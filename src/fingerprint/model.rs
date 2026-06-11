@@ -12,7 +12,7 @@ pub struct Fingerprint {
 }
 
 impl Fingerprint {
-    pub fn default_for_tests() -> Self {
+    pub fn default_codex_desktop() -> Self {
         Self {
             originator: "Codex Desktop".to_string(),
             app_version: "26.519.81530".to_string(),
@@ -23,6 +23,10 @@ impl Fingerprint {
             user_agent_template:
                 "Codex/{app_version} ({platform}; {arch}) Chromium/{chromium_version}".to_string(),
         }
+    }
+
+    pub fn default_for_tests() -> Self {
+        Self::default_codex_desktop()
     }
 
     pub fn user_agent(&self) -> String {
