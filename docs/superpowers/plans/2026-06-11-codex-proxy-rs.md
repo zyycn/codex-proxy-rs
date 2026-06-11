@@ -929,7 +929,7 @@ git commit -m "feat: add codex-only configuration"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_migration_test.rs`
 
-- [ ] **Step 1: Write failing migration test**
+- [x] **Step 1: Write failing migration test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_migration_test.rs`:
 
@@ -951,7 +951,7 @@ async fn migrations_create_accounts_and_event_tables() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -961,7 +961,7 @@ cargo test migrations_create_accounts_and_event_tables
 
 Expected: compile failure because `storage::db` does not exist.
 
-- [ ] **Step 3: Create migrations**
+- [x] **Step 3: Create migrations**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0001_initial.sql`:
 
@@ -1068,7 +1068,7 @@ create index if not exists idx_client_api_keys_prefix on client_api_keys(prefix)
 create index if not exists idx_account_cookies_account on account_cookies(account_id);
 ```
 
-- [ ] **Step 4: Implement database connector**
+- [x] **Step 4: Implement database connector**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -1103,7 +1103,7 @@ pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Erro
 }
 ```
 
-- [ ] **Step 5: Verify migrations**
+- [x] **Step 5: Verify migrations**
 
 Run:
 
@@ -1113,7 +1113,7 @@ cargo test migrations_create_accounts_and_event_tables
 
 Expected: pass.
 
-- [ ] **Step 6: Commit storage**
+- [x] **Step 6: Commit storage**
 
 ```bash
 git add Cargo.toml migrations src/storage src/lib.rs tests/storage_migration_test.rs
