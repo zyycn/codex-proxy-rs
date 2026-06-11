@@ -2864,7 +2864,7 @@ git commit -m "feat: parse codex desktop fingerprint updates"
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/Dockerfile`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/docker-compose.yml`
 
-- [ ] **Step 1: Write README with exact scope**
+- [x] **Step 1: Write README with exact scope**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/README.md`:
 
@@ -2898,7 +2898,7 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - Codex account tokens are internal upstream credentials.
 ```
 
-- [ ] **Step 2: Add environment example**
+- [x] **Step 2: Add environment example**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/.env.example`:
 
@@ -2911,7 +2911,7 @@ CPRS_API_KEY_PEPPER_FILE=data/api-key-pepper.key
 RUST_LOG=codex_proxy_rs=info,tower_http=info
 ```
 
-- [ ] **Step 3: Verify full test suite and lint**
+- [x] **Step 3: Verify full test suite and lint**
 
 Run:
 
@@ -2923,7 +2923,7 @@ cargo test
 
 Expected: all commands pass.
 
-- [ ] **Step 4: Run local server smoke test**
+- [x] **Step 4: Run local server smoke test**
 
 Run:
 
@@ -2938,7 +2938,7 @@ Expected response:
 {"status":"ok"}
 ```
 
-- [ ] **Step 5: Commit docs and runtime files**
+- [x] **Step 5: Commit docs and runtime files**
 
 ```bash
 git add README.md .env.example Dockerfile docker-compose.yml
