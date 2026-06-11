@@ -2956,6 +2956,42 @@ git commit -m "docs: document codex-proxy-rs scope"
 - [x] Replace the refresh policy shell with a native refresh scheduler. It refreshes before expiry, refreshes immediately after an upstream 401 trigger, preserves the existing refresh token when the refresh response omits one, maps refresh failures to account statuses, and enforces configured concurrency with a semaphore.
 - [x] Fill the previously empty `src/codex/sse.rs` and `src/codex/usage.rs` modules with tested SSE frame parsing/encoding and token usage extraction helpers.
 
+## 2026-06-11 Original Project Gap Audit
+
+The Rust project has no legacy compatibility requirement, but the in-scope behavior must still be rebuilt natively. This audit compares the TypeScript project under `/home/zyy/Codes/codex-proxy` with the Rust rewrite and corrects earlier over-broad completion claims.
+
+### Keep and Rebuild Natively
+
+- [ ] **HTTP auth boundary:** restore a real `src/http/auth.rs` module instead of scattered header checks. It must validate `Bearer cpr_...` client API keys for `/v1/*`, validate admin session cookies for `/admin/*`, reject cross-use in both directions, and return the documented OpenAI/admin response families.
+- [ ] **Account SQLite repository:** implement `src/accounts/repository.rs` for encrypted access/refresh tokens, account metadata, quota JSON, usage counters, labels, status transitions, pagination, and batch-safe mutations. Do not add TypeScript JSON migration or legacy import shims.
+- [ ] **Admin account routes:** rebuild `/auth/status`, `/auth/accounts`, import/export, batch delete/status, health-check, per-account refresh, label, delete, reset usage, quota, Cookie CRUD, and quota warnings as `/admin/*` endpoints with admin envelopes and cursor pagination where a list is returned.
+- [ ] **Login routes:** implement OAuth PKCE login-start/code-relay/callback, device-login/device-poll, CLI auth import, manual access-token import, and logout as account-login flows. Keep this separate from admin password login and client API key creation.
+- [ ] **Client API key management:** implement admin CRUD for local client API keys: list/create/delete/batch-delete/label/status/export/import. Remove provider/model binding semantics from the TypeScript version; Rust client API keys authorize only local `/v1/*` access.
+- [ ] **Settings:** implement admin settings for server/runtime fields that remain in scope: default model, reasoning effort, service tier, model aliases, refresh enabled/margin/concurrency, max concurrent per account, request interval, rotation strategy, tier priority, quota refresh/thresholds/skip exhausted, logs state/capacity/body capture, and usage history retention. Remove proxy URL, Ollama, third-party provider, OpenAI official key, and Electron/self-update settings.
+- [ ] **Diagnostics:** expand health/admin diagnostics to include authenticated state, pool summary, capacity summary, transport/fingerprint status, paths, runtime metadata, and test-connection checks. Keep production-local gating for sensitive debug endpoints.
+- [ ] **Logs and usage stats:** add `/admin/logs/state`, clear/detail, error-log equivalents if retained, and `/admin/usage-stats/summary` plus paginated or bounded history queries. Keep log file rotation and SQLite event pagination.
+- [ ] **Model catalog:** replace the hard-coded `/v1/models` list with a model store that supports static defaults, configured aliases, `-low/-medium/-high/-xhigh/-fast/-flex` suffix parsing, backend model fetching per plan, cache persistence, `/v1/models/catalog`, `/v1/models/{id}`, `/v1/models/{id}/info`, `/admin/refresh-models`, and `/debug/models`.
+- [ ] **Account scheduling parity:** extend account acquisition beyond `active + least last_used`: max concurrent slots per account, stale slot cleanup, least-used/round-robin/sticky strategies, quota-cache skip, tier priority, model-plan filtering, exclude IDs, preferred account from session affinity, Cloudflare cooldown, request staggering, and release-time usage accounting.
+- [ ] **Upstream Codex lifecycle:** implement account acquire -> Codex request -> SSE/collect -> rate-limit capture -> usage release -> retry/fallback. Include Cookie replay/capture, Codex Desktop headers, `x-codex-turn-state`, `x-client-request-id`, upstream error classification, 401-triggered refresh, 429 quota cache, 402 quota exhausted, 403 ban/Cloudflare distinction, path-block Cookie clearing, and OpenAI-compatible error mapping.
+- [ ] **Session affinity and previous response:** persist an in-memory response-id to account mapping with TTL, prompt-cache/conversation identity, turn-state replay, and preferred account selection. `src/codex/websocket.rs` must either implement the WebSocket path with verified TLS/header behavior or the API must reject WebSocket-only cases explicitly with documented limitations until fingerprint parity is proven.
+- [ ] **Fingerprint auto-update parity:** poll the real Codex Desktop appcast/update source, parse app version/build number, persist update state, select the latest stored fingerprint for runtime headers, and optionally extract Chromium version from a local Codex.app path when configured.
+
+### Keep Removed
+
+- [ ] Do not rebuild per-account proxy assignment, proxy pool, proxy health checks, or proxy import/export.
+- [ ] Do not rebuild Ollama bridge/settings.
+- [ ] Do not rebuild Anthropic, Gemini, OpenRouter/custom provider routing, or OpenAI official API key direct upstream.
+- [ ] Do not rebuild Electron packaging, large dashboard static UI, or proxy self-update installer flows.
+- [ ] Do not add old TypeScript data migration, deprecated API compatibility adapters, or dual-mode legacy behavior.
+
+### Original Bugs or Risky Behavior to Correct During Rebuild
+
+- [ ] Old `/admin/*` settings mutations used the proxy API key as a write gate. Rust must use admin sessions only.
+- [ ] Old refresh fallback could be dangerous for one-time refresh tokens if retried after a mid-flight failure. Rust must keep the one-time RT preservation rule and retry only when the request definitely did not reach the server.
+- [ ] Old settings exposed proxy and provider knobs that are out of scope. Rust config and API must not keep dead settings as no-op compatibility fields.
+- [ ] Old route responses mix multiple body shapes. Rust must keep `/v1/*` OpenAI-compatible and `/admin/*` lower camelCase `code/message/data/requestId`.
+- [ ] Empty placeholder modules are not acceptable. A module either owns tested behavior or is removed from the target structure with a documented reason.
+
 ---
 
 ## Acceptance Criteria
