@@ -30,8 +30,8 @@ serde_yaml = "0.9.34"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid", "migrate"] }
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync"] }
-tower = "0.5.3"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync", "net"] }
+tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6.11", features = ["trace", "cors", "request-id", "timeout"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"

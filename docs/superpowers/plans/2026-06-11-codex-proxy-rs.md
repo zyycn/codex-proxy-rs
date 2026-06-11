@@ -2496,7 +2496,7 @@ git commit -m "feat: add openai to codex translation"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/main.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_responses_test.rs`
 
-- [ ] **Step 1: Write failing route boundary test**
+- [x] **Step 1: Write failing route boundary test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_responses_test.rs`:
 
@@ -2533,7 +2533,7 @@ async fn v1_requires_client_api_key_not_admin_cookie() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -2543,7 +2543,7 @@ cargo test v1_requires_client_api_key_not_admin_cookie
 
 Expected: compile failure because app/http modules do not exist.
 
-- [ ] **Step 3: Implement minimal router**
+- [x] **Step 3: Implement minimal router**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -2650,7 +2650,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-- [ ] **Step 4: Verify route boundary**
+- [x] **Step 4: Verify route boundary**
 
 Run:
 
@@ -2660,7 +2660,7 @@ cargo test v1_requires_client_api_key_not_admin_cookie
 
 Expected: pass.
 
-- [ ] **Step 5: Commit router**
+- [x] **Step 5: Commit router**
 
 ```bash
 git add src/app.rs src/http src/main.rs src/lib.rs tests/routes_responses_test.rs

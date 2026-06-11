@@ -1,3 +1,9 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use tower::ServiceExt;
+
 use codex_proxy_rs::{
     app::build_router,
     config::{
@@ -7,12 +13,11 @@ use codex_proxy_rs::{
     state::AppState,
 };
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let config = AppConfig {
+fn test_config() -> AppConfig {
+    AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
-            port: 8080,
+            port: 0,
         },
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),
@@ -23,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
             refresh_concurrency: 2,
         },
         database: DatabaseConfig {
-            url: "sqlite://data/codex-proxy-rs.sqlite".to_string(),
+            url: "sqlite://:memory:".to_string(),
         },
         security: SecurityConfig {
             master_key_file: "data/master.key".to_string(),
@@ -40,12 +45,21 @@ async fn main() -> anyhow::Result<()> {
             max_file_bytes: 10_485_760,
             retention_days: 14,
         },
-    };
+    }
+}
 
-    let host = config.server.host.clone();
-    let port = config.server.port;
-    let app = build_router(AppState::new(config));
-    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+#[tokio::test]
+async fn v1_requires_client_api_key_not_admin_cookie() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
