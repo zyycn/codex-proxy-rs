@@ -1321,7 +1321,7 @@ git commit -m "feat: split admin login and client api keys"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/crypto_test.rs`
 
-- [ ] **Step 1: Write failing encryption test**
+- [x] **Step 1: Write failing encryption test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/crypto_test.rs`:
 
@@ -1341,7 +1341,7 @@ fn secret_box_encrypts_and_decrypts_without_storing_plaintext() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -1351,7 +1351,7 @@ cargo test secret_box_encrypts_and_decrypts_without_storing_plaintext
 
 Expected: compile failure because `codex_proxy_rs::crypto::SecretBox` does not exist.
 
-- [ ] **Step 3: Implement AES-GCM secret encryption**
+- [x] **Step 3: Implement AES-GCM secret encryption**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/crypto.rs`:
 
@@ -1438,7 +1438,7 @@ pub mod state;
 pub mod storage;
 ```
 
-- [ ] **Step 4: Verify encryption**
+- [x] **Step 4: Verify encryption**
 
 Run:
 
@@ -1448,7 +1448,7 @@ cargo test secret_box_encrypts_and_decrypts_without_storing_plaintext
 
 Expected: pass.
 
-- [ ] **Step 5: Commit secret encryption**
+- [x] **Step 5: Commit secret encryption**
 
 ```bash
 git add Cargo.toml src/crypto.rs src/lib.rs tests/crypto_test.rs
