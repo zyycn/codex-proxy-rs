@@ -2079,7 +2079,7 @@ git commit -m "feat: add account scoped cookie jar"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/refresh_scheduler_test.rs`
 
-- [ ] **Step 1: Write failing account acquisition test**
+- [x] **Step 1: Write failing account acquisition test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/refresh_scheduler_test.rs`:
 
@@ -2103,7 +2103,7 @@ fn account_pool_skips_expired_disabled_banned_and_quota_exhausted_accounts() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -2113,7 +2113,7 @@ cargo test account_pool_skips_expired_disabled_banned_and_quota_exhausted_accoun
 
 Expected: compile failure because accounts module does not exist.
 
-- [ ] **Step 3: Implement account status and pool**
+- [x] **Step 3: Implement account status and pool**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -2280,7 +2280,7 @@ pub mod refresh;
 pub mod token;
 ```
 
-- [ ] **Step 4: Verify account pool behavior**
+- [x] **Step 4: Verify account pool behavior**
 
 Run:
 
@@ -2290,7 +2290,7 @@ cargo test account_pool_skips_expired_disabled_banned_and_quota_exhausted_accoun
 
 Expected: pass.
 
-- [ ] **Step 5: Commit account foundation**
+- [x] **Step 5: Commit account foundation**
 
 ```bash
 git add src/accounts src/auth src/lib.rs tests/refresh_scheduler_test.rs
