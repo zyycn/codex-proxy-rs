@@ -1,11 +1,17 @@
 use axum::{
-    http::StatusCode,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
-use serde::Serialize;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 
-use crate::pagination::Page;
+use crate::{
+    http::middleware::RequestId,
+    pagination::{clamp_limit, Page},
+    state::AppState,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,4 +102,95 @@ where
     fn into_response(self) -> Response {
         (self.status, Json(self.body)).into_response()
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+pub async fn logs(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<LogsQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    match validate_admin_session(pool, &headers).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return AdminResponse::new(
+                StatusCode::UNAUTHORIZED,
+                AdminEnvelope::new(40101, "Admin session required", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to validate admin session", (), request_id),
+            )
+            .into_response();
+        }
+    }
+
+    let limit = clamp_limit(query.limit.unwrap_or(50));
+    let Some(repo) = state.event_logs() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Event log repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    match repo.list(query.cursor, limit).await {
+        Ok(page) => AdminResponse::new(
+            StatusCode::OK,
+            AdminPageEnvelope::ok(page, limit, request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to list event logs", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+async fn validate_admin_session(
+    pool: &sqlx::SqlitePool,
+    headers: &HeaderMap,
+) -> Result<bool, sqlx::Error> {
+    let Some(session_id) = admin_session_cookie(headers) else {
+        return Ok(false);
+    };
+    let now = Utc::now().to_rfc3339();
+    let count: (i64,) =
+        sqlx::query_as("select count(*) from admin_sessions where id = ? and expires_at > ?")
+            .bind(session_id)
+            .bind(now)
+            .fetch_one(pool)
+            .await?;
+    Ok(count.0 > 0)
+}
+
+fn admin_session_cookie(headers: &HeaderMap) -> Option<&str> {
+    let cookie = headers.get("cookie")?.to_str().ok()?;
+    cookie.split(';').map(str::trim).find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        (name == "cpr_admin_session" && !value.is_empty()).then_some(value)
+    })
 }

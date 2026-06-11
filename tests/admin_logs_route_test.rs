@@ -1,0 +1,147 @@
+use axum::{
+    body::{to_bytes, Body},
+    http::{Request, StatusCode},
+};
+use chrono::Utc;
+use serde_json::Value;
+use tower::ServiceExt;
+
+use codex_proxy_rs::{
+    app::build_router,
+    config::{
+        AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig,
+        SecurityConfig, ServerConfig, TlsConfig,
+    },
+    logs::{
+        event::{EventLevel, EventLog},
+        repository::EventLogRepository,
+    },
+    state::AppState,
+    storage::db::connect_sqlite,
+};
+
+fn test_config(database_url: String) -> AppConfig {
+    AppConfig {
+        server: ServerConfig {
+            host: "127.0.0.1".to_string(),
+            port: 0,
+        },
+        api: ApiConfig {
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+        },
+        auth: AuthConfig {
+            refresh_margin_seconds: 300,
+            refresh_enabled: true,
+            refresh_concurrency: 2,
+        },
+        database: DatabaseConfig { url: database_url },
+        security: SecurityConfig {
+            master_key_file: "data/master.key".to_string(),
+            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
+        },
+        tls: TlsConfig {
+            force_http11: false,
+        },
+        admin: AdminConfig {
+            session_ttl_minutes: 1440,
+        },
+        logging: LoggingConfig {
+            directory: "logs".to_string(),
+            max_file_bytes: 10_485_760,
+            retention_days: 14,
+        },
+    }
+}
+
+#[tokio::test]
+async fn admin_logs_are_cursor_paginated_and_include_request_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let repo = EventLogRepository::new(pool.clone());
+    repo.insert(EventLog::new("request", EventLevel::Info, "first"))
+        .await
+        .unwrap();
+    repo.insert(EventLog::new("request", EventLevel::Info, "second"))
+        .await
+        .unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs?limit=1")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_admin");
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["page"]["limit"], 1);
+    assert!(body["page"]["nextCursor"].is_string());
+}
+
+#[tokio::test]
+async fn admin_logs_reject_missing_admin_session_cookie() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs")
+                .header("x-request-id", "req_admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_admin");
+}
+
+async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
+    )
+    .bind("admin_1")
+    .bind("hash")
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
+    )
+    .bind(session_id)
+    .bind("admin_1")
+    .bind("2999-01-01T00:00:00Z")
+    .bind(now)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}

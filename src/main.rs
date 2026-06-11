@@ -3,6 +3,7 @@ use codex_proxy_rs::{
     config::AppConfig,
     logs::rotation::{init_tracing, RotationConfig},
     state::AppState,
+    storage::db::connect_sqlite,
 };
 
 #[tokio::main]
@@ -16,7 +17,8 @@ async fn main() -> anyhow::Result<()> {
     ))?;
     let host = config.server.host.clone();
     let port = config.server.port;
-    let app = build_router(AppState::new(config));
+    let pool = connect_sqlite(&config.database.url).await?;
+    let app = build_router(AppState::with_pool(config, pool));
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     tracing::info!(host, port, "codex-proxy-rs listening");
     axum::serve(listener, app).await?;
