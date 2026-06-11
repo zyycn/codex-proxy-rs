@@ -39,5 +39,7 @@ pub fn translate_chat_to_codex(req: ChatCompletionRequest) -> AppResult<CodexRes
         store: false,
         reasoning: None,
         tools: None,
+        previous_response_id: None,
+        use_websocket: false,
     })
 }

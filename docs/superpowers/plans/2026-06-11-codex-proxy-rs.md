@@ -2957,6 +2957,7 @@ git commit -m "docs: document codex-proxy-rs scope"
 - [x] Fill the previously empty `src/codex/sse.rs` and `src/codex/usage.rs` modules with tested SSE frame parsing/encoding and token usage extraction helpers.
 - [x] Add a tested SQLite account repository foundation. It encrypts access/refresh tokens, decrypts account reads, cursor-pages accounts, updates status/labels without rewriting token ciphertext, persists usage counters, and preserves the existing refresh token when token refresh responses omit a new one.
 - [x] Add a real HTTP auth boundary. `src/http/auth.rs` parses client API keys and admin session cookies as separate credential types, `/v1/*` uses only `Bearer cpr_...`, and admin session parsing ignores client API keys.
+- [x] Add a tested Codex WebSocket boundary. `src/codex/websocket.rs` classifies HTTP SSE versus WebSocket-only requests, adds `previous_response_id`/`use_websocket` request fields, and returns typed errors instead of silently downgrading WebSocket-required traffic.
 
 ## 2026-06-11 Original Project Gap Audit
 
