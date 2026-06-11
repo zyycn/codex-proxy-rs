@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use chrono::Utc;
+use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use wiremock::{
@@ -13,8 +15,14 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
+    accounts::repository::AccountRepository,
     app::build_router,
-    auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    auth::{
+        api_key::ApiKeyHasher,
+        api_key_repository::ClientApiKeyRepository,
+        refresh::{RefreshFailure, TokenRefresher},
+        token::TokenPair,
+    },
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
@@ -32,6 +40,22 @@ struct ImportedApp {
     secret_box: SecretBox,
     client_api_key: String,
     _tempdir: tempfile::TempDir,
+}
+
+#[derive(Clone)]
+struct StaticTokenRefresher {
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+#[async_trait]
+impl TokenRefresher for StaticTokenRefresher {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        Ok(TokenPair {
+            access_token: self.access_token.clone(),
+            refresh_token: self.refresh_token.clone(),
+        })
+    }
 }
 
 fn test_config(database_url: String, base_url: String) -> AppConfig {
@@ -108,6 +132,67 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
         secret_box.clone(),
         hasher,
     ));
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_imported",
+                            "accountId": "chatgpt-account",
+                            "token": "access-secret",
+                            "refreshToken": "refresh-secret",
+                            "status": "active"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(import_response.status(), StatusCode::OK);
+
+    ImportedApp {
+        app,
+        pool,
+        secret_box,
+        client_api_key: generated.plaintext,
+        _tempdir: tempdir,
+    }
+}
+
+async fn build_imported_app_with_refresher(base_url: String, access_token: &str) -> ImportedApp {
+    let tempdir = tempfile::tempdir().unwrap();
+    let db = tempdir.path().join("v1-upstream-refresh.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let secret_box = SecretBox::new([31u8; 32]);
+    let hasher = ApiKeyHasher::new([32u8; 32]);
+    let generated = hasher.generate_client_api_key("test");
+    ClientApiKeyRepository::new(pool.clone())
+        .insert_generated("test", &generated)
+        .await
+        .unwrap();
+    let app = build_router(
+        AppState::with_pool_secret_api_key_hasher_and_token_refresher(
+            test_config(url, base_url),
+            pool.clone(),
+            secret_box.clone(),
+            hasher,
+            StaticTokenRefresher {
+                access_token: access_token.to_string(),
+                refresh_token: None,
+            },
+        ),
+    );
 
     let import_response = app
         .clone()
@@ -296,6 +381,137 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
     assert_eq!(event.3, 200);
     assert_eq!(event.4["stream"], true);
     assert_eq!(event.4["usage"]["outputTokens"], 5);
+}
+
+#[tokio::test]
+async fn v1_responses_should_refresh_after_401_and_retry_non_stream() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_after_refresh\",\"object\":\"response\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "token_revoked"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer refreshed-access"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_refresher(server.uri(), "refreshed-access").await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_refresh_non_stream")
+                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_refresh");
+    let repo = AccountRepository::new(imported.pool.clone(), imported.secret_box);
+    let account = repo.get("acct_imported").await.unwrap().unwrap();
+    assert_eq!(account.access_token.expose_secret(), "refreshed-access");
+    assert_eq!(
+        account.refresh_token.unwrap().expose_secret(),
+        "refresh-secret"
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_should_refresh_after_401_and_retry_stream() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"pong\"}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_stream_after_refresh\",\"object\":\"response\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "token_revoked"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer refreshed-stream-access"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_refresher(server.uri(), "refreshed-stream-access").await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_refresh_stream")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = response_text(response).await;
+    assert!(body.contains("event: response.completed"));
+    let usage: (i64, i64, i64, i64) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens, cached_tokens from account_usage where account_id = ?",
+    )
+    .bind("acct_imported")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(usage, (1, 4, 2, 0));
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {

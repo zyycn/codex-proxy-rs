@@ -93,6 +93,28 @@ pub struct AccountUsageRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountUsageListRecord {
+    pub account_id: String,
+    pub email: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountUsageSummary {
+    pub account_count: i64,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+}
+
 #[derive(Clone)]
 pub struct AccountRepository {
     pool: SqlitePool,
@@ -430,6 +452,97 @@ fn parse_rfc3339(value: &str) -> AccountRepositoryResult<DateTime<Utc>> {
 fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> AccountRepositoryResult<AccountUsageRecord> {
     Ok(AccountUsageRecord {
         account_id: row.get("account_id"),
+        request_count: row.get("request_count"),
+        input_tokens: row.get("input_tokens"),
+        output_tokens: row.get("output_tokens"),
+        cached_tokens: row.get("cached_tokens"),
+        last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+    })
+}
+
+#[derive(Clone)]
+pub struct AccountUsageRepository {
+    pool: SqlitePool,
+}
+
+impl AccountUsageRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn list(
+        &self,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> AccountRepositoryResult<Page<AccountUsageListRecord>> {
+        let fetch_limit = i64::from(limit) + 1;
+        let rows = if let Some(cursor) = cursor {
+            let (last_used_at, account_id) =
+                decode_cursor(&cursor).ok_or(AccountRepositoryError::InvalidCursor)?;
+            sqlx::query(
+                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id where coalesce(account_usage.last_used_at, '') < ? or (coalesce(account_usage.last_used_at, '') = ? and account_usage.account_id < ?) order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
+            )
+            .bind(&last_used_at)
+            .bind(last_used_at)
+            .bind(account_id)
+            .bind(fetch_limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
+            )
+            .bind(fetch_limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let has_next = rows.len() > limit as usize;
+        let take_count = rows.len().min(limit as usize);
+        let mut items = Vec::with_capacity(take_count);
+        for row in rows.into_iter().take(take_count) {
+            items.push(usage_list_from_row(&row)?);
+        }
+        let next_cursor = if has_next {
+            items.last().map(|usage| {
+                encode_cursor(
+                    &usage
+                        .last_used_at
+                        .map(|value| value.to_rfc3339())
+                        .unwrap_or_default(),
+                    &usage.account_id,
+                )
+            })
+        } else {
+            None
+        };
+        Ok(Page { items, next_cursor })
+    }
+
+    pub async fn summary(&self) -> AccountRepositoryResult<AccountUsageSummary> {
+        let row = sqlx::query(
+            "select count(*) as account_count, coalesce(sum(request_count), 0) as request_count, coalesce(sum(input_tokens), 0) as input_tokens, coalesce(sum(output_tokens), 0) as output_tokens, coalesce(sum(cached_tokens), 0) as cached_tokens from account_usage",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(AccountUsageSummary {
+            account_count: row.get("account_count"),
+            request_count: row.get("request_count"),
+            input_tokens: row.get("input_tokens"),
+            output_tokens: row.get("output_tokens"),
+            cached_tokens: row.get("cached_tokens"),
+        })
+    }
+}
+
+fn usage_list_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AccountRepositoryResult<AccountUsageListRecord> {
+    Ok(AccountUsageListRecord {
+        account_id: row.get("account_id"),
+        email: row.get("email"),
+        label: row.get("label"),
+        plan_type: row.get("plan_type"),
         request_count: row.get("request_count"),
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),

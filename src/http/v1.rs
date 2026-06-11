@@ -13,16 +13,18 @@ use axum::{
 use chrono::Utc;
 use futures::{stream, StreamExt};
 use reqwest::Url;
+use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::{
     accounts::{
-        model::Account,
+        model::{Account, AccountStatus},
         pool::{AccountAcquireRequest, AccountPool},
-        repository::UsageDelta,
+        repository::{TokenUpdate, UsageDelta},
     },
+    auth::refresh::RefreshFailure,
     codex::{
         client::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream, CodexClientError,
@@ -112,7 +114,13 @@ pub async fn responses(
         return responses_stream(state, codex_request, account, log_context).await;
     }
 
-    let response = send_codex_request(&state, &codex_request, &account, request_id.as_str()).await;
+    let response = send_codex_request_with_refresh_retry(
+        &state,
+        &codex_request,
+        &account,
+        request_id.as_str(),
+    )
+    .await;
     state.account_pool().lock().await.release(&account.id);
 
     let response = match response {
@@ -251,6 +259,23 @@ fn default_body(default_model: String) -> ResponsesBody {
     }
 }
 
+async fn send_codex_request_with_refresh_retry(
+    state: &AppState,
+    request: &CodexResponsesRequest,
+    account: &Account,
+    request_id: &str,
+) -> Result<crate::codex::client::CodexBackendResponse, CodexClientError> {
+    match send_codex_request(state, request, account, request_id).await {
+        Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
+            let Some(refreshed) = refresh_account_after_unauthorized(state, account).await else {
+                return Err(CodexClientError::Upstream { status, body });
+            };
+            send_codex_request(state, request, &refreshed, request_id).await
+        }
+        result => result,
+    }
+}
+
 async fn send_codex_request(
     state: &AppState,
     request: &CodexResponsesRequest,
@@ -279,6 +304,23 @@ async fn send_codex_request(
             },
         )
         .await
+}
+
+async fn send_codex_stream_request_with_refresh_retry(
+    state: &AppState,
+    request: &CodexResponsesRequest,
+    account: &Account,
+    request_id: &str,
+) -> Result<CodexBackendStream, CodexClientError> {
+    match send_codex_stream_request(state, request, account, request_id).await {
+        Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
+            let Some(refreshed) = refresh_account_after_unauthorized(state, account).await else {
+                return Err(CodexClientError::Upstream { status, body });
+            };
+            send_codex_stream_request(state, request, &refreshed, request_id).await
+        }
+        result => result,
+    }
 }
 
 async fn send_codex_stream_request(
@@ -317,9 +359,13 @@ async fn responses_stream(
     account: Account,
     log_context: V1LogContext,
 ) -> Response {
-    let stream_response =
-        send_codex_stream_request(&state, &request, &account, log_context.request_id.as_str())
-            .await;
+    let stream_response = send_codex_stream_request_with_refresh_retry(
+        &state,
+        &request,
+        &account,
+        log_context.request_id.as_str(),
+    )
+    .await;
     let stream_response = match stream_response {
         Ok(response) => response,
         Err(error) => {
@@ -397,6 +443,77 @@ async fn responses_stream(
             )
                 .into_response()
         })
+}
+
+async fn refresh_account_after_unauthorized(
+    state: &AppState,
+    account: &Account,
+) -> Option<Account> {
+    if !state.config().auth.refresh_enabled {
+        return None;
+    }
+    let refresh_token = account.refresh_token.as_deref()?;
+    let refresher = state.token_refresher()?;
+    match refresher.refresh(refresh_token).await {
+        Ok(tokens) => persist_refreshed_account(state, account, tokens).await,
+        Err(failure) => {
+            mark_refresh_failure(state, account, failure).await;
+            None
+        }
+    }
+}
+
+async fn persist_refreshed_account(
+    state: &AppState,
+    account: &Account,
+    tokens: crate::auth::token::TokenPair,
+) -> Option<Account> {
+    let repo = state.account_repository()?;
+    let access_token = tokens.access_token;
+    let refresh_token = tokens.refresh_token;
+    repo.update_tokens(
+        &account.id,
+        TokenUpdate {
+            access_token: SecretString::new(access_token.clone().into()),
+            refresh_token: refresh_token
+                .clone()
+                .map(|token| SecretString::new(token.into())),
+            access_token_expires_at: None,
+        },
+    )
+    .await
+    .ok()?;
+
+    let mut refreshed = account.clone();
+    refreshed.access_token = access_token;
+    if let Some(refresh_token) = refresh_token {
+        refreshed.refresh_token = Some(refresh_token);
+    }
+    refreshed.status = AccountStatus::Active;
+    state.account_pool().lock().await.insert(refreshed.clone());
+    Some(refreshed)
+}
+
+async fn mark_refresh_failure(state: &AppState, account: &Account, failure: RefreshFailure) {
+    let Some(status) = status_for_refresh_failure(failure) else {
+        return;
+    };
+    if let Some(repo) = state.account_repository() {
+        let _ = repo.set_status(&account.id, status).await;
+    }
+    let mut updated = account.clone();
+    updated.status = status;
+    state.account_pool().lock().await.insert(updated);
+}
+
+fn status_for_refresh_failure(failure: RefreshFailure) -> Option<AccountStatus> {
+    match failure {
+        RefreshFailure::InvalidGrant => Some(AccountStatus::Expired),
+        RefreshFailure::QuotaExhausted => Some(AccountStatus::QuotaExhausted),
+        RefreshFailure::Banned => Some(AccountStatus::Banned),
+        RefreshFailure::Disabled => Some(AccountStatus::Disabled),
+        RefreshFailure::Transport => None,
+    }
 }
 
 async fn persist_upstream_cookies(

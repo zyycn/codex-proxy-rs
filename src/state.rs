@@ -5,9 +5,11 @@ use tokio::sync::Mutex;
 
 use crate::accounts::{
     pool::{AccountPool, AccountPoolOptions, RotationStrategy},
-    repository::{AccountRepository, AccountRepositoryResult},
+    repository::{AccountRepository, AccountRepositoryResult, AccountUsageRepository},
 };
-use crate::auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository};
+use crate::auth::{
+    api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository, refresh::TokenRefresher,
+};
 use crate::config::AppConfig;
 use crate::cookies::repository::CookieRepository;
 use crate::crypto::SecretBox;
@@ -24,6 +26,7 @@ pub struct AppServices {
     pub event_logs: Option<EventLogRepository>,
     pub secret_box: Option<SecretBox>,
     pub api_key_hasher: Option<ApiKeyHasher>,
+    pub token_refresher: Option<Arc<dyn TokenRefresher>>,
     pub account_pool: Arc<Mutex<AccountPool>>,
 }
 
@@ -37,6 +40,7 @@ impl AppState {
                 event_logs: None,
                 secret_box: None,
                 api_key_hasher: None,
+                token_refresher: None,
                 account_pool,
             }),
         }
@@ -51,6 +55,7 @@ impl AppState {
                 event_logs: Some(EventLogRepository::new(pool)),
                 secret_box: None,
                 api_key_hasher: None,
+                token_refresher: None,
                 account_pool,
             }),
         }
@@ -69,6 +74,7 @@ impl AppState {
                 event_logs: Some(EventLogRepository::new(pool)),
                 secret_box: Some(secret_box),
                 api_key_hasher: None,
+                token_refresher: None,
                 account_pool,
             }),
         }
@@ -88,6 +94,31 @@ impl AppState {
                 event_logs: Some(EventLogRepository::new(pool)),
                 secret_box: Some(secret_box),
                 api_key_hasher: Some(api_key_hasher),
+                token_refresher: None,
+                account_pool,
+            }),
+        }
+    }
+
+    pub fn with_pool_secret_api_key_hasher_and_token_refresher<C>(
+        config: AppConfig,
+        pool: SqlitePool,
+        secret_box: SecretBox,
+        api_key_hasher: ApiKeyHasher,
+        token_refresher: C,
+    ) -> Self
+    where
+        C: TokenRefresher,
+    {
+        let account_pool = account_pool_from_config(&config);
+        Self {
+            services: Arc::new(AppServices {
+                config,
+                db: Some(pool.clone()),
+                event_logs: Some(EventLogRepository::new(pool)),
+                secret_box: Some(secret_box),
+                api_key_hasher: Some(api_key_hasher),
+                token_refresher: Some(Arc::new(token_refresher)),
                 account_pool,
             }),
         }
@@ -112,6 +143,10 @@ impl AppState {
         ))
     }
 
+    pub fn account_usage_repository(&self) -> Option<AccountUsageRepository> {
+        Some(AccountUsageRepository::new(self.db()?.clone()))
+    }
+
     pub fn cookie_repository(&self) -> Option<CookieRepository> {
         Some(CookieRepository::new(
             self.db()?.clone(),
@@ -129,6 +164,10 @@ impl AppState {
 
     pub fn api_key_hasher(&self) -> Option<&ApiKeyHasher> {
         self.services.api_key_hasher.as_ref()
+    }
+
+    pub fn token_refresher(&self) -> Option<Arc<dyn TokenRefresher>> {
+        self.services.token_refresher.clone()
     }
 
     pub async fn reload_account_pool_from_repository(&self) -> AccountRepositoryResult<usize> {

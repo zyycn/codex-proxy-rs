@@ -1,6 +1,6 @@
 use codex_proxy_rs::{
     app::build_router,
-    auth::api_key::ApiKeyHasher,
+    auth::{api_key::ApiKeyHasher, oauth::OpenAiOAuthRefresher},
     config::AppConfig,
     crypto::SecretBox,
     logs::rotation::{init_tracing, RotationConfig},
@@ -21,9 +21,20 @@ async fn main() -> anyhow::Result<()> {
     let port = config.server.port;
     let secret_box = SecretBox::load_or_create(&config.security.master_key_file)?;
     let api_key_hasher = ApiKeyHasher::load_or_create(&config.security.api_key_pepper_file)?;
+    let token_refresher = OpenAiOAuthRefresher::codex_default(
+        reqwest::Client::builder()
+            .use_rustls_tls()
+            .no_proxy()
+            .build()?,
+    );
     let pool = connect_sqlite(&config.database.url).await?;
-    let state =
-        AppState::with_pool_secret_and_api_key_hasher(config, pool, secret_box, api_key_hasher);
+    let state = AppState::with_pool_secret_api_key_hasher_and_token_refresher(
+        config,
+        pool,
+        secret_box,
+        api_key_hasher,
+        token_refresher,
+    );
     let restored_accounts = state.reload_account_pool_from_repository().await?;
     tracing::info!(restored_accounts, "account pool restored from sqlite");
     let app = build_router(state);

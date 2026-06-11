@@ -47,6 +47,8 @@ When the client omits `stream` or sets `"stream": false`, the Rust route collect
 
 When the client sets `"stream": true`, the Rust route returns `text/event-stream` and passes through upstream SSE frames while collecting usage for the account after the stream finishes. Both modes capture upstream `Set-Cookie`, replay encrypted account-scoped Cookies, record account usage when usage appears in SSE, and write a `v1.response` event log with `requestId`, `accountId`, `route`, `model`, `statusCode`, `latencyMs`, and non-secret metadata.
 
+If Codex returns `401` and the account has a stored refresh token, the route refreshes the account through the OpenAI OAuth token endpoint once, persists the rotated access token, preserves the old refresh token when the server omits a new one, updates the in-process account pool, and retries the same request once.
+
 `previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
 
 ## `/admin/*`
@@ -157,6 +159,47 @@ Example item:
 }
 ```
 
+### `GET /admin/usage-stats`
+
+Returns cursor-paginated account usage counters recorded after `/v1/*` calls. The endpoint never returns account access tokens, refresh tokens, Cookie values, or client API keys.
+
+Example item:
+
+```json
+{
+  "accountId": "acct_01",
+  "email": "user@example.com",
+  "label": "primary",
+  "planType": "plus",
+  "requestCount": 2,
+  "inputTokens": 14,
+  "outputTokens": 8,
+  "cachedTokens": 3,
+  "lastUsedAt": "2026-06-11T12:00:00Z"
+}
+```
+
+### `GET /admin/usage-stats/summary`
+
+Returns global usage totals across accounts.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "accountCount": 1,
+    "requestCount": 2,
+    "inputTokens": 14,
+    "outputTokens": 8,
+    "cachedTokens": 3
+  },
+  "requestId": "req_01"
+}
+```
+
 ### `GET /admin/api-keys`
 
 Returns local client API keys with cursor pagination. The plaintext key and hash are never returned by list endpoints.
@@ -230,17 +273,6 @@ Success response:
     "imported": 1,
     "skipped": 0
   },
-  "requestId": "req_01"
-}
-```
-
-Success body:
-
-```json
-{
-  "code": 200,
-  "message": "OK",
-  "data": {},
   "requestId": "req_01"
 }
 ```

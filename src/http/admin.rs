@@ -16,7 +16,10 @@ use uuid::Uuid;
 use crate::{
     accounts::{
         model::{Account, AccountStatus},
-        repository::{NewAccount, StoredAccountMetadata},
+        repository::{
+            AccountRepositoryError, AccountUsageListRecord, AccountUsageSummary, NewAccount,
+            StoredAccountMetadata,
+        },
     },
     auth::admin_session::verify_admin_password,
     auth::api_key_repository::StoredClientApiKey,
@@ -134,6 +137,13 @@ pub struct AccountsQuery {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeysQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageStatsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -286,6 +296,58 @@ impl From<StoredAccountMetadata> for AdminAccountData {
                 .map(|value| value.to_rfc3339()),
             added_at: account.added_at.to_rfc3339(),
             updated_at: account.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUsageStatsData {
+    pub account_id: String,
+    pub email: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub last_used_at: Option<String>,
+}
+
+impl From<AccountUsageListRecord> for AdminUsageStatsData {
+    fn from(usage: AccountUsageListRecord) -> Self {
+        Self {
+            account_id: usage.account_id,
+            email: usage.email,
+            label: usage.label,
+            plan_type: usage.plan_type,
+            request_count: usage.request_count,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_tokens: usage.cached_tokens,
+            last_used_at: usage.last_used_at.map(|value| value.to_rfc3339()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUsageStatsSummaryData {
+    pub account_count: i64,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+}
+
+impl From<AccountUsageSummary> for AdminUsageStatsSummaryData {
+    fn from(summary: AccountUsageSummary) -> Self {
+        Self {
+            account_count: summary.account_count,
+            request_count: summary.request_count,
+            input_tokens: summary.input_tokens,
+            output_tokens: summary.output_tokens,
+            cached_tokens: summary.cached_tokens,
         }
     }
 }
@@ -480,6 +542,106 @@ pub async fn settings(
         AdminEnvelope::ok(AdminSettingsData::from_config(state.config()), request_id),
     )
     .into_response()
+}
+
+pub async fn usage_stats(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<UsageStatsQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_usage_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account usage repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let limit = clamp_limit(query.limit.unwrap_or(50));
+    match repo.list(query.cursor, limit).await {
+        Ok(page) => {
+            let Page { items, next_cursor } = page;
+            let page = Page {
+                items: items.into_iter().map(AdminUsageStatsData::from).collect(),
+                next_cursor,
+            };
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminPageEnvelope::ok(page, limit, request_id),
+            )
+            .into_response()
+        }
+        Err(AccountRepositoryError::InvalidCursor) => AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40002, "Invalid cursor", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to list usage stats", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn usage_stats_summary(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_usage_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account usage repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.summary().await {
+        Ok(summary) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AdminUsageStatsSummaryData::from(summary), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to summarize usage stats", (), request_id),
+        )
+        .into_response(),
+    }
 }
 
 pub async fn accounts(
