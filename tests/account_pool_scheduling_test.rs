@@ -15,15 +15,15 @@ fn account_pool_should_respect_max_concurrent_slots_per_account() {
     pool.insert(Account::test("acct_a", AccountStatus::Active));
     pool.insert(Account::test("acct_b", AccountStatus::Active));
 
-    let first = pool.acquire("gpt-5.4").unwrap();
-    let second = pool.acquire("gpt-5.4").unwrap();
-    let third = pool.acquire("gpt-5.4");
+    let first = pool.acquire("gpt-5.5").unwrap();
+    let second = pool.acquire("gpt-5.5").unwrap();
+    let third = pool.acquire("gpt-5.5");
 
     assert_ne!(first.id, second.id);
     assert!(third.is_none());
 
     pool.release(&first.id);
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, first.id);
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, first.id);
 }
 
 #[test]
@@ -37,10 +37,10 @@ fn account_pool_should_rotate_round_robin_across_candidates() {
     pool.insert(Account::test("acct_b", AccountStatus::Active));
     pool.insert(Account::test("acct_c", AccountStatus::Active));
 
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "acct_a");
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "acct_c");
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "acct_b");
-    assert!(pool.acquire("gpt-5.4").is_none());
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_a");
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_c");
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_b");
+    assert!(pool.acquire("gpt-5.5").is_none());
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn account_pool_should_skip_accounts_with_cached_quota_limit() {
     pool.insert(limited);
     pool.insert(Account::test("usable", AccountStatus::Active));
 
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "usable");
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "usable");
 }
 
 #[test]
@@ -67,13 +67,13 @@ fn account_pool_should_prefer_configured_tier_priority() {
     pool.insert(free);
     pool.insert(team);
 
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "team");
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "team");
 }
 
 #[test]
 fn account_pool_should_filter_by_model_plan_allowlist() {
     let mut model_plans = BTreeMap::new();
-    model_plans.insert("gpt-5.4".to_string(), vec!["plus".to_string()]);
+    model_plans.insert("gpt-5.5".to_string(), vec!["plus".to_string()]);
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         model_plan_allowlist: model_plans,
         ..AccountPoolOptions::default()
@@ -85,7 +85,7 @@ fn account_pool_should_filter_by_model_plan_allowlist() {
     pool.insert(free);
     pool.insert(plus);
 
-    assert_eq!(pool.acquire("gpt-5.4").unwrap().id, "plus");
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "plus");
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn account_pool_should_exclude_requested_account_ids() {
 
     let acquired = pool
         .acquire_with(
-            AccountAcquireRequest::new("gpt-5.4", fixed_time())
+            AccountAcquireRequest::new("gpt-5.5", fixed_time())
                 .with_exclude_account_ids(["acct_a"]),
         )
         .unwrap();
@@ -112,7 +112,7 @@ fn account_pool_should_prefer_session_affinity_account_when_available() {
 
     let acquired = pool
         .acquire_with(
-            AccountAcquireRequest::new("gpt-5.4", fixed_time()).with_preferred_account_id("acct_b"),
+            AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_preferred_account_id("acct_b"),
         )
         .unwrap();
 
@@ -129,7 +129,7 @@ fn account_pool_should_skip_accounts_in_cloudflare_cooldown() {
     pool.insert(Account::test("usable", AccountStatus::Active));
 
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.4", now))
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert_eq!(acquired.account.id, "usable");
@@ -146,11 +146,11 @@ fn account_pool_should_cleanup_stale_slots_before_acquire() {
     pool.insert(Account::test("acct_a", AccountStatus::Active));
 
     assert!(pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.4", now))
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
         .is_some());
     let acquired = pool
         .acquire_with(AccountAcquireRequest::new(
-            "gpt-5.4",
+            "gpt-5.5",
             now + Duration::minutes(5) + Duration::seconds(1),
         ))
         .unwrap();
@@ -168,11 +168,11 @@ fn account_pool_should_return_previous_slot_time_for_request_staggering() {
     pool.insert(Account::test("acct_a", AccountStatus::Active));
 
     let first = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.4", now))
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
     let second = pool
         .acquire_with(AccountAcquireRequest::new(
-            "gpt-5.4",
+            "gpt-5.5",
             now + Duration::milliseconds(250),
         ))
         .unwrap();
@@ -191,7 +191,7 @@ fn account_pool_should_report_capacity_summary() {
     pool.insert(Account::test("acct_a", AccountStatus::Active));
     pool.insert(Account::test("acct_b", AccountStatus::Disabled));
 
-    pool.acquire_with(AccountAcquireRequest::new("gpt-5.4", now));
+    pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
     let summary = pool.capacity_summary(now);
 
     assert_eq!(summary.total_slots, 2);
@@ -209,9 +209,9 @@ fn account_pool_should_rotate_tied_least_used_accounts() {
     pool.insert(Account::test("acct_a", AccountStatus::Active));
     pool.insert(Account::test("acct_b", AccountStatus::Active));
 
-    let first = pool.acquire("gpt-5.4").unwrap();
+    let first = pool.acquire("gpt-5.5").unwrap();
     pool.release(&first.id);
-    let second = pool.acquire("gpt-5.4").unwrap();
+    let second = pool.acquire("gpt-5.5").unwrap();
 
     assert_ne!(first.id, second.id);
 }

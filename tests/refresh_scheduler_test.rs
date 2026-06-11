@@ -12,6 +12,6 @@ fn account_pool_skips_expired_disabled_banned_and_quota_exhausted_accounts() {
     pool.insert(Account::test("banned", AccountStatus::Banned));
     pool.insert(Account::test("quota", AccountStatus::QuotaExhausted));
 
-    let acquired = pool.acquire("gpt-5.4").unwrap();
+    let acquired = pool.acquire("gpt-5.5").unwrap();
     assert_eq!(acquired.id, "active");
 }

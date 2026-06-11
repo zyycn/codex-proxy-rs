@@ -128,5 +128,5 @@ async fn models_route_returns_openai_compatible_codex_model_list() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["object"], "list");
     assert_eq!(body["data"][0]["object"], "model");
-    assert!(body["data"][0]["id"].as_str().unwrap().starts_with("gpt"));
+    assert_eq!(body["data"][0]["id"], "gpt-5.5");
 }

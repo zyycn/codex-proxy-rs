@@ -9,6 +9,8 @@ use serde_json::json;
 
 use crate::{http::auth::client_api_key, translation::codex_to_openai::openai_error};
 
+const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
+
 #[derive(Deserialize)]
 struct ResponsesBody {
     model: Option<String>,
@@ -23,9 +25,11 @@ pub async fn responses(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
     }
 
     let body = serde_json::from_slice::<ResponsesBody>(&body).unwrap_or_else(|_| ResponsesBody {
-        model: Some("gpt-5.4".to_string()),
+        model: Some(DEFAULT_CODEX_MODEL.to_string()),
     });
-    let model = body.model.unwrap_or_else(|| "gpt-5.4".to_string());
+    let model = body
+        .model
+        .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string());
     if !(model.starts_with("gpt") || model.starts_with("codex") || model.starts_with('o')) {
         return (
             StatusCode::NOT_FOUND,
@@ -56,7 +60,7 @@ pub async fn models(headers: HeaderMap) -> impl IntoResponse {
             "object": "list",
             "data": [
                 {
-                    "id": "gpt-5.4",
+                    "id": DEFAULT_CODEX_MODEL,
                     "object": "model",
                     "created": 0,
                     "owned_by": "openai"

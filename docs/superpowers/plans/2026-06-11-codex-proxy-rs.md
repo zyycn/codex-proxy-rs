@@ -2100,7 +2100,7 @@ fn account_pool_skips_expired_disabled_banned_and_quota_exhausted_accounts() {
     pool.insert(Account::test("banned", AccountStatus::Banned));
     pool.insert(Account::test("quota", AccountStatus::QuotaExhausted));
 
-    let acquired = pool.acquire("gpt-5.4").unwrap();
+    let acquired = pool.acquire("gpt-5.5").unwrap();
     assert_eq!(acquired.id, "active");
 }
 ```
@@ -2322,7 +2322,7 @@ use codex_proxy_rs::translation::openai_to_codex::{translate_chat_to_codex, Chat
 #[test]
 fn chat_completion_translates_to_codex_response_request() {
     let req = ChatCompletionRequest {
-        model: "gpt-5.4".to_string(),
+        model: "gpt-5.5".to_string(),
         stream: true,
         messages: vec![ChatMessage {
             role: "user".to_string(),
@@ -2331,7 +2331,7 @@ fn chat_completion_translates_to_codex_response_request() {
     };
 
     let codex = translate_chat_to_codex(req).unwrap();
-    assert_eq!(codex.model, "gpt-5.4");
+    assert_eq!(codex.model, "gpt-5.5");
     assert!(codex.stream);
     assert_eq!(codex.input[0]["role"], "user");
 }
@@ -2738,7 +2738,7 @@ pub async fn responses(headers: HeaderMap, Json(body): Json<ResponsesBody>) -> i
             Json(openai_error("Missing client API key", "invalid_api_key")),
         );
     }
-    let model = body.model.unwrap_or_else(|| "gpt-5.4".to_string());
+    let model = body.model.unwrap_or_else(|| "gpt-5.5".to_string());
     if !(model.starts_with("gpt") || model.starts_with("codex") || model.starts_with("o")) {
         return (
             StatusCode::NOT_FOUND,
@@ -2959,6 +2959,7 @@ git commit -m "docs: document codex-proxy-rs scope"
 - [x] Add a real HTTP auth boundary. `src/http/auth.rs` parses client API keys and admin session cookies as separate credential types, `/v1/*` uses only `Bearer cpr_...`, and admin session parsing ignores client API keys.
 - [x] Add a tested Codex WebSocket boundary. `src/codex/websocket.rs` classifies HTTP SSE versus WebSocket-only requests, adds `previous_response_id`/`use_websocket` request fields, and returns typed errors instead of silently downgrading WebSocket-required traffic.
 - [x] Extend account scheduling primitives against the original TypeScript lifecycle. `AccountPool` now covers max concurrent slots, stale slot cleanup, least-used/round-robin/sticky strategies, tier priority, model-plan filtering, cached quota skip, exclude IDs, preferred account selection for session affinity, Cloudflare cooldown skip, request-staggering metadata, and capacity summary.
+- [x] Set `gpt-5.5` as the default/test model baseline across code, tests, and plan examples. `/v1/models` now asserts the exact default model instead of only checking for a `gpt` prefix.
 
 ## 2026-06-11 Original Project Gap Audit
 

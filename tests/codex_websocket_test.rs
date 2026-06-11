@@ -28,7 +28,7 @@ fn transport_for_request_should_require_websocket_for_previous_response_id() {
 
 fn base_request() -> CodexResponsesRequest {
     CodexResponsesRequest {
-        model: "gpt-5.4".to_string(),
+        model: "gpt-5.5".to_string(),
         instructions: String::new(),
         input: Vec::new(),
         stream: true,
