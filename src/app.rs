@@ -6,7 +6,7 @@ use axum::{
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    http::{health::health, middleware::attach_request_id, v1::responses},
+    http::{health::health, middleware::attach_request_id, v1::models, v1::responses},
     state::AppState,
 };
 
@@ -15,6 +15,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(responses))
+        .route("/v1/models", get(models))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(from_fn(attach_request_id))

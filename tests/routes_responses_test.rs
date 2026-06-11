@@ -107,3 +107,26 @@ async fn v1_response_has_request_id_header_without_admin_body_field() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert!(body.get("requestId").is_none());
 }
+
+#[tokio::test]
+async fn models_route_returns_openai_compatible_codex_model_list() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["object"], "list");
+    assert_eq!(body["data"][0]["object"], "model");
+    assert!(body["data"][0]["id"].as_str().unwrap().starts_with("gpt"));
+}

@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::translation::codex_to_openai::openai_error;
 
@@ -14,11 +15,7 @@ struct ResponsesBody {
 }
 
 pub async fn responses(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
-    let auth = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    if !auth.starts_with("Bearer cpr_") {
+    if !has_client_api_key(&headers) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(openai_error("Missing client API key", "invalid_api_key")),
@@ -43,4 +40,36 @@ pub async fn responses(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
             "no_available_accounts",
         )),
     )
+}
+
+pub async fn models(headers: HeaderMap) -> impl IntoResponse {
+    if !has_client_api_key(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(openai_error("Missing client API key", "invalid_api_key")),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "gpt-5.4",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "openai"
+                }
+            ]
+        })),
+    )
+}
+
+fn has_client_api_key(headers: &HeaderMap) -> bool {
+    let auth = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    auth.starts_with("Bearer cpr_")
 }
