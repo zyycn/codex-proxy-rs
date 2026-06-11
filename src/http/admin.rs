@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::admin_session::verify_admin_password,
-    http::middleware::RequestId,
+    http::{auth::admin_session_id, middleware::RequestId},
     pagination::{clamp_limit, Page},
     state::AppState,
 };
@@ -348,9 +348,5 @@ async fn validate_admin_session(
 }
 
 fn admin_session_cookie(headers: &HeaderMap) -> Option<&str> {
-    let cookie = headers.get("cookie")?.to_str().ok()?;
-    cookie.split(';').map(str::trim).find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        (name == "cpr_admin_session" && !value.is_empty()).then_some(value)
-    })
+    admin_session_id(headers)
 }

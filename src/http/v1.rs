@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::translation::codex_to_openai::openai_error;
+use crate::{http::auth::client_api_key, translation::codex_to_openai::openai_error};
 
 #[derive(Deserialize)]
 struct ResponsesBody {
@@ -67,9 +67,5 @@ pub async fn models(headers: HeaderMap) -> impl IntoResponse {
 }
 
 fn has_client_api_key(headers: &HeaderMap) -> bool {
-    let auth = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    auth.starts_with("Bearer cpr_")
+    client_api_key(headers).is_some()
 }
