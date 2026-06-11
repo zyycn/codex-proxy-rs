@@ -116,6 +116,48 @@ Success response:
 }
 ```
 
+### `GET /admin/accounts`
+
+Returns stored Codex accounts with cursor pagination. Access tokens and refresh tokens are never decrypted or returned.
+
+### `POST /admin/accounts/import`
+
+Imports accounts into encrypted SQLite storage. The request body uses the Rust import format, which accepts the exported account object fields needed by this service and ignores unrelated fields.
+
+Request:
+
+```json
+{
+  "accounts": [
+    {
+      "id": "acct_01",
+      "email": "user@example.com",
+      "accountId": "chatgpt-account",
+      "userId": "chatgpt-user",
+      "label": "primary",
+      "planType": "plus",
+      "token": "access-token",
+      "refreshToken": "refresh-token",
+      "status": "active"
+    }
+  ]
+}
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "imported": 1,
+    "skipped": 0
+  },
+  "requestId": "req_01"
+}
+```
+
 Success body:
 
 ```json

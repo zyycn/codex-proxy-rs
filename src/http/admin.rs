@@ -8,11 +8,16 @@ use axum::{
     Extension, Json,
 };
 use chrono::{Duration, Utc};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
+    accounts::{
+        model::AccountStatus,
+        repository::{NewAccount, StoredAccountMetadata},
+    },
     auth::admin_session::verify_admin_password,
     config::{AppConfig, QuotaWarningThresholds},
     http::{auth::admin_session_id, middleware::RequestId},
@@ -120,6 +125,13 @@ pub struct LogsQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountsQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     pub password: String,
 }
@@ -151,6 +163,67 @@ pub struct AdminSettingsData {
     pub logs_capacity: u32,
     pub logs_capture_body: bool,
     pub usage_history_retention_days: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImportPayload {
+    pub accounts: Vec<AccountImportEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImportEntry {
+    pub id: Option<String>,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub token: String,
+    pub refresh_token: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImportData {
+    pub imported: u32,
+    pub skipped: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAccountData {
+    pub id: String,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub status: String,
+    pub access_token_expires_at: Option<String>,
+    pub added_at: String,
+    pub updated_at: String,
+}
+
+impl From<StoredAccountMetadata> for AdminAccountData {
+    fn from(account: StoredAccountMetadata) -> Self {
+        Self {
+            id: account.id,
+            email: account.email,
+            account_id: account.account_id,
+            user_id: account.user_id,
+            label: account.label,
+            plan_type: account.plan_type,
+            status: account_status_value(account.status).to_string(),
+            access_token_expires_at: account
+                .access_token_expires_at
+                .map(|value| value.to_rfc3339()),
+            added_at: account.added_at.to_rfc3339(),
+            updated_at: account.updated_at.to_rfc3339(),
+        }
+    }
 }
 
 impl AdminSettingsData {
@@ -345,6 +418,159 @@ pub async fn settings(
     .into_response()
 }
 
+pub async fn accounts(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<AccountsQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let limit = clamp_limit(query.limit.unwrap_or(50));
+    match repo.list_metadata(query.cursor, limit).await {
+        Ok(page) => {
+            let Page { items, next_cursor } = page;
+            let page = Page {
+                items: items.into_iter().map(AdminAccountData::from).collect(),
+                next_cursor,
+            };
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminPageEnvelope::ok(page, limit, request_id),
+            )
+            .into_response()
+        }
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to list accounts", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn import_accounts(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<AccountImportPayload>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    if payload.accounts.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "No importable accounts found", (), request_id),
+        )
+        .into_response();
+    }
+
+    let mut imported = 0u32;
+    let mut skipped = 0u32;
+    for entry in payload.accounts {
+        let token = entry.token.trim();
+        if token.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let id = normalized_account_id(entry.id);
+        match repo.exists(&id).await {
+            Ok(true) => {
+                skipped += 1;
+                continue;
+            }
+            Ok(false) => {}
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+                )
+                .into_response();
+            }
+        }
+
+        let status = match parse_import_status(entry.status.as_deref()) {
+            Ok(status) => status,
+            Err(message) => {
+                return AdminResponse::new(
+                    StatusCode::BAD_REQUEST,
+                    AdminEnvelope::new(40001, message, (), request_id),
+                )
+                .into_response();
+            }
+        };
+        let account = NewAccount {
+            id,
+            email: empty_to_none(entry.email),
+            account_id: empty_to_none(entry.account_id),
+            user_id: empty_to_none(entry.user_id),
+            label: empty_to_none(entry.label),
+            plan_type: empty_to_none(entry.plan_type),
+            access_token: SecretString::new(token.to_string().into()),
+            refresh_token: empty_to_none(entry.refresh_token)
+                .map(|token| SecretString::new(token.into())),
+            access_token_expires_at: None,
+            status,
+        };
+        if repo.insert(account).await.is_err() {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to import account", (), request_id),
+            )
+            .into_response();
+        }
+        imported += 1;
+    }
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountImportData { imported, skipped }, request_id),
+    )
+    .into_response()
+}
+
 #[derive(Debug)]
 struct AdminUserRow {
     id: String,
@@ -427,5 +653,39 @@ async fn require_admin_session(
             AdminEnvelope::new(50001, "Failed to validate admin session", (), request_id),
         )
         .into_response()),
+    }
+}
+
+fn normalized_account_id(id: Option<String>) -> String {
+    id.and_then(|id| empty_to_none(Some(id)))
+        .unwrap_or_else(|| format!("acct_{}", Uuid::new_v4().simple()))
+}
+
+fn empty_to_none(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_import_status(status: Option<&str>) -> Result<AccountStatus, String> {
+    match status.unwrap_or("active") {
+        "active" => Ok(AccountStatus::Active),
+        "expired" => Ok(AccountStatus::Expired),
+        "quota_exhausted" => Ok(AccountStatus::QuotaExhausted),
+        "refreshing" => Ok(AccountStatus::Refreshing),
+        "disabled" => Ok(AccountStatus::Disabled),
+        "banned" => Ok(AccountStatus::Banned),
+        other => Err(format!("Unsupported account status: {other}")),
+    }
+}
+
+fn account_status_value(status: AccountStatus) -> &'static str {
+    match status {
+        AccountStatus::Active => "active",
+        AccountStatus::Expired => "expired",
+        AccountStatus::QuotaExhausted => "quota_exhausted",
+        AccountStatus::Refreshing => "refreshing",
+        AccountStatus::Disabled => "disabled",
+        AccountStatus::Banned => "banned",
     }
 }

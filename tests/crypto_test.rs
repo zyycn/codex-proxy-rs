@@ -14,3 +14,18 @@ fn secret_box_encrypts_and_decrypts_without_storing_plaintext() {
         "rt_example_refresh_token"
     );
 }
+
+#[test]
+fn secret_box_load_or_create_should_reuse_existing_master_key_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("master.key");
+    let first_box = SecretBox::load_or_create(&key_path).unwrap();
+    let ciphertext = first_box
+        .encrypt(&SecretString::new("persisted-secret".to_string().into()))
+        .unwrap();
+
+    let second_box = SecretBox::load_or_create(&key_path).unwrap();
+    let decrypted = second_box.decrypt(&ciphertext).unwrap();
+
+    assert_eq!(decrypted.expose_secret(), "persisted-secret");
+}

@@ -62,6 +62,20 @@ pub struct StoredAccount {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StoredAccountMetadata {
+    pub id: String,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
+    pub status: AccountStatus,
+    pub added_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct UsageDelta {
     pub input_tokens: i64,
@@ -128,6 +142,14 @@ impl AccountRepository {
         row.map(|row| self.account_from_row(&row)).transpose()
     }
 
+    pub async fn exists(&self, id: &str) -> AccountRepositoryResult<bool> {
+        let row = sqlx::query("select 1 from accounts where id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn list(
         &self,
         cursor: Option<String>,
@@ -160,6 +182,49 @@ impl AccountRepository {
         let mut items = Vec::with_capacity(take_count);
         for row in rows.into_iter().take(take_count) {
             items.push(self.account_from_row(&row)?);
+        }
+        let next_cursor = if has_next {
+            items
+                .last()
+                .map(|account| encode_cursor(&account.added_at.to_rfc3339(), &account.id))
+        } else {
+            None
+        };
+        Ok(Page { items, next_cursor })
+    }
+
+    pub async fn list_metadata(
+        &self,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> AccountRepositoryResult<Page<StoredAccountMetadata>> {
+        let fetch_limit = i64::from(limit) + 1;
+        let rows = if let Some(cursor) = cursor {
+            let (created_at, id) =
+                decode_cursor(&cursor).ok_or(AccountRepositoryError::InvalidCursor)?;
+            sqlx::query(
+                "select id, email, account_id, user_id, label, plan_type, access_token_expires_at, status, added_at, updated_at from accounts where added_at < ? or (added_at = ? and id < ?) order by added_at desc, id desc limit ?",
+            )
+            .bind(&created_at)
+            .bind(created_at)
+            .bind(id)
+            .bind(fetch_limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "select id, email, account_id, user_id, label, plan_type, access_token_expires_at, status, added_at, updated_at from accounts order by added_at desc, id desc limit ?",
+            )
+            .bind(fetch_limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let has_next = rows.len() > limit as usize;
+        let take_count = rows.len().min(limit as usize);
+        let mut items = Vec::with_capacity(take_count);
+        for row in rows.into_iter().take(take_count) {
+            items.push(metadata_from_row(&row)?);
         }
         let next_cursor = if has_next {
             items
@@ -336,5 +401,24 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> AccountRepositoryResult<Acco
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+    })
+}
+
+fn metadata_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AccountRepositoryResult<StoredAccountMetadata> {
+    Ok(StoredAccountMetadata {
+        id: row.get("id"),
+        email: row.get("email"),
+        account_id: row.get("account_id"),
+        user_id: row.get("user_id"),
+        label: row.get("label"),
+        plan_type: row.get("plan_type"),
+        access_token_expires_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("access_token_expires_at"),
+        )?,
+        status: status_from_db(&row.get::<String, _>("status"))?,
+        added_at: parse_rfc3339(&row.get::<String, _>("added_at"))?,
+        updated_at: parse_rfc3339(&row.get::<String, _>("updated_at"))?,
     })
 }

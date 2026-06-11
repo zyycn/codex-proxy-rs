@@ -1,3 +1,5 @@
+use std::{fs, path::Path};
+
 use aes_gcm::{
     aead::{rand_core::RngCore, Aead, OsRng},
     Aes256Gcm, KeyInit, Nonce,
@@ -22,6 +24,10 @@ pub enum CryptoError {
     UnsupportedVersion,
     #[error("secret is not valid utf-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
+    #[error("secret key file io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("stored secret key must decode to 32 bytes")]
+    InvalidStoredKeyLength,
 }
 
 pub type CryptoResult<T> = Result<T, CryptoError>;
@@ -34,6 +40,26 @@ pub struct SecretBox {
 impl SecretBox {
     pub fn new(key: [u8; 32]) -> Self {
         Self { key }
+    }
+
+    pub fn load_or_create(path: impl AsRef<Path>) -> CryptoResult<Self> {
+        let path = path.as_ref();
+        if path.exists() {
+            let encoded = fs::read_to_string(path)?;
+            let key = decode_key(encoded.trim())?;
+            return Ok(Self::new(key));
+        }
+
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        fs::write(path, URL_SAFE_NO_PAD.encode(key))?;
+        Ok(Self::new(key))
     }
 
     pub fn encrypt(&self, plaintext: &SecretString) -> CryptoResult<String> {
@@ -73,4 +99,11 @@ impl SecretBox {
             .map_err(|_| CryptoError::Decrypt)?;
         Ok(SecretString::new(String::from_utf8(plaintext)?.into()))
     }
+}
+
+fn decode_key(encoded: &str) -> CryptoResult<[u8; 32]> {
+    URL_SAFE_NO_PAD
+        .decode(encoded)?
+        .try_into()
+        .map_err(|_| CryptoError::InvalidStoredKeyLength)
 }
