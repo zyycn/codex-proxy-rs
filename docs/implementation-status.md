@@ -12,7 +12,7 @@ Update this file before each feature commit.
 | Secret encryption | Completed | pending crypto commit | `cargo test secret_box_encrypts_and_decrypts_without_storing_plaintext`; full `fmt/test/clippy` before commit | AES-256-GCM `SecretBox` stores upstream secrets as `v1:<nonce>:<ciphertext>` without plaintext. |
 | Logging and pagination | Completed | pending logs commit | `cargo test event_logs_are_cursor_paginated`; full `fmt/test/clippy` before commit | Adds cursor pagination, `Page<T>` camelCase serialization, event log repository, and rotation config shell. |
 | TLS headers and fingerprint | Completed | pending codex headers commit | `cargo test codex_headers_include_desktop_identity_and_turn_state`; `cargo tree \| rg 'reqwest\|rustls'`; full `fmt/test/clippy` before commit | Adds Codex Desktop fingerprint model, exact identity/request headers, and pinned reqwest/rustls client builder. |
-| Cookie persistence | Planned |  |  |  |
+| Cookie persistence | Completed | pending cookies commit | `cargo test cookie_jar_captures_and_replays_account_scoped_cookies`; full `fmt/test/clippy` before commit | Adds account-scoped in-memory Cookie jar and repository shell; database persistence follows storage integration. |
 | Account pool and refresh | Planned |  |  |  |
 | Translation | Planned |  |  |  |
 | HTTP routes | Planned |  |  |  |

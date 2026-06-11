@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod codex;
 pub mod config;
+pub mod cookies;
 pub mod crypto;
 pub mod error;
 pub mod fingerprint;

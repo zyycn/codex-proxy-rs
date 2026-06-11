@@ -1937,7 +1937,7 @@ git commit -m "feat: add codex tls client and headers"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/cookie_store_test.rs`
 
-- [ ] **Step 1: Write failing cookie replay test**
+- [x] **Step 1: Write failing cookie replay test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/cookie_store_test.rs`:
 
@@ -1955,7 +1955,7 @@ fn cookie_jar_captures_and_replays_account_scoped_cookies() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -1965,7 +1965,7 @@ cargo test cookie_jar_captures_and_replays_account_scoped_cookies
 
 Expected: compile failure because cookies module does not exist.
 
-- [ ] **Step 3: Implement in-memory cookie jar**
+- [x] **Step 3: Implement in-memory cookie jar**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -2046,7 +2046,7 @@ Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/repository.rs`:
 pub struct CookieRepository;
 ```
 
-- [ ] **Step 4: Verify cookie capture**
+- [x] **Step 4: Verify cookie capture**
 
 Run:
 
@@ -2056,7 +2056,7 @@ cargo test cookie_jar_captures_and_replays_account_scoped_cookies
 
 Expected: pass.
 
-- [ ] **Step 5: Commit cookies**
+- [x] **Step 5: Commit cookies**
 
 ```bash
 git add src/cookies src/lib.rs tests/cookie_store_test.rs
