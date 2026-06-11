@@ -2310,7 +2310,7 @@ git commit -m "feat: add account pool foundation"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_chat_test.rs`
 
-- [ ] **Step 1: Write failing translation test**
+- [x] **Step 1: Write failing translation test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_chat_test.rs`:
 
@@ -2335,7 +2335,7 @@ fn chat_completion_translates_to_codex_response_request() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -2345,7 +2345,7 @@ cargo test chat_completion_translates_to_codex_response_request
 
 Expected: compile failure because translation module does not exist.
 
-- [ ] **Step 3: Implement minimal translation types**
+- [x] **Step 3: Implement minimal translation types**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -2463,7 +2463,7 @@ pub enum ResponseFormat {
 }
 ```
 
-- [ ] **Step 4: Verify translation**
+- [x] **Step 4: Verify translation**
 
 Run:
 
@@ -2473,7 +2473,7 @@ cargo test chat_completion_translates_to_codex_response_request
 
 Expected: pass.
 
-- [ ] **Step 5: Commit translation layer**
+- [x] **Step 5: Commit translation layer**
 
 ```bash
 git add src/translation src/codex/types.rs src/lib.rs tests/routes_chat_test.rs

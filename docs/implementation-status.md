@@ -14,7 +14,7 @@ Update this file before each feature commit.
 | TLS headers and fingerprint | Completed | pending codex headers commit | `cargo test codex_headers_include_desktop_identity_and_turn_state`; `cargo tree \| rg 'reqwest\|rustls'`; full `fmt/test/clippy` before commit | Adds Codex Desktop fingerprint model, exact identity/request headers, and pinned reqwest/rustls client builder. |
 | Cookie persistence | Completed | pending cookies commit | `cargo test cookie_jar_captures_and_replays_account_scoped_cookies`; full `fmt/test/clippy` before commit | Adds account-scoped in-memory Cookie jar and repository shell; database persistence follows storage integration. |
 | Account pool and refresh | Completed | pending accounts commit | `cargo test account_pool_skips_expired_disabled_banned_and_quota_exhausted_accounts`; full `fmt/test/clippy` before commit | Adds account statuses, acquisition filter, lifecycle events, token pair, OAuth config, and refresh policy shell. |
-| Translation | Planned |  |  |  |
+| Translation | Completed | pending translation commit | `cargo test chat_completion_translates_to_codex_response_request`; full `fmt/test/clippy` before commit | Adds OpenAI Chat request types, Codex Responses request type, translation, and OpenAI-compatible error body helper. |
 | HTTP routes | Planned |  |  |  |
 | Upstream lifecycle | Planned |  |  |  |
 | Fingerprint updates | Planned |  |  |  |

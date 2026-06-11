@@ -10,3 +10,4 @@ pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
+pub mod translation;
