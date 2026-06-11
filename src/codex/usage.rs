@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::codex::sse::{parse_sse_events, SseError};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
@@ -66,6 +68,28 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         cached_tokens,
         total_tokens,
     })
+}
+
+pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
+    let events = parse_sse_events(body)?;
+    let mut usage: Option<TokenUsage> = None;
+    for event in events {
+        if event.data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            continue;
+        };
+        let event_usage =
+            extract_usage(&value).or_else(|| value.get("response").and_then(extract_usage));
+        if let Some(event_usage) = event_usage {
+            usage = Some(match usage {
+                Some(current) => current.merged(event_usage),
+                None => event_usage,
+            });
+        }
+    }
+    Ok(usage)
 }
 
 fn number_field(value: &Value, field: &str) -> Option<u64> {

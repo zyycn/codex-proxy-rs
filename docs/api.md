@@ -43,7 +43,11 @@ Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, 
 
 Uses imported Codex accounts to call `POST /codex/responses` on the configured Codex backend. The upstream request is sent with Codex Desktop headers, account bearer token, optional account id, request id, and encrypted account-scoped Cookie replay.
 
-The current Rust route collects HTTP SSE until `response.completed` and returns the completed OpenAI-compatible response JSON. `previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
+When the client omits `stream` or sets `"stream": false`, the Rust route collects upstream HTTP SSE until `response.completed` and returns the completed OpenAI-compatible response JSON.
+
+When the client sets `"stream": true`, the Rust route returns `text/event-stream` and passes through upstream SSE frames while collecting usage for the account after the stream finishes. Both modes capture upstream `Set-Cookie`, replay encrypted account-scoped Cookies, record account usage when usage appears in SSE, and write a `v1.response` event log with `requestId`, `accountId`, `route`, `model`, `statusCode`, `latencyMs`, and non-secret metadata.
+
+`previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
 
 ## `/admin/*`
 
@@ -119,6 +123,37 @@ Success response:
     "usageHistoryRetentionDays": null
   },
   "requestId": "req_01"
+}
+```
+
+### `GET /admin/logs`
+
+Returns cursor-paginated event logs for admin troubleshooting. The list uses the standard admin page envelope and lower camelCase fields.
+
+Example item:
+
+```json
+{
+  "id": "log_01",
+  "requestId": "req_01",
+  "kind": "v1.response",
+  "level": "info",
+  "accountId": "acct_01",
+  "route": "/v1/responses",
+  "model": "gpt-5.5",
+  "statusCode": 200,
+  "latencyMs": 123,
+  "message": "v1 responses completed",
+  "metadata": {
+    "stream": false,
+    "usage": {
+      "inputTokens": 7,
+      "outputTokens": 4,
+      "cachedTokens": 2,
+      "totalTokens": 11
+    }
+  },
+  "createdAt": "2026-06-11T12:00:00Z"
 }
 ```
 

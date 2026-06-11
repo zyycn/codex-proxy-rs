@@ -1,24 +1,40 @@
+use std::{sync::Arc, time::Instant};
+
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    http::{
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+        HeaderMap, StatusCode,
+    },
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chrono::Utc;
+use futures::{stream, StreamExt};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use crate::{
-    accounts::{pool::AccountAcquireRequest, repository::UsageDelta},
+    accounts::{
+        model::Account,
+        pool::{AccountAcquireRequest, AccountPool},
+        repository::UsageDelta,
+    },
     codex::{
-        client::{build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext},
+        client::{
+            build_reqwest_client, CodexBackendClient, CodexBackendStream, CodexClientError,
+            CodexRequestContext,
+        },
         sse::parse_sse_events,
         types::CodexResponsesRequest,
+        usage::{extract_sse_usage, TokenUsage},
     },
     fingerprint::model::Fingerprint,
     http::{auth::client_api_key, middleware::RequestId},
+    logs::event::{EventLevel, EventLog},
     models::catalog::ModelCatalog,
     state::AppState,
     translation::codex_to_openai::openai_error,
@@ -34,6 +50,7 @@ struct ResponsesBody {
     reasoning: Option<Value>,
     tools: Option<Vec<Value>>,
     previous_response_id: Option<String>,
+    stream: Option<bool>,
 }
 
 pub async fn responses(
@@ -41,21 +58,24 @@ pub async fn responses(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> Response {
+    let started_at = Instant::now();
     if !authorize_client_api_key(&state, &headers).await {
-        return missing_client_api_key_response();
+        return missing_client_api_key_response().into_response();
     }
 
     let default_model = state.config().model.default_model.clone();
     let body = serde_json::from_slice::<ResponsesBody>(&body)
         .unwrap_or_else(|_| default_body(default_model.clone()));
+    let client_stream = body.stream.unwrap_or(false);
     let requested_model = body.model.clone().unwrap_or(default_model);
     let catalog = ModelCatalog::from_config(&state.config().model);
     if !catalog.is_recognized_model_name(&requested_model) {
         return (
             StatusCode::NOT_FOUND,
             Json(openai_error("Model not found", "model_not_found")),
-        );
+        )
+            .into_response();
     }
     let parsed_model = catalog.parse_model_name(&requested_model);
     let codex_request = CodexResponsesRequest {
@@ -77,72 +97,135 @@ pub async fn responses(
             .acquire_with(AccountAcquireRequest::new(&codex_request.model, Utc::now()))
     };
     let Some(acquired) = acquired else {
-        return no_available_accounts_response();
+        return no_available_accounts_response().into_response();
     };
     let account = acquired.account;
+    let log_context = V1LogContext::new(
+        request_id.as_str(),
+        &account.id,
+        &codex_request.model,
+        client_stream,
+        started_at,
+    );
+
+    if client_stream {
+        return responses_stream(state, codex_request, account, log_context).await;
+    }
+
     let response = send_codex_request(&state, &codex_request, &account, request_id.as_str()).await;
     state.account_pool().lock().await.release(&account.id);
 
     let response = match response {
         Ok(response) => response,
-        Err(error) => return codex_client_error_response(error),
-    };
-    if let Some(cookie_repo) = state.cookie_repository() {
-        for cookie in &response.set_cookie_headers {
-            if cookie_repo
-                .capture_set_cookie(&account.id, cookie)
-                .await
-                .is_err()
-            {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(openai_error(
-                        "Failed to persist upstream cookies",
-                        "cookie_store_error",
-                    )),
-                );
-            }
-        }
-    }
-    if let (Some(repo), Some(usage)) = (state.account_repository(), response.usage) {
-        if repo
-            .record_usage(
-                &account.id,
-                UsageDelta {
-                    input_tokens: u64_to_i64_saturating(usage.input_tokens),
-                    output_tokens: u64_to_i64_saturating(usage.output_tokens),
-                    cached_tokens: u64_to_i64_saturating(usage.cached_tokens),
-                },
+        Err(error) => {
+            let error_response = codex_client_error_response(error);
+            log_v1_response(
+                &state,
+                &log_context,
+                error_response.0,
+                EventLevel::Error,
+                "v1 responses upstream request failed",
+                json!({"stream": false}),
             )
-            .await
-            .is_err()
-        {
+            .await;
+            return error_response.into_response();
+        }
+    };
+    if persist_upstream_cookies(&state, &account.id, &response.set_cookie_headers)
+        .await
+        .is_err()
+    {
+        log_v1_response(
+            &state,
+            &log_context,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            EventLevel::Error,
+            "v1 responses cookie persistence failed",
+            json!({"stream": false, "cookieStoreError": true}),
+        )
+        .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(openai_error(
+                "Failed to persist upstream cookies",
+                "cookie_store_error",
+            )),
+        )
+            .into_response();
+    }
+    if let Some(usage) = response.usage {
+        if record_usage(&state, &account.id, usage).await.is_err() {
+            log_v1_response(
+                &state,
+                &log_context,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                EventLevel::Error,
+                "v1 responses usage persistence failed",
+                json!({"stream": false, "usage": usage, "usageStoreError": true}),
+            )
+            .await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(openai_error(
                     "Failed to record account usage",
                     "usage_store_error",
                 )),
-            );
+            )
+                .into_response();
         }
     }
 
     match completed_response_json(&response.body) {
-        Ok(Some(body)) => (StatusCode::OK, Json(body)),
-        Ok(None) => (
-            StatusCode::BAD_GATEWAY,
-            Json(openai_error(
-                "Codex response did not include response.completed",
-                "empty_upstream_response",
-            )),
-        ),
-        Err(_) => (
-            StatusCode::BAD_GATEWAY,
-            Json(openai_error(
-                "Invalid Codex SSE response",
-                "invalid_upstream_sse",
-            )),
-        ),
+        Ok(Some(body)) => {
+            log_v1_response(
+                &state,
+                &log_context,
+                StatusCode::OK,
+                EventLevel::Info,
+                "v1 responses completed",
+                json!({"stream": false, "usage": response.usage}),
+            )
+            .await;
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Ok(None) => {
+            log_v1_response(
+                &state,
+                &log_context,
+                StatusCode::BAD_GATEWAY,
+                EventLevel::Warn,
+                "v1 responses completed event missing",
+                json!({"stream": false, "usage": response.usage}),
+            )
+            .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Codex response did not include response.completed",
+                    "empty_upstream_response",
+                )),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            log_v1_response(
+                &state,
+                &log_context,
+                StatusCode::BAD_GATEWAY,
+                EventLevel::Warn,
+                "v1 responses invalid SSE response",
+                json!({"stream": false, "sseParseError": error.to_string()}),
+            )
+            .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Invalid Codex SSE response",
+                    "invalid_upstream_sse",
+                )),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -164,13 +247,14 @@ fn default_body(default_model: String) -> ResponsesBody {
         reasoning: None,
         tools: None,
         previous_response_id: None,
+        stream: None,
     }
 }
 
 async fn send_codex_request(
     state: &AppState,
     request: &CodexResponsesRequest,
-    account: &crate::accounts::model::Account,
+    account: &Account,
     request_id: &str,
 ) -> Result<crate::codex::client::CodexBackendResponse, CodexClientError> {
     let request_domain = request_domain(&state.config().api.base_url);
@@ -195,6 +279,333 @@ async fn send_codex_request(
             },
         )
         .await
+}
+
+async fn send_codex_stream_request(
+    state: &AppState,
+    request: &CodexResponsesRequest,
+    account: &Account,
+    request_id: &str,
+) -> Result<CodexBackendStream, CodexClientError> {
+    let request_domain = request_domain(&state.config().api.base_url);
+    let cookie_header = match (state.cookie_repository(), request_domain.as_deref()) {
+        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
+        _ => None,
+    };
+    let client = CodexBackendClient::new(
+        build_reqwest_client(state.config().tls.force_http11)?,
+        state.config().api.base_url.clone(),
+        Fingerprint::default_codex_desktop(),
+    );
+    client
+        .stream_response(
+            request,
+            CodexRequestContext {
+                access_token: &account.access_token,
+                account_id: account.account_id.as_deref(),
+                request_id,
+                turn_state: None,
+                cookie_header: cookie_header.as_deref(),
+            },
+        )
+        .await
+}
+
+async fn responses_stream(
+    state: AppState,
+    request: CodexResponsesRequest,
+    account: Account,
+    log_context: V1LogContext,
+) -> Response {
+    let stream_response =
+        send_codex_stream_request(&state, &request, &account, log_context.request_id.as_str())
+            .await;
+    let stream_response = match stream_response {
+        Ok(response) => response,
+        Err(error) => {
+            state.account_pool().lock().await.release(&account.id);
+            let error_response = codex_client_error_response(error);
+            log_v1_response(
+                &state,
+                &log_context,
+                error_response.0,
+                EventLevel::Error,
+                "v1 responses stream upstream request failed",
+                json!({"stream": true}),
+            )
+            .await;
+            return error_response.into_response();
+        }
+    };
+
+    if persist_upstream_cookies(&state, &account.id, &stream_response.set_cookie_headers)
+        .await
+        .is_err()
+    {
+        state.account_pool().lock().await.release(&account.id);
+        log_v1_response(
+            &state,
+            &log_context,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            EventLevel::Error,
+            "v1 responses stream cookie persistence failed",
+            json!({"stream": true, "cookieStoreError": true}),
+        )
+        .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(openai_error(
+                "Failed to persist upstream cookies",
+                "cookie_store_error",
+            )),
+        )
+            .into_response();
+    }
+
+    let upstream = Box::pin(stream_response.response.bytes_stream());
+    let audit = StreamAudit::new(state, log_context, account.id);
+    let body_stream = stream::unfold(Some((upstream, Vec::new(), audit)), |state| async move {
+        let (mut upstream, mut collected, mut audit) = state?;
+        match upstream.next().await {
+            Some(Ok(chunk)) => {
+                collected.extend_from_slice(&chunk);
+                Some((Ok(chunk), Some((upstream, collected, audit))))
+            }
+            Some(Err(error)) => {
+                audit.log_transport_error(&error).await;
+                Some((Err(error), None))
+            }
+            None => {
+                audit.complete(&collected).await;
+                None
+            }
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from_stream(body_stream))
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(openai_error(
+                    "Failed to build stream response",
+                    "stream_response_error",
+                )),
+            )
+                .into_response()
+        })
+}
+
+async fn persist_upstream_cookies(
+    state: &AppState,
+    account_id: &str,
+    set_cookie_headers: &[String],
+) -> Result<(), ()> {
+    let Some(cookie_repo) = state.cookie_repository() else {
+        return Ok(());
+    };
+    for cookie in set_cookie_headers {
+        cookie_repo
+            .capture_set_cookie(account_id, cookie)
+            .await
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+async fn record_usage(state: &AppState, account_id: &str, usage: TokenUsage) -> Result<(), ()> {
+    let Some(repo) = state.account_repository() else {
+        return Ok(());
+    };
+    repo.record_usage(
+        account_id,
+        UsageDelta {
+            input_tokens: u64_to_i64_saturating(usage.input_tokens),
+            output_tokens: u64_to_i64_saturating(usage.output_tokens),
+            cached_tokens: u64_to_i64_saturating(usage.cached_tokens),
+        },
+    )
+    .await
+    .map_err(|_| ())
+}
+
+#[derive(Clone)]
+struct V1LogContext {
+    request_id: String,
+    account_id: String,
+    model: String,
+    stream: bool,
+    started_at: Instant,
+}
+
+impl V1LogContext {
+    fn new(
+        request_id: &str,
+        account_id: &str,
+        model: &str,
+        stream: bool,
+        started_at: Instant,
+    ) -> Self {
+        Self {
+            request_id: request_id.to_string(),
+            account_id: account_id.to_string(),
+            model: model.to_string(),
+            stream,
+            started_at,
+        }
+    }
+
+    fn latency_ms(&self) -> i64 {
+        self.started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
+    }
+}
+
+struct StreamAudit {
+    state: AppState,
+    context: V1LogContext,
+    account_slot: AccountSlotGuard,
+}
+
+impl StreamAudit {
+    fn new(state: AppState, context: V1LogContext, account_id: String) -> Self {
+        let account_slot = AccountSlotGuard::new(state.account_pool(), account_id);
+        Self {
+            state,
+            context,
+            account_slot,
+        }
+    }
+
+    async fn complete(&mut self, body: &[u8]) {
+        let body = String::from_utf8_lossy(body);
+        let mut level = EventLevel::Info;
+        let mut message = "v1 responses stream completed";
+        let mut metadata = match extract_sse_usage(&body) {
+            Ok(usage) => {
+                if let Some(usage) = usage {
+                    if record_usage(&self.state, &self.context.account_id, usage)
+                        .await
+                        .is_err()
+                    {
+                        level = EventLevel::Warn;
+                        message = "v1 responses stream completed with usage store error";
+                        json!({"stream": true, "usage": usage, "usageStoreError": true})
+                    } else {
+                        json!({"stream": true, "usage": usage})
+                    }
+                } else {
+                    json!({"stream": true, "usage": null})
+                }
+            }
+            Err(error) => {
+                level = EventLevel::Warn;
+                message = "v1 responses stream completed with invalid SSE usage";
+                json!({"stream": true, "sseParseError": error.to_string()})
+            }
+        };
+        ensure_stream_metadata(&mut metadata, true);
+        log_v1_response(
+            &self.state,
+            &self.context,
+            StatusCode::OK,
+            level,
+            message,
+            metadata,
+        )
+        .await;
+        self.account_slot.release().await;
+    }
+
+    async fn log_transport_error(&mut self, error: &reqwest::Error) {
+        log_v1_response(
+            &self.state,
+            &self.context,
+            StatusCode::BAD_GATEWAY,
+            EventLevel::Error,
+            "v1 responses stream transport failed",
+            json!({"stream": true, "transportError": error.to_string()}),
+        )
+        .await;
+        self.account_slot.release().await;
+    }
+}
+
+struct AccountSlotGuard {
+    pool: Arc<Mutex<AccountPool>>,
+    account_id: String,
+    released: bool,
+}
+
+impl AccountSlotGuard {
+    fn new(pool: Arc<Mutex<AccountPool>>, account_id: String) -> Self {
+        Self {
+            pool,
+            account_id,
+            released: false,
+        }
+    }
+
+    async fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        self.pool.lock().await.release(&self.account_id);
+        self.released = true;
+    }
+}
+
+impl Drop for AccountSlotGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let pool = self.pool.clone();
+        let account_id = self.account_id.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            pool.lock().await.release(&account_id);
+        });
+    }
+}
+
+async fn log_v1_response(
+    state: &AppState,
+    context: &V1LogContext,
+    status: StatusCode,
+    level: EventLevel,
+    message: &str,
+    mut metadata: Value,
+) {
+    let Some(repo) = state.event_logs() else {
+        return;
+    };
+    ensure_stream_metadata(&mut metadata, context.stream);
+    let mut event = EventLog::new("v1.response", level, message);
+    event.request_id = Some(context.request_id.clone());
+    event.account_id = Some(context.account_id.clone());
+    event.route = Some("/v1/responses".to_string());
+    event.model = Some(context.model.clone());
+    event.status_code = Some(i64::from(status.as_u16()));
+    event.latency_ms = Some(context.latency_ms());
+    event.metadata = metadata;
+    if let Err(error) = repo.insert(event).await {
+        tracing::warn!(?error, "failed to insert v1 response event log");
+    }
+}
+
+fn ensure_stream_metadata(metadata: &mut Value, stream_value: bool) {
+    let Some(object) = metadata.as_object_mut() else {
+        *metadata = json!({"stream": stream_value});
+        return;
+    };
+    object
+        .entry("stream".to_string())
+        .or_insert_with(|| json!(stream_value));
 }
 
 fn completed_response_json(body: &str) -> Result<Option<Value>, crate::codex::sse::SseError> {

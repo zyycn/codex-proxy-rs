@@ -1,16 +1,15 @@
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, SET_COOKIE},
-    Client, StatusCode,
+    Client, Response as ReqwestResponse, StatusCode,
 };
-use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
     codex::{
         headers::build_codex_headers,
-        sse::{parse_sse_events, SseError},
+        sse::SseError,
         types::CodexResponsesRequest,
-        usage::{extract_usage, TokenUsage},
+        usage::{extract_sse_usage, TokenUsage},
         websocket::{ensure_http_sse_supported, WebSocketSupportError},
     },
     fingerprint::model::Fingerprint,
@@ -51,6 +50,12 @@ pub struct CodexBackendResponse {
     pub set_cookie_headers: Vec<String>,
 }
 
+pub struct CodexBackendStream {
+    pub response: ReqwestResponse,
+    pub turn_state: Option<String>,
+    pub set_cookie_headers: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct CodexBackendClient {
     client: Client,
@@ -72,27 +77,10 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendResponse> {
-        ensure_http_sse_supported(request)?;
-        let url = format!("{}/codex/responses", self.base_url);
-        let response = self
-            .client
-            .post(url)
-            .headers(self.request_headers(context)?)
-            .json(request)
-            .send()
-            .await?;
+        let response = self.send_response_request(request, context).await?;
         let status = response.status();
-        let turn_state = response
-            .headers()
-            .get("x-codex-turn-state")
-            .and_then(|value| value.to_str().ok())
-            .map(ToString::to_string);
-        let set_cookie_headers = response
-            .headers()
-            .get_all(SET_COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok().map(ToString::to_string))
-            .collect::<Vec<_>>();
+        let turn_state = turn_state(&response);
+        let set_cookie_headers = set_cookie_headers(&response);
         let body = response.text().await?;
         if !status.is_success() {
             return Err(CodexClientError::Upstream { status, body });
@@ -105,6 +93,43 @@ impl CodexBackendClient {
             turn_state,
             set_cookie_headers,
         })
+    }
+
+    pub async fn stream_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStream> {
+        let response = self.send_response_request(request, context).await?;
+        let status = response.status();
+        let turn_state = turn_state(&response);
+        let set_cookie_headers = set_cookie_headers(&response);
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(CodexClientError::Upstream { status, body });
+        }
+
+        Ok(CodexBackendStream {
+            response,
+            turn_state,
+            set_cookie_headers,
+        })
+    }
+
+    async fn send_response_request(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<ReqwestResponse> {
+        ensure_http_sse_supported(request)?;
+        let url = format!("{}/codex/responses", self.base_url);
+        Ok(self
+            .client
+            .post(url)
+            .headers(self.request_headers(context)?)
+            .json(request)
+            .send()
+            .await?)
     }
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
@@ -154,24 +179,19 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error
     builder.build()
 }
 
-fn extract_sse_usage(body: &str) -> CodexClientResult<Option<TokenUsage>> {
-    let events = parse_sse_events(body)?;
-    let mut usage: Option<TokenUsage> = None;
-    for event in events {
-        if event.data == "[DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-            continue;
-        };
-        let event_usage =
-            extract_usage(&value).or_else(|| value.get("response").and_then(extract_usage));
-        if let Some(event_usage) = event_usage {
-            usage = Some(match usage {
-                Some(current) => current.merged(event_usage),
-                None => event_usage,
-            });
-        }
-    }
-    Ok(usage)
+fn turn_state(response: &ReqwestResponse) -> Option<String> {
+    response
+        .headers()
+        .get("x-codex-turn-state")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
+}
+
+fn set_cookie_headers(response: &ReqwestResponse) -> Vec<String> {
+    response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(ToString::to_string))
+        .collect()
 }
