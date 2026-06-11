@@ -20,7 +20,10 @@ async fn main() -> anyhow::Result<()> {
     let port = config.server.port;
     let secret_box = SecretBox::load_or_create(&config.security.master_key_file)?;
     let pool = connect_sqlite(&config.database.url).await?;
-    let app = build_router(AppState::with_pool_and_secret_box(config, pool, secret_box));
+    let state = AppState::with_pool_and_secret_box(config, pool, secret_box);
+    let restored_accounts = state.reload_account_pool_from_repository().await?;
+    tracing::info!(restored_accounts, "account pool restored from sqlite");
+    let app = build_router(state);
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     tracing::info!(host, port, "codex-proxy-rs listening");
     axum::serve(listener, app).await?;

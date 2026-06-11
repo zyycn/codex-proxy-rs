@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::accounts::{
     pool::{AccountPool, AccountPoolOptions, RotationStrategy},
-    repository::AccountRepository,
+    repository::{AccountRepository, AccountRepositoryResult},
 };
 use crate::config::AppConfig;
 use crate::cookies::repository::CookieRepository;
@@ -97,6 +97,19 @@ impl AppState {
 
     pub fn account_pool(&self) -> Arc<Mutex<AccountPool>> {
         self.services.account_pool.clone()
+    }
+
+    pub async fn reload_account_pool_from_repository(&self) -> AccountRepositoryResult<usize> {
+        let Some(repo) = self.account_repository() else {
+            return Ok(0);
+        };
+        let accounts = repo.list_pool_accounts().await?;
+        let restored = accounts.len();
+        let mut pool = self.services.account_pool.lock().await;
+        for account in accounts {
+            pool.insert(account);
+        }
+        Ok(restored)
     }
 }
 

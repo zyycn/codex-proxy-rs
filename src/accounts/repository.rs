@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 
 use crate::{
-    accounts::model::AccountStatus,
+    accounts::model::{Account, AccountStatus},
     crypto::{CryptoError, SecretBox},
     pagination::{decode_cursor, encode_cursor, Page},
 };
@@ -234,6 +234,40 @@ impl AccountRepository {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    pub async fn list_pool_accounts(&self) -> AccountRepositoryResult<Vec<Account>> {
+        let rows = sqlx::query(
+            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut accounts = Vec::with_capacity(rows.len());
+        for row in rows {
+            let stored = self.account_from_row(&row)?;
+            let access_token = stored.access_token.expose_secret().to_string();
+            let refresh_token = stored
+                .refresh_token
+                .as_ref()
+                .map(|token| token.expose_secret().to_string());
+            accounts.push(Account {
+                id: stored.id,
+                email: stored.email,
+                account_id: stored.account_id,
+                user_id: stored.user_id,
+                label: stored.label,
+                plan_type: stored.plan_type,
+                access_token,
+                refresh_token,
+                access_token_expires_at: stored.access_token_expires_at,
+                status: stored.status,
+                quota_limit_reached: false,
+                cloudflare_cooldown_until: None,
+                added_at: stored.added_at.to_rfc3339(),
+                last_used_at: row.get("usage_last_used_at"),
+            });
+        }
+        Ok(accounts)
     }
 
     pub async fn set_status(
