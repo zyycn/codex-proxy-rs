@@ -2679,7 +2679,7 @@ git commit -m "feat: add http router auth boundaries"
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_chat_test.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_responses_test.rs`
 
-- [ ] **Step 1: Add failing upstream mock test**
+- [x] **Step 1: Add failing upstream mock test**
 
 Append to `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_responses_test.rs`:
 
@@ -2703,7 +2703,7 @@ async fn responses_route_rejects_non_codex_provider_models() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -2713,7 +2713,7 @@ cargo test responses_route_rejects_non_codex_provider_models
 
 Expected: fails with `401 Unauthorized`, because client API key validation and model validation are not implemented.
 
-- [ ] **Step 3: Implement model allow rule**
+- [x] **Step 3: Implement model allow rule**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/http/v1.rs`:
 
@@ -2750,7 +2750,7 @@ pub async fn responses(headers: HeaderMap, Json(body): Json<ResponsesBody>) -> i
 }
 ```
 
-- [ ] **Step 4: Verify model rejection**
+- [x] **Step 4: Verify model rejection**
 
 Run:
 
@@ -2760,7 +2760,7 @@ cargo test responses_route_rejects_non_codex_provider_models
 
 Expected: pass.
 
-- [ ] **Step 5: Commit upstream lifecycle boundary**
+- [x] **Step 5: Commit upstream lifecycle boundary**
 
 ```bash
 git add src/codex src/http/v1.rs src/state.rs tests/routes_chat_test.rs tests/routes_responses_test.rs

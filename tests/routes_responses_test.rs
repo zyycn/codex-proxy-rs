@@ -63,3 +63,21 @@ async fn v1_requires_client_api_key_not_admin_cookie() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn responses_route_rejects_non_codex_provider_models() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", "Bearer cpr_test")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"claude-3","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
