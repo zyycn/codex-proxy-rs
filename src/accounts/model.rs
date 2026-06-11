@@ -23,6 +23,8 @@ pub struct Account {
     pub refresh_token: Option<String>,
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub status: AccountStatus,
+    pub quota_limit_reached: bool,
+    pub cloudflare_cooldown_until: Option<DateTime<Utc>>,
     pub added_at: String,
     pub last_used_at: Option<String>,
 }
@@ -40,6 +42,8 @@ impl Account {
             refresh_token: Some(format!("refresh-{id}")),
             access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
             status,
+            quota_limit_reached: false,
+            cloudflare_cooldown_until: None,
             added_at: Utc::now().to_rfc3339(),
             last_used_at: None,
         }
