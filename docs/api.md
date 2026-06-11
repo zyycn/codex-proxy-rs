@@ -34,6 +34,39 @@ Admin JSON uses lower camelCase field names. Every admin response includes an `X
 
 Use real HTTP status codes and body-level frontend codes together. Do not return HTTP `200` for failed requests. The body `code` exists for frontend branching; the HTTP status remains the transport truth.
 
+### `POST /admin/login`
+
+Authenticates only with the configured admin password stored in `admin_users`. Client API keys (`Bearer cpr_...`) are ignored by the admin login flow and cannot create admin sessions.
+
+Request:
+
+```json
+{
+  "password": "admin-password"
+}
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "expiresAt": "2026-06-11T12:00:00Z"
+  },
+  "requestId": "req_01"
+}
+```
+
+Success also returns:
+
+```http
+Set-Cookie: cpr_admin_session=...; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600
+```
+
+Invalid password response uses HTTP `401` and body code `40102`.
+
 Success body:
 
 ```json
