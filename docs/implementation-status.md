@@ -8,7 +8,7 @@ Update this file before each feature commit.
 | API contract docs | Completed | initial scaffold commit | `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | `/v1/*` OpenAI-compatible body, `/admin/*` frontend envelope, body codes, camelCase, and request ID policy are documented. |
 | Configuration | Completed | pending config commit | `cargo test default_config_keeps_only_codex_backend`; full `fmt/test/clippy` before commit | Defines Codex-only config, default YAML, and `Arc<AppServices>` state shell. |
 | SQLite storage | Completed | pending storage commit | `cargo test migrations_create_accounts_and_event_tables`; full `fmt/test/clippy` before commit | Creates SQLite WAL connector, migrations for accounts/API keys/sessions/cookies/fingerprints/events, and event/account indexes. |
-| Admin auth and client API keys | Planned |  |  |  |
+| Admin auth and client API keys | Completed | pending auth commit | `cargo test client_api_key_has_proxy_prefix_and_verifies_against_hash`; `cargo test admin_password_hash_is_not_a_client_api_key`; full `fmt/test/clippy` before commit | Admin passwords use Argon2id, client API keys use `cpr_` prefix plus HMAC-SHA256 with server-side pepper. |
 | Secret encryption | Planned |  |  |  |
 | Logging and pagination | Planned |  |  |  |
 | TLS headers and fingerprint | Planned |  |  |  |

@@ -1133,7 +1133,7 @@ git commit -m "feat: add sqlite storage schema"
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/admin_auth_test.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/api_key_auth_test.rs`
 
-- [ ] **Step 1: Write failing tests for separate secret types**
+- [x] **Step 1: Write failing tests for separate secret types**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/api_key_auth_test.rs`:
 
@@ -1164,7 +1164,7 @@ fn admin_password_hash_is_not_a_client_api_key() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -1174,7 +1174,7 @@ cargo test client_api_key_has_proxy_prefix_and_verifies_against_hash admin_passw
 
 Expected: compile failure because auth modules do not exist.
 
-- [ ] **Step 3: Implement hashing helpers**
+- [x] **Step 3: Implement hashing helpers**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -1295,7 +1295,7 @@ impl ApiKeyHasher {
 }
 ```
 
-- [ ] **Step 4: Verify auth split tests**
+- [x] **Step 4: Verify auth split tests**
 
 Run:
 
@@ -1305,7 +1305,7 @@ cargo test client_api_key_has_proxy_prefix_and_verifies_against_hash admin_passw
 
 Expected: pass.
 
-- [ ] **Step 5: Commit auth split**
+- [x] **Step 5: Commit auth split**
 
 ```bash
 git add Cargo.toml src/auth src/lib.rs tests/admin_auth_test.rs tests/api_key_auth_test.rs
