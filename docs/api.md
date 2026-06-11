@@ -39,6 +39,12 @@ data: {"error":{"message":"Upstream failed","type":"server_error","param":null,"
 
 Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, `-xhigh`, `-fast`, and `-flex` suffixes.
 
+### `POST /v1/responses`
+
+Uses imported Codex accounts to call `POST /codex/responses` on the configured Codex backend. The upstream request is sent with Codex Desktop headers, account bearer token, optional account id, request id, and encrypted account-scoped Cookie replay.
+
+The current Rust route collects HTTP SSE until `response.completed` and returns the completed OpenAI-compatible response JSON. `previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
+
 ## `/admin/*`
 
 Admin endpoints are authenticated only by HttpOnly admin session cookies.

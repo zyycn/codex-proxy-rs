@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     accounts::{
-        model::AccountStatus,
+        model::{Account, AccountStatus},
         repository::{NewAccount, StoredAccountMetadata},
     },
     auth::admin_session::verify_admin_password,
@@ -541,16 +541,38 @@ pub async fn import_accounts(
                 .into_response();
             }
         };
+        let email = empty_to_none(entry.email);
+        let account_id = empty_to_none(entry.account_id);
+        let user_id = empty_to_none(entry.user_id);
+        let label = empty_to_none(entry.label);
+        let plan_type = empty_to_none(entry.plan_type);
+        let refresh_token = empty_to_none(entry.refresh_token);
+        let access_token = token.to_string();
+        let pool_account = Account {
+            id: id.clone(),
+            email: email.clone(),
+            account_id: account_id.clone(),
+            user_id: user_id.clone(),
+            label: label.clone(),
+            plan_type: plan_type.clone(),
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            access_token_expires_at: None,
+            status,
+            quota_limit_reached: false,
+            cloudflare_cooldown_until: None,
+            added_at: chrono::Utc::now().to_rfc3339(),
+            last_used_at: None,
+        };
         let account = NewAccount {
             id,
-            email: empty_to_none(entry.email),
-            account_id: empty_to_none(entry.account_id),
-            user_id: empty_to_none(entry.user_id),
-            label: empty_to_none(entry.label),
-            plan_type: empty_to_none(entry.plan_type),
-            access_token: SecretString::new(token.to_string().into()),
-            refresh_token: empty_to_none(entry.refresh_token)
-                .map(|token| SecretString::new(token.into())),
+            email,
+            account_id,
+            user_id,
+            label,
+            plan_type,
+            access_token: SecretString::new(access_token.into()),
+            refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
             access_token_expires_at: None,
             status,
         };
@@ -561,6 +583,7 @@ pub async fn import_accounts(
             )
             .into_response();
         }
+        state.account_pool().lock().await.insert(pool_account);
         imported += 1;
     }
 

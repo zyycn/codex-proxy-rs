@@ -1,4 +1,141 @@
-use reqwest::Client;
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, SET_COOKIE},
+    Client, StatusCode,
+};
+use serde_json::Value;
+use thiserror::Error;
+
+use crate::{
+    codex::{
+        headers::build_codex_headers,
+        sse::{parse_sse_events, SseError},
+        types::CodexResponsesRequest,
+        usage::{extract_usage, TokenUsage},
+        websocket::{ensure_http_sse_supported, WebSocketSupportError},
+    },
+    fingerprint::model::Fingerprint,
+};
+
+#[derive(Debug, Error)]
+pub enum CodexClientError {
+    #[error("http transport error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("invalid request header name: {0}")]
+    InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
+    #[error("invalid request header value: {0}")]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    #[error("unsupported transport: {0}")]
+    UnsupportedTransport(#[from] WebSocketSupportError),
+    #[error("invalid upstream SSE response: {0}")]
+    InvalidSse(#[from] SseError),
+    #[error("upstream returned status {status}: {body}")]
+    Upstream { status: StatusCode, body: String },
+}
+
+pub type CodexClientResult<T> = Result<T, CodexClientError>;
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodexRequestContext<'a> {
+    pub access_token: &'a str,
+    pub account_id: Option<&'a str>,
+    pub request_id: &'a str,
+    pub turn_state: Option<&'a str>,
+    pub cookie_header: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexBackendResponse {
+    pub body: String,
+    pub usage: Option<TokenUsage>,
+    pub turn_state: Option<String>,
+    pub set_cookie_headers: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct CodexBackendClient {
+    client: Client,
+    base_url: String,
+    fingerprint: Fingerprint,
+}
+
+impl CodexBackendClient {
+    pub fn new(client: Client, base_url: impl Into<String>, fingerprint: Fingerprint) -> Self {
+        Self {
+            client,
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            fingerprint,
+        }
+    }
+
+    pub async fn create_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendResponse> {
+        ensure_http_sse_supported(request)?;
+        let url = format!("{}/codex/responses", self.base_url);
+        let response = self
+            .client
+            .post(url)
+            .headers(self.request_headers(context)?)
+            .json(request)
+            .send()
+            .await?;
+        let status = response.status();
+        let turn_state = response
+            .headers()
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        let set_cookie_headers = response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(ToString::to_string))
+            .collect::<Vec<_>>();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(CodexClientError::Upstream { status, body });
+        }
+        let usage = extract_sse_usage(&body)?;
+
+        Ok(CodexBackendResponse {
+            body,
+            usage,
+            turn_state,
+            set_cookie_headers,
+        })
+    }
+
+    fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        for (name, value) in build_codex_headers(
+            &self.fingerprint,
+            context.access_token,
+            context.account_id,
+            context.turn_state,
+            context.request_id,
+        ) {
+            headers.insert(
+                HeaderName::from_bytes(name.as_bytes())?,
+                HeaderValue::from_str(&value)?,
+            );
+        }
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            HeaderName::from_static("openai-beta"),
+            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-openai-internal-codex-residency"),
+            HeaderValue::from_static("us"),
+        );
+        if let Some(cookie_header) = context.cookie_header {
+            headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
+        }
+        Ok(headers)
+    }
+}
 
 pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error> {
     // Codex Desktop 指纹依赖 reqwest/rustls 组合，升级前必须重新验证 TLS 行为。
@@ -15,4 +152,26 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error
         builder
     };
     builder.build()
+}
+
+fn extract_sse_usage(body: &str) -> CodexClientResult<Option<TokenUsage>> {
+    let events = parse_sse_events(body)?;
+    let mut usage: Option<TokenUsage> = None;
+    for event in events {
+        if event.data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            continue;
+        };
+        let event_usage =
+            extract_usage(&value).or_else(|| value.get("response").and_then(extract_usage));
+        if let Some(event_usage) = event_usage {
+            usage = Some(match usage {
+                Some(current) => current.merged(event_usage),
+                None => event_usage,
+            });
+        }
+    }
+    Ok(usage)
 }
