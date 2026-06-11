@@ -42,7 +42,7 @@ pub async fn responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -253,7 +253,7 @@ fn u64_to_i64_saturating(value: u64) -> i64 {
 }
 
 pub async fn models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -273,7 +273,7 @@ pub async fn models(State(state): State<AppState>, headers: HeaderMap) -> impl I
 }
 
 pub async fn model_catalog(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -286,7 +286,7 @@ pub async fn model_detail(
     headers: HeaderMap,
     Path(model_id): Path<String>,
 ) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -302,7 +302,7 @@ pub async fn model_info(
     headers: HeaderMap,
     Path(model_id): Path<String>,
 ) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -314,7 +314,7 @@ pub async fn model_info(
 }
 
 pub async fn debug_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if !has_client_api_key(&headers) {
+    if !authorize_client_api_key(&state, &headers).await {
         return missing_client_api_key_response();
     }
 
@@ -322,8 +322,19 @@ pub async fn debug_models(State(state): State<AppState>, headers: HeaderMap) -> 
     (StatusCode::OK, Json(json!(catalog.debug())))
 }
 
-fn has_client_api_key(headers: &HeaderMap) -> bool {
-    client_api_key(headers).is_some()
+async fn authorize_client_api_key(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(api_key) = client_api_key(headers) else {
+        return false;
+    };
+    let Some(repo) = state.client_api_key_repository() else {
+        return false;
+    };
+    let Some(hasher) = state.api_key_hasher().cloned() else {
+        return false;
+    };
+    repo.verify_and_touch(api_key.as_str(), &hasher)
+        .await
+        .unwrap_or(false)
 }
 
 fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {

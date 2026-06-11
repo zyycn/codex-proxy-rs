@@ -5,34 +5,31 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tower::ServiceExt;
-use wiremock::{
-    matchers::{body_json, header, method, path},
-    Mock, MockServer, ResponseTemplate,
-};
 
 use codex_proxy_rs::{
     app::build_router,
-    auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    auth::api_key::ApiKeyHasher,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    cookies::repository::CookieRepository,
     crypto::SecretBox,
     state::AppState,
     storage::db::connect_sqlite,
 };
 
-fn test_config(database_url: String, base_url: String) -> AppConfig {
+fn test_config(database_url: String) -> AppConfig {
     AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 0,
         },
-        api: ApiConfig { base_url },
+        api: ApiConfig {
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+        },
         model: ModelConfig {
             default_model: "gpt-5.5".to_string(),
             default_reasoning_effort: None,
@@ -82,110 +79,83 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
 }
 
 #[tokio::test]
-async fn v1_responses_should_use_imported_account_and_record_usage() {
-    let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"usage\":{\"input_tokens\":7,\"output_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":2}}}}\n",
-        "\n",
-    );
-    Mock::given(method("POST"))
-        .and(path("/codex/responses"))
-        .and(header("authorization", "Bearer access-secret"))
-        .and(header("chatgpt-account-id", "chatgpt-account"))
-        .and(body_json(json!({
-            "model": "gpt-5.5",
-            "instructions": "",
-            "input": [],
-            "stream": true,
-            "store": false
-        })))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .insert_header(
-                    "set-cookie",
-                    "cf_clearance=new; Domain=.chatgpt.com; Path=/",
-                )
-                .set_body_string(sse_body),
-        )
-        .mount(&server)
-        .await;
+async fn admin_api_keys_should_create_list_and_authorize_v1_requests() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("v1-upstream.sqlite");
+    let db = dir.path().join("admin-api-keys.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([21u8; 32]);
-    let hasher = ApiKeyHasher::new([22u8; 32]);
-    let generated = hasher.generate_client_api_key("test");
-    ClientApiKeyRepository::new(pool.clone())
-        .insert_generated("test", &generated)
-        .await
-        .unwrap();
     let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
-        test_config(url, server.uri()),
-        pool.clone(),
-        secret_box.clone(),
-        hasher,
+        test_config(url),
+        pool,
+        SecretBox::new([41u8; 32]),
+        ApiKeyHasher::new([42u8; 32]),
     ));
 
-    let import_response = app
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", "Bearer cpr_not_stored")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+    let create_response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/admin/api-keys")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(
-                    json!({
-                        "accounts": [{
-                            "id": "acct_imported",
-                            "accountId": "chatgpt-account",
-                            "token": "access-secret",
-                            "refreshToken": "refresh-secret",
-                            "status": "active"
-                        }]
-                    })
-                    .to_string(),
-                ))
+                .header("x-request-id", "req_api_key")
+                .body(Body::from(r#"{"name":"cursor"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(import_response.status(), StatusCode::OK);
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let body = response_json(create_response).await;
+    let plaintext = body["data"]["plaintext"].as_str().unwrap().to_string();
+    assert!(plaintext.starts_with("cpr_"));
+    assert_eq!(body["requestId"], "req_api_key");
 
-    let response = app
+    let list_response = app
+        .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri("/v1/responses")
-                .header("authorization", format!("Bearer {}", generated.plaintext))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .method("GET")
+                .uri("/admin/api-keys?limit=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = response_json(list_response).await;
+    assert_eq!(body["data"][0]["name"], "cursor");
+    assert!(body["data"][0].get("plaintext").is_none());
+    assert!(body["data"][0].get("keyHash").is_none());
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["id"], "resp_1");
-    assert_eq!(body["usage"]["input_tokens"], 7);
-    let usage: (i64, i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens, cached_tokens from account_usage where account_id = ?",
-    )
-    .bind("acct_imported")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(usage, (1, 7, 4, 2));
-    let cookie_header = CookieRepository::new(pool, secret_box)
-        .cookie_header("acct_imported", "chatgpt.com")
+    let models_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", format!("Bearer {plaintext}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    assert_eq!(cookie_header.as_deref(), Some("cf_clearance=new"));
+    assert_eq!(models_response.status(), StatusCode::OK);
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {

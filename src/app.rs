@@ -7,7 +7,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     http::{
-        admin::{accounts, import_accounts, login, logs, settings},
+        admin::{accounts, api_keys, create_api_key, import_accounts, login, logs, settings},
         health::health,
         middleware::attach_request_id,
         v1::{debug_models, model_catalog, model_detail, model_info, models, responses},
@@ -30,6 +30,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/settings", get(settings))
         .route("/admin/accounts", get(accounts))
         .route("/admin/accounts/import", post(import_accounts))
+        .route("/admin/api-keys", get(api_keys).post(create_api_key))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(from_fn(attach_request_id))

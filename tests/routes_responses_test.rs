@@ -3,18 +3,22 @@ use std::collections::BTreeMap;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
+    Router,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
     app::build_router,
+    auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
+    crypto::SecretBox,
     state::AppState,
+    storage::db::connect_sqlite,
 };
 
 fn test_config() -> AppConfig {
@@ -78,6 +82,32 @@ fn test_config() -> AppConfig {
     }
 }
 
+fn test_config_with_database(database_url: String) -> AppConfig {
+    let mut config = test_config();
+    config.database.url = database_url;
+    config
+}
+
+async fn test_app_with_client_api_key() -> (Router, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("routes-responses.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let hasher = ApiKeyHasher::new([52u8; 32]);
+    let generated = hasher.generate_client_api_key("test");
+    ClientApiKeyRepository::new(pool.clone())
+        .insert_generated("test", &generated)
+        .await
+        .unwrap();
+    let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
+        test_config_with_database(url),
+        pool,
+        SecretBox::new([53u8; 32]),
+        hasher,
+    ));
+    (app, generated.plaintext, dir)
+}
+
 #[tokio::test]
 async fn v1_requires_client_api_key_not_admin_cookie() {
     let app = build_router(AppState::new(test_config()));
@@ -96,13 +126,13 @@ async fn v1_requires_client_api_key_not_admin_cookie() {
 
 #[tokio::test]
 async fn responses_route_rejects_non_codex_provider_models() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/v1/responses")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"claude-3","input":[]}"#))
                 .unwrap(),
@@ -114,13 +144,13 @@ async fn responses_route_rejects_non_codex_provider_models() {
 
 #[tokio::test]
 async fn v1_response_has_request_id_header_without_admin_body_field() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/v1/responses")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .header("x-request-id", "req_client")
                 .body(Body::from("{}"))
                 .unwrap(),
@@ -139,13 +169,13 @@ async fn v1_response_has_request_id_header_without_admin_body_field() {
 
 #[tokio::test]
 async fn models_route_returns_openai_compatible_codex_model_list() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -163,13 +193,13 @@ async fn models_route_returns_openai_compatible_codex_model_list() {
 
 #[tokio::test]
 async fn model_catalog_route_returns_codex_metadata_without_alias_entries() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models/catalog")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -191,13 +221,13 @@ async fn model_catalog_route_returns_codex_metadata_without_alias_entries() {
 
 #[tokio::test]
 async fn model_detail_route_returns_openai_model_for_known_model() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models/gpt-5.5")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -213,13 +243,13 @@ async fn model_detail_route_returns_openai_model_for_known_model() {
 
 #[tokio::test]
 async fn model_detail_route_rejects_unknown_model_with_openai_error() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models/not-a-codex-model")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -234,13 +264,13 @@ async fn model_detail_route_rejects_unknown_model_with_openai_error() {
 
 #[tokio::test]
 async fn model_info_route_returns_extended_catalog_entry() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models/gpt-5.5/info")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -256,13 +286,13 @@ async fn model_info_route_returns_extended_catalog_entry() {
 
 #[tokio::test]
 async fn debug_models_route_returns_model_store_summary() {
-    let app = build_router(AppState::new(test_config()));
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/debug/models")
-                .header("authorization", "Bearer cpr_test")
+                .header("authorization", format!("Bearer {api_key}"))
                 .body(Body::empty())
                 .unwrap(),
         )

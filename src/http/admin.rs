@@ -19,6 +19,7 @@ use crate::{
         repository::{NewAccount, StoredAccountMetadata},
     },
     auth::admin_session::verify_admin_password,
+    auth::api_key_repository::StoredClientApiKey,
     config::{AppConfig, QuotaWarningThresholds},
     http::{auth::admin_session_id, middleware::RequestId},
     pagination::{clamp_limit, Page},
@@ -132,6 +133,13 @@ pub struct AccountsQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ApiKeysQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     pub password: String,
 }
@@ -190,6 +198,62 @@ pub struct AccountImportEntry {
 pub struct AccountImportData {
     pub imported: u32,
     pub skipped: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientApiKeyData {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedClientApiKeyData {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub plaintext: String,
+}
+
+impl From<StoredClientApiKey> for ClientApiKeyData {
+    fn from(key: StoredClientApiKey) -> Self {
+        Self {
+            id: key.id,
+            name: key.name,
+            prefix: key.prefix,
+            enabled: key.enabled,
+            created_at: key.created_at,
+            last_used_at: key.last_used_at,
+        }
+    }
+}
+
+impl CreatedClientApiKeyData {
+    fn new(key: StoredClientApiKey, plaintext: String) -> Self {
+        Self {
+            id: key.id,
+            name: key.name,
+            prefix: key.prefix,
+            enabled: key.enabled,
+            created_at: key.created_at,
+            last_used_at: key.last_used_at,
+            plaintext,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -592,6 +656,119 @@ pub async fn import_accounts(
         AdminEnvelope::ok(AccountImportData { imported, skipped }, request_id),
     )
     .into_response()
+}
+
+pub async fn api_keys(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<ApiKeysQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let limit = clamp_limit(query.limit.unwrap_or(50));
+    match repo.list(query.cursor, limit).await {
+        Ok(page) => {
+            let Page { items, next_cursor } = page;
+            let page = Page {
+                items: items.into_iter().map(ClientApiKeyData::from).collect(),
+                next_cursor,
+            };
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminPageEnvelope::ok(page, limit, request_id),
+            )
+            .into_response()
+        }
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to list API keys", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn create_api_key(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateApiKeyRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "API key name is required", (), request_id),
+        )
+        .into_response();
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(hasher) = state.api_key_hasher() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "API key hasher is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+
+    let generated = hasher.generate_client_api_key(name);
+    let plaintext = generated.plaintext.clone();
+    match repo.insert_generated(name, &generated).await {
+        Ok(key) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(CreatedClientApiKeyData::new(key, plaintext), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to create API key", (), request_id),
+        )
+        .into_response(),
+    }
 }
 
 #[derive(Debug)]

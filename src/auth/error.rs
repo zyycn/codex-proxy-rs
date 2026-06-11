@@ -8,6 +8,8 @@ pub enum AuthError {
     ApiKeyEncoding(#[from] base64::DecodeError),
     #[error("invalid api key pepper length")]
     InvalidPepperLength,
+    #[error("api key pepper file io error: {0}")]
+    PepperIo(#[from] std::io::Error),
 }
 
 pub type AuthResult<T> = Result<T, AuthError>;

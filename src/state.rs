@@ -7,6 +7,7 @@ use crate::accounts::{
     pool::{AccountPool, AccountPoolOptions, RotationStrategy},
     repository::{AccountRepository, AccountRepositoryResult},
 };
+use crate::auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository};
 use crate::config::AppConfig;
 use crate::cookies::repository::CookieRepository;
 use crate::crypto::SecretBox;
@@ -22,6 +23,7 @@ pub struct AppServices {
     pub db: Option<SqlitePool>,
     pub event_logs: Option<EventLogRepository>,
     pub secret_box: Option<SecretBox>,
+    pub api_key_hasher: Option<ApiKeyHasher>,
     pub account_pool: Arc<Mutex<AccountPool>>,
 }
 
@@ -34,6 +36,7 @@ impl AppState {
                 db: None,
                 event_logs: None,
                 secret_box: None,
+                api_key_hasher: None,
                 account_pool,
             }),
         }
@@ -47,6 +50,7 @@ impl AppState {
                 db: Some(pool.clone()),
                 event_logs: Some(EventLogRepository::new(pool)),
                 secret_box: None,
+                api_key_hasher: None,
                 account_pool,
             }),
         }
@@ -64,6 +68,26 @@ impl AppState {
                 db: Some(pool.clone()),
                 event_logs: Some(EventLogRepository::new(pool)),
                 secret_box: Some(secret_box),
+                api_key_hasher: None,
+                account_pool,
+            }),
+        }
+    }
+
+    pub fn with_pool_secret_and_api_key_hasher(
+        config: AppConfig,
+        pool: SqlitePool,
+        secret_box: SecretBox,
+        api_key_hasher: ApiKeyHasher,
+    ) -> Self {
+        let account_pool = account_pool_from_config(&config);
+        Self {
+            services: Arc::new(AppServices {
+                config,
+                db: Some(pool.clone()),
+                event_logs: Some(EventLogRepository::new(pool)),
+                secret_box: Some(secret_box),
+                api_key_hasher: Some(api_key_hasher),
                 account_pool,
             }),
         }
@@ -97,6 +121,14 @@ impl AppState {
 
     pub fn account_pool(&self) -> Arc<Mutex<AccountPool>> {
         self.services.account_pool.clone()
+    }
+
+    pub fn client_api_key_repository(&self) -> Option<ClientApiKeyRepository> {
+        Some(ClientApiKeyRepository::new(self.db()?.clone()))
+    }
+
+    pub fn api_key_hasher(&self) -> Option<&ApiKeyHasher> {
+        self.services.api_key_hasher.as_ref()
     }
 
     pub async fn reload_account_pool_from_repository(&self) -> AccountRepositoryResult<usize> {

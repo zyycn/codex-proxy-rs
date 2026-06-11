@@ -1,3 +1,5 @@
+use std::{fs, path::Path};
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
@@ -22,6 +24,26 @@ pub struct ApiKeyHasher {
 impl ApiKeyHasher {
     pub fn new(pepper: [u8; 32]) -> Self {
         Self { pepper }
+    }
+
+    pub fn load_or_create(path: impl AsRef<Path>) -> AuthResult<Self> {
+        let path = path.as_ref();
+        if path.exists() {
+            let encoded = fs::read_to_string(path)?;
+            let pepper = URL_SAFE_NO_PAD.decode(encoded.trim())?;
+            return Self::try_from_slice(&pepper);
+        }
+
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let mut pepper = [0u8; 32];
+        rand::rng().fill_bytes(&mut pepper);
+        fs::write(path, URL_SAFE_NO_PAD.encode(pepper))?;
+        Ok(Self::new(pepper))
     }
 
     pub fn try_from_slice(pepper: &[u8]) -> AuthResult<Self> {

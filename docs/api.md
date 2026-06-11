@@ -4,7 +4,7 @@
 
 ## `/v1/*`
 
-These endpoints are OpenAI-compatible and are authenticated only by client API keys using `Authorization: Bearer cpr_...`.
+These endpoints are OpenAI-compatible and are authenticated only by enabled local client API keys created through `/admin/api-keys` and sent as `Authorization: Bearer cpr_...`.
 Responses include an `X-Request-Id` header for tracing, but the body stays OpenAI-compatible and does not include a custom `requestId` field.
 
 Error body:
@@ -117,6 +117,41 @@ Success response:
     "logsCapacity": 2000,
     "logsCaptureBody": false,
     "usageHistoryRetentionDays": null
+  },
+  "requestId": "req_01"
+}
+```
+
+### `GET /admin/api-keys`
+
+Returns local client API keys with cursor pagination. The plaintext key and hash are never returned by list endpoints.
+
+### `POST /admin/api-keys`
+
+Creates a local client API key for `/v1/*`. The plaintext value is returned only in this response; store it client-side and use it as `Authorization: Bearer <plaintext>`.
+
+Request:
+
+```json
+{
+  "name": "cursor"
+}
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "id": "key_01",
+    "name": "cursor",
+    "prefix": "cpr_xxxxxxxx",
+    "enabled": true,
+    "createdAt": "2026-06-11T12:00:00Z",
+    "lastUsedAt": null,
+    "plaintext": "cpr_full_key_returned_once"
   },
   "requestId": "req_01"
 }
