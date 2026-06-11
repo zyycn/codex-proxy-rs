@@ -4,7 +4,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
@@ -18,6 +18,8 @@ use codex_proxy_rs::{
 };
 
 fn test_config() -> AppConfig {
+    let mut aliases = BTreeMap::new();
+    aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
     AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
@@ -30,7 +32,7 @@ fn test_config() -> AppConfig {
             default_model: "gpt-5.5".to_string(),
             default_reasoning_effort: None,
             service_tier: None,
-            aliases: BTreeMap::new(),
+            aliases,
         },
         auth: AuthConfig {
             refresh_margin_seconds: 300,
@@ -156,4 +158,120 @@ async fn models_route_returns_openai_compatible_codex_model_list() {
     assert_eq!(body["object"], "list");
     assert_eq!(body["data"][0]["object"], "model");
     assert_eq!(body["data"][0]["id"], "gpt-5.5");
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn model_catalog_route_returns_codex_metadata_without_alias_entries() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/catalog")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "gpt-5.5");
+    assert_eq!(body[0]["isDefault"], true);
+    assert_eq!(body[0]["defaultReasoningEffort"], "medium");
+    assert_eq!(
+        body[0]["supportedReasoningEfforts"][0]["reasoningEffort"],
+        "low"
+    );
+}
+
+#[tokio::test]
+async fn model_detail_route_returns_openai_model_for_known_model() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/gpt-5.5")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["id"], "gpt-5.5");
+    assert_eq!(body["object"], "model");
+}
+
+#[tokio::test]
+async fn model_detail_route_rejects_unknown_model_with_openai_error() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/not-a-codex-model")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "model_not_found");
+}
+
+#[tokio::test]
+async fn model_info_route_returns_extended_catalog_entry() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/gpt-5.5/info")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["id"], "gpt-5.5");
+    assert_eq!(body["outputModalities"], json!(["text"]));
+}
+
+#[tokio::test]
+async fn debug_models_route_returns_model_store_summary() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/models")
+                .header("authorization", "Bearer cpr_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["totalModels"], 1);
+    assert_eq!(body["aliasCount"], 1);
 }

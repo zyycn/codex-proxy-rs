@@ -27,6 +27,18 @@ event: error
 data: {"error":{"message":"Upstream failed","type":"server_error","param":null,"code":"upstream_error"}}
 ```
 
+### Model Routes
+
+`GET /v1/models` returns the OpenAI-compatible model list. The default static Codex model is `gpt-5.5`.
+
+`GET /v1/models/catalog` returns Codex model metadata for UI use. Aliases are used for request parsing but are not exposed as standalone models.
+
+`GET /v1/models/{id}` returns an OpenAI-compatible model object or a `404` OpenAI error body with `code=model_not_found`.
+
+`GET /v1/models/{id}/info` returns the extended Codex catalog entry for a known model.
+
+Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, `-xhigh`, `-fast`, and `-flex` suffixes.
+
 ## `/admin/*`
 
 Admin endpoints are authenticated only by HttpOnly admin session cookies.

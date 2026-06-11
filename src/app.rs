@@ -10,7 +10,7 @@ use crate::{
         admin::{login, logs, settings},
         health::health,
         middleware::attach_request_id,
-        v1::{models, responses},
+        v1::{debug_models, model_catalog, model_detail, model_info, models, responses},
     },
     state::AppState,
 };
@@ -21,6 +21,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(responses))
         .route("/v1/models", get(models))
+        .route("/v1/models/catalog", get(model_catalog))
+        .route("/v1/models/{model_id}", get(model_detail))
+        .route("/v1/models/{model_id}/info", get(model_info))
+        .route("/debug/models", get(debug_models))
         .route("/admin/login", post(login))
         .route("/admin/logs", get(logs))
         .route("/admin/settings", get(settings))

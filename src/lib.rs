@@ -9,6 +9,7 @@ pub mod error;
 pub mod fingerprint;
 pub mod http;
 pub mod logs;
+pub mod models;
 pub mod pagination;
 pub mod state;
 pub mod storage;
