@@ -67,6 +67,43 @@ Set-Cookie: cpr_admin_session=...; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600
 
 Invalid password response uses HTTP `401` and body code `40102`.
 
+### `GET /admin/settings`
+
+Returns the in-scope runtime settings visible to the admin UI. This endpoint is read-only; persistent settings mutation will be added separately and must use admin sessions, not client API keys.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "defaultModel": "gpt-5.5",
+    "defaultReasoningEffort": null,
+    "serviceTier": null,
+    "modelAliases": {},
+    "refreshEnabled": true,
+    "refreshMarginSeconds": 300,
+    "refreshConcurrency": 2,
+    "maxConcurrentPerAccount": 3,
+    "requestIntervalMs": 50,
+    "rotationStrategy": "least_used",
+    "tierPriority": [],
+    "quotaRefreshIntervalMinutes": 5,
+    "quotaWarningThresholds": {
+      "primary": [80, 90],
+      "secondary": [80, 90]
+    },
+    "quotaSkipExhausted": true,
+    "logsEnabled": false,
+    "logsCapacity": 2000,
+    "logsCaptureBody": false,
+    "usageHistoryRetentionDays": null
+  },
+  "requestId": "req_01"
+}
+```
+
 Success body:
 
 ```json

@@ -5,12 +5,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
     app::build_router,
-    auth::admin_session::hash_admin_password,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
@@ -21,6 +20,8 @@ use codex_proxy_rs::{
 };
 
 fn test_config(database_url: String) -> AppConfig {
+    let mut aliases = BTreeMap::new();
+    aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
     AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
@@ -31,29 +32,29 @@ fn test_config(database_url: String) -> AppConfig {
         },
         model: ModelConfig {
             default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
-            aliases: BTreeMap::new(),
+            default_reasoning_effort: Some("high".to_string()),
+            service_tier: Some("flex".to_string()),
+            aliases,
         },
         auth: AuthConfig {
-            refresh_margin_seconds: 300,
+            refresh_margin_seconds: 240,
             refresh_enabled: true,
             refresh_concurrency: 2,
-            max_concurrent_per_account: 3,
+            max_concurrent_per_account: 4,
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
-            tier_priority: Vec::new(),
+            tier_priority: vec!["team".to_string(), "plus".to_string()],
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
             warning_thresholds: QuotaWarningThresholds {
                 primary: vec![80, 90],
-                secondary: vec![80, 90],
+                secondary: vec![70, 95],
             },
             skip_exhausted: true,
         },
         usage_stats: UsageStatsConfig {
-            history_retention_days: None,
+            history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
@@ -64,13 +65,13 @@ fn test_config(database_url: String) -> AppConfig {
             force_http11: false,
         },
         admin: AdminConfig {
-            session_ttl_minutes: 60,
+            session_ttl_minutes: 1440,
         },
         logging: LoggingConfig {
             directory: "logs".to_string(),
             max_file_bytes: 10_485_760,
             retention_days: 14,
-            enabled: false,
+            enabled: true,
             capacity: 2_000,
             capture_body: false,
         },
@@ -78,113 +79,117 @@ fn test_config(database_url: String) -> AppConfig {
 }
 
 #[tokio::test]
-async fn admin_login_issues_http_only_session_cookie() {
+async fn admin_settings_should_require_admin_session_cookie() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("admin-login.sqlite");
+    let db = dir.path().join("admin-settings.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    seed_admin_user(&pool, "correct-password").await;
-    let app = build_router(AppState::with_pool(test_config(url), pool.clone()));
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/admin/login")
-                .header("content-type", "application/json")
-                .header("x-request-id", "req_login")
-                .body(Body::from(r#"{"password":"correct-password"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let cookie = response
-        .headers()
-        .get("set-cookie")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    assert!(cookie.starts_with("cpr_admin_session="));
-    assert!(cookie.contains("HttpOnly"));
-    assert!(cookie.contains("SameSite=Lax"));
-    let session_cookie = cookie.split(';').next().unwrap().to_string();
-    let body = response_json(response).await;
-    assert_eq!(body["code"], 200);
-    assert_eq!(body["requestId"], "req_login");
-    assert!(body["data"]["expiresAt"].is_string());
-
-    let logs_response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/admin/logs")
-                .header("cookie", session_cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(logs_response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn admin_login_rejects_client_api_key_as_password_or_authorization() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("admin-login.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-    seed_admin_user(&pool, "correct-password").await;
     let app = build_router(AppState::with_pool(test_config(url), pool));
 
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri("/admin/login")
-                .header("content-type", "application/json")
-                .header("authorization", "Bearer cpr_not_an_admin_session")
-                .header("x-request-id", "req_login_bad")
-                .body(Body::from(r#"{"password":"cpr_not_an_admin_password"}"#))
+                .method("GET")
+                .uri("/admin/settings")
+                .header("x-request-id", "req_settings")
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert!(response.headers().get("set-cookie").is_none());
     let body = response_json(response).await;
-    assert_eq!(body["code"], 40102);
-    assert_eq!(body["requestId"], "req_login_bad");
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_settings");
+}
 
-    let logs_response = app
+#[tokio::test]
+async fn admin_settings_should_return_only_in_scope_runtime_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-settings.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs")
-                .header("authorization", "Bearer cpr_not_an_admin_session")
+                .uri("/admin/settings")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(logs_response.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_settings");
+    assert_eq!(
+        body["data"],
+        json!({
+            "defaultModel": "gpt-5.5",
+            "defaultReasoningEffort": "high",
+            "serviceTier": "flex",
+            "modelAliases": { "codex-fast": "gpt-5.5" },
+            "refreshEnabled": true,
+            "refreshMarginSeconds": 240,
+            "refreshConcurrency": 2,
+            "maxConcurrentPerAccount": 4,
+            "requestIntervalMs": 50,
+            "rotationStrategy": "least_used",
+            "tierPriority": ["team", "plus"],
+            "quotaRefreshIntervalMinutes": 5,
+            "quotaWarningThresholds": {
+                "primary": [80, 90],
+                "secondary": [70, 95]
+            },
+            "quotaSkipExhausted": true,
+            "logsEnabled": true,
+            "logsCapacity": 2000,
+            "logsCaptureBody": false,
+            "usageHistoryRetentionDays": 30
+        })
+    );
+    for removed_key in [
+        "proxyUrl",
+        "openaiApiKey",
+        "ollama",
+        "provider",
+        "proxyApiKey",
+        "autoUpdate",
+    ] {
+        assert!(
+            body["data"].get(removed_key).is_none(),
+            "{removed_key} must stay out of the Rust settings API"
+        );
+    }
 }
 
-async fn seed_admin_user(pool: &sqlx::SqlitePool, password: &str) {
+async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
     let now = Utc::now().to_rfc3339();
-    let hash = hash_admin_password(password).unwrap();
     sqlx::query(
         "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
     )
     .bind("admin_1")
-    .bind(hash)
+    .bind("hash")
     .bind(&now)
     .bind(&now)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
+    )
+    .bind(session_id)
+    .bind("admin_1")
+    .bind("2999-01-01T00:00:00Z")
+    .bind(now)
     .execute(pool)
     .await
     .unwrap();

@@ -9,10 +9,31 @@ server:
   port: 8080
 api:
   base_url: https://chatgpt.com/backend-api
+model:
+  default: gpt-5.5
+  default_reasoning_effort: null
+  default_service_tier: null
+  aliases: {}
 auth:
   refresh_margin_seconds: 300
   refresh_enabled: true
   refresh_concurrency: 2
+  max_concurrent_per_account: 3
+  request_interval_ms: 50
+  rotation_strategy: least_used
+  tier_priority: []
+quota:
+  refresh_interval_minutes: 5
+  warning_thresholds:
+    primary:
+      - 80
+      - 90
+    secondary:
+      - 80
+      - 90
+  skip_exhausted: true
+usage_stats:
+  history_retention_days: null
 database:
   url: sqlite://data/codex-proxy-rs.sqlite
 security:
@@ -26,10 +47,15 @@ logging:
   directory: logs
   max_file_bytes: 10485760
   retention_days: 14
+  enabled: false
+  capacity: 2000
+  capture_body: false
 "#;
     let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(cfg.api.base_url, "https://chatgpt.com/backend-api");
+    assert_eq!(cfg.model.default_model, "gpt-5.5");
     assert_eq!(cfg.auth.refresh_margin_seconds, 300);
+    assert_eq!(cfg.auth.rotation_strategy, "least_used");
     assert_eq!(cfg.database.url, "sqlite://data/codex-proxy-rs.sqlite");
     assert_eq!(cfg.security.master_key_file, "data/master.key");
 }
@@ -45,10 +71,31 @@ server:
   port: 8080
 api:
   base_url: https://chatgpt.com/backend-api
+model:
+  default: gpt-5.5
+  default_reasoning_effort: null
+  default_service_tier: null
+  aliases: {}
 auth:
   refresh_margin_seconds: 300
   refresh_enabled: true
   refresh_concurrency: 2
+  max_concurrent_per_account: 3
+  request_interval_ms: 50
+  rotation_strategy: least_used
+  tier_priority: []
+quota:
+  refresh_interval_minutes: 5
+  warning_thresholds:
+    primary:
+      - 80
+      - 90
+    secondary:
+      - 80
+      - 90
+  skip_exhausted: true
+usage_stats:
+  history_retention_days: null
 database:
   url: sqlite://data/codex-proxy-rs.sqlite
 security:
@@ -62,6 +109,9 @@ logging:
   directory: logs
   max_file_bytes: 10485760
   retention_days: 14
+  enabled: false
+  capacity: 2000
+  capture_body: false
 "#,
     )
     .unwrap();
@@ -82,6 +132,8 @@ logging:
             ("CPRS_PORT", "19090"),
             ("CPRS_DATABASE_URL", "sqlite://override.sqlite"),
             ("CPRS_LOG_MAX_FILE_BYTES", "4096"),
+            ("CPRS_DEFAULT_MODEL", "gpt-5.5"),
+            ("CPRS_MAX_CONCURRENT_PER_ACCOUNT", "4"),
         ],
     )
     .unwrap();
@@ -89,6 +141,8 @@ logging:
     assert_eq!(cfg.server.host, "0.0.0.0");
     assert_eq!(cfg.server.port, 19090);
     assert_eq!(cfg.database.url, "sqlite://override.sqlite");
+    assert_eq!(cfg.model.default_model, "gpt-5.5");
+    assert_eq!(cfg.auth.max_concurrent_per_account, 4);
     assert_eq!(cfg.logging.directory, "local-logs");
     assert_eq!(cfg.logging.max_file_bytes, 4096);
 }

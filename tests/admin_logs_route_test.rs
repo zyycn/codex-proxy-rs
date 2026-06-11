@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -9,8 +11,9 @@ use tower::ServiceExt;
 use codex_proxy_rs::{
     app::build_router,
     config::{
-        AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig,
-        SecurityConfig, ServerConfig, TlsConfig,
+        AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
+        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
+        UsageStatsConfig,
     },
     logs::{
         event::{EventLevel, EventLog},
@@ -29,10 +32,31 @@ fn test_config(database_url: String) -> AppConfig {
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),
         },
+        model: ModelConfig {
+            default_model: "gpt-5.5".to_string(),
+            default_reasoning_effort: None,
+            service_tier: None,
+            aliases: BTreeMap::new(),
+        },
         auth: AuthConfig {
             refresh_margin_seconds: 300,
             refresh_enabled: true,
             refresh_concurrency: 2,
+            max_concurrent_per_account: 3,
+            request_interval_ms: 50,
+            rotation_strategy: "least_used".to_string(),
+            tier_priority: Vec::new(),
+        },
+        quota: QuotaConfig {
+            refresh_interval_minutes: 5,
+            warning_thresholds: QuotaWarningThresholds {
+                primary: vec![80, 90],
+                secondary: vec![80, 90],
+            },
+            skip_exhausted: true,
+        },
+        usage_stats: UsageStatsConfig {
+            history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
@@ -49,6 +73,9 @@ fn test_config(database_url: String) -> AppConfig {
             directory: "logs".to_string(),
             max_file_bytes: 10_485_760,
             retention_days: 14,
+            enabled: false,
+            capacity: 2_000,
+            capture_body: false,
         },
     }
 }
