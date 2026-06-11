@@ -48,6 +48,11 @@ struct StaticTokenRefresher {
     refresh_token: Option<String>,
 }
 
+#[derive(Clone)]
+struct FailingTokenRefresher {
+    failure: RefreshFailure,
+}
+
 #[async_trait]
 impl TokenRefresher for StaticTokenRefresher {
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
@@ -55,6 +60,13 @@ impl TokenRefresher for StaticTokenRefresher {
             access_token: self.access_token.clone(),
             refresh_token: self.refresh_token.clone(),
         })
+    }
+}
+
+#[async_trait]
+impl TokenRefresher for FailingTokenRefresher {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        Err(self.failure)
     }
 }
 
@@ -169,6 +181,23 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
 }
 
 async fn build_imported_app_with_refresher(base_url: String, access_token: &str) -> ImportedApp {
+    build_imported_app_with_token_refresher(
+        base_url,
+        StaticTokenRefresher {
+            access_token: access_token.to_string(),
+            refresh_token: None,
+        },
+    )
+    .await
+}
+
+async fn build_imported_app_with_token_refresher<C>(
+    base_url: String,
+    token_refresher: C,
+) -> ImportedApp
+where
+    C: TokenRefresher,
+{
     let tempdir = tempfile::tempdir().unwrap();
     let db = tempdir.path().join("v1-upstream-refresh.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -187,10 +216,7 @@ async fn build_imported_app_with_refresher(base_url: String, access_token: &str)
             pool.clone(),
             secret_box.clone(),
             hasher,
-            StaticTokenRefresher {
-                access_token: access_token.to_string(),
-                refresh_token: None,
-            },
+            token_refresher,
         ),
     );
 
@@ -512,6 +538,65 @@ async fn v1_responses_should_refresh_after_401_and_retry_stream() {
     .await
     .unwrap();
     assert_eq!(usage, (1, 4, 2, 0));
+}
+
+#[tokio::test]
+async fn v1_responses_should_log_refresh_failure_after_401() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "token_revoked"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_token_refresher(
+        server.uri(),
+        FailingTokenRefresher {
+            failure: RefreshFailure::InvalidGrant,
+        },
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_refresh_failed")
+                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_imported")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "expired");
+    let refresh_event: (String, String, String) = sqlx::query_as(
+        "select level, message, metadata_json from event_logs where request_id = ? and kind = 'account.refresh'",
+    )
+    .bind("req_refresh_failed")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    let metadata: Value = serde_json::from_str(&refresh_event.2).unwrap();
+    assert_eq!(refresh_event.0, "warn");
+    assert_eq!(refresh_event.1, "account refresh failed after upstream 401");
+    assert_eq!(metadata["failure"], "invalidGrant");
+    assert_eq!(metadata["accountStatus"], "expired");
+    assert_eq!(metadata["trigger"], "upstream_401");
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {

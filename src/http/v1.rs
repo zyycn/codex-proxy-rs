@@ -267,7 +267,9 @@ async fn send_codex_request_with_refresh_retry(
 ) -> Result<crate::codex::client::CodexBackendResponse, CodexClientError> {
     match send_codex_request(state, request, account, request_id).await {
         Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
-            let Some(refreshed) = refresh_account_after_unauthorized(state, account).await else {
+            let Some(refreshed) =
+                refresh_account_after_unauthorized(state, request, account, request_id).await
+            else {
                 return Err(CodexClientError::Upstream { status, body });
             };
             send_codex_request(state, request, &refreshed, request_id).await
@@ -314,7 +316,9 @@ async fn send_codex_stream_request_with_refresh_retry(
 ) -> Result<CodexBackendStream, CodexClientError> {
     match send_codex_stream_request(state, request, account, request_id).await {
         Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
-            let Some(refreshed) = refresh_account_after_unauthorized(state, account).await else {
+            let Some(refreshed) =
+                refresh_account_after_unauthorized(state, request, account, request_id).await
+            else {
                 return Err(CodexClientError::Upstream { status, body });
             };
             send_codex_stream_request(state, request, &refreshed, request_id).await
@@ -447,7 +451,9 @@ async fn responses_stream(
 
 async fn refresh_account_after_unauthorized(
     state: &AppState,
+    request: &CodexResponsesRequest,
     account: &Account,
+    request_id: &str,
 ) -> Option<Account> {
     if !state.config().auth.refresh_enabled {
         return None;
@@ -457,7 +463,7 @@ async fn refresh_account_after_unauthorized(
     match refresher.refresh(refresh_token).await {
         Ok(tokens) => persist_refreshed_account(state, account, tokens).await,
         Err(failure) => {
-            mark_refresh_failure(state, account, failure).await;
+            mark_refresh_failure(state, account, failure, request_id, &request.model).await;
             None
         }
     }
@@ -494,16 +500,23 @@ async fn persist_refreshed_account(
     Some(refreshed)
 }
 
-async fn mark_refresh_failure(state: &AppState, account: &Account, failure: RefreshFailure) {
-    let Some(status) = status_for_refresh_failure(failure) else {
-        return;
-    };
-    if let Some(repo) = state.account_repository() {
-        let _ = repo.set_status(&account.id, status).await;
+async fn mark_refresh_failure(
+    state: &AppState,
+    account: &Account,
+    failure: RefreshFailure,
+    request_id: &str,
+    model: &str,
+) {
+    let status = status_for_refresh_failure(failure);
+    if let Some(status) = status {
+        if let Some(repo) = state.account_repository() {
+            let _ = repo.set_status(&account.id, status).await;
+        }
+        let mut updated = account.clone();
+        updated.status = status;
+        state.account_pool().lock().await.insert(updated);
     }
-    let mut updated = account.clone();
-    updated.status = status;
-    state.account_pool().lock().await.insert(updated);
+    log_account_refresh_failure(state, account, failure, status, request_id, model).await;
 }
 
 fn status_for_refresh_failure(failure: RefreshFailure) -> Option<AccountStatus> {
@@ -513,6 +526,58 @@ fn status_for_refresh_failure(failure: RefreshFailure) -> Option<AccountStatus> 
         RefreshFailure::Banned => Some(AccountStatus::Banned),
         RefreshFailure::Disabled => Some(AccountStatus::Disabled),
         RefreshFailure::Transport => None,
+    }
+}
+
+async fn log_account_refresh_failure(
+    state: &AppState,
+    account: &Account,
+    failure: RefreshFailure,
+    status: Option<AccountStatus>,
+    request_id: &str,
+    model: &str,
+) {
+    let Some(repo) = state.event_logs() else {
+        return;
+    };
+    let mut event = EventLog::new(
+        "account.refresh",
+        EventLevel::Warn,
+        "account refresh failed after upstream 401",
+    );
+    event.request_id = Some(request_id.to_string());
+    event.account_id = Some(account.id.clone());
+    event.route = Some("/v1/responses".to_string());
+    event.model = Some(model.to_string());
+    event.status_code = Some(i64::from(StatusCode::UNAUTHORIZED.as_u16()));
+    event.metadata = json!({
+        "trigger": "upstream_401",
+        "failure": refresh_failure_value(failure),
+        "accountStatus": status.map(account_status_value),
+    });
+    if let Err(error) = repo.insert(event).await {
+        tracing::warn!(?error, "failed to insert account refresh event log");
+    }
+}
+
+fn refresh_failure_value(failure: RefreshFailure) -> &'static str {
+    match failure {
+        RefreshFailure::InvalidGrant => "invalidGrant",
+        RefreshFailure::QuotaExhausted => "quotaExhausted",
+        RefreshFailure::Banned => "banned",
+        RefreshFailure::Disabled => "disabled",
+        RefreshFailure::Transport => "transport",
+    }
+}
+
+fn account_status_value(status: AccountStatus) -> &'static str {
+    match status {
+        AccountStatus::Active => "active",
+        AccountStatus::Expired => "expired",
+        AccountStatus::QuotaExhausted => "quotaExhausted",
+        AccountStatus::Refreshing => "refreshing",
+        AccountStatus::Disabled => "disabled",
+        AccountStatus::Banned => "banned",
     }
 }
 
