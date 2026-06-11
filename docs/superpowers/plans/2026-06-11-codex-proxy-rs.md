@@ -19,7 +19,7 @@ Keep:
 - OpenAI-compatible inbound API: `/v1/chat/completions`, `/v1/responses`, `/v1/models`.
 - Codex Responses passthrough for clients that already speak Responses format.
 - ChatGPT/Codex OAuth login, device login, CLI token import, manual access-token import.
-- Account pool, account rotation, quota state, token refresh behavior compatible with the current TypeScript implementation.
+- Account pool, account rotation, quota state, and token refresh behavior reimplemented natively with the same required semantics, not through a TypeScript compatibility layer.
 - Rust native TLS path using pinned `reqwest` and `rustls`.
 - Codex Desktop fingerprint headers and fingerprint auto-update.
 - Account-scoped Cloudflare Cookie capture and replay.
@@ -32,6 +32,7 @@ Remove:
 - Ollama bridge and Ollama settings.
 - Per-account proxy assignment, proxy health checks, proxy UI, proxy routing.
 - Electron desktop packaging and large dashboard UI.
+- Legacy compatibility layers, old-project API adapters, and old-project data migration scripts.
 
 Security split:
 
@@ -52,7 +53,8 @@ These adjustments come from the `rust-best-practices` review and should be treat
 - Use the `config` crate with `config/default.yaml`, optional `config/local.yaml`, and `CPRS_*` environment overrides. Keep `.env` support via `dotenvy` for local development only.
 - Prefer borrowed parameters in public APIs (`&str`, `&[T]`, references to request structs) unless ownership transfer is part of the domain model.
 - Keep tests descriptive and targeted. Unit tests live beside modules for private behavior; integration tests under `tests/` cover route and storage behavior. Use `insta` only for structured payload snapshots that are worth reviewing.
-- Add sparse Chinese comments only where the reason is not obvious from names or types. Good targets are protocol/security/business invariants: TLS fingerprint pinning, Codex Desktop header parity, account-scoped Cookie replay, admin-session versus client-API-key boundaries, and token refresh compatibility with the TypeScript implementation. Do not comment every line, do not restate obvious code, and do not leave untracked TODO comments.
+- Add sparse Chinese comments only where the reason is not obvious from names or types. Good targets are protocol/security/business invariants: TLS fingerprint pinning, Codex Desktop header parity, account-scoped Cookie replay, admin-session versus client-API-key boundaries, and token refresh invariants. Do not comment every line, do not restate obvious code, and do not leave untracked TODO comments.
+- This project has no old deployment or data history to preserve. Do not add compatibility shims, legacy adapters, dual-mode behavior for removed features, or scripts that migrate data from the TypeScript project. SQL schema version files are allowed only for this Rust service's own database creation and future schema evolution.
 - Keep Rust identifiers idiomatic: type names use `PascalCase`, functions/variables/fields use `snake_case`, constants use `SCREAMING_SNAKE_CASE`. JSON fields exposed to the frontend use lower camelCase via `#[serde(rename_all = "camelCase")]`; do not expose PascalCase or snake_case JSON fields in admin/frontend APIs.
 
 ## Dependency Version Policy
@@ -919,25 +921,25 @@ git commit -m "feat: add codex-only configuration"
 
 ---
 
-### Task 3: SQLite Storage with sqlx Migrations
+### Task 3: SQLite Storage with sqlx-Managed Schema
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0001_initial.sql`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0002_events_indexes.sql`
+- Create schema version file: `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0001_initial.sql`
+- Create schema version file: `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0002_events_indexes.sql`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/storage/mod.rs`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/storage/db.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
-- Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_migration_test.rs`
+- Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_schema_test.rs`
 
-- [x] **Step 1: Write failing migration test**
+- [x] **Step 1: Write failing schema test**
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_migration_test.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/storage_schema_test.rs`:
 
 ```rust
 use codex_proxy_rs::storage::db::connect_sqlite;
 
 #[tokio::test]
-async fn migrations_create_accounts_and_event_tables() {
+async fn sqlite_schema_creates_accounts_and_event_tables() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -956,12 +958,12 @@ async fn migrations_create_accounts_and_event_tables() {
 Run:
 
 ```bash
-cargo test migrations_create_accounts_and_event_tables
+cargo test sqlite_schema_creates_accounts_and_event_tables
 ```
 
 Expected: compile failure because `storage::db` does not exist.
 
-- [x] **Step 3: Create migrations**
+- [x] **Step 3: Create sqlx schema version files**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/migrations/0001_initial.sql`:
 
@@ -1103,12 +1105,12 @@ pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Erro
 }
 ```
 
-- [x] **Step 5: Verify migrations**
+- [x] **Step 5: Verify schema**
 
 Run:
 
 ```bash
-cargo test migrations_create_accounts_and_event_tables
+cargo test sqlite_schema_creates_accounts_and_event_tables
 ```
 
 Expected: pass.
@@ -1116,7 +1118,7 @@ Expected: pass.
 - [x] **Step 6: Commit storage**
 
 ```bash
-git add Cargo.toml migrations src/storage src/lib.rs tests/storage_migration_test.rs
+git add Cargo.toml migrations src/storage src/lib.rs tests/storage_schema_test.rs
 git commit -m "feat: add sqlite storage schema"
 ```
 
@@ -2880,7 +2882,7 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - `/v1/models`
 - ChatGPT/Codex OAuth and refresh-token based account pool
 - Codex Desktop-style TLS, headers, Cookies, and fingerprint updates
-- SQLite storage with sqlx migrations
+- SQLite storage with sqlx-managed schema
 - Structured logs with pagination and file rotation
 
 ## Excluded
@@ -2890,6 +2892,7 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - Ollama bridge
 - Per-account proxy assignment
 - Electron app
+- Legacy compatibility layers and old-project data migration scripts
 
 ## Auth Model
 
@@ -2972,14 +2975,14 @@ git commit -m "docs: document codex-proxy-rs scope"
 - Codex headers include Codex Desktop identity, authorization, account id when available, turn-state when available, and request id.
 - Cloudflare Cookies are captured from upstream `Set-Cookie`, encrypted at rest, stored per account, and replayed only for the same account.
 - Fingerprint update logic can parse a Codex Desktop update manifest and persist app version/build number history.
-- SQLite is the only database. Migrations create accounts, client API keys, admin users, sessions, cookies, fingerprints, and event logs.
+- SQLite is the only database. The Rust service's own sqlx schema version files create accounts, client API keys, admin users, sessions, cookies, fingerprints, and event logs; no old-project data migration code is included.
 - Log files rotate by date/size policy, and event query APIs are cursor paginated with a max limit of 200.
-- Account refresh behavior preserves the current TypeScript semantics: refresh before expiry, immediate refresh after 401, refresh-token preservation, status transitions for expired/quota/banned/disabled, and bounded concurrency.
+- Account refresh behavior is implemented natively with the required refresh semantics: refresh before expiry, immediate refresh after 401, refresh-token preservation, status transitions for expired/quota/banned/disabled, and bounded concurrency.
 - Important protocol, security, and business invariants have sparse Chinese comments; obvious code is left uncommented.
 
 ## Self-Review Notes
 
-- Spec coverage: the plan covers Rust rewrite, removed channels, TLS fingerprint, headers, Cookies, fingerprint update, auth split, logging, pagination, SQLite storage, API/status-code contracts, frontend body codes, JSON casing, request IDs, Chinese comment policy, dependency policy, documentation completion tracking, and account refresh compatibility.
+- Spec coverage: the plan covers Rust rewrite, removed channels, TLS fingerprint, headers, Cookies, fingerprint update, auth split, logging, pagination, SQLite storage, API/status-code contracts, frontend body codes, JSON casing, request IDs, Chinese comment policy, dependency policy, documentation completion tracking, account refresh behavior, and the ban on legacy compatibility/data-migration code.
 - Rust best-practices coverage: the revised plan adds lint gates, `thiserror` library errors, binary-only `anyhow`, `secrecy` secret handling, HMAC API key hashing, SQLite URL configuration, and an `Arc<AppServices>` runtime state boundary.
 - Open item scan: no open-ended implementation gaps are intentionally left in task steps.
 - Type consistency: the early scaffold uses `AppConfig`, `AppState`, `AccountStatus`, `EventLog`, `Fingerprint`, and `CodexResponsesRequest` consistently across later tasks.

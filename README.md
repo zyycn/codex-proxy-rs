@@ -9,7 +9,7 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - `/v1/models`
 - ChatGPT/Codex OAuth and refresh-token based account pool
 - Codex Desktop-style TLS, headers, Cookies, and fingerprint updates
-- SQLite storage with sqlx migrations
+- SQLite storage with sqlx-managed schema
 - Structured logs with pagination and file rotation
 
 ## Excluded
@@ -19,6 +19,7 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - Ollama bridge
 - Per-account proxy assignment
 - Electron app
+- Legacy compatibility layers and old-project data migration scripts
 
 ## Auth Model
 

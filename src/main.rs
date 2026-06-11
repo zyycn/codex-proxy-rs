@@ -4,6 +4,7 @@ use codex_proxy_rs::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig,
         SecurityConfig, ServerConfig, TlsConfig,
     },
+    logs::rotation::{init_tracing, RotationConfig},
     state::AppState,
 };
 
@@ -42,10 +43,16 @@ async fn main() -> anyhow::Result<()> {
         },
     };
 
+    let _log_writer = init_tracing(RotationConfig::new(
+        &config.logging.directory,
+        config.logging.max_file_bytes,
+        config.logging.retention_days,
+    ))?;
     let host = config.server.host.clone();
     let port = config.server.port;
     let app = build_router(AppState::new(config));
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    tracing::info!(host, port, "codex-proxy-rs listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

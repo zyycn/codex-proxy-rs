@@ -1,7 +1,7 @@
 use codex_proxy_rs::storage::db::connect_sqlite;
 
 #[tokio::test]
-async fn migrations_create_accounts_and_event_tables() {
+async fn sqlite_schema_creates_accounts_and_event_tables() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
     let url = format!("sqlite://{}", db.display());
