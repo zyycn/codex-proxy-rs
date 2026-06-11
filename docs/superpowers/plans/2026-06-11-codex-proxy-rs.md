@@ -2776,7 +2776,7 @@ git commit -m "feat: enforce codex-only upstream routing"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/model.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`
 
-- [ ] **Step 1: Add failing updater parse test**
+- [x] **Step 1: Add failing updater parse test**
 
 Append to `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`:
 
@@ -2792,7 +2792,7 @@ fn update_manifest_updates_app_version_and_build_number() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -2802,7 +2802,7 @@ cargo test update_manifest_updates_app_version_and_build_number
 
 Expected: compile failure because `parse_update_manifest` does not exist.
 
-- [ ] **Step 3: Implement updater parser**
+- [x] **Step 3: Implement updater parser**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/updater.rs`:
 
@@ -2837,7 +2837,7 @@ pub fn parse_update_manifest(input: &str) -> Result<FingerprintUpdate, Fingerpri
 }
 ```
 
-- [ ] **Step 4: Verify updater parser**
+- [x] **Step 4: Verify updater parser**
 
 Run:
 
@@ -2847,7 +2847,7 @@ cargo test update_manifest_updates_app_version_and_build_number
 
 Expected: pass.
 
-- [ ] **Step 5: Commit fingerprint updater parser**
+- [x] **Step 5: Commit fingerprint updater parser**
 
 ```bash
 git add src/fingerprint/updater.rs tests/codex_headers_test.rs

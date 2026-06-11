@@ -17,5 +17,5 @@ Update this file before each feature commit.
 | Translation | Completed | pending translation commit | `cargo test chat_completion_translates_to_codex_response_request`; full `fmt/test/clippy` before commit | Adds OpenAI Chat request types, Codex Responses request type, translation, and OpenAI-compatible error body helper. |
 | HTTP routes | Completed | pending router commit | `cargo test v1_requires_client_api_key_not_admin_cookie`; full `fmt/test/clippy` before commit | Adds Axum router, health route, `/v1` unauthorized OpenAI error body, and binary listener. |
 | Upstream lifecycle | Completed | pending upstream boundary commit | `cargo test responses_route_rejects_non_codex_provider_models`; `cargo test v1_requires_client_api_key_not_admin_cookie`; full `fmt/test/clippy` before commit | `/v1` accepts only `Bearer cpr_...`, rejects non-Codex provider models, and returns OpenAI-compatible errors. |
-| Fingerprint updates | Planned |  |  |  |
+| Fingerprint updates | Completed | pending fingerprint updater commit | `cargo test update_manifest_updates_app_version_and_build_number`; full `fmt/test/clippy` before commit | Parses Codex Desktop update manifests into app version and build number updates. |
 | Runtime docs and packaging | Planned |  |  |  |
