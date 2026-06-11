@@ -33,6 +33,7 @@ create table if not exists accounts (
   plan_type text,
   access_token_cipher text not null,
   refresh_token_cipher text,
+  access_token_expires_at text,
   status text not null,
   quota_json text,
   quota_fetched_at text,

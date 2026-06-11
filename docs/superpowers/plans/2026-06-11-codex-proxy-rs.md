@@ -2953,6 +2953,7 @@ git commit -m "docs: document codex-proxy-rs scope"
 ## Audit Follow-ups
 
 - [x] Add `POST /admin/login` so admin login is a password-backed session flow, not a client API key flow. The route issues an HttpOnly `cpr_admin_session` cookie, returns the admin envelope with lower camelCase `expiresAt`, and rejects `Bearer cpr_...` as admin credentials.
+- [x] Replace the refresh policy shell with a native refresh scheduler. It refreshes before expiry, refreshes immediately after an upstream 401 trigger, preserves the existing refresh token when the refresh response omits one, maps refresh failures to account statuses, and enforces configured concurrency with a semaphore.
 
 ---
 
