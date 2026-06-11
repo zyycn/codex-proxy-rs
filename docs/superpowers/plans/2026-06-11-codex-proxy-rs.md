@@ -1745,7 +1745,7 @@ git commit -m "feat: add paginated event logs"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`
 
-- [ ] **Step 1: Write failing header test**
+- [x] **Step 1: Write failing header test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`:
 
@@ -1769,7 +1769,7 @@ fn codex_headers_include_desktop_identity_and_turn_state() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -1779,7 +1779,7 @@ cargo test codex_headers_include_desktop_identity_and_turn_state
 
 Expected: compile failure because `codex` and `fingerprint` modules do not exist.
 
-- [ ] **Step 3: Implement fingerprint and headers**
+- [x] **Step 3: Implement fingerprint and headers**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -1908,7 +1908,7 @@ Create empty module files:
 touch src/fingerprint/updater.rs src/codex/sse.rs src/codex/types.rs src/codex/usage.rs src/codex/websocket.rs
 ```
 
-- [ ] **Step 4: Verify headers**
+- [x] **Step 4: Verify headers**
 
 Run:
 
@@ -1919,7 +1919,7 @@ cargo tree | rg 'reqwest|rustls'
 
 Expected: test passes; `cargo tree` shows `reqwest v0.12.28` and `rustls v0.23.36`.
 
-- [ ] **Step 5: Commit TLS and headers foundation**
+- [x] **Step 5: Commit TLS and headers foundation**
 
 ```bash
 git add Cargo.toml src/codex src/fingerprint src/lib.rs tests/codex_headers_test.rs

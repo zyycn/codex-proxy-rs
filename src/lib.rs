@@ -1,7 +1,9 @@
 pub mod auth;
+pub mod codex;
 pub mod config;
 pub mod crypto;
 pub mod error;
+pub mod fingerprint;
 pub mod logs;
 pub mod pagination;
 pub mod state;
