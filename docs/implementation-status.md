@@ -10,7 +10,7 @@ Update this file before each feature commit.
 | SQLite storage | Completed | pending storage commit | `cargo test migrations_create_accounts_and_event_tables`; full `fmt/test/clippy` before commit | Creates SQLite WAL connector, migrations for accounts/API keys/sessions/cookies/fingerprints/events, and event/account indexes. |
 | Admin auth and client API keys | Completed | pending auth commit | `cargo test client_api_key_has_proxy_prefix_and_verifies_against_hash`; `cargo test admin_password_hash_is_not_a_client_api_key`; full `fmt/test/clippy` before commit | Admin passwords use Argon2id, client API keys use `cpr_` prefix plus HMAC-SHA256 with server-side pepper. |
 | Secret encryption | Completed | pending crypto commit | `cargo test secret_box_encrypts_and_decrypts_without_storing_plaintext`; full `fmt/test/clippy` before commit | AES-256-GCM `SecretBox` stores upstream secrets as `v1:<nonce>:<ciphertext>` without plaintext. |
-| Logging and pagination | Planned |  |  |  |
+| Logging and pagination | Completed | pending logs commit | `cargo test event_logs_are_cursor_paginated`; full `fmt/test/clippy` before commit | Adds cursor pagination, `Page<T>` camelCase serialization, event log repository, and rotation config shell. |
 | TLS headers and fingerprint | Planned |  |  |  |
 | Cookie persistence | Planned |  |  |  |
 | Account pool and refresh | Planned |  |  |  |

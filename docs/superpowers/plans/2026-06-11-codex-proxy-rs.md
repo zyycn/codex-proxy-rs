@@ -1468,7 +1468,7 @@ git commit -m "feat: encrypt stored upstream secrets"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/logs_pagination_test.rs`
 
-- [ ] **Step 1: Write failing pagination test**
+- [x] **Step 1: Write failing pagination test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/logs_pagination_test.rs`:
 
@@ -1500,7 +1500,7 @@ async fn event_logs_are_cursor_paginated() {
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -1510,7 +1510,7 @@ cargo test event_logs_are_cursor_paginated
 
 Expected: compile failure because logs modules do not exist.
 
-- [ ] **Step 3: Implement pagination and event models**
+- [x] **Step 3: Implement pagination and event models**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -1715,7 +1715,7 @@ impl RotationConfig {
 }
 ```
 
-- [ ] **Step 4: Verify event pagination**
+- [x] **Step 4: Verify event pagination**
 
 Run:
 
@@ -1725,7 +1725,7 @@ cargo test event_logs_are_cursor_paginated
 
 Expected: pass.
 
-- [ ] **Step 5: Commit logging foundation**
+- [x] **Step 5: Commit logging foundation**
 
 ```bash
 git add src/logs src/pagination.rs src/lib.rs tests/logs_pagination_test.rs
