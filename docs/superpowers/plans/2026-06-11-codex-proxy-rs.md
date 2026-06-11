@@ -719,7 +719,7 @@ git commit -m "docs: define api contracts and status codes"
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/config_test.rs`
 
-- [ ] **Step 1: Write failing config test**
+- [x] **Step 1: Write failing config test**
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/config_test.rs`:
 
@@ -760,7 +760,7 @@ logging:
 }
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 Run:
 
@@ -770,7 +770,7 @@ cargo test default_config_keeps_only_codex_backend
 
 Expected: compile failure because `codex_proxy_rs::config` does not exist.
 
-- [ ] **Step 3: Implement config types**
+- [x] **Step 3: Implement config types**
 
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
@@ -900,7 +900,7 @@ logging:
   retention_days: 14
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -910,7 +910,7 @@ cargo test default_config_keeps_only_codex_backend
 
 Expected: pass.
 
-- [ ] **Step 5: Commit config**
+- [x] **Step 5: Commit config**
 
 ```bash
 git add config src tests/config_test.rs

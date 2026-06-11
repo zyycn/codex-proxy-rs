@@ -6,7 +6,7 @@ Update this file before each feature commit.
 | --- | --- | --- | --- | --- |
 | Scaffold | Completed | initial scaffold commit | `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | Rust crate, lint policy, pinned TLS-sensitive dependencies, `.gitignore`, and minimal entry points are in place. |
 | API contract docs | Completed | initial scaffold commit | `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | `/v1/*` OpenAI-compatible body, `/admin/*` frontend envelope, body codes, camelCase, and request ID policy are documented. |
-| Configuration | Planned |  |  |  |
+| Configuration | Completed | pending config commit | `cargo test default_config_keeps_only_codex_backend`; full `fmt/test/clippy` before commit | Defines Codex-only config, default YAML, and `Arc<AppServices>` state shell. |
 | SQLite storage | Planned |  |  |  |
 | Admin auth and client API keys | Planned |  |  |  |
 | Secret encryption | Planned |  |  |  |
