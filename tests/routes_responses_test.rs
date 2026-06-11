@@ -1,7 +1,8 @@
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
+use serde_json::Value;
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
@@ -80,4 +81,29 @@ async fn responses_route_rejects_non_codex_provider_models() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn v1_response_has_request_id_header_without_admin_body_field() {
+    let app = build_router(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", "Bearer cpr_test")
+                .header("x-request-id", "req_client")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.headers().get("x-request-id").unwrap(),
+        "req_client"
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body.get("requestId").is_none());
 }

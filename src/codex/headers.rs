@@ -18,6 +18,7 @@ pub fn build_codex_headers(
     headers.insert("originator".to_string(), fp.originator.clone());
     headers.insert("user-agent".to_string(), fp.user_agent());
     headers.insert("x-client-request-id".to_string(), request_id.to_string());
+    // 中文注释：这些 Codex Desktop 私有头是上游识别链路的一部分，不能按普通 OpenAI API 精简。
     headers.insert(
         "x-openai-internal-codex-residency".to_string(),
         "global".to_string(),

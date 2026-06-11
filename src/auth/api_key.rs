@@ -34,6 +34,7 @@ impl ApiKeyHasher {
     pub fn generate_client_api_key(&self, _name: &str) -> GeneratedClientApiKey {
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
+        // 中文注释：cpr_ 只用于客户端调用 /v1，不能复用成管理员登录密码。
         let plaintext = format!("cpr_{}", URL_SAFE_NO_PAD.encode(bytes));
         let prefix = plaintext.chars().take(12).collect::<String>();
         let key_hash = self.hash_client_api_key(&plaintext);
