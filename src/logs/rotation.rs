@@ -149,7 +149,7 @@ impl RotatingLogInner {
 pub fn init_tracing(config: RotationConfig) -> Result<RotatingLogWriter, LogError> {
     let writer = RotatingLogWriter::new(config)?;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    // 中文注释：日志必须写入可轮转文件，不能只依赖 stdout，否则线上问题无法回溯。
+    // 日志必须写入可轮转文件，不能只依赖 stdout，否则线上问题无法回溯。
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(filter)

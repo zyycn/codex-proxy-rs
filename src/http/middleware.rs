@@ -31,7 +31,7 @@ pub async fn attach_request_id(mut request: Request, next: Next) -> Response {
         .and_then(RequestId::from_header)
         .unwrap_or_else(RequestId::generate);
 
-    // 中文注释：同一个 requestId 同时进入日志、响应头和 admin body，方便跨层排查。
+    // 同一个 requestId 同时进入日志、响应头和 admin body，方便跨层排查。
     request.extensions_mut().insert(request_id.clone());
     let mut response = next.run(request).await;
     if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {

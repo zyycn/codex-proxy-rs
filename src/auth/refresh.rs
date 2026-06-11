@@ -89,7 +89,7 @@ where
             .acquire()
             .await
             .map_err(|_| RefreshError::ConcurrencyClosed)?;
-        // 中文注释：刷新响应未返回 refresh_token 时必须保留旧值，避免把账号永久刷新能力清空。
+        // 刷新响应未返回 refresh_token 时必须保留旧值，避免把账号永久刷新能力清空。
         match self.client.refresh(refresh_token).await {
             Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
             Err(RefreshFailure::Transport) => Err(RefreshError::Transport),

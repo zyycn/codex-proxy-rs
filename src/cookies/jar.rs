@@ -38,7 +38,7 @@ impl CookieJar {
     }
 
     pub fn cookie_header(&self, account_id: &str, domain: &str) -> Option<String> {
-        // 中文注释：Cloudflare Cookie 必须按账号隔离，不能在不同 Codex 账号之间复用。
+        // Cloudflare Cookie 必须按账号隔离，不能在不同 Codex 账号之间复用。
         let cookies = self.by_account.get(account_id)?;
         let pairs = cookies
             .iter()

@@ -35,7 +35,7 @@ impl<T> AdminEnvelope<T> {
         data: T,
         request_id: impl Into<String>,
     ) -> Self {
-        // 中文注释：body code 给前端做业务分支，HTTP status 仍然是传输层真相。
+        // body code 给前端做业务分支，HTTP status 仍然是传输层真相。
         Self {
             code,
             message: message.into(),
@@ -161,7 +161,7 @@ pub async fn login(
         }
     };
 
-    // 中文注释：admin 登录只校验管理员密码；客户端 cpr_ API Key 不能参与后台登录。
+    // admin 登录只校验管理员密码；客户端 cpr_ API Key 不能参与后台登录。
     match verify_admin_password(&payload.password, &admin.password_hash) {
         Ok(true) => {}
         Ok(false) => {
