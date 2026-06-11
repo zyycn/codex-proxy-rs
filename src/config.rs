@@ -1,4 +1,8 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+
+pub type ConfigResult<T> = Result<T, config::ConfigError>;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AppConfig {
@@ -10,6 +14,71 @@ pub struct AppConfig {
     pub tls: TlsConfig,
     pub admin: AdminConfig,
     pub logging: LoggingConfig,
+}
+
+impl AppConfig {
+    pub fn load() -> ConfigResult<Self> {
+        let _ = dotenvy::dotenv();
+        Self::load_from_dir_with_env("config", std::env::vars())
+    }
+
+    pub fn load_from_dir_with_env<K, V, I>(
+        config_dir: impl AsRef<Path>,
+        env: I,
+    ) -> ConfigResult<Self>
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let config_dir = config_dir.as_ref();
+        let mut cfg: Self = config::Config::builder()
+            .add_source(config::File::from(config_dir.join("default.yaml")).required(true))
+            .add_source(config::File::from(config_dir.join("local.yaml")).required(false))
+            .add_source(config::File::from(config_dir.join("local.yml")).required(false))
+            .build()?
+            .try_deserialize()?;
+        cfg.apply_env(env)?;
+        Ok(cfg)
+    }
+
+    fn apply_env<K, V, I>(&mut self, env: I) -> ConfigResult<()>
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+        I: IntoIterator<Item = (K, V)>,
+    {
+        for (key, value) in env {
+            let key = key.as_ref();
+            let value = value.as_ref();
+            match key {
+                "CPRS_HOST" => self.server.host = value.to_string(),
+                "CPRS_PORT" => self.server.port = parse_env(key, value)?,
+                "CPRS_BASE_URL" => self.api.base_url = value.to_string(),
+                "CPRS_REFRESH_MARGIN_SECONDS" => {
+                    self.auth.refresh_margin_seconds = parse_env(key, value)?;
+                }
+                "CPRS_REFRESH_ENABLED" => self.auth.refresh_enabled = parse_env(key, value)?,
+                "CPRS_REFRESH_CONCURRENCY" => {
+                    self.auth.refresh_concurrency = parse_env(key, value)?;
+                }
+                "CPRS_DATABASE_URL" => self.database.url = value.to_string(),
+                "CPRS_MASTER_KEY_FILE" => self.security.master_key_file = value.to_string(),
+                "CPRS_API_KEY_PEPPER_FILE" => {
+                    self.security.api_key_pepper_file = value.to_string();
+                }
+                "CPRS_FORCE_HTTP11" => self.tls.force_http11 = parse_env(key, value)?,
+                "CPRS_ADMIN_SESSION_TTL_MINUTES" => {
+                    self.admin.session_ttl_minutes = parse_env(key, value)?;
+                }
+                "CPRS_LOG_DIR" => self.logging.directory = value.to_string(),
+                "CPRS_LOG_MAX_FILE_BYTES" => self.logging.max_file_bytes = parse_env(key, value)?,
+                "CPRS_LOG_RETENTION_DAYS" => self.logging.retention_days = parse_env(key, value)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -56,4 +125,14 @@ pub struct LoggingConfig {
     pub directory: String,
     pub max_file_bytes: u64,
     pub retention_days: u64,
+}
+
+fn parse_env<T>(key: &str, value: &str) -> ConfigResult<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|error| config::ConfigError::Message(format!("invalid {key}: {error}")))
 }
