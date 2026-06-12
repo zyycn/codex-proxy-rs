@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
 
-**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Task 4 is implemented in the current pending stage: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Remaining major work starts at Task 5: account fallback/rate limits, model refresh/cache, and scoped admin operations.
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Remaining major work starts at Task 5: account fallback/rate limits, model refresh/cache, and scoped admin operations.
 
 ---
 
