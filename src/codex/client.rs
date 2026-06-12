@@ -1,5 +1,7 @@
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, RETRY_AFTER, SET_COOKIE},
+    header::{
+        HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE, COOKIE, RETRY_AFTER, SET_COOKIE,
+    },
     Client, Response as ReqwestResponse, StatusCode,
 };
 use serde_json::Value;
@@ -17,6 +19,7 @@ use crate::{
         },
     },
     fingerprint::model::Fingerprint,
+    models::catalog::BackendModelEntry,
 };
 
 #[derive(Debug, Error)]
@@ -39,6 +42,8 @@ pub enum CodexClientError {
         body: String,
         retry_after_seconds: Option<u64>,
     },
+    #[error("backend model catalog is unavailable")]
+    ModelsUnavailable,
 }
 
 pub type CodexClientResult<T> = Result<T, CodexClientError>;
@@ -160,6 +165,36 @@ impl CodexBackendClient {
         })
     }
 
+    pub async fn fetch_models(
+        &self,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<Vec<BackendModelEntry>> {
+        let endpoints = [
+            format!(
+                "{}/codex/models?client_version={}",
+                self.base_url, self.fingerprint.app_version
+            ),
+            format!("{}/models", self.base_url),
+            format!("{}/sentinel/chat-requirements", self.base_url),
+        ];
+
+        for endpoint in endpoints {
+            let mut headers = self.request_headers(context)?;
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let response = self.client.get(endpoint).headers(headers).send().await?;
+            if !response.status().is_success() {
+                continue;
+            }
+            let parsed = response.json::<Value>().await?;
+            let models = extract_backend_model_entries(&parsed);
+            if !models.is_empty() {
+                return Ok(models);
+            }
+        }
+
+        Err(CodexClientError::ModelsUnavailable)
+    }
+
     async fn send_response_request(
         &self,
         request: &CodexResponsesRequest,
@@ -218,6 +253,33 @@ impl CodexBackendClient {
         )?;
         Ok(headers)
     }
+}
+
+fn extract_backend_model_entries(value: &Value) -> Vec<BackendModelEntry> {
+    let Some(models) = value
+        .pointer("/chat_models/models")
+        .or_else(|| value.get("models"))
+        .or_else(|| value.get("data"))
+        .or_else(|| value.get("categories"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut entries = Vec::new();
+    for model in models {
+        if let Some(nested) = model.get("models").and_then(Value::as_array) {
+            entries.extend(nested.iter().filter_map(parse_backend_model_entry));
+        } else if let Some(entry) = parse_backend_model_entry(model) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+fn parse_backend_model_entry(value: &Value) -> Option<BackendModelEntry> {
+    let entry = serde_json::from_value::<BackendModelEntry>(value.clone()).ok()?;
+    (entry.slug.is_some() || entry.id.is_some() || entry.name.is_some()).then_some(entry)
 }
 
 fn insert_optional_header(
