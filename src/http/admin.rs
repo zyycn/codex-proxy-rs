@@ -261,6 +261,33 @@ pub struct DeleteAccountData {
     pub deleted: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteAccountsRequest {
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteAccountsData {
+    pub deleted: u32,
+    pub not_found: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchUpdateAccountStatusRequest {
+    pub ids: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchUpdateAccountStatusData {
+    pub updated: u32,
+    pub not_found: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshModelsData {
@@ -1114,6 +1141,154 @@ pub async fn delete_account(
         )
         .into_response(),
     }
+}
+
+pub async fn batch_delete_accounts(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<BatchDeleteAccountsRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    if payload.ids.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Account ids are required", (), request_id),
+        )
+        .into_response();
+    }
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let mut deleted = 0u32;
+    let mut not_found = Vec::new();
+    for account_id in payload.ids {
+        match repo.delete(&account_id).await {
+            Ok(true) => {
+                state.account_pool().lock().await.remove(&account_id);
+                deleted += 1;
+            }
+            Ok(false) => not_found.push(account_id),
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to delete account", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    }
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(BatchDeleteAccountsData { deleted, not_found }, request_id),
+    )
+    .into_response()
+}
+
+pub async fn batch_update_account_status(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<BatchUpdateAccountStatusRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    if payload.ids.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Account ids are required", (), request_id),
+        )
+        .into_response();
+    }
+    let status = match parse_admin_account_status(&payload.status) {
+        Ok(status) => status,
+        Err(message) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, message, (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let mut updated = 0u32;
+    let mut not_found = Vec::new();
+    for account_id in payload.ids {
+        match repo.set_status(&account_id, status).await {
+            Ok(true) => {
+                if sync_runtime_account_status(&state, &repo, &account_id, status)
+                    .await
+                    .is_err()
+                {
+                    return AdminResponse::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        AdminEnvelope::new(50001, "Failed to sync account status", (), request_id),
+                    )
+                    .into_response();
+                }
+                updated += 1;
+            }
+            Ok(false) => not_found.push(account_id),
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to update account status", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    }
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            BatchUpdateAccountStatusData { updated, not_found },
+            request_id,
+        ),
+    )
+    .into_response()
 }
 
 pub async fn import_accounts(

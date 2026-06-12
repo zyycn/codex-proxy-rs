@@ -8,9 +8,9 @@ use tower_http::trace::TraceLayer;
 use crate::{
     http::{
         admin::{
-            accounts, api_keys, create_api_key, delete_account, import_accounts, login, logs,
-            refresh_models, settings, update_account_label, update_account_status, usage_stats,
-            usage_stats_summary,
+            accounts, api_keys, batch_delete_accounts, batch_update_account_status, create_api_key,
+            delete_account, import_accounts, login, logs, refresh_models, settings,
+            update_account_label, update_account_status, usage_stats, usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -39,6 +39,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
         .route("/admin/accounts", get(accounts))
+        .route("/admin/accounts/batch-delete", post(batch_delete_accounts))
+        .route(
+            "/admin/accounts/batch-status",
+            post(batch_update_account_status),
+        )
         .route("/admin/accounts/{account_id}", delete(delete_account))
         .route(
             "/admin/accounts/{account_id}/label",

@@ -555,6 +555,150 @@ async fn admin_account_delete_should_remove_database_row_and_runtime_pool_entry(
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn admin_accounts_batch_delete_should_delete_found_accounts_and_report_missing_ids() {
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-batch-delete.sqlite", 20).await;
+    import_test_account(&app, "session_1", "acct_batch_delete_a").await;
+    import_test_account(&app, "session_1", "acct_batch_delete_b").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/batch-delete")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "ids": ["acct_batch_delete_a", "ghost", "acct_batch_delete_b"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["deleted"], 2);
+    assert_eq!(body["data"]["notFound"], json!(["ghost"]));
+
+    let row_count: (i64,) = sqlx::query_as("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row_count.0, 0);
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_none());
+
+    let empty = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/batch-delete")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"ids":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_accounts_batch_status_should_update_found_accounts_and_reject_invalid_status() {
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-batch-status.sqlite", 21).await;
+    import_test_account(&app, "session_1", "acct_batch_status_a").await;
+    import_test_account(&app, "session_1", "acct_batch_status_b").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/batch-status")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "ids": ["acct_batch_status_a", "ghost"],
+                        "status": "disabled"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["updated"], 1);
+    assert_eq!(body["data"]["notFound"], json!(["ghost"]));
+
+    let statuses =
+        sqlx::query_as::<_, (String, String)>("select id, status from accounts order by id asc")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        statuses,
+        vec![
+            ("acct_batch_status_a".to_string(), "disabled".to_string()),
+            ("acct_batch_status_b".to_string(), "active".to_string())
+        ]
+    );
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.id, "acct_batch_status_b");
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/batch-status")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "ids": ["acct_batch_status_a"],
+                        "status": "expired"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let empty = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/batch-status")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"ids":[],"status":"active"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+}
+
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,
