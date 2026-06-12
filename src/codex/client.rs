@@ -195,6 +195,42 @@ impl CodexBackendClient {
         Err(CodexClientError::ModelsUnavailable)
     }
 
+    pub async fn fetch_usage(&self, context: CodexRequestContext<'_>) -> CodexClientResult<Value> {
+        let mut last_invalid_body = None;
+        for endpoint in self.usage_endpoints() {
+            let mut headers = self.request_headers(context)?;
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let response = self.client.get(endpoint).headers(headers).send().await?;
+            let status = response.status();
+            let retry_after_seconds = retry_after_seconds(response.headers(), None);
+            let body = response.text().await?;
+            if status == StatusCode::NOT_FOUND {
+                last_invalid_body = Some(body);
+                continue;
+            }
+            if !status.is_success() {
+                return Err(CodexClientError::Upstream {
+                    status,
+                    retry_after_seconds: retry_after_seconds
+                        .or_else(|| retry_after_seconds_from_body(&body)),
+                    body,
+                });
+            }
+            match serde_json::from_str::<Value>(&body) {
+                Ok(parsed) if parsed.get("rate_limit").is_some() => return Ok(parsed),
+                _ => last_invalid_body = Some(body),
+            }
+        }
+
+        Err(CodexClientError::Upstream {
+            status: StatusCode::BAD_GATEWAY,
+            retry_after_seconds: None,
+            body: last_invalid_body
+                .map(|body| format!("invalid usage response: {}", truncate_for_error(&body)))
+                .unwrap_or_else(|| "usage endpoint is unavailable".to_string()),
+        })
+    }
+
     async fn send_response_request(
         &self,
         request: &CodexResponsesRequest,
@@ -209,6 +245,20 @@ impl CodexBackendClient {
             .json(request)
             .send()
             .await?)
+    }
+
+    fn usage_endpoints(&self) -> Vec<String> {
+        if self.base_url.contains("/backend-api") {
+            vec![
+                format!("{}/wham/usage", self.base_url),
+                format!("{}/codex/usage", self.base_url),
+            ]
+        } else {
+            vec![
+                format!("{}/api/codex/usage", self.base_url),
+                format!("{}/codex/usage", self.base_url),
+            ]
+        }
     }
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
@@ -353,4 +403,8 @@ fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
         .ok()?
         .as_secs();
     (resets_at > now).then_some(resets_at - now)
+}
+
+fn truncate_for_error(body: &str) -> String {
+    body.chars().take(200).collect()
 }

@@ -1,3 +1,5 @@
+use std::time::{Duration as StdDuration, Instant};
+
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
@@ -10,10 +12,13 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use futures::{stream, StreamExt};
+use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sqlx::Row;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
@@ -21,7 +26,7 @@ use crate::{
         model::{Account, AccountStatus},
         repository::{
             AccountClaimsUpdate, AccountRepositoryError, AccountUsageListRecord,
-            AccountUsageSummary, NewAccount, StoredAccount, StoredAccountMetadata,
+            AccountUsageSummary, NewAccount, StoredAccount, StoredAccountMetadata, TokenUpdate,
         },
     },
     auth::api_key_repository::StoredClientApiKey,
@@ -29,8 +34,11 @@ use crate::{
         admin_session::verify_admin_password,
         cli_import::{default_codex_home, read_cli_auth_from_home},
         refresh::RefreshFailure,
+        token::TokenPair,
     },
-    codex::client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
+    codex::client::{
+        build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
+    },
     config::{AppConfig, QuotaWarningThresholds},
     fingerprint::model::Fingerprint,
     http::{auth::admin_session_id, middleware::RequestId},
@@ -255,6 +263,57 @@ pub struct CreateAccountRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ImportCliAuthRequest {
     pub codex_home: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheckRequest {
+    pub ids: Option<Vec<String>>,
+    #[serde(alias = "stagger_ms")]
+    pub stagger_ms: Option<u64>,
+    pub concurrency: Option<u8>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheckData {
+    pub summary: HealthCheckSummary,
+    pub results: Vec<AccountProbeData>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheckSummary {
+    pub total: usize,
+    pub alive: usize,
+    pub dead: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProbeData {
+    pub id: String,
+    pub email: Option<String>,
+    pub previous_status: String,
+    pub result: String,
+    pub status: Option<String>,
+    pub error: Option<String>,
+    pub duration_ms: Option<u128>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetAccountUsageData {
+    pub id: String,
+    pub reset: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaData {
+    pub quota: Value,
+    pub raw: Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1148,6 +1207,430 @@ pub async fn create_account(
         AdminEnvelope::ok(admin_account_data_from_stored(stored), request_id),
     )
     .into_response()
+}
+
+pub async fn health_check_accounts(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    payload: Option<Json<HealthCheckRequest>>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let payload = payload.map(|Json(payload)| payload).unwrap_or_default();
+    if payload.ids.as_ref().is_some_and(Vec::is_empty) {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Account ids must not be empty", (), request_id),
+        )
+        .into_response();
+    }
+    if payload
+        .stagger_ms
+        .is_some_and(|value| !(500..=30_000).contains(&value))
+    {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "staggerMs must be between 500 and 30000",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    if payload
+        .concurrency
+        .is_some_and(|value| !(1..=10).contains(&value))
+    {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "concurrency must be between 1 and 10",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let accounts = match repo.list_all().await {
+        Ok(accounts) => filter_health_check_accounts(accounts, payload.ids.as_deref()),
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to list accounts", (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let concurrency = usize::from(payload.concurrency.unwrap_or(2));
+    let stagger_ms = payload.stagger_ms.unwrap_or(3_000);
+    let results = stream::iter(accounts.into_iter().enumerate())
+        .map(|(index, account)| {
+            let state = state.clone();
+            let repo = repo.clone();
+            let request_id = request_id.clone();
+            async move {
+                if stagger_ms > 0 && index > 0 {
+                    let multiplier = index.min(concurrency);
+                    sleep(StdDuration::from_millis(
+                        stagger_ms.saturating_mul(multiplier as u64),
+                    ))
+                    .await;
+                }
+                probe_account_with_codex_backend(&state, &repo, account, &request_id).await
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect::<Vec<_>>()
+        .await;
+    let summary = HealthCheckSummary {
+        total: results.len(),
+        alive: results
+            .iter()
+            .filter(|result| result.result == "alive")
+            .count(),
+        dead: results
+            .iter()
+            .filter(|result| result.result == "dead")
+            .count(),
+        skipped: results
+            .iter()
+            .filter(|result| result.result == "skipped")
+            .count(),
+    };
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(HealthCheckData { summary, results }, request_id),
+    )
+    .into_response()
+}
+
+pub async fn refresh_account(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let account = match repo.get(&account_id).await {
+        Ok(Some(account)) => account,
+        Ok(None) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to load account", (), request_id),
+            )
+            .into_response();
+        }
+    };
+    if account.status == AccountStatus::Disabled {
+        return AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                skipped_probe_result(&account, "manually disabled"),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let Some(refresh_token) = account.refresh_token.as_ref() else {
+        return AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                skipped_probe_result(&account, "no refresh token"),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(refresher) = state.token_refresher() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Token refresher is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+
+    let started_at = Instant::now();
+    let previous_status = account_status_value(account.status).to_string();
+    match refresher.refresh(refresh_token.expose_secret()).await {
+        Ok(tokens) => {
+            match persist_admin_refreshed_account(&state, &repo, &account.id, tokens).await {
+                Ok(updated) => AdminResponse::new(
+                    StatusCode::OK,
+                    AdminEnvelope::ok(
+                        AccountProbeData {
+                            id: updated.id,
+                            email: updated.email,
+                            previous_status,
+                            result: "alive".to_string(),
+                            status: Some(account_status_value(updated.status).to_string()),
+                            error: None,
+                            duration_ms: Some(started_at.elapsed().as_millis()),
+                        },
+                        request_id,
+                    ),
+                )
+                .into_response(),
+                Err(_) => AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to store refreshed account", (), request_id),
+                )
+                .into_response(),
+            }
+        }
+        Err(failure) => {
+            let status = apply_refresh_failure_status(&state, &repo, &account, failure).await;
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    AccountProbeData {
+                        id: account.id,
+                        email: account.email,
+                        previous_status,
+                        result: "dead".to_string(),
+                        status: status.map(account_status_value).map(ToString::to_string),
+                        error: Some(public_refresh_failure(failure).to_string()),
+                        duration_ms: Some(started_at.elapsed().as_millis()),
+                    },
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+    }
+}
+
+pub async fn reset_account_usage(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(account_repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    match account_repo.exists(&account_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+            )
+            .into_response();
+        }
+    }
+    let Some(usage_repo) = state.account_usage_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account usage repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    if usage_repo.reset_account(&account_id).await.is_err() {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to reset account usage", (), request_id),
+        )
+        .into_response();
+    }
+    state.account_pool().lock().await.reset_usage(&account_id);
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            ResetAccountUsageData {
+                id: account_id,
+                reset: true,
+            },
+            request_id,
+        ),
+    )
+    .into_response()
+}
+
+pub async fn account_quota(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let account = match repo.get(&account_id).await {
+        Ok(Some(account)) => account,
+        Ok(None) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to load account", (), request_id),
+            )
+            .into_response();
+        }
+    };
+    if account.status != AccountStatus::Active {
+        return AdminResponse::new(
+            StatusCode::CONFLICT,
+            AdminEnvelope::new(
+                40901,
+                format!(
+                    "Account is {}, cannot query quota",
+                    account_status_value(account.status)
+                ),
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+
+    match fetch_account_usage(&state, &account, &request_id).await {
+        Ok(raw) => {
+            let quota = quota_from_usage(&raw);
+            if repo
+                .update_quota_json(&account.id, &quota.to_string())
+                .await
+                .is_err()
+            {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to store account quota", (), request_id),
+                )
+                .into_response();
+            }
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(AccountQuotaData { quota, raw }, request_id),
+            )
+            .into_response()
+        }
+        Err(error) => {
+            apply_codex_account_error(&state, &repo, &account, &error).await;
+            AdminResponse::new(
+                StatusCode::BAD_GATEWAY,
+                AdminEnvelope::new(
+                    50201,
+                    "Failed to fetch quota from Codex API",
+                    json!({ "error": public_codex_error(&error) }),
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+    }
 }
 
 pub async fn update_account_label(
@@ -2374,6 +2857,465 @@ async fn require_admin_session(
         )
         .into_response()),
     }
+}
+
+fn filter_health_check_accounts(
+    accounts: Vec<StoredAccount>,
+    ids: Option<&[String]>,
+) -> Vec<StoredAccount> {
+    let Some(ids) = ids else {
+        return accounts;
+    };
+    accounts
+        .into_iter()
+        .filter(|account| ids.iter().any(|id| id == &account.id))
+        .collect()
+}
+
+fn skipped_probe_result(account: &StoredAccount, error: &str) -> AccountProbeData {
+    AccountProbeData {
+        id: account.id.clone(),
+        email: account.email.clone(),
+        previous_status: account_status_value(account.status).to_string(),
+        result: "skipped".to_string(),
+        status: Some(account_status_value(account.status).to_string()),
+        error: Some(error.to_string()),
+        duration_ms: None,
+    }
+}
+
+async fn probe_account_with_codex_backend(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    account: StoredAccount,
+    request_id: &str,
+) -> AccountProbeData {
+    if account.status == AccountStatus::Disabled {
+        return skipped_probe_result(&account, "manually disabled");
+    }
+
+    let started_at = Instant::now();
+    let previous_status = account_status_value(account.status).to_string();
+    match fetch_account_usage(state, &account, request_id).await {
+        Ok(raw) => {
+            let quota = quota_from_usage(&raw);
+            let _ = repo
+                .update_quota_json(&account.id, &quota.to_string())
+                .await;
+            if account.status != AccountStatus::Active {
+                let _ = repo.set_status(&account.id, AccountStatus::Active).await;
+                state
+                    .account_pool()
+                    .lock()
+                    .await
+                    .set_status(&account.id, AccountStatus::Active);
+            }
+            AccountProbeData {
+                id: account.id,
+                email: account.email,
+                previous_status,
+                result: "alive".to_string(),
+                status: Some(account_status_value(AccountStatus::Active).to_string()),
+                error: None,
+                duration_ms: Some(started_at.elapsed().as_millis()),
+            }
+        }
+        Err(error) => {
+            let status = apply_codex_account_error(state, repo, &account, &error).await;
+            AccountProbeData {
+                id: account.id,
+                email: account.email,
+                previous_status,
+                result: "dead".to_string(),
+                status: status.map(account_status_value).map(ToString::to_string),
+                error: Some(public_codex_error(&error)),
+                duration_ms: Some(started_at.elapsed().as_millis()),
+            }
+        }
+    }
+}
+
+async fn fetch_account_usage(
+    state: &AppState,
+    account: &StoredAccount,
+    request_id: &str,
+) -> Result<Value, CodexClientError> {
+    let cookie_header = account_cookie_header(state, &account.id).await;
+    let client = CodexBackendClient::new(
+        build_reqwest_client(state.config().tls.force_http11)?,
+        state.config().api.base_url.clone(),
+        Fingerprint::default_codex_desktop(),
+    );
+    client
+        .fetch_usage(CodexRequestContext {
+            access_token: account.access_token.expose_secret(),
+            account_id: account.account_id.as_deref(),
+            request_id,
+            turn_state: None,
+            turn_metadata: None,
+            beta_features: None,
+            include_timing_metrics: None,
+            version: None,
+            codex_window_id: None,
+            parent_thread_id: None,
+            cookie_header: cookie_header.as_deref(),
+        })
+        .await
+}
+
+async fn account_cookie_header(state: &AppState, account_id: &str) -> Option<String> {
+    let domain = request_domain(&state.config().api.base_url)?;
+    state
+        .cookie_repository()?
+        .cookie_header(account_id, &domain)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn persist_admin_refreshed_account(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    account_id: &str,
+    tokens: TokenPair,
+) -> Result<Account, AccountRepositoryError> {
+    let access_token = tokens.access_token;
+    let refresh_token = tokens.refresh_token;
+    repo.update_tokens(
+        account_id,
+        TokenUpdate {
+            access_token: SecretString::new(access_token.into()),
+            refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
+            access_token_expires_at: None,
+        },
+    )
+    .await?;
+    let account = repo
+        .get(account_id)
+        .await?
+        .ok_or(AccountRepositoryError::Database(sqlx::Error::RowNotFound))?;
+    let account = pool_account_from_stored(account);
+    state.account_pool().lock().await.insert(account.clone());
+    Ok(account)
+}
+
+async fn apply_refresh_failure_status(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    account: &StoredAccount,
+    failure: RefreshFailure,
+) -> Option<AccountStatus> {
+    let status = status_for_refresh_failure(failure)?;
+    let _ = repo.set_status(&account.id, status).await;
+    state
+        .account_pool()
+        .lock()
+        .await
+        .set_status(&account.id, status);
+    Some(status)
+}
+
+fn status_for_refresh_failure(failure: RefreshFailure) -> Option<AccountStatus> {
+    match failure {
+        RefreshFailure::InvalidGrant => Some(AccountStatus::Expired),
+        RefreshFailure::QuotaExhausted => Some(AccountStatus::QuotaExhausted),
+        RefreshFailure::Banned => Some(AccountStatus::Banned),
+        RefreshFailure::Disabled => Some(AccountStatus::Disabled),
+        RefreshFailure::Transport => None,
+    }
+}
+
+fn public_refresh_failure(failure: RefreshFailure) -> &'static str {
+    match failure {
+        RefreshFailure::InvalidGrant => "invalidGrant",
+        RefreshFailure::QuotaExhausted => "quotaExhausted",
+        RefreshFailure::Banned => "banned",
+        RefreshFailure::Disabled => "disabled",
+        RefreshFailure::Transport => "transport",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexAccountErrorAction {
+    SetStatus(AccountStatus),
+    RateLimited { retry_after_seconds: u64 },
+    CloudflareChallenge { cooldown_seconds: u64 },
+}
+
+async fn apply_codex_account_error(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    account: &StoredAccount,
+    error: &CodexClientError,
+) -> Option<AccountStatus> {
+    match classify_codex_account_error(error) {
+        Some(CodexAccountErrorAction::SetStatus(status)) => {
+            let _ = repo.set_status(&account.id, status).await;
+            state
+                .account_pool()
+                .lock()
+                .await
+                .set_status(&account.id, status);
+            Some(status)
+        }
+        Some(CodexAccountErrorAction::RateLimited {
+            retry_after_seconds,
+        }) => {
+            let cooldown_until = Utc::now() + Duration::seconds(retry_after_seconds as i64);
+            state
+                .account_pool()
+                .lock()
+                .await
+                .mark_quota_limited_until(&account.id, cooldown_until);
+            None
+        }
+        Some(CodexAccountErrorAction::CloudflareChallenge { cooldown_seconds }) => {
+            let cooldown_until = Utc::now() + Duration::seconds(cooldown_seconds as i64);
+            state
+                .account_pool()
+                .lock()
+                .await
+                .set_cloudflare_cooldown_until(&account.id, cooldown_until);
+            None
+        }
+        None => None,
+    }
+}
+
+fn classify_codex_account_error(error: &CodexClientError) -> Option<CodexAccountErrorAction> {
+    const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS: u64 = 60;
+    const MAX_RATE_LIMIT_BACKOFF_SECONDS: u64 = 3_600;
+    const CLOUDFLARE_CHALLENGE_COOLDOWN_SECONDS: u64 = 120;
+
+    let CodexClientError::Upstream {
+        status,
+        body,
+        retry_after_seconds,
+    } = error
+    else {
+        return None;
+    };
+    let lower = body.to_ascii_lowercase();
+    if *status == StatusCode::UNAUTHORIZED
+        || lower.contains("invalid_grant")
+        || lower.contains("invalid_token")
+        || lower.contains("access_denied")
+        || lower.contains("refresh_token_expired")
+        || lower.contains("token_revoked")
+    {
+        return Some(CodexAccountErrorAction::SetStatus(AccountStatus::Expired));
+    }
+    if *status == StatusCode::PAYMENT_REQUIRED || lower.contains("quota") {
+        return Some(CodexAccountErrorAction::SetStatus(
+            AccountStatus::QuotaExhausted,
+        ));
+    }
+    if *status == StatusCode::TOO_MANY_REQUESTS {
+        return Some(CodexAccountErrorAction::RateLimited {
+            retry_after_seconds: retry_after_seconds
+                .unwrap_or(DEFAULT_RATE_LIMIT_BACKOFF_SECONDS)
+                .min(MAX_RATE_LIMIT_BACKOFF_SECONDS),
+        });
+    }
+    if *status == StatusCode::FORBIDDEN {
+        if is_cloudflare_challenge(body) {
+            return Some(CodexAccountErrorAction::CloudflareChallenge {
+                cooldown_seconds: CLOUDFLARE_CHALLENGE_COOLDOWN_SECONDS,
+            });
+        }
+        return Some(CodexAccountErrorAction::SetStatus(AccountStatus::Banned));
+    }
+    if lower.contains("account has been deactivated")
+        || lower.contains("deactivated")
+        || lower.contains("banned")
+        || lower.contains("suspended")
+    {
+        return Some(CodexAccountErrorAction::SetStatus(AccountStatus::Banned));
+    }
+    None
+}
+
+fn public_codex_error(error: &CodexClientError) -> String {
+    match error {
+        CodexClientError::Upstream { status, .. } => {
+            format!("upstream returned status {}", status.as_u16())
+        }
+        CodexClientError::Http(_) => "upstream transport failed".to_string(),
+        CodexClientError::InvalidHeaderName(_) | CodexClientError::InvalidHeaderValue(_) => {
+            "invalid upstream request headers".to_string()
+        }
+        CodexClientError::UnsupportedTransport(_)
+        | CodexClientError::WebSocket(_)
+        | CodexClientError::InvalidSse(_)
+        | CodexClientError::ModelsUnavailable => "Codex backend request failed".to_string(),
+    }
+}
+
+fn is_cloudflare_challenge(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("cf-mitigated")
+        || lower.contains("cf-chl-bypass")
+        || lower.contains("_cf_chl")
+        || lower.contains("cf_chl")
+        || lower.contains("attention required")
+        || lower.contains("just a moment")
+}
+
+fn quota_from_usage(usage: &Value) -> Value {
+    let additional = usage
+        .get("additional_rate_limits")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut rate_limits_by_limit_id = Map::new();
+    for item in &additional {
+        let Some(limit_id) = item
+            .get("metered_feature")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let quota = quota_from_rate_limit(item.get("rate_limit"));
+        if quota.is_null() {
+            continue;
+        }
+        rate_limits_by_limit_id.insert(
+            limit_id.to_string(),
+            json!({
+                "limit_id": limit_id,
+                "limit_name": item.get("limit_name").cloned().unwrap_or(Value::Null),
+                "allowed": quota.get("allowed").cloned().unwrap_or(Value::Null),
+                "limit_reached": quota.get("limit_reached").cloned().unwrap_or(Value::Null),
+                "used_percent": quota.get("used_percent").cloned().unwrap_or(Value::Null),
+                "remaining_percent": quota.get("remaining_percent").cloned().unwrap_or(Value::Null),
+                "reset_at": quota.get("reset_at").cloned().unwrap_or(Value::Null),
+                "limit_window_seconds": quota.get("limit_window_seconds").cloned().unwrap_or(Value::Null),
+                "secondary_rate_limit": secondary_quota_from_rate_limit(item.get("rate_limit")),
+            }),
+        );
+    }
+    let additional_review = additional.iter().find(|item| {
+        is_review_limit_id(item.get("metered_feature").and_then(Value::as_str))
+            || is_review_limit_id(item.get("limit_name").and_then(Value::as_str))
+    });
+    let code_review_rate_limit = match quota_from_rate_limit(usage.get("code_review_rate_limit")) {
+        Value::Null => {
+            quota_from_rate_limit(additional_review.and_then(|item| item.get("rate_limit")))
+        }
+        quota => quota,
+    };
+
+    json!({
+        "plan_type": usage.get("plan_type").cloned().unwrap_or(Value::Null),
+        "rate_limit": quota_from_rate_limit(usage.get("rate_limit")),
+        "secondary_rate_limit": secondary_quota_from_rate_limit(usage.get("rate_limit")),
+        "code_review_rate_limit": code_review_rate_limit,
+        "rate_limits_by_limit_id": if rate_limits_by_limit_id.is_empty() {
+            Value::Null
+        } else {
+            Value::Object(rate_limits_by_limit_id)
+        },
+        "credits": normalize_quota_credits(usage.get("credits")),
+    })
+}
+
+fn quota_from_rate_limit(rate_limit: Option<&Value>) -> Value {
+    let Some(rate_limit) = rate_limit.filter(|value| !value.is_null()) else {
+        return Value::Null;
+    };
+    let primary = rate_limit.get("primary_window");
+    let used_percent = primary
+        .and_then(|window| window.get("used_percent"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    json!({
+        "allowed": rate_limit.get("allowed").cloned().unwrap_or(Value::Null),
+        "limit_reached": rate_limit.get("limit_reached").cloned().unwrap_or(Value::Null),
+        "used_percent": used_percent,
+        "remaining_percent": remaining_percent(primary.and_then(|window| window.get("used_percent"))),
+        "reset_at": primary.and_then(|window| window.get("reset_at")).cloned().unwrap_or(Value::Null),
+        "limit_window_seconds": primary.and_then(|window| window.get("limit_window_seconds")).cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn secondary_quota_from_rate_limit(rate_limit: Option<&Value>) -> Value {
+    let Some(secondary) = rate_limit
+        .and_then(|rate_limit| rate_limit.get("secondary_window"))
+        .filter(|value| !value.is_null())
+    else {
+        return Value::Null;
+    };
+    let used_percent = secondary
+        .get("used_percent")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let limit_reached = secondary
+        .get("used_percent")
+        .and_then(Value::as_f64)
+        .map(|used| used >= 100.0)
+        .map(Value::Bool)
+        .or_else(|| {
+            rate_limit
+                .and_then(|rate_limit| rate_limit.get("limit_reached"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null);
+    json!({
+        "limit_reached": limit_reached,
+        "used_percent": used_percent,
+        "remaining_percent": remaining_percent(secondary.get("used_percent")),
+        "reset_at": secondary.get("reset_at").cloned().unwrap_or(Value::Null),
+        "limit_window_seconds": secondary.get("limit_window_seconds").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn normalize_quota_credits(raw: Option<&Value>) -> Value {
+    let Some(raw) = raw.filter(|value| !value.is_null()) else {
+        return Value::Null;
+    };
+    let Some(balance) = raw
+        .get("balance")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+    else {
+        return Value::Null;
+    };
+    json!({
+        "has_credits": raw.get("has_credits").and_then(Value::as_bool).unwrap_or(false),
+        "unlimited": raw.get("unlimited").and_then(Value::as_bool).unwrap_or(false),
+        "overage_limit_reached": raw.get("overage_limit_reached").and_then(Value::as_bool).unwrap_or(false),
+        "balance": balance,
+    })
+}
+
+fn remaining_percent(used_percent: Option<&Value>) -> Value {
+    let Some(used_percent) = used_percent.and_then(Value::as_f64) else {
+        return Value::Null;
+    };
+    json!((100.0 - used_percent.clamp(0.0, 100.0)).round() as i64)
+}
+
+fn is_review_limit_id(value: Option<&str>) -> bool {
+    let normalized = value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_");
+    normalized == "review"
+        || normalized == "code_review"
+        || normalized == "codex_review"
+        || normalized == "codex_code_review"
+        || normalized.contains("code_review")
+        || normalized.contains("codex_review")
+}
+
+fn request_domain(base_url: &str) -> Option<String> {
+    Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(ToString::to_string))
 }
 
 async fn sync_runtime_account_status(

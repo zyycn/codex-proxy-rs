@@ -13,6 +13,10 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use tokio::sync::Mutex;
 use tower::ServiceExt;
+use wiremock::{
+    matchers::{header, method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 use codex_proxy_rs::{
     accounts::repository::AccountRepository,
@@ -31,6 +35,32 @@ use codex_proxy_rs::{
     state::AppState,
     storage::db::connect_sqlite,
 };
+
+#[derive(Clone)]
+struct StaticTokenRefresher {
+    result: Result<TokenPair, RefreshFailure>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Clone)]
+struct FailingTokenRefresher {
+    failure: RefreshFailure,
+}
+
+#[async_trait]
+impl TokenRefresher for StaticTokenRefresher {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        self.calls.lock().await.push(refresh_token.to_string());
+        self.result.clone()
+    }
+}
+
+#[async_trait]
+impl TokenRefresher for FailingTokenRefresher {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        Err(self.failure)
+    }
+}
 
 fn test_config(database_url: String) -> AppConfig {
     AppConfig {
@@ -86,6 +116,13 @@ fn test_config(database_url: String) -> AppConfig {
             capacity: 2_000,
             capture_body: false,
         },
+    }
+}
+
+fn test_config_with_base_url(database_url: String, base_url: String) -> AppConfig {
+    AppConfig {
+        api: ApiConfig { base_url },
+        ..test_config(database_url)
     }
 }
 
@@ -1438,9 +1475,311 @@ async fn admin_accounts_import_cli_should_read_codex_auth_file_store_encrypted_a
     assert_eq!(acquired.id, stored.0);
 }
 
+#[tokio::test]
+async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_returning_secrets() {
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_refresher(
+        "admin-account-refresh.sqlite",
+        28,
+        StaticTokenRefresher {
+            result: Ok(TokenPair {
+                access_token: "new-admin-refresh-access".to_string(),
+                refresh_token: Some("new-admin-refresh-rt".to_string()),
+            }),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        },
+    )
+    .await;
+    import_test_account(&app, "session_1", "acct_refresh").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_refresh/refresh")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_refresh_account")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["id"], "acct_refresh");
+    assert_eq!(body["data"]["result"], "alive");
+    assert_eq!(body["data"]["previousStatus"], "active");
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("new-admin-refresh-access"));
+    assert!(!serialized.contains("new-admin-refresh-rt"));
+
+    let stored: (String, String) = sqlx::query_as(
+        "select access_token_cipher, refresh_token_cipher from accounts where id = ?",
+    )
+    .bind("acct_refresh")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored.0.starts_with("v1:"));
+    assert!(!stored.0.contains("new-admin-refresh-access"));
+    assert!(stored.1.starts_with("v1:"));
+    assert!(!stored.1.contains("new-admin-refresh-rt"));
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.access_token, "new-admin-refresh-access");
+}
+
+#[tokio::test]
+async fn admin_account_refresh_should_mark_invalid_refresh_token_as_expired() {
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_refresher(
+        "admin-account-refresh-invalid.sqlite",
+        29,
+        FailingTokenRefresher {
+            failure: RefreshFailure::InvalidGrant,
+        },
+    )
+    .await;
+    import_test_account(&app, "session_1", "acct_refresh_invalid").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_refresh_invalid/refresh")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_refresh_invalid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["result"], "dead");
+    assert_eq!(body["data"]["status"], "expired");
+    let status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_refresh_invalid")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status.0, "expired");
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_none());
+}
+
+#[tokio::test]
+async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_used() {
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app("admin-account-reset-usage.sqlite", 30).await;
+    import_test_account(&app, "session_1", "acct_reset_usage").await;
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 7, 11, 13, 17, ?)",
+    )
+    .bind("acct_reset_usage")
+    .bind("2026-06-12T12:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    state.reload_account_pool_from_repository().await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_reset_usage/reset-usage")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_reset_usage")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["id"], "acct_reset_usage");
+    assert_eq!(body["data"]["reset"], true);
+    let usage: (i64, i64, i64, i64, Option<String>) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens, cached_tokens, last_used_at from account_usage where account_id = ?",
+    )
+    .bind("acct_reset_usage")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(usage, (0, 0, 0, 0, None));
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.last_used_at, None);
+}
+
+#[tokio::test]
+async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secrets() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer access-acct_quota"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 25,
+                    "limit_window_seconds": 300,
+                    "reset_after_seconds": 120,
+                    "reset_at": 1770000000
+                },
+                "secondary_window": null
+            },
+            "code_review_rate_limit": null,
+            "additional_rate_limits": null,
+            "credits": {
+                "has_credits": false,
+                "unlimited": false,
+                "overage_limit_reached": false,
+                "balance": "0"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app_with_base_url("admin-account-quota.sqlite", 31, server.uri()).await;
+    import_test_account(&app, "session_1", "acct_quota").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/acct_quota/quota")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_quota")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["quota"]["plan_type"], "plus");
+    assert_eq!(body["data"]["quota"]["rate_limit"]["remaining_percent"], 75);
+    assert_eq!(
+        body["data"]["raw"]["rate_limit"]["primary_window"]["used_percent"],
+        25
+    );
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("access-acct_quota"));
+    assert!(!serialized.contains("refresh-acct_quota"));
+    let stored: (String,) = sqlx::query_as("select quota_json from accounts where id = ?")
+        .bind("acct_quota")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(stored.0.contains("\"remaining_percent\":75"));
+    assert!(!stored.0.contains("access-acct_quota"));
+}
+
+#[tokio::test]
+async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accounts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer access-acct_health_alive"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": null,
+                "secondary_window": null
+            },
+            "code_review_rate_limit": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("authorization", "Bearer access-acct_health_dead"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"message": "invalid token"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app_with_base_url("admin-account-health.sqlite", 32, server.uri())
+            .await;
+    import_test_account(&app, "session_1", "acct_health_alive").await;
+    import_test_account(&app, "session_1", "acct_health_dead").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/health-check")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_health")
+                .body(Body::from(
+                    json!({
+                        "ids": ["acct_health_alive", "acct_health_dead"],
+                        "concurrency": 2
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["summary"]["total"], 2);
+    assert_eq!(body["data"]["summary"]["alive"], 1);
+    assert_eq!(body["data"]["summary"]["dead"], 1);
+    assert_eq!(body["data"]["summary"]["skipped"], 0);
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("access-acct_health_alive"));
+    assert!(!serialized.contains("access-acct_health_dead"));
+    let status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_health_dead")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status.0, "expired");
+}
+
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir) {
+    admin_accounts_test_app_with_base_url(
+        db_name,
+        key_byte,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await
+}
+
+async fn admin_accounts_test_app_with_base_url(
+    db_name: &str,
+    key_byte: u8,
+    base_url: String,
 ) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
@@ -1448,7 +1787,7 @@ async fn admin_accounts_test_app(
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let state = AppState::with_pool_and_secret_box(
-        test_config(url),
+        test_config_with_base_url(url, base_url),
         pool.clone(),
         SecretBox::new([key_byte; 32]),
     );
@@ -1459,7 +1798,7 @@ async fn admin_accounts_test_app(
 async fn admin_accounts_test_app_with_refresher<C>(
     db_name: &str,
     key_byte: u8,
-    refresher: C,
+    token_refresher: C,
 ) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir)
 where
     C: TokenRefresher,
@@ -1474,7 +1813,7 @@ where
         pool.clone(),
         SecretBox::new([key_byte; 32]),
         ApiKeyHasher::new([key_byte; 32]),
-        refresher,
+        token_refresher,
     );
     let app = build_router(state.clone());
     (app, state, pool, dir)
@@ -1592,18 +1931,4 @@ fn test_jwt(
 
 fn jwt_part(value: &Value) -> String {
     URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap())
-}
-
-#[derive(Clone)]
-struct StaticTokenRefresher {
-    result: Result<TokenPair, RefreshFailure>,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-#[async_trait]
-impl TokenRefresher for StaticTokenRefresher {
-    async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
-        self.calls.lock().await.push(refresh_token.to_string());
-        self.result.clone()
-    }
 }

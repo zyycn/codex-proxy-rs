@@ -137,6 +137,14 @@ impl AccountPool {
         true
     }
 
+    pub fn reset_usage(&mut self, account_id: &str) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.last_used_at = None;
+        true
+    }
+
     pub fn mark_quota_limited_until(
         &mut self,
         account_id: &str,
