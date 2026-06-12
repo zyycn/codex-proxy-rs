@@ -31,6 +31,13 @@ struct ImportedApp {
     _tempdir: tempfile::TempDir,
 }
 
+struct ImportAccount {
+    id: &'static str,
+    account_id: &'static str,
+    token: &'static str,
+    refresh_token: &'static str,
+}
+
 fn test_config(database_url: String, base_url: String) -> AppConfig {
     AppConfig {
         server: ServerConfig {
@@ -87,6 +94,22 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
 }
 
 async fn build_imported_app(base_url: String) -> ImportedApp {
+    build_imported_app_with_accounts(
+        base_url,
+        &[ImportAccount {
+            id: "acct_chat",
+            account_id: "chatgpt-account",
+            token: "access-secret",
+            refresh_token: "refresh-secret",
+        }],
+    )
+    .await
+}
+
+async fn build_imported_app_with_accounts(
+    base_url: String,
+    accounts: &[ImportAccount],
+) -> ImportedApp {
     let tempdir = tempfile::tempdir().unwrap();
     let db = tempdir.path().join("chat-completions.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -105,6 +128,18 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
         secret_box,
         hasher,
     ));
+    let accounts = accounts
+        .iter()
+        .map(|account| {
+            json!({
+                "id": account.id,
+                "accountId": account.account_id,
+                "token": account.token,
+                "refreshToken": account.refresh_token,
+                "status": "active"
+            })
+        })
+        .collect::<Vec<_>>();
 
     let import_response = app
         .clone()
@@ -114,18 +149,7 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
                 .uri("/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(
-                    json!({
-                        "accounts": [{
-                            "id": "acct_chat",
-                            "accountId": "chatgpt-account",
-                            "token": "access-secret",
-                            "refreshToken": "refresh-secret",
-                            "status": "active"
-                        }]
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(json!({ "accounts": accounts }).to_string()))
                 .unwrap(),
         )
         .await
@@ -137,6 +161,97 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
         client_api_key: generated.plaintext,
         _tempdir: tempdir,
     }
+}
+
+#[tokio::test]
+async fn chat_completions_stream_should_retry_next_account_after_429_retry_after() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"ok\"}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_chat_after_429\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "90")
+                .set_body_json(json!({
+                    "error": {"message": "rate limited"}
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": true,
+                        "messages": [
+                            {"role": "user", "content": "Say ok"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let frames = response_sse_data(response).await;
+    assert_eq!(frames.last().unwrap(), "[DONE]");
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "ok");
+    assert_eq!(chunks[2]["usage"]["prompt_tokens"], 4);
 }
 
 #[tokio::test]

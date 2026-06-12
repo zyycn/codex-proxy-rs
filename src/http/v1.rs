@@ -190,8 +190,14 @@ pub async fn responses(
             Ok(response) => break response,
             Err(error) => {
                 if let Some(retry) = classify_upstream_account_retry(&error) {
-                    apply_upstream_account_retry(&state, &account, retry).await;
-                    excluded_account_ids.push(account.id.clone());
+                    let fallback = apply_upstream_retry_and_acquire_fallback(
+                        &state,
+                        &account,
+                        retry,
+                        &codex_request.model,
+                        &mut excluded_account_ids,
+                    )
+                    .await;
                     log_v1_response(
                         &state,
                         &log_context,
@@ -201,21 +207,9 @@ pub async fn responses(
                         retry.metadata(false),
                     )
                     .await;
-                    let fallback = {
-                        state.account_pool().lock().await.acquire_with(
-                            AccountAcquireRequest::new(&codex_request.model, Utc::now())
-                                .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
-                        )
-                    };
                     if let Some(fallback) = fallback {
-                        account = fallback.account;
-                        log_context = V1LogContext::new(
-                            request_id.as_str(),
-                            &account.id,
-                            &codex_request.model,
-                            client_stream,
-                            started_at,
-                        );
+                        account = fallback;
+                        log_context = log_context.with_account(&account.id);
                         continue;
                     }
                 }
@@ -404,8 +398,8 @@ pub async fn chat_completions(
     let Some(acquired) = acquired else {
         return no_available_accounts_response().into_response();
     };
-    let account = acquired.account;
-    let log_context = V1LogContext::new(
+    let mut account = acquired.account;
+    let mut log_context = V1LogContext::new(
         request_id.as_str(),
         &account.id,
         &codex_request.model,
@@ -413,29 +407,56 @@ pub async fn chat_completions(
         started_at,
     );
 
-    let response = send_codex_request_with_refresh_retry(
-        &state,
-        &codex_request,
-        &account,
-        request_id.as_str(),
-    )
-    .await;
-    state.account_pool().lock().await.release(&account.id);
+    let mut excluded_account_ids = Vec::new();
+    let response = loop {
+        let response = send_codex_request_with_refresh_retry(
+            &state,
+            &codex_request,
+            &account,
+            request_id.as_str(),
+        )
+        .await;
+        state.account_pool().lock().await.release(&account.id);
 
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            let error_response = codex_client_error_response(error);
-            log_v1_response(
-                &state,
-                &log_context,
-                error_response.0,
-                EventLevel::Error,
-                "v1 chat completions upstream request failed",
-                json!({"stream": false}),
-            )
-            .await;
-            return error_response.into_response();
+        match response {
+            Ok(response) => break response,
+            Err(error) => {
+                if let Some(retry) = classify_upstream_account_retry(&error) {
+                    let fallback = apply_upstream_retry_and_acquire_fallback(
+                        &state,
+                        &account,
+                        retry,
+                        &codex_request.model,
+                        &mut excluded_account_ids,
+                    )
+                    .await;
+                    log_v1_response(
+                        &state,
+                        &log_context,
+                        retry.status(),
+                        EventLevel::Warn,
+                        "v1 chat completions upstream retrying with fallback account",
+                        retry.metadata(client_stream),
+                    )
+                    .await;
+                    if let Some(fallback) = fallback {
+                        account = fallback;
+                        log_context = log_context.with_account(&account.id);
+                        continue;
+                    }
+                }
+                let error_response = codex_client_error_response(error);
+                log_v1_response(
+                    &state,
+                    &log_context,
+                    error_response.0,
+                    EventLevel::Error,
+                    "v1 chat completions upstream request failed",
+                    json!({"stream": client_stream}),
+                )
+                .await;
+                return error_response.into_response();
+            }
         }
     };
     if persist_upstream_cookies(&state, &account.id, &response.set_cookie_headers)
@@ -827,6 +848,26 @@ fn is_cloudflare_challenge(body: &str) -> bool {
         || lower.contains("just a moment")
 }
 
+async fn apply_upstream_retry_and_acquire_fallback(
+    state: &AppState,
+    account: &Account,
+    retry: UpstreamAccountRetry,
+    model: &str,
+    excluded_account_ids: &mut Vec<String>,
+) -> Option<Account> {
+    apply_upstream_account_retry(state, account, retry).await;
+    excluded_account_ids.push(account.id.clone());
+    state
+        .account_pool()
+        .lock()
+        .await
+        .acquire_with(
+            AccountAcquireRequest::new(model, Utc::now())
+                .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
+        )
+        .map(|fallback| fallback.account)
+}
+
 async fn apply_upstream_account_retry(
     state: &AppState,
     account: &Account,
@@ -885,35 +926,62 @@ async fn set_account_status(state: &AppState, account: &Account, status: Account
 async fn responses_stream(
     state: AppState,
     request: CodexResponsesRequest,
-    account: Account,
-    log_context: V1LogContext,
+    mut account: Account,
+    mut log_context: V1LogContext,
 ) -> Response {
     if transport_for_request(&request) == CodexTransport::WebSocketRequired {
         return responses_websocket_stream(state, request, account, log_context).await;
     }
 
-    let stream_response = send_codex_stream_request_with_refresh_retry(
-        &state,
-        &request,
-        &account,
-        log_context.request_id.as_str(),
-    )
-    .await;
-    let stream_response = match stream_response {
-        Ok(response) => response,
-        Err(error) => {
-            state.account_pool().lock().await.release(&account.id);
-            let error_response = codex_client_error_response(error);
-            log_v1_response(
-                &state,
-                &log_context,
-                error_response.0,
-                EventLevel::Error,
-                "v1 responses stream upstream request failed",
-                json!({"stream": true}),
-            )
-            .await;
-            return error_response.into_response();
+    let mut excluded_account_ids = Vec::new();
+    let stream_response = loop {
+        let stream_response = send_codex_stream_request_with_refresh_retry(
+            &state,
+            &request,
+            &account,
+            log_context.request_id.as_str(),
+        )
+        .await;
+        match stream_response {
+            Ok(response) => break response,
+            Err(error) => {
+                state.account_pool().lock().await.release(&account.id);
+                if let Some(retry) = classify_upstream_account_retry(&error) {
+                    let fallback = apply_upstream_retry_and_acquire_fallback(
+                        &state,
+                        &account,
+                        retry,
+                        &request.model,
+                        &mut excluded_account_ids,
+                    )
+                    .await;
+                    log_v1_response(
+                        &state,
+                        &log_context,
+                        retry.status(),
+                        EventLevel::Warn,
+                        "v1 responses stream upstream retrying with fallback account",
+                        retry.metadata(true),
+                    )
+                    .await;
+                    if let Some(fallback) = fallback {
+                        account = fallback;
+                        log_context = log_context.with_account(&account.id);
+                        continue;
+                    }
+                }
+                let error_response = codex_client_error_response(error);
+                log_v1_response(
+                    &state,
+                    &log_context,
+                    error_response.0,
+                    EventLevel::Error,
+                    "v1 responses stream upstream request failed",
+                    json!({"stream": true}),
+                )
+                .await;
+                return error_response.into_response();
+            }
         }
     };
 
@@ -1288,6 +1356,16 @@ impl V1LogContext {
 
     fn latency_ms(&self) -> i64 {
         self.started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
+    }
+
+    fn with_account(&self, account_id: &str) -> Self {
+        Self {
+            request_id: self.request_id.clone(),
+            account_id: account_id.to_string(),
+            model: self.model.clone(),
+            stream: self.stream,
+            started_at: self.started_at,
+        }
     }
 }
 

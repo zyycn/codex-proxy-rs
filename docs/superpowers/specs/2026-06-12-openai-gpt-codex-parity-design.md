@@ -18,7 +18,7 @@ OpenAI Chat compatibility is implemented as a real route, not an alias to Respon
 
 Responses compatibility keeps native Responses passthrough semantics but adds the TS implementation's in-scope fields: reasoning/service tier, tool choice, parallel tool calls, text formats, prompt cache key, include, client metadata, and Codex context headers. `previous_response_id` uses WebSocket transport rather than being rejected.
 
-Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Streaming Responses, WebSocket streaming fallback, and Chat Completions fallback remain Task 5 follow-ups.
+Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. The current pending stage extends that fallback to HTTP SSE Responses setup and Chat Completions. WebSocket-backed `previous_response_id` fallback remains a Task 5 follow-up because account affinity must be preserved.
 
 ## Components
 
@@ -40,7 +40,7 @@ For Responses, the route validates the local client API key, parses native Respo
 
 ## Error Handling
 
-Client authentication errors stay OpenAI-compatible. Model misses return `model_not_found`. Upstream 401 triggers refresh and one retry for the same account. For non-streaming Responses, 429 applies a quota cooldown and records the failed attempt, 402 marks quota exhausted, Cloudflare 403 applies a short cooldown, non-Cloudflare 403 marks banned, and each retryable account-state error tries another imported account when available. Retryable transport/empty-response failures can retry another account in a later Task 5 pass. Terminal upstream errors are formatted as OpenAI-compatible errors for Chat and Responses-compatible failed events for streaming Responses.
+Client authentication errors stay OpenAI-compatible. Model misses return `model_not_found`. Upstream 401 triggers refresh and one retry for the same account. For non-streaming Responses, HTTP SSE Responses setup, and Chat Completions, 429 applies a quota cooldown and records the failed attempt, 402 marks quota exhausted, Cloudflare 403 applies a short cooldown, non-Cloudflare 403 marks banned, and each retryable account-state error tries another imported account when available. Retryable transport/empty-response failures can retry another account in a later Task 5 pass. Terminal upstream errors are formatted as OpenAI-compatible errors for Chat and Responses-compatible failed events for streaming Responses.
 
 ## Testing
 
