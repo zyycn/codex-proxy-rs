@@ -288,6 +288,24 @@ pub struct BatchUpdateAccountStatusData {
     pub not_found: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAccountCookiesRequest {
+    pub cookies: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountCookiesData {
+    pub cookies: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountCookiesData {
+    pub deleted: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshModelsData {
@@ -1310,6 +1328,252 @@ pub async fn batch_update_account_status(
     .into_response()
 }
 
+pub async fn get_account_cookies(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(account_repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    match account_repo.exists(&account_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+            )
+            .into_response();
+        }
+    }
+    let Some(cookie_repo) = state.cookie_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Cookie repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match cookie_repo.cookie_header(&account_id, "chatgpt.com").await {
+        Ok(cookies) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AccountCookiesData { cookies }, request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to load account cookies", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn set_account_cookies(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+    Json(payload): Json<SetAccountCookiesRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let cookie_header = match admin_cookie_header(&payload.cookies) {
+        Ok(cookie_header) => cookie_header,
+        Err(message) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, message, (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(account_repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    match account_repo.exists(&account_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+            )
+            .into_response();
+        }
+    }
+    let Some(cookie_repo) = state.cookie_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Cookie repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    // 管理端粘贴的是浏览器 Cookie header；保存时逐项加密，读取时只回放当前账号自己的 Cookie。
+    match cookie_repo
+        .set_cookie_header(&account_id, &cookie_header)
+        .await
+    {
+        Ok(0) => AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "No valid cookies found", (), request_id),
+        )
+        .into_response(),
+        Ok(_) => match cookie_repo.cookie_header(&account_id, "chatgpt.com").await {
+            Ok(cookies) => AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(AccountCookiesData { cookies }, request_id),
+            )
+            .into_response(),
+            Err(_) => AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to load account cookies", (), request_id),
+            )
+            .into_response(),
+        },
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to store account cookies", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn delete_account_cookies(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(account_repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    match account_repo.exists(&account_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return AdminResponse::new(
+                StatusCode::NOT_FOUND,
+                AdminEnvelope::new(40401, "Account not found", (), request_id),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+            )
+            .into_response();
+        }
+    }
+    let Some(cookie_repo) = state.cookie_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Cookie repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match cookie_repo.delete_account_cookies(&account_id).await {
+        Ok(_) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(DeleteAccountCookiesData { deleted: true }, request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to delete account cookies", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
 pub async fn import_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -2086,6 +2350,35 @@ fn parse_client_api_key_enabled_status(status: &str) -> Result<bool, String> {
         "active" => Ok(true),
         "disabled" => Ok(false),
         other => Err(format!("Unsupported API key status: {other}")),
+    }
+}
+
+fn admin_cookie_header(value: &Value) -> Result<String, &'static str> {
+    if let Some(cookies) = value.as_str() {
+        let cookies = cookies.trim();
+        if cookies.is_empty() {
+            return Err("cookies field is required");
+        }
+        return Ok(cookies.to_string());
+    }
+    let Some(object) = value.as_object() else {
+        return Err("cookies must be a string or object");
+    };
+    if object.is_empty() {
+        return Err("cookies field is required");
+    }
+    let pairs = object
+        .iter()
+        .filter_map(|(name, value)| {
+            let value = value.as_str()?.trim();
+            (!name.trim().is_empty() && !value.is_empty())
+                .then(|| format!("{}={value}", name.trim()))
+        })
+        .collect::<Vec<_>>();
+    if pairs.is_empty() {
+        Err("No valid cookies found")
+    } else {
+        Ok(pairs.join("; "))
     }
 }
 

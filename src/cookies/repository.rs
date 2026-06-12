@@ -31,6 +31,19 @@ impl CookieRepository {
         let Some(parsed) = parse_set_cookie(raw) else {
             return Ok(());
         };
+        self.upsert_cookie(account_id, parsed).await
+    }
+
+    pub async fn set_cookie_header(&self, account_id: &str, raw: &str) -> CookieResult<usize> {
+        let parsed = parse_cookie_header(raw);
+        let count = parsed.len();
+        for cookie in parsed {
+            self.upsert_cookie(account_id, cookie).await?;
+        }
+        Ok(count)
+    }
+
+    async fn upsert_cookie(&self, account_id: &str, parsed: ParsedCookie) -> CookieResult<()> {
         let now = Utc::now().to_rfc3339();
         let value_cipher = self
             .secret_box
@@ -79,6 +92,14 @@ impl CookieRepository {
             Ok(Some(pairs.join("; ")))
         }
     }
+
+    pub async fn delete_account_cookies(&self, account_id: &str) -> CookieResult<u64> {
+        let result = sqlx::query("delete from account_cookies where account_id = ?")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 struct ParsedCookie {
@@ -111,6 +132,27 @@ fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
         path,
         expires_at,
     })
+}
+
+fn parse_cookie_header(raw: &str) -> Vec<ParsedCookie> {
+    raw.split(';')
+        .map(str::trim)
+        .filter_map(|part| {
+            let (name, value) = part.split_once('=')?;
+            let name = name.trim();
+            let value = value.trim();
+            if name.is_empty() || value.is_empty() {
+                return None;
+            }
+            Some(ParsedCookie {
+                domain: "chatgpt.com".to_string(),
+                name: name.to_string(),
+                value: value.to_string(),
+                path: "/".to_string(),
+                expires_at: None,
+            })
+        })
+        .collect()
 }
 
 fn domain_matches(request_domain: &str, cookie_domain: &str) -> bool {
