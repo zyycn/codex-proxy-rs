@@ -9,11 +9,11 @@ use crate::{
     http::{
         admin::{
             accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
-            batch_update_account_status, create_api_key, delete_account, delete_account_cookies,
-            delete_api_key, export_accounts, get_account_cookies, import_accounts, login, logs,
-            refresh_models, set_account_cookies, settings, update_account_label,
-            update_account_status, update_api_key_label, update_api_key_status, usage_stats,
-            usage_stats_summary,
+            batch_update_account_status, create_account, create_api_key, delete_account,
+            delete_account_cookies, delete_api_key, export_accounts, get_account_cookies,
+            import_accounts, login, logs, refresh_models, set_account_cookies, settings,
+            update_account_label, update_account_status, update_api_key_label,
+            update_api_key_status, usage_stats, usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -41,7 +41,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/refresh-models", post(refresh_models))
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
-        .route("/admin/accounts", get(accounts))
+        .route("/admin/accounts", get(accounts).post(create_account))
         .route("/admin/accounts/batch-delete", post(batch_delete_accounts))
         .route(
             "/admin/accounts/batch-status",

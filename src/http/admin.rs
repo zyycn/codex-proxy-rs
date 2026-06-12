@@ -236,6 +236,20 @@ pub struct AccountImportData {
     pub source_format: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAccountRequest {
+    pub id: Option<String>,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountExportFormat {
     Native,
@@ -1081,6 +1095,156 @@ pub async fn export_accounts(
         AccountExportFormat::Sub2Api => sub2api_account_export(accounts),
     };
     AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data, request_id)).into_response()
+}
+
+pub async fn create_account(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateAccountRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let access_token = payload.token.as_deref().unwrap_or_default().trim();
+    if access_token.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Account token is required", (), request_id),
+        )
+        .into_response();
+    }
+    if payload
+        .label
+        .as_ref()
+        .is_some_and(|label| label.chars().count() > 64)
+    {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "Account label must be 64 characters or fewer",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let status = match parse_import_status(payload.status.as_deref()) {
+        Ok(status) => status,
+        Err(message) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, message, (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let id = normalized_account_id(payload.id);
+    match repo.exists(&id).await {
+        Ok(true) => {
+            return AdminResponse::new(
+                StatusCode::CONFLICT,
+                AdminEnvelope::new(40901, "Account already exists", (), request_id),
+            )
+            .into_response();
+        }
+        Ok(false) => {}
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+            )
+            .into_response();
+        }
+    }
+
+    let email = empty_to_none(payload.email);
+    let account_id = empty_to_none(payload.account_id);
+    let user_id = empty_to_none(payload.user_id);
+    let label = empty_to_none(payload.label);
+    let plan_type = empty_to_none(payload.plan_type);
+    let refresh_token = empty_to_none(payload.refresh_token);
+    let now = Utc::now().to_rfc3339();
+    let pool_account = Account {
+        id: id.clone(),
+        email: email.clone(),
+        account_id: account_id.clone(),
+        user_id: user_id.clone(),
+        label: label.clone(),
+        plan_type: plan_type.clone(),
+        access_token: access_token.to_string(),
+        refresh_token: refresh_token.clone(),
+        access_token_expires_at: None,
+        status,
+        quota_limit_reached: false,
+        quota_cooldown_until: None,
+        cloudflare_cooldown_until: None,
+        added_at: now.clone(),
+        last_used_at: None,
+    };
+    let account = NewAccount {
+        id: id.clone(),
+        email: email.clone(),
+        account_id: account_id.clone(),
+        user_id: user_id.clone(),
+        label: label.clone(),
+        plan_type: plan_type.clone(),
+        access_token: SecretString::new(access_token.to_string().into()),
+        refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
+        access_token_expires_at: None,
+        status,
+    };
+    if repo.insert(account).await.is_err() {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to create account", (), request_id),
+        )
+        .into_response();
+    }
+    state.account_pool().lock().await.insert(pool_account);
+
+    // 手动添加账号的响应只返回可展示元数据，OAuth token 永不回显。
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            AdminAccountData {
+                id,
+                email,
+                account_id,
+                user_id,
+                label,
+                plan_type,
+                status: account_status_value(status).to_string(),
+                access_token_expires_at: None,
+                added_at: now.clone(),
+                updated_at: now,
+            },
+            request_id,
+        ),
+    )
+    .into_response()
 }
 
 pub async fn update_account_label(
