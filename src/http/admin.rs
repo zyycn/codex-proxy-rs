@@ -168,6 +168,12 @@ pub struct ApiKeysQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ApiKeyExportQuery {
+    pub ids: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageStatsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
@@ -476,7 +482,74 @@ pub struct DeleteClientApiKeyData {
     pub deleted: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ClientApiKeyImportEntry {
+    pub source_id: Option<String>,
+    pub source_prefix: Option<String>,
+    pub name: String,
+    pub label: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientApiKeyExportData {
+    pub source_format: &'static str,
+    pub rotation_required: bool,
+    pub api_keys: Vec<ClientApiKeyExportEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientApiKeyExportEntry {
+    pub id: String,
+    pub name: String,
+    pub label: Option<String>,
+    pub prefix: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientApiKeyImportData {
+    pub imported: u32,
+    pub skipped: u32,
+    pub rotated: bool,
+    pub keys: Vec<ImportedClientApiKeyData>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedClientApiKeyData {
+    pub source_id: Option<String>,
+    pub source_prefix: Option<String>,
+    pub id: String,
+    pub name: String,
+    pub label: Option<String>,
+    pub prefix: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub plaintext: String,
+}
+
 impl From<StoredClientApiKey> for ClientApiKeyData {
+    fn from(key: StoredClientApiKey) -> Self {
+        Self {
+            id: key.id,
+            name: key.name,
+            label: key.label,
+            prefix: key.prefix,
+            enabled: key.enabled,
+            created_at: key.created_at,
+            last_used_at: key.last_used_at,
+        }
+    }
+}
+
+impl From<StoredClientApiKey> for ClientApiKeyExportEntry {
     fn from(key: StoredClientApiKey) -> Self {
         Self {
             id: key.id,
@@ -493,6 +566,28 @@ impl From<StoredClientApiKey> for ClientApiKeyData {
 impl CreatedClientApiKeyData {
     fn new(key: StoredClientApiKey, plaintext: String) -> Self {
         Self {
+            id: key.id,
+            name: key.name,
+            label: key.label,
+            prefix: key.prefix,
+            enabled: key.enabled,
+            created_at: key.created_at,
+            last_used_at: key.last_used_at,
+            plaintext,
+        }
+    }
+}
+
+impl ImportedClientApiKeyData {
+    fn new(
+        key: StoredClientApiKey,
+        plaintext: String,
+        source_id: Option<String>,
+        source_prefix: Option<String>,
+    ) -> Self {
+        Self {
+            source_id,
+            source_prefix,
             id: key.id,
             name: key.name,
             label: key.label,
@@ -2468,6 +2563,192 @@ pub async fn api_keys(
     }
 }
 
+pub async fn export_api_keys(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<ApiKeyExportQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let ids = account_export_ids(query.ids.as_deref());
+    let keys = if ids.is_empty() {
+        match repo.list_all().await {
+            Ok(keys) => keys,
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to export API keys", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    } else {
+        let mut keys = Vec::with_capacity(ids.len());
+        for id in ids {
+            match repo.get(&id).await {
+                Ok(Some(key)) => keys.push(key),
+                Ok(None) => {}
+                Err(_) => {
+                    return AdminResponse::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        AdminEnvelope::new(50001, "Failed to export API keys", (), request_id),
+                    )
+                    .into_response();
+                }
+            }
+        }
+        keys
+    };
+
+    // 安全边界：本地 cpr_ key 只导出可展示元数据，绝不导出 plaintext、key_hash 或 pepper。
+    let data = ClientApiKeyExportData {
+        source_format: "rustLocalClientApiKeys",
+        rotation_required: true,
+        api_keys: keys
+            .into_iter()
+            .map(ClientApiKeyExportEntry::from)
+            .collect(),
+    };
+    AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data, request_id)).into_response()
+}
+
+pub async fn import_api_keys(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(hasher) = state.api_key_hasher() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "API key hasher is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+
+    let entries = parse_client_api_key_import_payload(&payload);
+    if entries.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "No importable API keys found", (), request_id),
+        )
+        .into_response();
+    }
+
+    let mut imported = 0u32;
+    let mut skipped = 0u32;
+    let mut keys = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry.name.trim();
+        if name.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        if entry
+            .label
+            .as_ref()
+            .is_some_and(|label| label.chars().count() > 64)
+        {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(
+                    40001,
+                    "API key label must be 64 characters or fewer",
+                    (),
+                    request_id,
+                ),
+            )
+            .into_response();
+        }
+
+        let generated = hasher.generate_client_api_key(name);
+        let plaintext = generated.plaintext.clone();
+        let source_id = entry.source_id;
+        let source_prefix = entry.source_prefix;
+        match repo
+            .insert_generated_with_metadata(name, entry.label.as_deref(), entry.enabled, &generated)
+            .await
+        {
+            Ok(key) => {
+                imported += 1;
+                keys.push(ImportedClientApiKeyData::new(
+                    key,
+                    plaintext,
+                    source_id,
+                    source_prefix,
+                ));
+            }
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to import API key", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    }
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            ClientApiKeyImportData {
+                imported,
+                skipped,
+                rotated: true,
+                keys,
+            },
+            request_id,
+        ),
+    )
+    .into_response()
+}
+
 pub async fn create_api_key(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -3726,6 +4007,59 @@ fn account_export_ids(value: Option<&str>) -> Vec<String> {
             (!id.is_empty()).then(|| id.to_string())
         })
         .collect()
+}
+
+fn parse_client_api_key_import_payload(payload: &Value) -> Vec<ClientApiKeyImportEntry> {
+    let payload = payload
+        .get("data")
+        .filter(|data| data.get("apiKeys").is_some() || data.get("keys").is_some())
+        .unwrap_or(payload);
+
+    if let Some(keys) = payload.get("apiKeys").and_then(Value::as_array) {
+        return keys
+            .iter()
+            .filter_map(client_api_key_import_entry_from_value)
+            .collect();
+    }
+    if let Some(keys) = payload.get("keys").and_then(Value::as_array) {
+        return keys
+            .iter()
+            .filter_map(client_api_key_import_entry_from_value)
+            .collect();
+    }
+    if let Some(keys) = payload.as_array() {
+        return keys
+            .iter()
+            .filter_map(client_api_key_import_entry_from_value)
+            .collect();
+    }
+
+    client_api_key_import_entry_from_value(payload)
+        .into_iter()
+        .collect()
+}
+
+fn client_api_key_import_entry_from_value(value: &Value) -> Option<ClientApiKeyImportEntry> {
+    value.as_object()?;
+    let name = first_string(value, &[&["name"]])?;
+    // 安全边界：导入即使收到 plaintext/keyHash，也只按元数据轮换生成新的本地 cpr_ key。
+    Some(ClientApiKeyImportEntry {
+        source_id: first_string(value, &[&["id"], &["sourceId"]]),
+        source_prefix: first_string(value, &[&["prefix"], &["sourcePrefix"]]),
+        name,
+        label: first_string(value, &[&["label"]]),
+        enabled: client_api_key_import_enabled(value),
+    })
+}
+
+fn client_api_key_import_enabled(value: &Value) -> bool {
+    if let Some(enabled) = value.get("enabled").and_then(Value::as_bool) {
+        return enabled;
+    }
+    !first_string(value, &[&["status"]])
+        .unwrap_or_else(|| "active".to_string())
+        .trim()
+        .eq_ignore_ascii_case("disabled")
 }
 
 fn parse_account_export_format(value: Option<&str>) -> Result<AccountExportFormat, &'static str> {

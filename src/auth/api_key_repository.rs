@@ -46,24 +46,37 @@ impl ClientApiKeyRepository {
         name: &str,
         generated: &GeneratedClientApiKey,
     ) -> ClientApiKeyRepositoryResult<StoredClientApiKey> {
+        self.insert_generated_with_metadata(name, None, true, generated)
+            .await
+    }
+
+    pub async fn insert_generated_with_metadata(
+        &self,
+        name: &str,
+        label: Option<&str>,
+        enabled: bool,
+        generated: &GeneratedClientApiKey,
+    ) -> ClientApiKeyRepositoryResult<StoredClientApiKey> {
         let id = format!("key_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "insert into client_api_keys (id, name, prefix, key_hash, enabled, created_at, last_used_at) values (?, ?, ?, ?, 1, ?, null)",
+            "insert into client_api_keys (id, name, label, prefix, key_hash, enabled, created_at, last_used_at) values (?, ?, ?, ?, ?, ?, ?, null)",
         )
         .bind(&id)
         .bind(name)
+        .bind(label)
         .bind(&generated.prefix)
         .bind(&generated.key_hash)
+        .bind(if enabled { 1_i64 } else { 0_i64 })
         .bind(&now)
         .execute(&self.pool)
         .await?;
         Ok(StoredClientApiKey {
             id,
             name: name.to_string(),
-            label: None,
+            label: label.map(ToString::to_string),
             prefix: generated.prefix.clone(),
-            enabled: true,
+            enabled,
             created_at: now,
             last_used_at: None,
         })
@@ -121,6 +134,15 @@ impl ClientApiKeyRepository {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|row| key_from_row(&row)))
+    }
+
+    pub async fn list_all(&self) -> ClientApiKeyRepositoryResult<Vec<StoredClientApiKey>> {
+        let rows = sqlx::query(
+            "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|row| key_from_row(&row)).collect())
     }
 
     pub async fn verify_and_touch(

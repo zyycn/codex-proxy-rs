@@ -10,11 +10,11 @@ use crate::{
         admin::{
             account_quota, accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
             batch_update_account_status, create_account, create_api_key, delete_account,
-            delete_account_cookies, delete_api_key, export_accounts, get_account_cookies,
-            health_check_accounts, import_accounts, import_cli_auth, login, logs, refresh_account,
-            refresh_models, reset_account_usage, set_account_cookies, settings,
-            update_account_label, update_account_status, update_api_key_label,
-            update_api_key_status, usage_stats, usage_stats_summary,
+            delete_account_cookies, delete_api_key, export_accounts, export_api_keys,
+            get_account_cookies, health_check_accounts, import_accounts, import_api_keys,
+            import_cli_auth, login, logs, refresh_account, refresh_models, reset_account_usage,
+            set_account_cookies, settings, update_account_label, update_account_status,
+            update_api_key_label, update_api_key_status, usage_stats, usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -77,6 +77,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/accounts/import", post(import_accounts))
         .route("/admin/accounts/import-cli", post(import_cli_auth))
         .route("/admin/api-keys", get(api_keys).post(create_api_key))
+        .route("/admin/api-keys/export", get(export_api_keys))
+        .route("/admin/api-keys/import", post(import_api_keys))
         .route("/admin/api-keys/batch-delete", post(batch_delete_api_keys))
         .route("/admin/api-keys/{key_id}", delete(delete_api_key))
         .route(

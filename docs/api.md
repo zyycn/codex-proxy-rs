@@ -238,6 +238,92 @@ Success response:
 }
 ```
 
+### `GET /admin/api-keys/export`
+
+Exports Rust-local client API key metadata for backup or migration. The export never includes plaintext keys, key hashes, or the raw auth pepper. Because `cpr_` keys are stored only as peppered HMAC hashes, imports rotate keys instead of preserving the original plaintext.
+
+Optional query:
+
+```http
+GET /admin/api-keys/export?ids=key_01,key_02
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "sourceFormat": "rustLocalClientApiKeys",
+    "rotationRequired": true,
+    "apiKeys": [
+      {
+        "id": "key_01",
+        "name": "cursor",
+        "label": "automation",
+        "prefix": "cpr_xxxxxxxx",
+        "enabled": true,
+        "createdAt": "2026-06-11T12:00:00Z",
+        "lastUsedAt": null
+      }
+    ]
+  },
+  "requestId": "req_01"
+}
+```
+
+### `POST /admin/api-keys/import`
+
+Imports Rust-local client API key metadata exported by this service. Import creates new local `cpr_` keys using the target instance's pepper and returns the new plaintext values only in this response. Clients must replace the old keys with these rotated plaintext values.
+
+Request:
+
+```json
+{
+  "sourceFormat": "rustLocalClientApiKeys",
+  "rotationRequired": true,
+  "apiKeys": [
+    {
+      "id": "key_01",
+      "name": "cursor",
+      "label": "automation",
+      "prefix": "cpr_xxxxxxxx",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "imported": 1,
+    "skipped": 0,
+    "rotated": true,
+    "keys": [
+      {
+        "sourceId": "key_01",
+        "sourcePrefix": "cpr_xxxxxxxx",
+        "id": "key_02",
+        "name": "cursor",
+        "label": "automation",
+        "prefix": "cpr_yyyyyyyy",
+        "enabled": true,
+        "createdAt": "2026-06-11T12:05:00Z",
+        "lastUsedAt": null,
+        "plaintext": "cpr_new_full_key_returned_once"
+      }
+    ]
+  },
+  "requestId": "req_01"
+}
+```
+
 ### `GET /admin/accounts`
 
 Returns stored Codex accounts with cursor pagination. Access tokens and refresh tokens are never decrypted or returned.
