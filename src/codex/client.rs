@@ -69,12 +69,14 @@ pub struct CodexBackendResponse {
     pub usage: Option<TokenUsage>,
     pub turn_state: Option<String>,
     pub set_cookie_headers: Vec<String>,
+    pub rate_limit_headers: Vec<(String, String)>,
 }
 
 pub struct CodexBackendStream {
     pub response: ReqwestResponse,
     pub turn_state: Option<String>,
     pub set_cookie_headers: Vec<String>,
+    pub rate_limit_headers: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -99,18 +101,20 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendResponse> {
         if transport_for_request(request) == CodexTransport::WebSocketRequired {
-            let body = create_response_via_websocket(
+            let response = create_response_via_websocket(
                 &self.base_url,
                 request,
                 self.request_headers(context)?,
             )
-            .await?;
-            let usage = extract_sse_usage(&body)?;
+            .await
+            .map_err(codex_websocket_error)?;
+            let usage = extract_sse_usage(&response.body)?;
             return Ok(CodexBackendResponse {
-                body,
+                body: response.body,
                 usage,
-                turn_state: None,
-                set_cookie_headers: Vec::new(),
+                turn_state: response.turn_state,
+                set_cookie_headers: response.set_cookie_headers,
+                rate_limit_headers: response.rate_limit_headers,
             });
         }
 
@@ -118,6 +122,7 @@ impl CodexBackendClient {
         let status = response.status();
         let turn_state = turn_state(&response);
         let set_cookie_headers = set_cookie_headers(&response);
+        let rate_limit_headers = rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let body = response.text().await?;
         if !status.is_success() {
@@ -135,6 +140,7 @@ impl CodexBackendClient {
             usage,
             turn_state,
             set_cookie_headers,
+            rate_limit_headers,
         })
     }
 
@@ -147,6 +153,7 @@ impl CodexBackendClient {
         let status = response.status();
         let turn_state = turn_state(&response);
         let set_cookie_headers = set_cookie_headers(&response);
+        let rate_limit_headers = rate_limit_headers(response.headers());
         if !status.is_success() {
             let retry_after_seconds = retry_after_seconds(response.headers(), None);
             let body = response.text().await?;
@@ -162,6 +169,7 @@ impl CodexBackendClient {
             response,
             turn_state,
             set_cookie_headers,
+            rate_limit_headers,
         })
     }
 
@@ -378,6 +386,24 @@ fn set_cookie_headers(response: &ReqwestResponse) -> Vec<String> {
         .collect()
 }
 
+fn rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| is_rate_limit_header(name.as_str()))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn is_rate_limit_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "retry-after" || name.contains("ratelimit") || name.contains("rate-limit")
+}
+
 fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
@@ -407,4 +433,19 @@ fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
 
 fn truncate_for_error(body: &str) -> String {
     body.chars().take(200).collect()
+}
+
+fn codex_websocket_error(error: CodexWebSocketError) -> CodexClientError {
+    match error {
+        CodexWebSocketError::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        } => CodexClientError::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        },
+        error => CodexClientError::WebSocket(error),
+    }
 }

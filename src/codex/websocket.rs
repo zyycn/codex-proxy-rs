@@ -1,12 +1,15 @@
 use thiserror::Error;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{http::Request as WsRequest, Message},
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{HeaderMap as WsHeaderMap, Request as WsRequest},
+        Error as WsError, Message,
+    },
 };
 
 use futures::{SinkExt, StreamExt};
-use reqwest::header::HeaderMap;
+use reqwest::{header::HeaderMap, StatusCode};
 use serde_json::{json, Value};
 
 use crate::codex::{sse::encode_sse_event, types::CodexResponsesRequest};
@@ -30,9 +33,23 @@ pub enum CodexWebSocketError {
     #[error("invalid WebSocket request: {0}")]
     InvalidRequest(#[from] tokio_tungstenite::tungstenite::http::Error),
     #[error("websocket transport error: {0}")]
-    Transport(#[from] tokio_tungstenite::tungstenite::Error),
+    Transport(#[source] WsError),
+    #[error("websocket handshake returned status {status}: {body}")]
+    Upstream {
+        status: StatusCode,
+        body: String,
+        retry_after_seconds: Option<u64>,
+    },
     #[error("websocket response ended before any events")]
     EmptyResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexWebSocketResponse {
+    pub body: String,
+    pub turn_state: Option<String>,
+    pub set_cookie_headers: Vec<String>,
+    pub rate_limit_headers: Vec<(String, String)>,
 }
 
 pub fn transport_for_request(request: &CodexResponsesRequest) -> CodexTransport {
@@ -59,18 +76,21 @@ pub async fn create_response_via_websocket(
     base_url: &str,
     request: &CodexResponsesRequest,
     headers: HeaderMap,
-) -> Result<String, CodexWebSocketError> {
+) -> Result<CodexWebSocketResponse, CodexWebSocketError> {
     let ws_request = build_ws_request(base_url, headers)?;
-    let (mut websocket, _) = connect_async(ws_request).await?;
+    let (mut websocket, handshake_response) = connect_async(ws_request)
+        .await
+        .map_err(codex_websocket_transport_error)?;
     websocket
         .send(Message::Text(
             websocket_request_body(request).to_string().into(),
         ))
-        .await?;
+        .await
+        .map_err(CodexWebSocketError::Transport)?;
 
     let mut body = String::new();
     while let Some(message) = websocket.next().await {
-        let message = message?;
+        let message = message.map_err(CodexWebSocketError::Transport)?;
         let Some(raw) = websocket_message_text(message) else {
             continue;
         };
@@ -86,14 +106,22 @@ pub async fn create_response_via_websocket(
     if body.is_empty() {
         return Err(CodexWebSocketError::EmptyResponse);
     }
-    Ok(body)
+    let headers = handshake_response.headers();
+    Ok(CodexWebSocketResponse {
+        body,
+        turn_state: turn_state(headers),
+        set_cookie_headers: set_cookie_headers(headers),
+        rate_limit_headers: rate_limit_headers(headers),
+    })
 }
 
 fn build_ws_request(
     base_url: &str,
     headers: HeaderMap,
 ) -> Result<WsRequest<()>, CodexWebSocketError> {
-    let mut request = websocket_url(base_url).into_client_request()?;
+    let mut request = websocket_url(base_url)
+        .into_client_request()
+        .map_err(codex_websocket_transport_error)?;
     for (name, value) in &headers {
         let Ok(name) =
             tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_str().as_bytes())
@@ -182,4 +210,81 @@ fn websocket_event_type(raw: &str) -> Option<String> {
 
 fn is_terminal_websocket_event(event: &str) -> bool {
     event == "response.completed" || event == "response.failed" || event == "error"
+}
+
+fn codex_websocket_transport_error(error: WsError) -> CodexWebSocketError {
+    match error {
+        WsError::Http(response) => {
+            let (parts, body) = (*response).into_parts();
+            let body = body
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_default();
+            CodexWebSocketError::Upstream {
+                status: parts.status,
+                retry_after_seconds: retry_after_seconds(&parts.headers)
+                    .or_else(|| retry_after_seconds_from_body(&body)),
+                body,
+            }
+        }
+        error => CodexWebSocketError::Transport(error),
+    }
+}
+
+fn turn_state(headers: &WsHeaderMap) -> Option<String> {
+    headers
+        .get("x-codex-turn-state")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
+}
+
+fn set_cookie_headers(headers: &WsHeaderMap) -> Vec<String> {
+    headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(ToString::to_string))
+        .collect()
+}
+
+fn rate_limit_headers(headers: &WsHeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| is_rate_limit_header(name.as_str()))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn is_rate_limit_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "retry-after" || name.contains("ratelimit") || name.contains("rate-limit")
+}
+
+fn retry_after_seconds(headers: &WsHeaderMap) -> Option<u64> {
+    headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+}
+
+fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
+    let value = serde_json::from_str::<Value>(body).ok()?;
+    let error = value.get("error").unwrap_or(&value);
+    if let Some(seconds) = error
+        .get("resets_in_seconds")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0)
+    {
+        return Some(seconds);
+    }
+    let resets_at = error.get("resets_at").and_then(Value::as_u64)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    (resets_at > now).then_some(resets_at - now)
 }
