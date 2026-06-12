@@ -10,6 +10,8 @@
 
 **Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: persisted backend model snapshots and cached `/v1/models*` reads. Commit `0b6cc7e` adds Task 7 import compatibility for Sub2API OpenAI OAuth exports and marks the detected source format while ignoring proxy-only fields. Commit `f75db60` adds `/admin/refresh-models` backed by imported accounts. Commit `4b19846` syncs refreshed model-plan allowlists into the runtime account pool. Commit `db6cb98` adds admin account label/status/delete mutations with runtime pool synchronization. Commit `16eb4ed` adds batch delete/status mutations. Commit `8af350d` adds local client API key status/delete mutations. Commit `203270f` adds encrypted account Cookie get/set/delete. Commit `960bbb2` adds local client API key label and batch-delete mutations. Commit `72438c6` adds native and Sub2API account export. Commit `16938e6` adds manual account creation for Codex OAuth tokens; the current correction narrows `POST /admin/accounts` to TS-like `token`/`refreshToken` import semantics for OpenAI GPT/Codex accounts, adds deterministic Codex CLI `auth.json` import through the same validated JWT-claim path, and adds admin health-check, per-account refresh, reset-usage, and quota routes for imported Codex accounts. Remaining major work continues with WebSocket/history fallback policy plus PKCE/device login and auth-status/logout variants.
 
+**Scoped HTTP SSE error update:** Non-WebSocket `/v1/responses` HTTP SSE collection now detects upstream `event: error` and `event: response.failed` terminal frames. Non-streaming clients receive a `502` OpenAI-compatible `upstream_error` body with the upstream message, while streaming clients keep passthrough SSE frames and record the lifecycle event as an upstream SSE failure.
+
 ---
 
 ### Parity Drift Audit 2026-06-12
@@ -109,6 +111,9 @@ Immediate priority after this audit:
 - [x] Extend fallback classification and account retry to HTTP SSE Responses setup and Chat Completions.
 - [x] Run: `cargo test --test v1_upstream_route_test`
 - [x] Run: `cargo test --test chat_completions_route_test`
+- [x] Write failing tests for HTTP SSE `event: error` and `response.failed` in non-streaming collection and streaming passthrough audit.
+- [x] Map non-streaming HTTP SSE `error`/`response.failed` terminal frames to OpenAI-compatible `upstream_error` bodies, and mark streaming passthrough terminal error frames as failed lifecycle logs.
+- [x] Run targeted tests: `cargo test --test v1_upstream_route_test v1_responses_non_stream_should_return_upstream_error`; `cargo test --test v1_upstream_route_test v1_responses_stream_should_passthrough`
 - [ ] Define and implement WebSocket-backed Responses fallback policy without breaking `previous_response_id` account affinity.
 - [ ] Add tests for exhausted no-account responses, refresh retry preservation under fallback, successful rate-limit header capture, and durable quota cooldown persistence if needed.
 

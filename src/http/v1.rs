@@ -272,7 +272,7 @@ pub async fn responses(
     }
 
     match completed_response_json(&response.body) {
-        Ok(Some(body)) => {
+        Ok(CollectedResponse::Completed(body)) => {
             log_v1_response(
                 &state,
                 &log_context,
@@ -284,7 +284,26 @@ pub async fn responses(
             .await;
             (StatusCode::OK, Json(body)).into_response()
         }
-        Ok(None) => {
+        Ok(CollectedResponse::Failed(failure)) => {
+            log_v1_response(
+                &state,
+                &log_context,
+                StatusCode::BAD_GATEWAY,
+                EventLevel::Error,
+                "v1 responses upstream SSE failed",
+                failure.metadata(false),
+            )
+            .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    &failure.openai_error_message(),
+                    "upstream_error",
+                )),
+            )
+                .into_response()
+        }
+        Ok(CollectedResponse::MissingCompleted) => {
             log_v1_response(
                 &state,
                 &log_context,
@@ -1404,6 +1423,7 @@ impl StreamAudit {
 
     async fn complete(&mut self, body: &[u8]) {
         let body = String::from_utf8_lossy(body);
+        let mut status = StatusCode::OK;
         let mut level = EventLevel::Info;
         let mut message = "v1 responses stream completed";
         let mut metadata = match extract_sse_usage(&body) {
@@ -1429,16 +1449,23 @@ impl StreamAudit {
                 json!({"stream": true, "sseParseError": error.to_string()})
             }
         };
+        match responses_sse_failure(&body) {
+            Ok(Some(failure)) => {
+                // SSE 响应头已发出，HTTP 状态不能回滚；用终止事件透传给客户端，并在审计里标记上游失败。
+                status = StatusCode::BAD_GATEWAY;
+                level = EventLevel::Error;
+                message = "v1 responses stream upstream SSE failed";
+                failure.extend_metadata(&mut metadata);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                level = EventLevel::Warn;
+                message = "v1 responses stream completed with invalid SSE failure metadata";
+                metadata = json!({"stream": true, "sseParseError": error.to_string()});
+            }
+        }
         ensure_stream_metadata(&mut metadata, true);
-        log_v1_response(
-            &self.state,
-            &self.context,
-            StatusCode::OK,
-            level,
-            message,
-            metadata,
-        )
-        .await;
+        log_v1_response(&self.state, &self.context, status, level, message, metadata).await;
         self.account_slot.release().await;
     }
 
@@ -1531,11 +1558,57 @@ fn ensure_stream_metadata(metadata: &mut Value, stream_value: bool) {
         .or_insert_with(|| json!(stream_value));
 }
 
-fn completed_response_json(body: &str) -> Result<Option<Value>, crate::codex::sse::SseError> {
+enum CollectedResponse {
+    Completed(Value),
+    Failed(ResponsesSseFailure),
+    MissingCompleted,
+}
+
+#[derive(Debug, Clone)]
+struct ResponsesSseFailure {
+    event: String,
+    message: String,
+    upstream_code: Option<String>,
+}
+
+impl ResponsesSseFailure {
+    fn from_event(event: &str, value: &Value) -> Self {
+        Self {
+            event: event.to_string(),
+            message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
+            upstream_code: failure_code(value),
+        }
+    }
+
+    fn openai_error_message(&self) -> String {
+        format!("Codex upstream SSE failed: {}", self.message)
+    }
+
+    fn metadata(&self, stream: bool) -> Value {
+        let mut metadata = json!({"stream": stream});
+        self.extend_metadata(&mut metadata);
+        metadata
+    }
+
+    fn extend_metadata(&self, metadata: &mut Value) {
+        let Some(object) = metadata.as_object_mut() else {
+            *metadata = self.metadata(true);
+            return;
+        };
+        object.insert("failureEvent".to_string(), json!(self.event));
+        object.insert("failureMessage".to_string(), json!(self.message));
+        if let Some(code) = &self.upstream_code {
+            object.insert("upstreamCode".to_string(), json!(code));
+        }
+    }
+}
+
+fn completed_response_json(body: &str) -> Result<CollectedResponse, crate::codex::sse::SseError> {
     let events = parse_sse_events(body)?;
     let mut output_text = String::new();
     let mut output_items = Vec::new();
     let mut completed_response = None;
+    let mut failed_response = None;
     for event in events {
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
             continue;
@@ -1556,15 +1629,56 @@ fn completed_response_json(body: &str) -> Result<Option<Value>, crate::codex::ss
                     completed_response = Some(response.clone());
                 }
             }
+            Some(event_name @ ("error" | "response.failed")) if failed_response.is_none() => {
+                failed_response = Some(ResponsesSseFailure::from_event(event_name, &value));
+            }
             _ => {}
         }
     }
+    if let Some(failure) = failed_response {
+        return Ok(CollectedResponse::Failed(failure));
+    }
     let Some(mut response) = completed_response else {
-        return Ok(None);
+        return Ok(CollectedResponse::MissingCompleted);
     };
     ensure_completed_response_output(&mut response, &output_items, &output_text);
     sync_output_text_from_output(&mut response);
-    Ok(Some(response))
+    Ok(CollectedResponse::Completed(response))
+}
+
+fn responses_sse_failure(
+    body: &str,
+) -> Result<Option<ResponsesSseFailure>, crate::codex::sse::SseError> {
+    for event in parse_sse_events(body)? {
+        let Some(event_name @ ("error" | "response.failed")) = event.event.as_deref() else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            continue;
+        };
+        return Ok(Some(ResponsesSseFailure::from_event(event_name, &value)));
+    }
+    Ok(None)
+}
+
+fn failure_message(value: &Value) -> Option<String> {
+    value
+        .pointer("/response/error/message")
+        .or_else(|| value.pointer("/error/message"))
+        .or_else(|| value.get("message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+fn failure_code(value: &Value) -> Option<String> {
+    value
+        .pointer("/response/error/code")
+        .or_else(|| value.pointer("/error/code"))
+        .or_else(|| value.get("code"))
+        .and_then(Value::as_str)
+        .filter(|code| !code.trim().is_empty())
+        .map(ToString::to_string)
 }
 
 fn ensure_completed_response_output(
