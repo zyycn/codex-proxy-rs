@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
 
-**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: persisted backend model snapshots and cached `/v1/models*` reads. Remaining major work continues with WebSocket/history fallback policy, live model refresh, and scoped admin operations.
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: persisted backend model snapshots and cached `/v1/models*` reads. Pending Task 7 import work accepts Sub2API OpenAI OAuth exports and marks the detected source format while ignoring proxy-only fields. Remaining major work continues with WebSocket/history fallback policy, live model refresh, and scoped admin operations.
 
 ---
 
@@ -110,7 +110,10 @@
 - Test: `tests/admin_accounts_route_test.rs`
 - Test: `tests/admin_api_keys_route_test.rs`
 
-- [ ] Write failing tests for manual add, delete, batch status, label, quota fetch, health check, cookie get/set/delete, import/export, API key disable/delete.
+- [x] Write failing tests for Sub2API OpenAI OAuth import payloads and native exports that carry proxy/runtime metadata.
+- [x] Run: `cargo test --test admin_accounts_route_test`
+- [x] Implement Sub2API import normalization, `sourceFormat` response marking, and proxy-field ignoring.
+- [ ] Write failing tests for manual add, delete, batch status, label, quota fetch, health check, cookie get/set/delete, remaining import/export, API key disable/delete.
 - [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`
 - [ ] Implement scoped admin operations needed to operate Codex-backed OpenAI GPT routes.
 - [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`

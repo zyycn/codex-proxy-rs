@@ -188,6 +188,154 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
 }
 
 #[tokio::test]
+async fn admin_accounts_import_should_accept_sub2api_oauth_export_and_mark_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-sub2api.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_and_secret_box(
+        test_config(url),
+        pool.clone(),
+        SecretBox::new([14u8; 32]),
+    ));
+    let import_body = json!({
+        "type": "sub2api-data",
+        "version": 1,
+        "proxies": [],
+        "accounts": [
+            {
+                "name": "Sub2API Team",
+                "platform": "openai",
+                "type": "oauth",
+                "credentials": {
+                    "access_token": "Bearer sub2api-access-secret",
+                    "refresh_token": "rt_sub2api",
+                    "email": "team@example.com",
+                    "chatgpt_account_id": "chatgpt-account",
+                    "chatgpt_user_id": "chatgpt-user",
+                    "plan_type": "team"
+                },
+                "concurrency": 0,
+                "priority": 0
+            },
+            {
+                "name": "Other Provider",
+                "platform": "anthropic",
+                "type": "oauth",
+                "credentials": {
+                    "access_token": "ignored-secret"
+                }
+            }
+        ]
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_sub2api")
+                .body(Body::from(import_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["skipped"], 0);
+    let stored: (String, String, String, String, String) =
+        sqlx::query_as("select email, account_id, user_id, label, plan_type from accounts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "team@example.com");
+    assert_eq!(stored.1, "chatgpt-account");
+    assert_eq!(stored.2, "chatgpt-user");
+    assert_eq!(stored.3, "Sub2API Team");
+    assert_eq!(stored.4, "team");
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_accept_sub2api_native_account_export_without_proxy_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-sub2api-native.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_and_secret_box(
+        test_config(url),
+        pool,
+        SecretBox::new([15u8; 32]),
+    ));
+    let import_body = json!({
+        "accounts": [{
+            "id": "acct_sub2api_native",
+            "token": "native-access-secret",
+            "refreshToken": "native-refresh-secret",
+            "email": "native@example.com",
+            "accountId": "native-account",
+            "userId": "native-user",
+            "label": "Native Sub2API",
+            "planType": "plus",
+            "proxyApiKey": "ignored-proxy-secret",
+            "status": "active",
+            "usage": {
+                "request_count": 1,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0
+            },
+            "cachedQuota": null,
+            "quotaVerifyRequired": false
+        }]
+    });
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_sub2api_native")
+                .body(Body::from(import_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let body = response_json(import_response).await;
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(body["data"]["imported"], 1);
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts?limit=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_sub2api_native_list")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list = response_json(list_response).await;
+    assert_eq!(list["data"][0]["id"], "acct_sub2api_native");
+    assert_eq!(list["data"][0]["planType"], "plus");
+    assert!(list["data"][0].get("proxyApiKey").is_none());
+    assert!(list["data"][0].get("usage").is_none());
+}
+
+#[tokio::test]
 async fn admin_accounts_list_should_not_decrypt_account_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-accounts.sqlite");
