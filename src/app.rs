@@ -8,11 +8,12 @@ use tower_http::trace::TraceLayer;
 use crate::{
     http::{
         admin::{
-            accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
+            account_quota, accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
             batch_update_account_status, create_account, create_api_key, delete_account,
             delete_account_cookies, delete_api_key, export_accounts, get_account_cookies,
-            import_accounts, import_cli_auth, login, logs, refresh_models, set_account_cookies,
-            settings, update_account_label, update_account_status, update_api_key_label,
+            health_check_accounts, import_accounts, import_cli_auth, login, logs, refresh_account,
+            refresh_models, reset_account_usage, set_account_cookies, settings,
+            update_account_label, update_account_status, update_api_key_label,
             update_api_key_status, usage_stats, usage_stats_summary,
         },
         health::health,
@@ -42,12 +43,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
         .route("/admin/accounts", get(accounts).post(create_account))
+        .route("/admin/accounts/health-check", post(health_check_accounts))
         .route("/admin/accounts/batch-delete", post(batch_delete_accounts))
         .route(
             "/admin/accounts/batch-status",
             post(batch_update_account_status),
         )
         .route("/admin/accounts/export", get(export_accounts))
+        .route(
+            "/admin/accounts/{account_id}/refresh",
+            post(refresh_account),
+        )
+        .route(
+            "/admin/accounts/{account_id}/reset-usage",
+            post(reset_account_usage),
+        )
+        .route("/admin/accounts/{account_id}/quota", get(account_quota))
         .route(
             "/admin/accounts/{account_id}/cookies",
             get(get_account_cookies)

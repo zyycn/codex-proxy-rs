@@ -486,6 +486,24 @@ impl AccountRepository {
         row.map(|row| usage_from_row(&row)).transpose()
     }
 
+    pub async fn update_quota_json(
+        &self,
+        account_id: &str,
+        quota_json: &str,
+    ) -> AccountRepositoryResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "update accounts set quota_json = ?, quota_fetched_at = ?, updated_at = ? where id = ?",
+        )
+        .bind(quota_json)
+        .bind(&now)
+        .bind(now)
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     fn account_from_row(
         &self,
         row: &sqlx::sqlite::SqliteRow,
@@ -629,6 +647,16 @@ impl AccountUsageRepository {
             output_tokens: row.get("output_tokens"),
             cached_tokens: row.get("cached_tokens"),
         })
+    }
+
+    pub async fn reset_account(&self, account_id: &str) -> AccountRepositoryResult<()> {
+        sqlx::query(
+            "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 0, 0, 0, 0, null) on conflict(account_id) do update set request_count = 0, input_tokens = 0, output_tokens = 0, cached_tokens = 0, last_used_at = null",
+        )
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 
