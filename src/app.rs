@@ -10,9 +10,10 @@ use crate::{
         admin::{
             accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
             batch_update_account_status, create_api_key, delete_account, delete_account_cookies,
-            delete_api_key, get_account_cookies, import_accounts, login, logs, refresh_models,
-            set_account_cookies, settings, update_account_label, update_account_status,
-            update_api_key_label, update_api_key_status, usage_stats, usage_stats_summary,
+            delete_api_key, export_accounts, get_account_cookies, import_accounts, login, logs,
+            refresh_models, set_account_cookies, settings, update_account_label,
+            update_account_status, update_api_key_label, update_api_key_status, usage_stats,
+            usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -46,6 +47,7 @@ pub fn build_router(state: AppState) -> Router {
             "/admin/accounts/batch-status",
             post(batch_update_account_status),
         )
+        .route("/admin/accounts/export", get(export_accounts))
         .route(
             "/admin/accounts/{account_id}/cookies",
             get(get_account_cookies)
