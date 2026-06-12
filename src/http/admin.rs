@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{
         header::{HeaderValue, SET_COOKIE},
@@ -24,7 +25,11 @@ use crate::{
         },
     },
     auth::api_key_repository::StoredClientApiKey,
-    auth::{admin_session::verify_admin_password, refresh::RefreshFailure},
+    auth::{
+        admin_session::verify_admin_password,
+        cli_import::{default_codex_home, read_cli_auth_from_home},
+        refresh::RefreshFailure,
+    },
     codex::client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
     config::{AppConfig, QuotaWarningThresholds},
     fingerprint::model::Fingerprint,
@@ -199,6 +204,7 @@ pub struct AdminSettingsData {
 enum AccountImportFormat {
     Native,
     Sub2Api,
+    CodexCli,
 }
 
 impl AccountImportFormat {
@@ -206,6 +212,7 @@ impl AccountImportFormat {
         match self {
             Self::Native => "native",
             Self::Sub2Api => "sub2api",
+            Self::CodexCli => "codex_cli",
         }
     }
 }
@@ -242,6 +249,12 @@ pub struct AccountImportData {
 pub struct CreateAccountRequest {
     pub token: Option<String>,
     pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCliAuthRequest {
+    pub codex_home: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1121,167 +1134,13 @@ pub async fn create_account(
         .into_response();
     };
 
-    let (access_token, refresh_token_update, new_account_refresh_token) = match (
-        empty_to_none(payload.token.map(normalize_bearer_token)),
-        empty_to_none(payload.refresh_token),
-    ) {
-        (Some(token), refresh_token) => (token, refresh_token.clone(), refresh_token),
-        (None, Some(refresh_token)) => {
-            let Some(refresher) = state.token_refresher() else {
-                return AdminResponse::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    AdminEnvelope::new(50001, "Token refresher is not initialized", (), request_id),
-                )
-                .into_response();
-            };
-            let tokens = match refresher.refresh(&refresh_token).await {
-                Ok(tokens) => tokens,
-                Err(RefreshFailure::Transport) => {
-                    return AdminResponse::new(
-                        StatusCode::BAD_GATEWAY,
-                        AdminEnvelope::new(50201, "Refresh token exchange failed", (), request_id),
-                    )
-                    .into_response();
-                }
-                Err(_) => {
-                    return AdminResponse::new(
-                        StatusCode::BAD_REQUEST,
-                        AdminEnvelope::new(40001, "Refresh token exchange failed", (), request_id),
-                    )
-                    .into_response();
-                }
-            };
-            let access_token = normalize_bearer_token(tokens.access_token);
-            let rotated_refresh_token = empty_to_none(tokens.refresh_token);
-            let new_account_refresh_token = rotated_refresh_token
-                .clone()
-                .or_else(|| Some(refresh_token.clone()));
-            (
-                access_token,
-                rotated_refresh_token,
-                new_account_refresh_token,
-            )
-        }
-        (None, None) => {
-            return AdminResponse::new(
-                StatusCode::BAD_REQUEST,
-                AdminEnvelope::new(
-                    40001,
-                    "Either token or refreshToken is required",
-                    (),
-                    request_id,
-                ),
-            )
-            .into_response();
-        }
-    };
-
-    // 手动导入只信任 ChatGPT JWT claim；客户端传来的展示字段不能参与账号身份判定。
-    let claims = match manual_account_claims(&access_token, Utc::now()) {
-        Ok(claims) => claims,
-        Err(message) => {
-            return AdminResponse::new(
-                StatusCode::BAD_REQUEST,
-                AdminEnvelope::new(40001, message, (), request_id),
-            )
-            .into_response();
-        }
-    };
-
-    let existing = match repo
-        .find_by_chatgpt_identity(&claims.account_id, claims.user_id.as_deref())
-        .await
-    {
-        Ok(account) => account,
-        Err(_) => {
-            return AdminResponse::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
-            )
-            .into_response();
-        }
-    };
-
-    let account_id = if let Some(existing) = existing {
-        let updated = repo
-            .update_from_claims(
-                &existing.id,
-                AccountClaimsUpdate {
-                    email: claims.email.clone(),
-                    account_id: Some(claims.account_id.clone()),
-                    user_id: claims.user_id.clone(),
-                    plan_type: claims.plan_type.clone(),
-                    access_token: SecretString::new(access_token.into()),
-                    refresh_token: refresh_token_update
-                        .map(|token| SecretString::new(token.into())),
-                    access_token_expires_at: Some(claims.expires_at),
-                    status: AccountStatus::Active,
-                },
-            )
-            .await;
-        match updated {
-            Ok(true) => existing.id,
-            Ok(false) => {
-                return AdminResponse::new(
-                    StatusCode::NOT_FOUND,
-                    AdminEnvelope::new(40401, "Account not found", (), request_id),
-                )
-                .into_response();
-            }
-            Err(_) => {
-                return AdminResponse::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    AdminEnvelope::new(50001, "Failed to update account", (), request_id),
-                )
-                .into_response();
-            }
-        }
-    } else {
-        let id = normalized_account_id(None);
-        let account = NewAccount {
-            id: id.clone(),
-            email: claims.email.clone(),
-            account_id: Some(claims.account_id.clone()),
-            user_id: claims.user_id.clone(),
-            label: None,
-            plan_type: claims.plan_type.clone(),
-            access_token: SecretString::new(access_token.into()),
-            refresh_token: new_account_refresh_token.map(|token| SecretString::new(token.into())),
-            access_token_expires_at: Some(claims.expires_at),
-            status: AccountStatus::Active,
+    let stored =
+        match store_validated_account_import(&state, &repo, payload.token, payload.refresh_token)
+            .await
+        {
+            Ok(stored) => stored,
+            Err(error) => return validated_account_import_error_response(error, request_id),
         };
-        if repo.insert(account).await.is_err() {
-            return AdminResponse::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AdminEnvelope::new(50001, "Failed to create account", (), request_id),
-            )
-            .into_response();
-        }
-        id
-    };
-
-    let stored = match repo.get(&account_id).await {
-        Ok(Some(account)) => account,
-        Ok(None) => {
-            return AdminResponse::new(
-                StatusCode::NOT_FOUND,
-                AdminEnvelope::new(40401, "Account not found", (), request_id),
-            )
-            .into_response();
-        }
-        Err(_) => {
-            return AdminResponse::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AdminEnvelope::new(50001, "Failed to load account", (), request_id),
-            )
-            .into_response();
-        }
-    };
-    state
-        .account_pool()
-        .lock()
-        .await
-        .insert(pool_account_from_stored(stored.clone()));
 
     // 手动添加账号的响应只返回可展示元数据，OAuth token 永不回显。
     AdminResponse::new(
@@ -1937,82 +1796,35 @@ pub async fn import_accounts(
     let mut imported = 0u32;
     let mut skipped = 0u32;
     for entry in parsed.accounts {
-        let token = entry.token.as_deref().unwrap_or_default().trim();
-        if token.is_empty() {
-            skipped += 1;
-            continue;
-        }
-        let id = normalized_account_id(entry.id);
-        match repo.exists(&id).await {
-            Ok(true) => {
-                skipped += 1;
-                continue;
+        match store_import_account_entry(&state, &repo, entry).await {
+            Ok(StoredImportAccount::Imported) => {
+                imported += 1;
             }
-            Ok(false) => {}
-            Err(_) => {
+            Ok(StoredImportAccount::Skipped) => {
+                skipped += 1;
+            }
+            Err(StoreImportAccountError::Inspect) => {
                 return AdminResponse::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
                 )
                 .into_response();
             }
-        }
-
-        let status = match parse_import_status(entry.status.as_deref()) {
-            Ok(status) => status,
-            Err(message) => {
+            Err(StoreImportAccountError::Invalid(message)) => {
                 return AdminResponse::new(
                     StatusCode::BAD_REQUEST,
                     AdminEnvelope::new(40001, message, (), request_id),
                 )
                 .into_response();
             }
-        };
-        let email = empty_to_none(entry.email);
-        let account_id = empty_to_none(entry.account_id);
-        let user_id = empty_to_none(entry.user_id);
-        let label = empty_to_none(entry.label);
-        let plan_type = empty_to_none(entry.plan_type);
-        let refresh_token = empty_to_none(entry.refresh_token);
-        let access_token = token.to_string();
-        let pool_account = Account {
-            id: id.clone(),
-            email: email.clone(),
-            account_id: account_id.clone(),
-            user_id: user_id.clone(),
-            label: label.clone(),
-            plan_type: plan_type.clone(),
-            access_token: access_token.clone(),
-            refresh_token: refresh_token.clone(),
-            access_token_expires_at: None,
-            status,
-            quota_limit_reached: false,
-            quota_cooldown_until: None,
-            cloudflare_cooldown_until: None,
-            added_at: chrono::Utc::now().to_rfc3339(),
-            last_used_at: None,
-        };
-        let account = NewAccount {
-            id,
-            email,
-            account_id,
-            user_id,
-            label,
-            plan_type,
-            access_token: SecretString::new(access_token.into()),
-            refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
-            access_token_expires_at: None,
-            status,
-        };
-        if repo.insert(account).await.is_err() {
-            return AdminResponse::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AdminEnvelope::new(50001, "Failed to import account", (), request_id),
-            )
-            .into_response();
+            Err(StoreImportAccountError::Insert) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to import account", (), request_id),
+                )
+                .into_response();
+            }
         }
-        state.account_pool().lock().await.insert(pool_account);
-        imported += 1;
     }
 
     AdminResponse::new(
@@ -2022,6 +1834,98 @@ pub async fn import_accounts(
                 imported,
                 skipped,
                 source_format: parsed.source_format.as_str().to_string(),
+            },
+            request_id,
+        ),
+    )
+    .into_response()
+}
+
+pub async fn import_cli_auth(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let payload = if body.is_empty() {
+        ImportCliAuthRequest::default()
+    } else {
+        match serde_json::from_slice::<ImportCliAuthRequest>(&body) {
+            Ok(payload) => payload,
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::BAD_REQUEST,
+                    AdminEnvelope::new(40001, "Invalid CLI import request", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    };
+    let codex_home = match empty_to_none(payload.codex_home) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => match default_codex_home() {
+            Ok(path) => path,
+            Err(error) => {
+                return AdminResponse::new(
+                    StatusCode::BAD_REQUEST,
+                    AdminEnvelope::new(40001, error.to_string(), (), request_id),
+                )
+                .into_response();
+            }
+        },
+    };
+    let cli_auth = match read_cli_auth_from_home(&codex_home) {
+        Ok(auth) => auth,
+        Err(error) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, error.to_string(), (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let _stored = match store_validated_account_import(
+        &state,
+        &repo,
+        Some(cli_auth.access_token().to_string()),
+        cli_auth.refresh_token().map(str::to_string),
+    )
+    .await
+    {
+        Ok(stored) => stored,
+        Err(error) => return validated_account_import_error_response(error, request_id),
+    };
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            AccountImportData {
+                imported: 1,
+                skipped: 0,
+                source_format: AccountImportFormat::CodexCli.as_str().to_string(),
             },
             request_id,
         ),
@@ -2546,6 +2450,180 @@ fn admin_account_data_from_stored(account: StoredAccount) -> AdminAccountData {
     }
 }
 
+#[derive(Debug)]
+enum ValidatedAccountImportError {
+    TokenRequired,
+    TokenRefresherUnavailable,
+    RefreshTransport,
+    RefreshRejected,
+    InvalidToken(&'static str),
+    Inspect,
+    NotFound,
+    Update,
+    Insert,
+    Load,
+}
+
+async fn store_validated_account_import(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    token: Option<String>,
+    refresh_token: Option<String>,
+) -> Result<StoredAccount, ValidatedAccountImportError> {
+    let (access_token, refresh_token_update, new_account_refresh_token) = match (
+        empty_to_none(token.map(normalize_bearer_token)),
+        empty_to_none(refresh_token),
+    ) {
+        (Some(token), refresh_token) => (token, refresh_token.clone(), refresh_token),
+        (None, Some(refresh_token)) => {
+            let Some(refresher) = state.token_refresher() else {
+                return Err(ValidatedAccountImportError::TokenRefresherUnavailable);
+            };
+            let tokens = match refresher.refresh(&refresh_token).await {
+                Ok(tokens) => tokens,
+                Err(RefreshFailure::Transport) => {
+                    return Err(ValidatedAccountImportError::RefreshTransport);
+                }
+                Err(_) => return Err(ValidatedAccountImportError::RefreshRejected),
+            };
+            let access_token = normalize_bearer_token(tokens.access_token);
+            let rotated_refresh_token = empty_to_none(tokens.refresh_token);
+            let new_account_refresh_token = rotated_refresh_token.clone().or(Some(refresh_token));
+            (
+                access_token,
+                rotated_refresh_token,
+                new_account_refresh_token,
+            )
+        }
+        (None, None) => return Err(ValidatedAccountImportError::TokenRequired),
+    };
+
+    // 手动和 CLI 导入都只信任 ChatGPT JWT claim；请求体里的展示字段不能参与账号身份判定。
+    let claims = manual_account_claims(&access_token, Utc::now())
+        .map_err(ValidatedAccountImportError::InvalidToken)?;
+    let existing = repo
+        .find_by_chatgpt_identity(&claims.account_id, claims.user_id.as_deref())
+        .await
+        .map_err(|_| ValidatedAccountImportError::Inspect)?;
+
+    let account_id = if let Some(existing) = existing {
+        let updated = repo
+            .update_from_claims(
+                &existing.id,
+                AccountClaimsUpdate {
+                    email: claims.email.clone(),
+                    account_id: Some(claims.account_id.clone()),
+                    user_id: claims.user_id.clone(),
+                    plan_type: claims.plan_type.clone(),
+                    access_token: SecretString::new(access_token.into()),
+                    refresh_token: refresh_token_update
+                        .map(|token| SecretString::new(token.into())),
+                    access_token_expires_at: Some(claims.expires_at),
+                    status: AccountStatus::Active,
+                },
+            )
+            .await
+            .map_err(|_| ValidatedAccountImportError::Update)?;
+        if !updated {
+            return Err(ValidatedAccountImportError::NotFound);
+        }
+        existing.id
+    } else {
+        let id = normalized_account_id(None);
+        let account = NewAccount {
+            id: id.clone(),
+            email: claims.email.clone(),
+            account_id: Some(claims.account_id.clone()),
+            user_id: claims.user_id.clone(),
+            label: None,
+            plan_type: claims.plan_type.clone(),
+            access_token: SecretString::new(access_token.into()),
+            refresh_token: new_account_refresh_token.map(|token| SecretString::new(token.into())),
+            access_token_expires_at: Some(claims.expires_at),
+            status: AccountStatus::Active,
+        };
+        repo.insert(account)
+            .await
+            .map_err(|_| ValidatedAccountImportError::Insert)?;
+        id
+    };
+
+    let stored = repo
+        .get(&account_id)
+        .await
+        .map_err(|_| ValidatedAccountImportError::Load)?
+        .ok_or(ValidatedAccountImportError::NotFound)?;
+    state
+        .account_pool()
+        .lock()
+        .await
+        .insert(pool_account_from_stored(stored.clone()));
+    Ok(stored)
+}
+
+fn validated_account_import_error_response(
+    error: ValidatedAccountImportError,
+    request_id: String,
+) -> Response {
+    match error {
+        ValidatedAccountImportError::TokenRequired => AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "Either token or refreshToken is required",
+                (),
+                request_id,
+            ),
+        )
+        .into_response(),
+        ValidatedAccountImportError::TokenRefresherUnavailable => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Token refresher is not initialized", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::RefreshTransport => AdminResponse::new(
+            StatusCode::BAD_GATEWAY,
+            AdminEnvelope::new(50201, "Refresh token exchange failed", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::RefreshRejected => AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Refresh token exchange failed", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::InvalidToken(message) => AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, message, (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::Inspect => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to inspect account", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::NotFound => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "Account not found", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::Update => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to update account", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::Insert => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to create account", (), request_id),
+        )
+        .into_response(),
+        ValidatedAccountImportError::Load => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to load account", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
 fn manual_account_claims(
     token: &str,
     now: DateTime<Utc>,
@@ -2604,6 +2682,92 @@ fn string_claim(map: &Map<String, Value>, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+#[derive(Debug)]
+enum StoredImportAccount {
+    Imported,
+    Skipped,
+}
+
+#[derive(Debug)]
+enum StoreImportAccountError {
+    Inspect,
+    Invalid(String),
+    Insert,
+}
+
+async fn store_import_account_entry(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    entry: AccountImportEntry,
+) -> Result<StoredImportAccount, StoreImportAccountError> {
+    let access_token = entry.token.as_deref().unwrap_or_default().trim();
+    if access_token.is_empty() {
+        return Ok(StoredImportAccount::Skipped);
+    }
+    if entry
+        .label
+        .as_ref()
+        .is_some_and(|label| label.chars().count() > 64)
+    {
+        return Err(StoreImportAccountError::Invalid(
+            "Account label must be 64 characters or fewer".to_string(),
+        ));
+    }
+
+    let id = normalized_account_id(entry.id);
+    match repo.exists(&id).await {
+        Ok(true) => return Ok(StoredImportAccount::Skipped),
+        Ok(false) => {}
+        Err(_) => return Err(StoreImportAccountError::Inspect),
+    }
+
+    let status =
+        parse_import_status(entry.status.as_deref()).map_err(StoreImportAccountError::Invalid)?;
+    let email = empty_to_none(entry.email);
+    let account_id = empty_to_none(entry.account_id);
+    let user_id = empty_to_none(entry.user_id);
+    let label = empty_to_none(entry.label);
+    let plan_type = empty_to_none(entry.plan_type);
+    let refresh_token = empty_to_none(entry.refresh_token);
+    let access_token = access_token.to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let pool_account = Account {
+        id: id.clone(),
+        email: email.clone(),
+        account_id: account_id.clone(),
+        user_id: user_id.clone(),
+        label: label.clone(),
+        plan_type: plan_type.clone(),
+        access_token: access_token.clone(),
+        refresh_token: refresh_token.clone(),
+        access_token_expires_at: None,
+        status,
+        quota_limit_reached: false,
+        quota_cooldown_until: None,
+        cloudflare_cooldown_until: None,
+        added_at: now.clone(),
+        last_used_at: None,
+    };
+    let account = NewAccount {
+        id: id.clone(),
+        email: email.clone(),
+        account_id: account_id.clone(),
+        user_id: user_id.clone(),
+        label: label.clone(),
+        plan_type: plan_type.clone(),
+        access_token: SecretString::new(access_token.into()),
+        refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
+        access_token_expires_at: None,
+        status,
+    };
+    repo.insert(account)
+        .await
+        .map_err(|_| StoreImportAccountError::Insert)?;
+    state.account_pool().lock().await.insert(pool_account);
+
+    Ok(StoredImportAccount::Imported)
 }
 
 fn normalized_account_id(id: Option<String>) -> String {

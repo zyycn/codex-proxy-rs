@@ -11,8 +11,8 @@ use crate::{
             accounts, api_keys, batch_delete_accounts, batch_delete_api_keys,
             batch_update_account_status, create_account, create_api_key, delete_account,
             delete_account_cookies, delete_api_key, export_accounts, get_account_cookies,
-            import_accounts, login, logs, refresh_models, set_account_cookies, settings,
-            update_account_label, update_account_status, update_api_key_label,
+            import_accounts, import_cli_auth, login, logs, refresh_models, set_account_cookies,
+            settings, update_account_label, update_account_status, update_api_key_label,
             update_api_key_status, usage_stats, usage_stats_summary,
         },
         health::health,
@@ -64,6 +64,7 @@ pub fn build_router(state: AppState) -> Router {
             patch(update_account_status),
         )
         .route("/admin/accounts/import", post(import_accounts))
+        .route("/admin/accounts/import-cli", post(import_cli_auth))
         .route("/admin/api-keys", get(api_keys).post(create_api_key))
         .route("/admin/api-keys/batch-delete", post(batch_delete_api_keys))
         .route("/admin/api-keys/{key_id}", delete(delete_api_key))
