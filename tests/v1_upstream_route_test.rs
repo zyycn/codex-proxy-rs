@@ -300,7 +300,9 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
                 )
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_non_stream")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -330,6 +332,176 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
     assert_eq!(event.3, 200);
     assert_eq!(event.4["stream"], false);
     assert_eq!(event.4["usage"]["inputTokens"], 7);
+}
+
+#[tokio::test]
+async fn v1_responses_should_forward_parity_fields_and_context_headers() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_fields\",\"object\":\"response\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .and(header("chatgpt-account-id", "chatgpt-account"))
+        .and(header("x-codex-turn-state", "turn-body"))
+        .and(header("x-codex-turn-metadata", "meta-header"))
+        .and(header("x-codex-beta-features", "beta-header"))
+        .and(header("x-responsesapi-include-timing-metrics", "true"))
+        .and(header("version", "2026-06-12"))
+        .and(header("x-codex-window-id", "window-1"))
+        .and(header("x-codex-parent-thread-id", "parent-1"))
+        .and(body_json(json!({
+            "model": "gpt-5.5",
+            "instructions": "",
+            "input": [],
+            "stream": true,
+            "store": false,
+            "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+            },
+            "service_tier": "priority",
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup"}
+            },
+            "parallel_tool_calls": true,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "Answer",
+                    "schema": {"type": "object"},
+                    "strict": true
+                }
+            },
+            "prompt_cache_key": "pcache",
+            "include": ["reasoning.encrypted_content"],
+            "client_metadata": {
+                "safe": "yes"
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-codex-turn-state", "turn-header")
+                .header("x-codex-turn-metadata", "meta-header")
+                .header("x-codex-beta-features", "beta-header")
+                .header("x-responsesapi-include-timing-metrics", "true")
+                .header("version", "2026-06-12")
+                .header("x-codex-window-id", "window-1")
+                .header("x-codex-parent-thread-id", "parent-1")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5-fast",
+                        "stream": false,
+                        "input": [],
+                        "reasoning": {"effort": "high"},
+                        "service_tier": "fast",
+                        "tool_choice": {
+                            "type": "function",
+                            "function": {"name": "lookup"}
+                        },
+                        "parallel_tool_calls": true,
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "Answer",
+                                "schema": {"type": "object"},
+                                "strict": true
+                            }
+                        },
+                        "prompt_cache_key": "pcache",
+                        "include": ["reasoning.encrypted_content"],
+                        "client_metadata": {
+                            "safe": "yes"
+                        },
+                        "turnState": "turn-body"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_fields");
+}
+
+#[tokio::test]
+async fn v1_responses_should_include_encrypted_reasoning_by_default() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_reasoning_include\",\"object\":\"response\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(body_json(json!({
+            "model": "gpt-5.5",
+            "instructions": "",
+            "input": [],
+            "stream": true,
+            "store": false,
+            "reasoning": {
+                "effort": "high",
+                "summary": "auto"
+            },
+            "include": ["reasoning.encrypted_content"]
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","stream":false,"input":[],"reasoning":{"effort":"high"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_reasoning_include");
 }
 
 #[tokio::test]
@@ -368,7 +540,9 @@ async fn v1_responses_should_reconstruct_non_stream_output_text_from_sse_deltas(
                     format!("Bearer {}", imported.client_api_key),
                 )
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -418,7 +592,9 @@ async fn v1_responses_should_use_done_output_items_when_completed_output_is_empt
                     format!("Bearer {}", imported.client_api_key),
                 )
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -509,6 +685,65 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_default_to_streaming_when_stream_is_omitted() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"pong\"}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_default_stream\",\"object\":\"response\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(body_json(json!({
+            "model": "gpt-5.5",
+            "instructions": "",
+            "input": [],
+            "stream": true,
+            "store": false
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = response_text(response).await;
+    assert!(body.contains("event: response.output_text.delta"));
+    assert!(body.contains("event: response.completed"));
+}
+
+#[tokio::test]
 async fn v1_responses_should_refresh_after_401_and_retry_non_stream() {
     let server = MockServer::start().await;
     let success_sse = concat!(
@@ -549,7 +784,9 @@ async fn v1_responses_should_refresh_after_401_and_retry_non_stream() {
                 )
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_refresh_non_stream")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
                 .unwrap(),
         )
         .await

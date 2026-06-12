@@ -39,6 +39,12 @@ pub struct CodexRequestContext<'a> {
     pub account_id: Option<&'a str>,
     pub request_id: &'a str,
     pub turn_state: Option<&'a str>,
+    pub turn_metadata: Option<&'a str>,
+    pub beta_features: Option<&'a str>,
+    pub include_timing_metrics: Option<&'a str>,
+    pub version: Option<&'a str>,
+    pub codex_window_id: Option<&'a str>,
+    pub parent_thread_id: Option<&'a str>,
     pub cookie_header: Option<&'a str>,
 }
 
@@ -158,8 +164,34 @@ impl CodexBackendClient {
         if let Some(cookie_header) = context.cookie_header {
             headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
         }
+        insert_optional_header(&mut headers, "x-codex-turn-metadata", context.turn_metadata)?;
+        insert_optional_header(&mut headers, "x-codex-beta-features", context.beta_features)?;
+        insert_optional_header(
+            &mut headers,
+            "x-responsesapi-include-timing-metrics",
+            context.include_timing_metrics,
+        )?;
+        insert_optional_header(&mut headers, "version", context.version)?;
+        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
+        insert_optional_header(
+            &mut headers,
+            "x-codex-parent-thread-id",
+            context.parent_thread_id,
+        )?;
         Ok(headers)
     }
+}
+
+fn insert_optional_header(
+    headers: &mut HeaderMap,
+    name: &'static str,
+    value: Option<&str>,
+) -> CodexClientResult<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    headers.insert(HeaderName::from_static(name), HeaderValue::from_str(value)?);
+    Ok(())
 }
 
 pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error> {
