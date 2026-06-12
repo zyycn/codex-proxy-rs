@@ -1,0 +1,116 @@
+# OpenAI GPT Codex Parity Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Port the seven OpenAI GPT/Codex parity gaps from the TypeScript reference into the Rust service without adding outbound proxy pools or non-GPT providers.
+
+**Architecture:** Add real Chat Completions support beside Responses, expand Codex request types and transport, then harden the shared upstream lifecycle. Keep route parsing, translation, transport, account state, model catalog, and admin operations in focused modules that match the existing Rust layout.
+
+**Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
+
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Remaining major work starts at Task 4: real WebSocket transport for `previous_response_id`, then account fallback/rate limits, model refresh/cache, and scoped admin operations.
+
+---
+
+### Task 1: Chat Completions Translation
+
+**Files:**
+- Modify: `src/translation/openai_to_codex.rs`
+- Modify: `src/codex/types.rs`
+- Test: `tests/routes_chat_test.rs`
+
+- [x] Write failing tests for system/developer instructions, tool calls, function outputs, image parts, response_format, reasoning effort, and service tier.
+- [x] Run: `cargo test --test routes_chat_test`
+- [x] Expand Chat request structs and translation helpers.
+- [x] Run: `cargo test --test routes_chat_test`
+
+### Task 2: Chat Completions Route And Output
+
+**Files:**
+- Modify: `src/app.rs`
+- Modify: `src/http/v1.rs`
+- Modify: `src/translation/codex_to_openai.rs`
+- Test: `tests/chat_completions_route_test.rs`
+
+- [x] Write failing route tests proving `/v1/chat/completions` sends translated Codex payloads and returns OpenAI chat JSON/SSE.
+- [x] Run: `cargo test --test chat_completions_route_test`
+- [x] Add a dedicated `chat_completions` handler and Codex-to-OpenAI collectors/streamers.
+- [x] Run: `cargo test --test chat_completions_route_test`
+
+### Task 3: Responses Field Parity
+
+**Files:**
+- Modify: `src/codex/types.rs`
+- Modify: `src/http/v1.rs`
+- Modify: `src/codex/client.rs`
+- Test: `tests/responses_field_parity_test.rs`
+
+- [x] Write failing tests for `service_tier`, `tool_choice`, `parallel_tool_calls`, `text.format`, `prompt_cache_key`, `include`, `client_metadata`, and Codex context headers.
+- [x] Run: `cargo test --test v1_upstream_route_test`
+- [x] Expand request parsing, serde output, and header/body forwarding.
+- [x] Run: `cargo test --test v1_upstream_route_test`
+
+### Task 4: WebSocket Previous Response Support
+
+**Files:**
+- Modify: `Cargo.toml`
+- Modify: `src/codex/websocket.rs`
+- Modify: `src/codex/client.rs`
+- Test: `tests/codex_websocket_test.rs`
+
+- [ ] Write failing tests proving `previous_response_id` uses WebSocket and HTTP fallback is not used when server-side history is required.
+- [ ] Run: `cargo test --test codex_websocket_test`
+- [ ] Add WebSocket response.create transport that emits SSE-compatible output.
+- [ ] Run: `cargo test --test codex_websocket_test`
+
+### Task 5: Upstream Retry, Fallback, And Rate Limits
+
+**Files:**
+- Modify: `src/http/v1.rs`
+- Modify: `src/accounts/pool.rs`
+- Modify: `src/accounts/repository.rs`
+- Test: `tests/upstream_fallback_test.rs`
+- Test: `tests/account_pool_scheduling_test.rs`
+
+- [ ] Write failing tests for 429 quota marking, retry-after handling, fallback account retry, refresh retry preservation, and exhausted no-account responses.
+- [ ] Run: `cargo test --test upstream_fallback_test --test account_pool_scheduling_test`
+- [ ] Add error classification and fallback acquire/release paths without adding proxy-pool support.
+- [ ] Run: `cargo test --test upstream_fallback_test --test account_pool_scheduling_test`
+
+### Task 6: Model Catalog Refresh
+
+**Files:**
+- Modify: `src/models/catalog.rs`
+- Create: `src/models/repository.rs`
+- Modify: `src/http/v1.rs`
+- Test: `tests/model_catalog_test.rs`
+
+- [ ] Write failing tests for backend model snapshots, suffix parsing including `none` and `minimal`, plan allowlist generation, and `/admin/refresh-models`.
+- [ ] Run: `cargo test --test model_catalog_test`
+- [ ] Add SQLite-backed model cache and refresh route using existing Codex accounts.
+- [ ] Run: `cargo test --test model_catalog_test`
+
+### Task 7: Scoped Admin Account Operations
+
+**Files:**
+- Modify: `src/http/admin.rs`
+- Modify: `src/accounts/repository.rs`
+- Modify: `src/cookies/repository.rs`
+- Test: `tests/admin_accounts_route_test.rs`
+- Test: `tests/admin_api_keys_route_test.rs`
+
+- [ ] Write failing tests for manual add, delete, batch status, label, quota fetch, health check, cookie get/set/delete, import/export, API key disable/delete.
+- [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`
+- [ ] Implement scoped admin operations needed to operate Codex-backed OpenAI GPT routes.
+- [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`
+
+### Task 8: Final Verification And Docs
+
+**Files:**
+- Modify: `docs/implementation-status.md`
+- Modify: `README.md` if route behavior changes
+
+- [ ] Run: `cargo fmt --check`
+- [ ] Run: `cargo test`
+- [ ] Run: `cargo clippy --all-targets --all-features --locked -- -D warnings`
+- [ ] Update implementation status with completed parity items and any intentionally omitted non-goals.
