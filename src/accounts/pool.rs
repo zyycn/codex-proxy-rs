@@ -108,8 +108,22 @@ impl AccountPool {
         self.accounts.insert(account.id.clone(), account);
     }
 
+    pub fn remove(&mut self, account_id: &str) -> bool {
+        let removed = self.accounts.remove(account_id).is_some();
+        self.slots.remove(account_id);
+        removed
+    }
+
     pub fn set_model_plan_allowlist(&mut self, allowlist: BTreeMap<String, Vec<String>>) {
         self.options.model_plan_allowlist = allowlist;
+    }
+
+    pub fn set_label(&mut self, account_id: &str, label: Option<String>) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.label = label;
+        true
     }
 
     pub fn set_status(&mut self, account_id: &str, status: AccountStatus) -> bool {

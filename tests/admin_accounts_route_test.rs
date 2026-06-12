@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
+    Router,
 };
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -377,6 +378,226 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["data"][0]["id"], "acct_corrupt");
+}
+
+#[tokio::test]
+async fn admin_account_label_should_update_and_clear_label() {
+    let (app, state, pool, _dir) = admin_accounts_test_app("admin-account-label.sqlite", 16).await;
+    import_test_account(&app, "session_1", "acct_label").await;
+
+    let set_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/acct_label/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_label")
+                .body(Body::from(r#"{"label":"Team Alpha"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set_response.status(), StatusCode::OK);
+    let body = response_json(set_response).await;
+    assert_eq!(body["data"]["label"], "Team Alpha");
+
+    let clear_response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/acct_label/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":null}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clear_response.status(), StatusCode::OK);
+    let body = response_json(clear_response).await;
+    assert!(body["data"]["label"].is_null());
+
+    let stored: (Option<String>,) = sqlx::query_as("select label from accounts where id = ?")
+        .bind("acct_label")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored.0, None);
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_some());
+}
+
+#[tokio::test]
+async fn admin_account_label_should_reject_too_long_or_missing_account() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-label-invalid.sqlite", 17).await;
+    import_test_account(&app, "session_1", "acct_label_invalid").await;
+    let long_label = "x".repeat(65);
+
+    let too_long = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/acct_label_invalid/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({ "label": long_label }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/missing/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":"Team Alpha"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_account_status_should_update_database_and_runtime_pool() {
+    let (app, state, pool, _dir) = admin_accounts_test_app("admin-account-status.sqlite", 18).await;
+    import_test_account(&app, "session_1", "acct_status").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/acct_status/status")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_status")
+                .body(Body::from(r#"{"status":"disabled"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["status"], "disabled");
+
+    let stored: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_status")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored.0, "disabled");
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_none());
+}
+
+#[tokio::test]
+async fn admin_account_delete_should_remove_database_row_and_runtime_pool_entry() {
+    let (app, state, pool, _dir) = admin_accounts_test_app("admin-account-delete.sqlite", 19).await;
+    import_test_account(&app, "session_1", "acct_delete").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/admin/accounts/acct_delete")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_delete")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["deleted"], true);
+
+    let row_count: (i64,) = sqlx::query_as("select count(*) from accounts where id = ?")
+        .bind("acct_delete")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row_count.0, 0);
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_none());
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/admin/accounts/acct_delete")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+async fn admin_accounts_test_app(
+    db_name: &str,
+    key_byte: u8,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let state = AppState::with_pool_and_secret_box(
+        test_config(url),
+        pool.clone(),
+        SecretBox::new([key_byte; 32]),
+    );
+    let app = build_router(state.clone());
+    (app, state, pool, dir)
+}
+
+async fn import_test_account(app: &Router, session_id: &str, account_id: &str) {
+    let import_body = json!({
+        "accounts": [{
+            "id": account_id,
+            "email": format!("{account_id}@example.com"),
+            "planType": "plus",
+            "token": format!("access-{account_id}"),
+            "refreshToken": format!("refresh-{account_id}"),
+            "status": "active"
+        }]
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", format!("cpr_admin_session={session_id}"))
+                .body(Body::from(import_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
