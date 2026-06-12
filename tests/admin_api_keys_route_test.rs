@@ -305,6 +305,137 @@ async fn admin_api_key_delete_should_remove_client_key_authorization() {
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn admin_api_key_label_should_update_and_clear_local_client_key_name() {
+    let (app, _dir) = admin_api_keys_test_app("admin-api-key-label.sqlite").await;
+    let (key_id, _plaintext) = create_admin_api_key(&app, "session_1", "label-key").await;
+
+    let renamed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/label"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":"automation"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let body = response_json(renamed).await;
+    assert_eq!(body["data"]["name"], "label-key");
+    assert_eq!(body["data"]["label"], "automation");
+
+    let cleared = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/label"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":null}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let body = response_json(cleared).await;
+    assert_eq!(body["data"]["name"], "label-key");
+    assert!(body["data"]["label"].is_null());
+
+    let too_long = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/label"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({ "label": "x".repeat(65) }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/api-keys/missing/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":"automation"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_api_keys_batch_delete_should_remove_found_keys_and_report_missing_ids() {
+    let (app, _dir) = admin_api_keys_test_app("admin-api-key-batch-delete.sqlite").await;
+    let (key_a, plaintext_a) = create_admin_api_key(&app, "session_1", "batch-a").await;
+    let (key_b, plaintext_b) = create_admin_api_key(&app, "session_1", "batch-b").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api-keys/batch-delete")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "ids": [key_a, "ghost", key_b]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["deleted"], 2);
+    assert_eq!(body["data"]["notFound"], json!(["ghost"]));
+
+    for plaintext in [plaintext_a, plaintext_b] {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/models")
+                    .header("authorization", format!("Bearer {plaintext}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let empty = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api-keys/batch-delete")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"ids":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+}
+
 async fn admin_api_keys_test_app(db_name: &str) -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);

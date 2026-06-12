@@ -24,6 +24,7 @@ pub type ClientApiKeyRepositoryResult<T> = Result<T, ClientApiKeyRepositoryError
 pub struct StoredClientApiKey {
     pub id: String,
     pub name: String,
+    pub label: Option<String>,
     pub prefix: String,
     pub enabled: bool,
     pub created_at: String,
@@ -60,6 +61,7 @@ impl ClientApiKeyRepository {
         Ok(StoredClientApiKey {
             id,
             name: name.to_string(),
+            label: None,
             prefix: generated.prefix.clone(),
             enabled: true,
             created_at: now,
@@ -77,7 +79,7 @@ impl ClientApiKeyRepository {
             let (created_at, id) =
                 decode_cursor(&cursor).ok_or(ClientApiKeyRepositoryError::InvalidCursor)?;
             sqlx::query(
-                "select id, name, prefix, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
             )
             .bind(&created_at)
             .bind(created_at)
@@ -87,7 +89,7 @@ impl ClientApiKeyRepository {
             .await?
         } else {
             sqlx::query(
-                "select id, name, prefix, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
             )
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -109,6 +111,16 @@ impl ClientApiKeyRepository {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    pub async fn get(&self, id: &str) -> ClientApiKeyRepositoryResult<Option<StoredClientApiKey>> {
+        let row = sqlx::query(
+            "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys where id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| key_from_row(&row)))
     }
 
     pub async fn verify_and_touch(
@@ -147,6 +159,22 @@ impl ClientApiKeyRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn set_label(
+        &self,
+        id: &str,
+        label: Option<String>,
+    ) -> ClientApiKeyRepositoryResult<Option<StoredClientApiKey>> {
+        let result = sqlx::query("update client_api_keys set label = ? where id = ?")
+            .bind(label)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get(id).await
+    }
+
     pub async fn delete(&self, id: &str) -> ClientApiKeyRepositoryResult<bool> {
         let result = sqlx::query("delete from client_api_keys where id = ?")
             .bind(id)
@@ -160,6 +188,7 @@ fn key_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredClientApiKey {
     StoredClientApiKey {
         id: row.get("id"),
         name: row.get("name"),
+        label: row.get("label"),
         prefix: row.get("prefix"),
         enabled: row.get::<i64, _>("enabled") != 0,
         created_at: row.get("created_at"),
