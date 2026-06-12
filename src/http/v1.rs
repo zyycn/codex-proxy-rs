@@ -33,6 +33,7 @@ use crate::{
         sse::parse_sse_events,
         types::CodexResponsesRequest,
         usage::{extract_sse_usage, TokenUsage},
+        websocket::{transport_for_request, CodexTransport},
     },
     fingerprint::model::Fingerprint,
     http::{auth::client_api_key, middleware::RequestId},
@@ -695,6 +696,10 @@ async fn responses_stream(
     account: Account,
     log_context: V1LogContext,
 ) -> Response {
+    if transport_for_request(&request) == CodexTransport::WebSocketRequired {
+        return responses_websocket_stream(state, request, account, log_context).await;
+    }
+
     let stream_response = send_codex_stream_request_with_refresh_retry(
         &state,
         &request,
@@ -769,6 +774,107 @@ async fn responses_stream(
         .header(CONTENT_TYPE, "text/event-stream")
         .header(CACHE_CONTROL, "no-cache")
         .body(Body::from_stream(body_stream))
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(openai_error(
+                    "Failed to build stream response",
+                    "stream_response_error",
+                )),
+            )
+                .into_response()
+        })
+}
+
+async fn responses_websocket_stream(
+    state: AppState,
+    request: CodexResponsesRequest,
+    account: Account,
+    log_context: V1LogContext,
+) -> Response {
+    let response = send_codex_request_with_refresh_retry(
+        &state,
+        &request,
+        &account,
+        log_context.request_id.as_str(),
+    )
+    .await;
+    state.account_pool().lock().await.release(&account.id);
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let error_response = codex_client_error_response(error);
+            log_v1_response(
+                &state,
+                &log_context,
+                error_response.0,
+                EventLevel::Error,
+                "v1 responses websocket stream upstream request failed",
+                json!({"stream": true, "transport": "websocket"}),
+            )
+            .await;
+            return error_response.into_response();
+        }
+    };
+
+    if persist_upstream_cookies(&state, &account.id, &response.set_cookie_headers)
+        .await
+        .is_err()
+    {
+        log_v1_response(
+            &state,
+            &log_context,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            EventLevel::Error,
+            "v1 responses websocket stream cookie persistence failed",
+            json!({"stream": true, "transport": "websocket", "cookieStoreError": true}),
+        )
+        .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(openai_error(
+                "Failed to persist upstream cookies",
+                "cookie_store_error",
+            )),
+        )
+            .into_response();
+    }
+
+    let mut level = EventLevel::Info;
+    let mut message = "v1 responses websocket stream completed";
+    let mut metadata = json!({
+        "stream": true,
+        "transport": "websocket",
+        "usage": response.usage,
+    });
+    if let Some(usage) = response.usage {
+        if record_usage(&state, &account.id, usage).await.is_err() {
+            level = EventLevel::Warn;
+            message = "v1 responses websocket stream completed with usage store error";
+            metadata = json!({
+                "stream": true,
+                "transport": "websocket",
+                "usage": usage,
+                "usageStoreError": true,
+            });
+        }
+    }
+    log_v1_response(
+        &state,
+        &log_context,
+        StatusCode::OK,
+        level,
+        message,
+        metadata,
+    )
+    .await;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from(response.body))
         .unwrap_or_else(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
