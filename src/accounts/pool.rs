@@ -108,6 +108,44 @@ impl AccountPool {
         self.accounts.insert(account.id.clone(), account);
     }
 
+    pub fn set_status(&mut self, account_id: &str, status: AccountStatus) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.status = status;
+        if status != AccountStatus::Active {
+            self.slots.remove(account_id);
+        }
+        true
+    }
+
+    pub fn mark_quota_limited_until(
+        &mut self,
+        account_id: &str,
+        cooldown_until: DateTime<Utc>,
+    ) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.quota_limit_reached = true;
+        account.quota_cooldown_until = Some(cooldown_until);
+        self.slots.remove(account_id);
+        true
+    }
+
+    pub fn set_cloudflare_cooldown_until(
+        &mut self,
+        account_id: &str,
+        cooldown_until: DateTime<Utc>,
+    ) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.cloudflare_cooldown_until = Some(cooldown_until);
+        self.slots.remove(account_id);
+        true
+    }
+
     pub fn acquire(&mut self, model: &str) -> Option<Account> {
         self.acquire_with(AccountAcquireRequest::new(model, Utc::now()))
             .map(|acquired| acquired.account)
@@ -153,8 +191,7 @@ impl AccountPool {
             .accounts
             .values()
             .filter(|account| {
-                account.status == AccountStatus::Active
-                    && (!self.options.skip_quota_limited || !account.quota_limit_reached)
+                account.status == AccountStatus::Active && self.is_quota_available(account, now)
             })
             .count();
         let total_slots = active_accounts * self.options.max_concurrent_per_account;
@@ -223,7 +260,7 @@ impl AccountPool {
     fn is_base_available(&self, account: &Account, request: &AccountAcquireRequest) -> bool {
         account.status == AccountStatus::Active
             && self.slot_count(&account.id) < self.options.max_concurrent_per_account
-            && (!self.options.skip_quota_limited || !account.quota_limit_reached)
+            && self.is_quota_available(account, request.now)
             && self.is_model_allowed(account, &request.model)
             && !request
                 .exclude_account_ids
@@ -232,6 +269,15 @@ impl AccountPool {
             && account
                 .cloudflare_cooldown_until
                 .is_none_or(|cooldown_until| request.now >= cooldown_until)
+    }
+
+    fn is_quota_available(&self, account: &Account, now: DateTime<Utc>) -> bool {
+        if !self.options.skip_quota_limited || !account.quota_limit_reached {
+            return true;
+        }
+        account
+            .quota_cooldown_until
+            .is_some_and(|cooldown_until| now >= cooldown_until)
     }
 
     fn slot_count(&self, account_id: &str) -> usize {

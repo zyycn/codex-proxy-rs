@@ -284,6 +284,7 @@ impl AccountRepository {
                 access_token_expires_at: stored.access_token_expires_at,
                 status: stored.status,
                 quota_limit_reached: false,
+                quota_cooldown_until: None,
                 cloudflare_cooldown_until: None,
                 added_at: stored.added_at.to_rfc3339(),
                 last_used_at: row.get("usage_last_used_at"),

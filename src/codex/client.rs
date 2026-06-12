@@ -1,7 +1,8 @@
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, SET_COOKIE},
+    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, COOKIE, RETRY_AFTER, SET_COOKIE},
     Client, Response as ReqwestResponse, StatusCode,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
@@ -33,7 +34,11 @@ pub enum CodexClientError {
     #[error("invalid upstream SSE response: {0}")]
     InvalidSse(#[from] SseError),
     #[error("upstream returned status {status}: {body}")]
-    Upstream { status: StatusCode, body: String },
+    Upstream {
+        status: StatusCode,
+        body: String,
+        retry_after_seconds: Option<u64>,
+    },
 }
 
 pub type CodexClientResult<T> = Result<T, CodexClientError>;
@@ -108,9 +113,15 @@ impl CodexBackendClient {
         let status = response.status();
         let turn_state = turn_state(&response);
         let set_cookie_headers = set_cookie_headers(&response);
+        let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let body = response.text().await?;
         if !status.is_success() {
-            return Err(CodexClientError::Upstream { status, body });
+            return Err(CodexClientError::Upstream {
+                status,
+                retry_after_seconds: retry_after_seconds
+                    .or_else(|| retry_after_seconds_from_body(&body)),
+                body,
+            });
         }
         let usage = extract_sse_usage(&body)?;
 
@@ -132,8 +143,14 @@ impl CodexBackendClient {
         let turn_state = turn_state(&response);
         let set_cookie_headers = set_cookie_headers(&response);
         if !status.is_success() {
+            let retry_after_seconds = retry_after_seconds(response.headers(), None);
             let body = response.text().await?;
-            return Err(CodexClientError::Upstream { status, body });
+            return Err(CodexClientError::Upstream {
+                status,
+                retry_after_seconds: retry_after_seconds
+                    .or_else(|| retry_after_seconds_from_body(&body)),
+                body,
+            });
         }
 
         Ok(CodexBackendStream {
@@ -247,4 +264,31 @@ fn set_cookie_headers(response: &ReqwestResponse) -> Vec<String> {
         .iter()
         .filter_map(|value| value.to_str().ok().map(ToString::to_string))
         .collect()
+}
+
+fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {
+    headers
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .or_else(|| body.and_then(retry_after_seconds_from_body))
+}
+
+fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
+    let value = serde_json::from_str::<Value>(body).ok()?;
+    let error = value.get("error").unwrap_or(&value);
+    if let Some(seconds) = error
+        .get("resets_in_seconds")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0)
+    {
+        return Some(seconds);
+    }
+    let resets_at = error.get("resets_at").and_then(Value::as_u64)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    (resets_at > now).then_some(resets_at - now)
 }
