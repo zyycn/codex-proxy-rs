@@ -10,13 +10,13 @@ use tower::ServiceExt;
 
 use codex_proxy_rs::{
     app::build_router,
+    app::state::AppState,
     auth::admin_session::hash_admin_password,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    state::AppState,
     storage::db::connect_sqlite,
 };
 

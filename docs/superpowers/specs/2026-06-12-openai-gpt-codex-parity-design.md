@@ -22,14 +22,14 @@ Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Comm
 
 ## Components
 
-- `src/translation/openai_to_codex.rs`: OpenAI Chat request schema and Chat-to-Codex translation, including messages, tools/functions, multimodal input, response formats, reasoning effort, and service tier.
-- `src/translation/codex_to_openai.rs`: Codex SSE to OpenAI Chat JSON/SSE conversion, including text, reasoning, tool calls, usage, and errors.
+- `src/codex/protocol/openai_to_codex.rs`: OpenAI Chat request schema and Chat-to-Codex translation, including messages, tools/functions, multimodal input, response formats, reasoning effort, and service tier.
+- `src/codex/protocol/codex_to_openai.rs`: Codex SSE to OpenAI Chat JSON/SSE conversion, including text, reasoning, tool calls, usage, and errors.
 - `src/codex/types.rs`: Expanded Codex request/response types for Responses and WebSocket.
 - `src/codex/websocket.rs`: WebSocket transport selection and `response.create` conversion into SSE-compatible events for upstream-history requests such as `previous_response_id`.
 - `src/codex/client.rs`: HTTP SSE and WebSocket Codex transport, context headers, cookies, and rate-limit header capture.
 - `src/http/v1.rs`: Separate `/v1/responses` and `/v1/chat/completions` handlers sharing upstream lifecycle helpers.
-- `src/accounts/pool.rs` and repositories: fallback selection, quota/rate-limit updates, durable usage release, and account state mutation hooks.
-- `src/models/catalog.rs`: static catalog plus persisted backend snapshots, plan allowlist derivation, and admin refresh trigger.
+- `src/codex/accounts/pool.rs` and repositories: fallback selection, quota/rate-limit updates, durable usage release, and account state mutation hooks.
+- `src/codex/models/catalog.rs`: static catalog plus persisted backend snapshots, plan allowlist derivation, and admin refresh trigger.
 - `src/http/admin.rs`: scoped account/API-key/account-health/quota/cookie/admin model operations needed to operate Codex-backed GPT compatibility, including Sub2API account import normalization without proxy-pool support.
 
 ## Data Flow

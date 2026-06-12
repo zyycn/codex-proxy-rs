@@ -1,0 +1,3 @@
+event: response.failed
+data: {"response":{"id":"resp_stream_failed","object":"response","status":"failed","error":{"code":"server_error","message":"stream failed"}}}
+

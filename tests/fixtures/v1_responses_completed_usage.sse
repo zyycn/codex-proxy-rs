@@ -1,0 +1,3 @@
+event: response.completed
+data: {"response":{"id":"resp_1","object":"response","usage":{"input_tokens":7,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}}}}
+

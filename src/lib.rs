@@ -1,16 +1,11 @@
-pub mod accounts;
 pub mod app;
 pub mod auth;
 pub mod codex;
+
 pub mod config;
-pub mod cookies;
-pub mod crypto;
-pub mod error;
-pub mod fingerprint;
+pub mod utils;
+
 pub mod http;
 pub mod logs;
-pub mod models;
-pub mod pagination;
-pub mod state;
+pub mod service;
 pub mod storage;
-pub mod translation;

@@ -2,7 +2,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::{
     logs::event::{EventLevel, EventLog},
-    pagination::{clamp_limit, decode_cursor, encode_cursor, Page},
+    utils::pagination::{clamp_limit, decode_cursor, encode_cursor, Page},
 };
 
 #[derive(Clone)]

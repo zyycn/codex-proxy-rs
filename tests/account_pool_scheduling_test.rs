@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{Duration, TimeZone, Utc};
-use codex_proxy_rs::accounts::{
+use codex_proxy_rs::codex::accounts::{
     model::{Account, AccountStatus},
     pool::{AccountAcquireRequest, AccountPool, AccountPoolOptions, RotationStrategy},
 };

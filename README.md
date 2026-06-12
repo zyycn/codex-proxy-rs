@@ -29,6 +29,9 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 
 ## Development
 
+Runtime config is loaded from `config.yaml` in the project root, then optional
+`local.yaml` / `local.yml`.
+
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features --locked -- -D warnings

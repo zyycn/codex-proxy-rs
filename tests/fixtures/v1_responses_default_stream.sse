@@ -1,0 +1,6 @@
+event: response.output_text.delta
+data: {"delta":"pong"}
+
+event: response.completed
+data: {"response":{"id":"resp_default_stream","object":"response","usage":{"input_tokens":3,"output_tokens":5}}}
+

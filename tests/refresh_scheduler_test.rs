@@ -1,4 +1,4 @@
-use codex_proxy_rs::accounts::{
+use codex_proxy_rs::codex::accounts::{
     model::{Account, AccountStatus},
     pool::AccountPool,
 };

@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use wiremock::{
@@ -14,16 +13,29 @@ use wiremock::{
 
 use codex_proxy_rs::{
     app::build_router,
+    app::state::AppState,
     auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    crypto::SecretBox,
-    state::AppState,
     storage::db::connect_sqlite,
+    utils::crypto::SecretBox,
 };
+
+mod common;
+
+use common::{response_json, response_sse_data, seed_admin_session};
+
+const CHAT_RETRY_AFTER_SUCCESS_SSE: &str = include_str!("fixtures/chat_retry_after_success.sse");
+const CHAT_NON_STREAM_TEXT_SSE: &str = include_str!("fixtures/chat_non_stream_text.sse");
+const CHAT_STREAM_TEXT_SSE: &str = include_str!("fixtures/chat_stream_text.sse");
+const CHAT_PARALLEL_TOOLS_SUCCESS_SSE: &str =
+    include_str!("fixtures/chat_parallel_tools_success.sse");
+const CHAT_TOOL_REASONING_COMPLETE_SSE: &str =
+    include_str!("fixtures/chat_tool_reasoning_complete.sse");
+const CHAT_TOOL_STREAM_SSE: &str = include_str!("fixtures/chat_tool_stream.sse");
 
 struct ImportedApp {
     app: axum::Router,
@@ -166,14 +178,6 @@ async fn build_imported_app_with_accounts(
 #[tokio::test]
 async fn chat_completions_stream_should_retry_next_account_after_429_retry_after() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"ok\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat_after_429\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-a"))
@@ -193,7 +197,7 @@ async fn chat_completions_stream_should_retry_next_account_after_429_retry_after
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_RETRY_AFTER_SUCCESS_SSE),
         )
         .mount(&server)
         .await;
@@ -257,14 +261,6 @@ async fn chat_completions_stream_should_retry_next_account_after_429_retry_after
 #[tokio::test]
 async fn chat_completions_translates_messages_and_returns_openai_response() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"hello\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-secret"))
@@ -282,7 +278,7 @@ async fn chat_completions_translates_messages_and_returns_openai_response() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_NON_STREAM_TEXT_SSE),
         )
         .mount(&server)
         .await;
@@ -330,17 +326,6 @@ async fn chat_completions_translates_messages_and_returns_openai_response() {
 #[tokio::test]
 async fn chat_completions_streams_openai_chunks_from_codex_sse() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"hel\"}\n",
-        "\n",
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"lo\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":4}}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-secret"))
@@ -358,7 +343,7 @@ async fn chat_completions_streams_openai_chunks_from_codex_sse() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_STREAM_TEXT_SSE),
         )
         .mount(&server)
         .await;
@@ -417,14 +402,6 @@ async fn chat_completions_streams_openai_chunks_from_codex_sse() {
 #[tokio::test]
 async fn chat_completions_forwards_parallel_tools_and_model_suffix_options() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"ok\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-secret"))
@@ -448,7 +425,7 @@ async fn chat_completions_forwards_parallel_tools_and_model_suffix_options() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_PARALLEL_TOOLS_SUCCESS_SSE),
         )
         .mount(&server)
         .await;
@@ -488,26 +465,6 @@ async fn chat_completions_forwards_parallel_tools_and_model_suffix_options() {
 #[tokio::test]
 async fn chat_completions_collects_tool_calls_and_reasoning_content() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.reasoning_summary_text.delta\n",
-        "data: {\"delta\":\"thinking \"}\n",
-        "\n",
-        "event: response.output_item.added\n",
-        "data: {\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_1\",\"call_id\":\"call_abc\",\"name\":\"lookup\"}}\n",
-        "\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"item_id\":\"item_1\",\"delta\":\"{\\\"city\\\"\"}\n",
-        "\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"item_id\":\"item_1\",\"delta\":\":\\\"Paris\\\"}\"}\n",
-        "\n",
-        "event: response.function_call_arguments.done\n",
-        "data: {\"item_id\":\"item_1\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"output_tokens_details\":{\"reasoning_tokens\":7}}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-secret"))
@@ -529,7 +486,7 @@ async fn chat_completions_collects_tool_calls_and_reasoning_content() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_TOOL_REASONING_COMPLETE_SSE),
         )
         .mount(&server)
         .await;
@@ -583,20 +540,6 @@ async fn chat_completions_collects_tool_calls_and_reasoning_content() {
 #[tokio::test]
 async fn chat_completions_streams_tool_call_chunks_from_codex_sse() {
     let server = MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.output_item.added\n",
-        "data: {\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_1\",\"call_id\":\"call_abc\",\"name\":\"lookup\"}}\n",
-        "\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"item_id\":\"item_1\",\"delta\":\"{\\\"city\\\"\"}\n",
-        "\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"item_id\":\"item_1\",\"delta\":\":\\\"Paris\\\"}\"}\n",
-        "\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_chat\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n",
-        "\n",
-    );
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-secret"))
@@ -614,7 +557,7 @@ async fn chat_completions_streams_tool_call_chunks_from_codex_sse() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(sse_body),
+                .set_body_string(CHAT_TOOL_STREAM_SSE),
         )
         .mount(&server)
         .await;
@@ -669,42 +612,4 @@ async fn chat_completions_streams_tool_call_chunks_from_codex_sse() {
         ":\"Paris\"}"
     );
     assert_eq!(chunks[4]["choices"][0]["finish_reason"], "tool_calls");
-}
-
-async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
-    )
-    .bind("admin_1")
-    .bind("hash")
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind("admin_1")
-    .bind("2999-01-01T00:00:00Z")
-    .bind(now)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
-async fn response_sse_data(response: axum::response::Response) -> Vec<String> {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    String::from_utf8(bytes.to_vec())
-        .unwrap()
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: ").map(ToString::to_string))
-        .collect()
 }

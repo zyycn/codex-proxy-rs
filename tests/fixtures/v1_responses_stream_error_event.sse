@@ -1,0 +1,3 @@
+event: error
+data: {"error":{"message":"upstream stream failed","type":"server_error","code":"upstream_error"}}
+

@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use codex_proxy_rs::translation::openai_to_codex::{
+use codex_proxy_rs::codex::protocol::openai_to_codex::{
     translate_chat_to_codex, ChatCompletionRequest, ChatMessage,
 };
 

@@ -15,7 +15,7 @@ use tokio_tungstenite::{
     },
 };
 
-use codex_proxy_rs::codex::{
+use codex_proxy_rs::codex::transport::{
     client::{build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext},
     types::CodexResponsesRequest,
     websocket::{ensure_http_sse_supported, transport_for_request, CodexTransport},
@@ -113,7 +113,7 @@ async fn previous_response_id_should_use_websocket_transport() {
     let client = CodexBackendClient::new(
         build_reqwest_client(false).unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::fingerprint::model::Fingerprint::default_for_tests(),
+        codex_proxy_rs::codex::fingerprint::model::Fingerprint::default_for_tests(),
     );
 
     let response = client
@@ -174,7 +174,7 @@ async fn websocket_handshake_429_should_surface_as_upstream_error_before_body_is
     let client = CodexBackendClient::new(
         build_reqwest_client(false).unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::fingerprint::model::Fingerprint::default_for_tests(),
+        codex_proxy_rs::codex::fingerprint::model::Fingerprint::default_for_tests(),
     );
 
     let error = client
@@ -266,7 +266,7 @@ async fn websocket_success_should_capture_handshake_headers_and_rate_limit_heade
     let client = CodexBackendClient::new(
         build_reqwest_client(false).unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::fingerprint::model::Fingerprint::default_for_tests(),
+        codex_proxy_rs::codex::fingerprint::model::Fingerprint::default_for_tests(),
     );
 
     let response = client

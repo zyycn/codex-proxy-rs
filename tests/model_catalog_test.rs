@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use codex_proxy_rs::{
-    config::ModelConfig,
-    models::{
+    codex::models::{
         catalog::{
             BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy, ModelCatalog,
             ModelPlanSnapshot, ParsedModelName,
         },
         repository::ModelSnapshotRepository,
     },
+    config::ModelConfig,
     storage::db::connect_sqlite,
 };
 

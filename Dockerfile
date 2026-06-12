@@ -14,10 +14,9 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/codex-proxy-rs /usr/local/bin/codex-proxy-rs
-COPY config ./config
+COPY config.yaml ./config.yaml
 COPY migrations ./migrations
 
-ENV RUST_LOG=codex_proxy_rs=info,tower_http=info
 EXPOSE 8080
 
 CMD ["codex-proxy-rs"]

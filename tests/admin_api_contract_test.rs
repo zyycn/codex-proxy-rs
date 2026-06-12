@@ -1,12 +1,13 @@
 use axum::{
+    body::to_bytes,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde_json::{json, Value};
 
 use codex_proxy_rs::{
-    http::admin::{AdminEnvelope, AdminPageEnvelope, AdminResponse},
-    pagination::Page,
+    http::admin::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
+    utils::pagination::Page,
 };
 
 #[test]
@@ -66,4 +67,28 @@ fn admin_error_body_uses_null_data() {
     let value = serde_json::to_value(body).unwrap();
 
     assert_eq!(value["data"], Value::Null);
+}
+
+#[tokio::test]
+async fn admin_error_into_response_uses_admin_envelope() {
+    let response: Response = AdminError::new(
+        StatusCode::UNAUTHORIZED,
+        40101,
+        "Admin login required",
+        "req_1",
+    )
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "code": 40101,
+            "message": "Admin login required",
+            "data": null,
+            "requestId": "req_1"
+        })
+    );
 }

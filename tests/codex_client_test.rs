@@ -5,12 +5,12 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
-    codex::{
+    codex::fingerprint::model::Fingerprint,
+    codex::transport::{
         client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
         types::CodexResponsesRequest,
         usage::TokenUsage,
     },
-    fingerprint::model::Fingerprint,
 };
 
 #[tokio::test]

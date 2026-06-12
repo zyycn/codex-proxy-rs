@@ -1,0 +1,9 @@
+event: response.output_text.delta
+data: {"delta":"你好，我是"}
+
+event: response.output_text.delta
+data: {"delta":"一个中文助手。"}
+
+event: response.completed
+data: {"response":{"id":"resp_text","object":"response","status":"completed","output":[],"usage":{"input_tokens":6,"output_tokens":4}}}
+

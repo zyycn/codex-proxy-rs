@@ -1,0 +1,6 @@
+event: response.output_item.done
+data: {"item":{"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"来自 done item"}]}}
+
+event: response.completed
+data: {"response":{"id":"resp_item","object":"response","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":3}}}
+

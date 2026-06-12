@@ -1,23 +1,26 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::json;
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
     app::build_router,
+    app::state::AppState,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    state::AppState,
     storage::db::connect_sqlite,
 };
+
+mod common;
+
+use common::{response_json, seed_admin_session};
 
 fn test_config(database_url: String) -> AppConfig {
     let mut aliases = BTreeMap::new();
@@ -169,33 +172,4 @@ async fn admin_settings_should_return_only_in_scope_runtime_fields() {
             "{removed_key} must stay out of the Rust settings API"
         );
     }
-}
-
-async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
-    )
-    .bind("admin_1")
-    .bind("hash")
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind("admin_1")
-    .bind("2999-01-01T00:00:00Z")
-    .bind(now)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
