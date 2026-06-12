@@ -3,13 +3,6 @@ services:
     build: .
     ports:
       - "8080:8080"
-    environment:
-      CPRS_HOST: 0.0.0.0
-      CPRS_PORT: 8080
-      CPRS_DATABASE_URL: sqlite://data/codex-proxy-rs.sqlite
-      CPRS_MASTER_KEY_FILE: data/master.key
-      CPRS_API_KEY_PEPPER_FILE: data/api-key-pepper.key
-      RUST_LOG: codex_proxy_rs=info,tower_http=info
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

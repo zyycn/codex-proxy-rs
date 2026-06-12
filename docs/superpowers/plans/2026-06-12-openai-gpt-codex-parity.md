@@ -43,7 +43,7 @@ Immediate priority after this audit:
 ### Task 1: Chat Completions Translation
 
 **Files:**
-- Modify: `src/translation/openai_to_codex.rs`
+- Modify: `src/codex/protocol/openai_to_codex.rs`
 - Modify: `src/codex/types.rs`
 - Test: `tests/routes_chat_test.rs`
 
@@ -57,7 +57,7 @@ Immediate priority after this audit:
 **Files:**
 - Modify: `src/app.rs`
 - Modify: `src/http/v1.rs`
-- Modify: `src/translation/codex_to_openai.rs`
+- Modify: `src/codex/protocol/codex_to_openai.rs`
 - Test: `tests/chat_completions_route_test.rs`
 
 - [x] Write failing route tests proving `/v1/chat/completions` sends translated Codex payloads and returns OpenAI chat JSON/SSE.
@@ -98,8 +98,8 @@ Immediate priority after this audit:
 
 **Files:**
 - Modify: `src/http/v1.rs`
-- Modify: `src/accounts/pool.rs`
-- Modify: `src/accounts/repository.rs`
+- Modify: `src/codex/accounts/pool.rs`
+- Modify: `src/codex/accounts/repository.rs`
 - Test: `tests/v1_upstream_route_test.rs`
 - Test: `tests/account_pool_scheduling_test.rs`
 
@@ -123,8 +123,8 @@ Immediate priority after this audit:
 ### Task 6: Model Catalog Refresh
 
 **Files:**
-- Modify: `src/models/catalog.rs`
-- Create: `src/models/repository.rs`
+- Modify: `src/codex/models/catalog.rs`
+- Create: `src/codex/models/repository.rs`
 - Modify: `src/http/v1.rs`
 - Test: `tests/model_catalog_test.rs`
 
@@ -140,8 +140,8 @@ Immediate priority after this audit:
 
 **Files:**
 - Modify: `src/http/admin.rs`
-- Modify: `src/accounts/repository.rs`
-- Modify: `src/cookies/repository.rs`
+- Modify: `src/codex/accounts/repository.rs`
+- Modify: `src/codex/cookies/repository.rs`
 - Test: `tests/admin_accounts_route_test.rs`
 - Test: `tests/admin_api_keys_route_test.rs`
 

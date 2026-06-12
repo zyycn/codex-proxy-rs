@@ -1,6 +1,6 @@
 use std::fs;
 
-use codex_proxy_rs::auth::cli_import::{parse_cli_auth_json, read_cli_auth_from_home};
+use codex_proxy_rs::codex::oauth::{parse_cli_auth_json, read_cli_auth_from_home};
 
 #[test]
 fn parse_cli_auth_json_should_accept_codex_cli_tokens() {

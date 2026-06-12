@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::api_key::{ApiKeyHasher, GeneratedClientApiKey},
-    pagination::{decode_cursor, encode_cursor, Page},
+    utils::pagination::{decode_cursor, encode_cursor, Page},
 };
 
 #[derive(Debug, Error)]

@@ -1,9 +1,9 @@
 use codex_proxy_rs::{
-    codex::client::build_reqwest_client,
-    fingerprint::{
+    codex::fingerprint::{
         repository::FingerprintRepository,
         updater::{FingerprintUpdater, CODEX_DESKTOP_UPDATE_SOURCE},
     },
+    codex::transport::client::build_reqwest_client,
     storage::db::connect_sqlite,
 };
 use wiremock::{

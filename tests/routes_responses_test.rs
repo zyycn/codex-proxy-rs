@@ -10,19 +10,19 @@ use tower::ServiceExt;
 
 use codex_proxy_rs::{
     app::build_router,
+    app::state::AppState,
     auth::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    codex::models::{
+        catalog::{BackendModelEntry, ModelPlanSnapshot},
+        repository::ModelSnapshotRepository,
+    },
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    crypto::SecretBox,
-    models::{
-        catalog::{BackendModelEntry, ModelPlanSnapshot},
-        repository::ModelSnapshotRepository,
-    },
-    state::AppState,
     storage::db::connect_sqlite,
+    utils::crypto::SecretBox,
 };
 
 fn test_config() -> AppConfig {

@@ -1,0 +1,3 @@
+event: response.failed
+data: {"response":{"id":"resp_failed","object":"response","status":"failed","error":{"code":"rate_limit_exceeded","message":"quota reached"}}}
+

@@ -1,6 +1,6 @@
 use codex_proxy_rs::{
-    codex::headers::build_codex_headers,
-    fingerprint::{model::Fingerprint, updater::parse_update_manifest},
+    codex::fingerprint::{model::Fingerprint, updater::parse_update_manifest},
+    codex::transport::headers::build_codex_headers,
 };
 
 #[test]

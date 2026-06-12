@@ -2,7 +2,8 @@ use chrono::Utc;
 use secrecy::SecretString;
 
 use codex_proxy_rs::{
-    accounts::{
+    app::state::AppState,
+    codex::accounts::{
         model::AccountStatus,
         repository::{NewAccount, UsageDelta},
     },
@@ -11,9 +12,8 @@ use codex_proxy_rs::{
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
-    crypto::SecretBox,
-    state::AppState,
     storage::db::connect_sqlite,
+    utils::crypto::SecretBox,
 };
 
 fn test_config(database_url: String) -> AppConfig {
@@ -80,7 +80,7 @@ async fn app_state_should_restore_account_pool_from_sqlite_accounts() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let secret_box = SecretBox::new([31u8; 32]);
-    let repo = codex_proxy_rs::accounts::repository::AccountRepository::new(
+    let repo = codex_proxy_rs::codex::accounts::repository::AccountRepository::new(
         pool.clone(),
         secret_box.clone(),
     );
@@ -114,10 +114,10 @@ async fn app_state_should_restore_account_pool_from_sqlite_accounts() {
 
     assert_eq!(restored, 1);
     let acquired = state
-        .account_pool()
-        .lock()
+        .services
+        .accounts
+        .acquire_runtime_account("gpt-5.5")
         .await
-        .acquire("gpt-5.5")
         .unwrap();
     assert_eq!(acquired.id, "acct_restored");
     assert_eq!(acquired.access_token, "access-secret");

@@ -1,4 +1,4 @@
-use codex_proxy_rs::crypto::SecretBox;
+use codex_proxy_rs::utils::crypto::SecretBox;
 use secrecy::{ExposeSecret, SecretString};
 
 #[test]

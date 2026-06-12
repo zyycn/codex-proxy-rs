@@ -11,12 +11,9 @@ use chrono::{Duration as ChronoDuration, Utc};
 use tokio::time::sleep;
 
 use codex_proxy_rs::{
-    accounts::model::{Account, AccountStatus},
-    auth::{
-        refresh::{
-            RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger, TokenRefresher,
-        },
-        token::TokenPair,
+    codex::accounts::model::{Account, AccountStatus},
+    codex::oauth::{
+        RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger, TokenPair, TokenRefresher,
     },
 };
 

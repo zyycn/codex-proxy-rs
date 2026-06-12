@@ -6,7 +6,7 @@
 
 **Architecture:** Create a new Rust service at `/home/zyy/桌面/Codes/codex-proxy-rs`. The only upstream is `https://chatgpt.com/backend-api`; remove OpenAI official API key passthrough, Anthropic, Gemini, custom providers, Ollama, Electron, and per-account proxy assignment. Treat Codex Desktop impersonation as a first-class subsystem: locked `reqwest` + `rustls`, exact headers, account-scoped Cookie replay, and fingerprint auto-update. Keep `src/main.rs` as the binary/bootstrap layer and keep reusable logic in `src/lib.rs` modules with typed `thiserror` errors.
 
-**Tech Stack:** Rust 2021, `tokio`, `axum`, `tower-http`, `sqlx` + SQLite WAL, `config`, `dotenvy`, `serde`, `serde_json`, `serde_yaml`, `tracing`, `tracing-subscriber`, rotating file logging, `argon2`, `rand`, `uuid`, `chrono`, `thiserror`, `anyhow` only in `main.rs` and tests, `base64`, `aes-gcm`, `hmac`, `sha2`, `secrecy`, `zeroize`, `wiremock`, `insta`, `tempfile`. Use the latest stable crate versions at implementation time except dependencies intentionally pinned for Codex Desktop TLS fingerprint parity: `reqwest = 0.12.28` and `rustls = 0.23.36` until a fingerprint review proves a newer pair is equivalent.
+**Tech Stack:** Rust 2021, `tokio`, `axum`, `tower-http`, `sqlx` + SQLite WAL, `config`, `serde`, `serde_json`, `serde_yaml`, `tracing`, `tracing-subscriber`, rotating file logging, `argon2`, `rand`, `uuid`, `chrono`, `thiserror`, `anyhow` only in `main.rs` and tests, `base64`, `aes-gcm`, `hmac`, `sha2`, `secrecy`, `zeroize`, `wiremock`, `insta`, `tempfile`. Use the latest stable crate versions at implementation time except dependencies intentionally pinned for Codex Desktop TLS fingerprint parity: `reqwest = 0.12.28` and `rustls = 0.23.36` until a fingerprint review proves a newer pair is equivalent.
 
 **Execution Mode:** Subagent-Driven. Execute one task at a time with implementation, spec review, and code-quality review before moving to the next task. After each completed task, update this plan's checkbox state and `docs/implementation-status.md` before committing.
 
@@ -50,7 +50,7 @@ These adjustments come from the `rust-best-practices` review and should be treat
 - Hash admin passwords with Argon2id. Hash high-entropy client API keys with HMAC-SHA256 using a server-side pepper, not with the API key display name.
 - Prefer concrete service structs over early `dyn Trait` abstraction. Use generics for test seams where useful; introduce trait objects only at boundaries that actually need runtime polymorphism.
 - Keep shared runtime state in an `Arc<AppServices>` container that holds cheap-clone handles (`SqlitePool`, `reqwest::Client`, repositories, secret box, config). Avoid mutable globals and avoid `std::sync::Mutex` across async `.await`; use SQLite, channels, or `tokio::sync` primitives.
-- Use the `config` crate with `config/default.yaml`, optional `config/local.yaml`, and `CPRS_*` environment overrides. Keep `.env` support via `dotenvy` for local development only.
+- Use the `config` crate with root `config.yaml` plus optional root `local.yaml` or `local.yml`. Do not use environment-variable overrides for runtime config.
 - Prefer borrowed parameters in public APIs (`&str`, `&[T]`, references to request structs) unless ownership transfer is part of the domain model.
 - Keep tests descriptive and targeted. Unit tests live beside modules for private behavior; integration tests under `tests/` cover route and storage behavior. Use `insta` only for structured payload snapshots that are worth reviewing.
 - Add sparse Chinese comments only where the reason is not obvious from names or types. Good targets are protocol/security/business invariants: TLS fingerprint pinning, Codex Desktop header parity, account-scoped Cookie replay, admin-session versus client-API-key boundaries, and token refresh invariants. Do not comment every line, do not restate obvious code, and do not leave untracked TODO comments.
@@ -193,7 +193,7 @@ codex-proxy-rs/
   Cargo.toml
   rust-toolchain.toml
   README.md
-  config/default.yaml
+  config.yaml
   docs/api.md
   docs/dependency-policy.md
   docs/implementation-status.md
@@ -305,7 +305,7 @@ Expected: `git status --short` prints no tracked files yet.
 Run these commands so non-fingerprint dependencies resolve to the latest stable versions available at implementation time:
 
 ```bash
-cargo add anyhow aes-gcm argon2 async-stream base64 bytes dotenvy futures-util hmac http http-body-util rand serde_json serde_yaml sha2 thiserror tracing tracing-appender uuid zeroize
+cargo add anyhow aes-gcm argon2 async-stream base64 bytes futures-util hmac http http-body-util rand serde_json serde_yaml sha2 thiserror tracing tracing-appender uuid zeroize
 cargo add axum --features macros,ws
 cargo add chrono --features serde
 cargo add config
@@ -340,7 +340,6 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 config = "0.15"
-dotenvy = "0.15"
 futures-util = "0.3"
 hmac = "0.12"
 http = "1"
@@ -715,7 +714,7 @@ git commit -m "docs: define api contracts and status codes"
 ### Task 2: Configuration and Application State
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/config/default.yaml`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/config.yaml`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/config.rs`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/state.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
@@ -875,7 +874,7 @@ impl AppState {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/config/default.yaml`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/config.yaml`:
 
 ```yaml
 server:
@@ -1739,8 +1738,8 @@ git commit -m "feat: add paginated event logs"
 ### Task 6: Codex Fingerprint, Header Generation, and TLS Client
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/mod.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/model.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/mod.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/model.rs`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/mod.rs`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/headers.rs`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/client.rs`
@@ -1753,8 +1752,8 @@ Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`:
 
 ```rust
 use codex_proxy_rs::{
-    codex::headers::build_codex_headers,
-    fingerprint::model::Fingerprint,
+    codex::transport::headers::build_codex_headers,
+    codex::fingerprint::model::Fingerprint,
 };
 
 #[test]
@@ -1791,21 +1790,21 @@ pub mod codex;
 pub mod config;
 pub mod crypto;
 pub mod error;
-pub mod fingerprint;
+
 pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/mod.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/mod.rs`:
 
 ```rust
 pub mod model;
 pub mod updater;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/model.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/model.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -1860,7 +1859,7 @@ Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/headers.rs`:
 ```rust
 use std::collections::BTreeMap;
 
-use crate::fingerprint::model::Fingerprint;
+use crate::codex::fingerprint::model::Fingerprint;
 
 pub fn build_codex_headers(
     fp: &Fingerprint,
@@ -1907,7 +1906,7 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error
 Create empty module files:
 
 ```bash
-touch src/fingerprint/updater.rs src/codex/sse.rs src/codex/types.rs src/codex/usage.rs src/codex/websocket.rs
+touch src/codex/fingerprint/updater.rs src/codex/sse.rs src/codex/types.rs src/codex/usage.rs src/codex/websocket.rs
 ```
 
 - [x] **Step 4: Verify headers**
@@ -1924,7 +1923,7 @@ Expected: test passes; `cargo tree` shows `reqwest v0.12.28` and `rustls v0.23.3
 - [x] **Step 5: Commit TLS and headers foundation**
 
 ```bash
-git add Cargo.toml src/codex src/fingerprint src/lib.rs tests/codex_headers_test.rs
+git add Cargo.toml src/codex src/codex/fingerprint src/lib.rs tests/codex_headers_test.rs
 git commit -m "feat: add codex tls client and headers"
 ```
 
@@ -1933,9 +1932,9 @@ git commit -m "feat: add codex tls client and headers"
 ### Task 7: Account Cookie Persistence
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/mod.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/jar.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/repository.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/mod.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/jar.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/repository.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/cookie_store_test.rs`
 
@@ -1944,7 +1943,7 @@ git commit -m "feat: add codex tls client and headers"
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/cookie_store_test.rs`:
 
 ```rust
-use codex_proxy_rs::cookies::jar::CookieJar;
+use codex_proxy_rs::codex::cookies::jar::CookieJar;
 
 #[test]
 fn cookie_jar_captures_and_replays_account_scoped_cookies() {
@@ -1978,21 +1977,21 @@ pub mod config;
 pub mod cookies;
 pub mod crypto;
 pub mod error;
-pub mod fingerprint;
+
 pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/mod.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/mod.rs`:
 
 ```rust
 pub mod jar;
 pub mod repository;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/jar.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/jar.rs`:
 
 ```rust
 use std::collections::HashMap;
@@ -2041,7 +2040,7 @@ impl CookieJar {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/cookies/repository.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/cookies/repository.rs`:
 
 ```rust
 #[derive(Debug, Clone)]
@@ -2061,7 +2060,7 @@ Expected: pass.
 - [x] **Step 5: Commit cookies**
 
 ```bash
-git add src/cookies src/lib.rs tests/cookie_store_test.rs
+git add src/codex/cookies src/lib.rs tests/cookie_store_test.rs
 git commit -m "feat: add account scoped cookie jar"
 ```
 
@@ -2070,14 +2069,14 @@ git commit -m "feat: add account scoped cookie jar"
 ### Task 8: Account Model, Pool, and Refresh Scheduler Compatibility
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/mod.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/model.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/pool.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/repository.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/lifecycle.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/refresh.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/token.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/oauth.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/mod.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/model.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/pool.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/repository.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/lifecycle.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/refresh.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/token.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/oauth.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/refresh_scheduler_test.rs`
 
@@ -2086,7 +2085,7 @@ git commit -m "feat: add account scoped cookie jar"
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/refresh_scheduler_test.rs`:
 
 ```rust
-use codex_proxy_rs::accounts::{
+use codex_proxy_rs::codex::accounts::{
     model::{Account, AccountStatus},
     pool::AccountPool,
 };
@@ -2120,21 +2119,21 @@ Expected: compile failure because accounts module does not exist.
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
 ```rust
-pub mod accounts;
+
 pub mod auth;
 pub mod codex;
 pub mod config;
 pub mod cookies;
 pub mod crypto;
 pub mod error;
-pub mod fingerprint;
+
 pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/mod.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/mod.rs`:
 
 ```rust
 pub mod lifecycle;
@@ -2143,7 +2142,7 @@ pub mod pool;
 pub mod repository;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/model.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/model.rs`:
 
 ```rust
 use chrono::Utc;
@@ -2193,12 +2192,12 @@ impl Account {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/pool.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/pool.rs`:
 
 ```rust
 use std::collections::BTreeMap;
 
-use crate::accounts::model::{Account, AccountStatus};
+use crate::codex::accounts::model::{Account, AccountStatus};
 
 #[derive(Debug, Default)]
 pub struct AccountPool {
@@ -2220,14 +2219,14 @@ impl AccountPool {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/repository.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/repository.rs`:
 
 ```rust
 #[derive(Debug, Clone)]
 pub struct AccountRepository;
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/accounts/lifecycle.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/accounts/lifecycle.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2241,7 +2240,7 @@ pub enum AccountLifecycleEvent {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/refresh.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/refresh.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy)]
@@ -2251,7 +2250,7 @@ pub struct RefreshPolicy {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/token.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/token.rs`:
 
 ```rust
 #[derive(Debug, Clone)]
@@ -2261,7 +2260,7 @@ pub struct TokenPair {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/auth/oauth.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/oauth/oauth.rs`:
 
 ```rust
 #[derive(Debug, Clone)]
@@ -2295,7 +2294,7 @@ Expected: pass.
 - [x] **Step 5: Commit account foundation**
 
 ```bash
-git add src/accounts src/auth src/lib.rs tests/refresh_scheduler_test.rs
+git add src/codex/accounts src/auth src/lib.rs tests/refresh_scheduler_test.rs
 git commit -m "feat: add account pool foundation"
 ```
 
@@ -2304,10 +2303,10 @@ git commit -m "feat: add account pool foundation"
 ### Task 9: Translation Layer for OpenAI Chat and Codex Responses
 
 **Files:**
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/mod.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/schema.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/openai_to_codex.rs`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/codex_to_openai.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/mod.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/schema.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/openai_to_codex.rs`
+- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/codex_to_openai.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/types.rs`
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_chat_test.rs`
@@ -2317,7 +2316,7 @@ git commit -m "feat: add account pool foundation"
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_chat_test.rs`:
 
 ```rust
-use codex_proxy_rs::translation::openai_to_codex::{translate_chat_to_codex, ChatCompletionRequest, ChatMessage};
+use codex_proxy_rs::codex::protocol::openai_to_codex::{translate_chat_to_codex, ChatCompletionRequest, ChatMessage};
 
 #[test]
 fn chat_completion_translates_to_codex_response_request() {
@@ -2352,22 +2351,22 @@ Expected: compile failure because translation module does not exist.
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
 ```rust
-pub mod accounts;
+
 pub mod auth;
 pub mod codex;
 pub mod config;
 pub mod cookies;
 pub mod crypto;
 pub mod error;
-pub mod fingerprint;
+
 pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
-pub mod translation;
+
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/mod.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/mod.rs`:
 
 ```rust
 pub mod codex_to_openai;
@@ -2395,13 +2394,13 @@ pub struct CodexResponsesRequest {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/openai_to_codex.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/openai_to_codex.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{codex::types::CodexResponsesRequest, error::{AppError, AppResult}};
+use crate::{codex::transport::types::CodexResponsesRequest, error::{AppError, AppResult}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionRequest {
@@ -2437,7 +2436,7 @@ pub fn translate_chat_to_codex(req: ChatCompletionRequest) -> AppResult<CodexRes
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/codex_to_openai.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/codex_to_openai.rs`:
 
 ```rust
 use serde_json::{json, Value};
@@ -2454,7 +2453,7 @@ pub fn openai_error(message: &str, code: &str) -> Value {
 }
 ```
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/translation/schema.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/protocol/schema.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2478,7 +2477,7 @@ Expected: pass.
 - [x] **Step 5: Commit translation layer**
 
 ```bash
-git add src/translation src/codex/types.rs src/lib.rs tests/routes_chat_test.rs
+git add src/codex/protocol src/codex/types.rs src/lib.rs tests/routes_chat_test.rs
 git commit -m "feat: add openai to codex translation"
 ```
 
@@ -2550,7 +2549,7 @@ Expected: compile failure because app/http modules do not exist.
 Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/lib.rs`:
 
 ```rust
-pub mod accounts;
+
 pub mod app;
 pub mod auth;
 pub mod codex;
@@ -2558,13 +2557,13 @@ pub mod config;
 pub mod cookies;
 pub mod crypto;
 pub mod error;
-pub mod fingerprint;
+
 pub mod http;
 pub mod logs;
 pub mod pagination;
 pub mod state;
 pub mod storage;
-pub mod translation;
+
 ```
 
 Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/app.rs`:
@@ -2609,7 +2608,7 @@ Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/http/v1.rs`:
 ```rust
 use axum::{http::StatusCode, response::IntoResponse, Json};
 
-use crate::translation::codex_to_openai::openai_error;
+use crate::codex::protocol::codex_to_openai::openai_error;
 
 pub async fn responses() -> impl IntoResponse {
     (
@@ -2723,7 +2722,7 @@ Modify `/home/zyy/桌面/Codes/codex-proxy-rs/src/http/v1.rs`:
 use axum::{http::{HeaderMap, StatusCode}, response::IntoResponse, Json};
 use serde::Deserialize;
 
-use crate::translation::codex_to_openai::openai_error;
+use crate::codex::protocol::codex_to_openai::openai_error;
 
 #[derive(Deserialize)]
 struct ResponsesBody {
@@ -2774,8 +2773,8 @@ git commit -m "feat: enforce codex-only upstream routing"
 ### Task 12: Fingerprint Auto-Update
 
 **Files:**
-- Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/updater.rs`
-- Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/model.rs`
+- Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/updater.rs`
+- Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/model.rs`
 - Test: `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`
 
 - [x] **Step 1: Add failing updater parse test**
@@ -2783,7 +2782,7 @@ git commit -m "feat: enforce codex-only upstream routing"
 Append to `/home/zyy/桌面/Codes/codex-proxy-rs/tests/codex_headers_test.rs`:
 
 ```rust
-use codex_proxy_rs::fingerprint::updater::parse_update_manifest;
+use codex_proxy_rs::codex::fingerprint::updater::parse_update_manifest;
 
 #[test]
 fn update_manifest_updates_app_version_and_build_number() {
@@ -2806,7 +2805,7 @@ Expected: compile failure because `parse_update_manifest` does not exist.
 
 - [x] **Step 3: Implement updater parser**
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/fingerprint/updater.rs`:
+Create `/home/zyy/桌面/Codes/codex-proxy-rs/src/codex/fingerprint/updater.rs`:
 
 ```rust
 use serde::Deserialize;
@@ -2852,7 +2851,7 @@ Expected: pass.
 - [x] **Step 5: Commit fingerprint updater parser**
 
 ```bash
-git add src/fingerprint/updater.rs tests/codex_headers_test.rs
+git add src/codex/fingerprint/updater.rs tests/codex_headers_test.rs
 git commit -m "feat: parse codex desktop fingerprint updates"
 ```
 
@@ -2862,7 +2861,6 @@ git commit -m "feat: parse codex desktop fingerprint updates"
 
 **Files:**
 - Modify: `/home/zyy/桌面/Codes/codex-proxy-rs/README.md`
-- Create: `/home/zyy/桌面/Codes/codex-proxy-rs/.env.example`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/Dockerfile`
 - Create: `/home/zyy/桌面/Codes/codex-proxy-rs/docker-compose.yml`
 
@@ -2901,18 +2899,12 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 - Codex account tokens are internal upstream credentials.
 ```
 
-- [x] **Step 2: Add environment example**
+- [x] **Step 2: Document local YAML overrides**
 
-Create `/home/zyy/桌面/Codes/codex-proxy-rs/.env.example`:
+Document that runtime config loads from root `config.yaml`, then optional root
+`local.yaml` or `local.yml`. Local overrides stay untracked and replace the old
+environment-variable override path.
 
-```dotenv
-CPRS_HOST=127.0.0.1
-CPRS_PORT=8080
-CPRS_DATABASE_URL=sqlite://data/codex-proxy-rs.sqlite
-CPRS_MASTER_KEY_FILE=data/master.key
-CPRS_API_KEY_PEPPER_FILE=data/api-key-pepper.key
-RUST_LOG=codex_proxy_rs=info,tower_http=info
-```
 
 - [x] **Step 3: Verify full test suite and lint**
 
@@ -2944,7 +2936,7 @@ Expected response:
 - [x] **Step 5: Commit docs and runtime files**
 
 ```bash
-git add README.md .env.example Dockerfile docker-compose.yml
+git add README.md config.yaml Dockerfile docker-compose.yml
 git commit -m "docs: document codex-proxy-rs scope"
 ```
 
@@ -2979,7 +2971,7 @@ The Rust project has no legacy compatibility requirement, but the in-scope behav
 ### Keep and Rebuild Natively
 
 - [x] **HTTP auth boundary:** restore a real `src/http/auth.rs` module instead of scattered header checks. It validates `Bearer cpr_...` client API keys for `/v1/*`, validates admin session cookies for `/admin/*`, rejects cross-use in both directions, and returns the documented OpenAI/admin response families.
-- [x] **Account SQLite repository:** implement `src/accounts/repository.rs` for encrypted access/refresh tokens, account metadata, quota JSON, usage counters, labels, status transitions, pagination, batch-safe mutations, metadata-only auth status reads, and account-wide delete for logout. Do not add TypeScript JSON migration or legacy import shims.
+- [x] **Account SQLite repository:** implement `src/codex/accounts/repository.rs` for encrypted access/refresh tokens, account metadata, quota JSON, usage counters, labels, status transitions, pagination, batch-safe mutations, metadata-only auth status reads, and account-wide delete for logout. Do not add TypeScript JSON migration or legacy import shims.
 - [ ] **Admin account routes:** rebuild `/auth/status`, `/auth/accounts`, import/export, batch delete/status, health-check, per-account refresh, label, delete, reset usage, quota, Cookie CRUD, and quota warnings as `/admin/*` endpoints with admin envelopes and cursor pagination where a list is returned. Encrypted import, manual token add, CLI import, paginated sanitized list, native/Sub2API export, Sub2API import marking, label/status/delete, batch delete/status, Cookie CRUD, health/probe, refresh, quota, reset usage, admin auth status, and admin logout are complete. Quota warnings remain.
 - [x] **Login routes:** implement OAuth PKCE login-start/code-relay/callback, device-login/device-poll, CLI auth import, manual access-token import, and logout as account-login flows. CLI auth import, validated manual token import, device login/poll, OAuth PKCE login-start/code-relay/callback, admin-session-gated auth status, and logout are complete. Keep this separate from admin password login and client API key creation.
 - [x] **Client API key management:** implement admin CRUD for local client API keys: list/create/delete/batch-delete/label/status/export/import. Create/list/status/delete/batch-delete/label/export/import and `/v1/*` SQLite verification are complete. Remove provider/model binding semantics from the TypeScript version; Rust client API keys authorize only local `/v1/*` access.
@@ -3038,7 +3030,7 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 - Non-fingerprint dependencies are resolved from current stable crate releases at implementation time and `Cargo.lock` is committed.
 - `reqwest` and `rustls` remain explicitly pinned until a separate TLS fingerprint review approves newer versions.
 - Library modules use `thiserror` error enums. `anyhow` is limited to `src/main.rs`, tests, and setup utilities.
-- Runtime config loads from `config/default.yaml`, optional local config, and `CPRS_*` environment variables.
+- Runtime config loads from root `config.yaml`, then optional root `local.yaml` or `local.yml`.
 - In-memory upstream secrets use `secrecy` types, and persisted access tokens, refresh tokens, Cookies, master key material, and API key pepper material are encrypted or stored outside plaintext database fields.
 - `/v1/*` and `/admin/*` response envelopes and status codes match `docs/api.md` and `docs/status-codes.md`.
 - `/v1/*` never uses the admin/frontend `code/message/data/requestId` envelope; it keeps OpenAI-compatible response and error bodies.

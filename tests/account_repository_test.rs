@@ -2,12 +2,12 @@ use chrono::{Duration, Utc};
 use secrecy::{ExposeSecret, SecretString};
 
 use codex_proxy_rs::{
-    accounts::{
+    codex::accounts::{
         model::AccountStatus,
         repository::{AccountRepository, NewAccount, TokenUpdate, UsageDelta},
     },
-    crypto::SecretBox,
     storage::db::connect_sqlite,
+    utils::crypto::SecretBox,
 };
 
 #[tokio::test]

@@ -1,0 +1,18 @@
+event: response.reasoning_summary_text.delta
+data: {"delta":"thinking "}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_abc","name":"lookup"}}
+
+event: response.function_call_arguments.delta
+data: {"item_id":"item_1","delta":"{\"city\""}
+
+event: response.function_call_arguments.delta
+data: {"item_id":"item_1","delta":":\"Paris\"}"}
+
+event: response.function_call_arguments.done
+data: {"item_id":"item_1","arguments":"{\"city\":\"Paris\"}"}
+
+event: response.completed
+data: {"response":{"id":"resp_chat","object":"response","status":"completed","usage":{"input_tokens":5,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":7}}}}
+

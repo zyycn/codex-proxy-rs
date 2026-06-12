@@ -1,0 +1,11 @@
+{
+  "type": "response.completed",
+  "response": {
+    "id": "resp_fixture",
+    "object": "response",
+    "usage": {
+      "input_tokens": 3,
+      "output_tokens": 1
+    }
+  }
+}

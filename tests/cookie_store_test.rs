@@ -1,9 +1,9 @@
 use chrono::Utc;
 
 use codex_proxy_rs::{
-    cookies::{jar::CookieJar, repository::CookieRepository},
-    crypto::SecretBox,
+    codex::cookies::{jar::CookieJar, repository::CookieRepository},
     storage::db::connect_sqlite,
+    utils::crypto::SecretBox,
 };
 
 #[test]

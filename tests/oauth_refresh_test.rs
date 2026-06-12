@@ -3,9 +3,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use codex_proxy_rs::auth::{
-    oauth::{OAuthClient, OAuthConfig, OAuthError, OpenAiOAuthRefresher},
-    refresh::TokenRefresher,
+use codex_proxy_rs::codex::oauth::{
+    OAuthClient, OAuthConfig, OAuthError, OpenAiOAuthRefresher, TokenRefresher,
 };
 
 #[tokio::test]
