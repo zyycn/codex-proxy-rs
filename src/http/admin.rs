@@ -4,7 +4,7 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{
-        header::{HeaderValue, SET_COOKIE},
+        header::{HeaderValue, HOST, LOCATION, SET_COOKIE},
         HeaderMap, StatusCode,
     },
     response::{IntoResponse, Response},
@@ -33,7 +33,7 @@ use crate::{
     auth::{
         admin_session::verify_admin_password,
         cli_import::{default_codex_home, read_cli_auth_from_home},
-        oauth::{DeviceCode, OAuthError},
+        oauth::{DeviceCode, OAuthClient, OAuthConfig, OAuthError, PkceSession},
         refresh::RefreshFailure,
         token::TokenPair,
     },
@@ -262,6 +262,34 @@ pub struct AdminAuthDevicePollData {
     pub success: bool,
     pub pending: bool,
     pub code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthLoginStartData {
+    pub auth_url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthCodeRelayRequest {
+    pub callback_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthCodeRelayData {
+    pub success: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1146,6 +1174,196 @@ pub async fn auth_device_poll(
             }
             oauth_error_response(error, request_id, "Device authorization failed")
         }
+    }
+}
+
+pub async fn auth_login_start(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let return_host = request_host(&headers, state.config());
+    let login = state
+        .oauth_sessions()
+        .lock()
+        .await
+        .start_login(&return_host, &OAuthConfig::codex_default());
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            AdminAuthLoginStartData {
+                auth_url: login.auth_url,
+                state: login.state,
+            },
+            request_id,
+        ),
+    )
+    .into_response()
+}
+
+pub async fn auth_code_relay(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<AdminAuthCodeRelayRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+
+    let Ok((code, oauth_state)) = parse_callback_url(&payload.callback_url) else {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Invalid OAuth callback URL", (), request_id),
+        )
+        .into_response();
+    };
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(oauth_client) = state.oauth_client() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "OAuth client is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+
+    let session = match acquire_pkce_session(&state, &oauth_state, &request_id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(AdminAuthCodeRelayData { success: true }, request_id),
+            )
+            .into_response();
+        }
+        Err(response) => return response,
+    };
+    match exchange_pkce_session(
+        &state,
+        &repo,
+        oauth_client.as_ref(),
+        &oauth_state,
+        &code,
+        session,
+        &request_id,
+    )
+    .await
+    {
+        Ok(_) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AdminAuthCodeRelayData { success: true }, request_id),
+        )
+        .into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn auth_callback(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<AdminAuthCallbackQuery>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    if query.error.is_some() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                query
+                    .error_description
+                    .unwrap_or_else(|| "OAuth error".to_string()),
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let (Some(code), Some(oauth_state)) = (query.code.as_deref(), query.state.as_deref()) else {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Missing OAuth code or state", (), request_id),
+        )
+        .into_response();
+    };
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(oauth_client) = state.oauth_client() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "OAuth client is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    let session = match acquire_pkce_session(&state, oauth_state, &request_id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return redirect_to_host(&request_host(&headers, state.config()), request_id),
+        Err(response) => return response,
+    };
+    let return_host = session.return_host.clone();
+    match exchange_pkce_session(
+        &state,
+        &repo,
+        oauth_client.as_ref(),
+        oauth_state,
+        code,
+        session,
+        &request_id,
+    )
+    .await
+    {
+        Ok(_) => redirect_to_host(&return_host, request_id),
+        Err(response) => response,
     }
 }
 
@@ -4204,6 +4422,122 @@ fn oauth_error_response(error: OAuthError, request_id: String, message: &'static
         AdminEnvelope::new(body_code, message, (), request_id),
     )
     .into_response()
+}
+
+fn request_host(headers: &HeaderMap, config: &AppConfig) -> String {
+    headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("localhost:{}", config.server.port))
+}
+
+fn parse_callback_url(callback_url: &str) -> Result<(String, String), ()> {
+    let callback_url = callback_url.trim();
+    if callback_url.is_empty() {
+        return Err(());
+    }
+    let url = Url::parse(callback_url).map_err(|_| ())?;
+    if url.query_pairs().any(|(key, _)| key == "error") {
+        return Err(());
+    }
+    let code = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "code").then(|| value.into_owned()))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(())?;
+    let state = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(())?;
+    Ok((code, state))
+}
+
+async fn acquire_pkce_session(
+    state: &AppState,
+    oauth_state: &str,
+    request_id: &str,
+) -> Result<Option<PkceSession>, Response> {
+    let sessions = state.oauth_sessions();
+    let mut sessions = sessions.lock().await;
+    if let Some(session) = sessions.try_acquire(oauth_state) {
+        return Ok(Some(session));
+    }
+    if sessions.is_completed_or_exchanging(oauth_state) {
+        return Ok(None);
+    }
+    Err(AdminResponse::new(
+        StatusCode::BAD_REQUEST,
+        AdminEnvelope::new(
+            40001,
+            "Invalid or expired OAuth session",
+            (),
+            request_id.to_string(),
+        ),
+    )
+    .into_response())
+}
+
+async fn exchange_pkce_session(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    oauth_client: &dyn OAuthClient,
+    oauth_state: &str,
+    code: &str,
+    session: PkceSession,
+    request_id: &str,
+) -> Result<String, Response> {
+    let tokens = match oauth_client
+        .exchange_code(code, &session.code_verifier, &session.redirect_uri)
+        .await
+    {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            state.oauth_sessions().lock().await.release(oauth_state);
+            return Err(oauth_error_response(
+                error,
+                request_id.to_string(),
+                "Token exchange failed",
+            ));
+        }
+    };
+    match store_validated_account_import(
+        state,
+        repo,
+        Some(tokens.access_token),
+        tokens.refresh_token,
+    )
+    .await
+    {
+        Ok(_) => {
+            state.oauth_sessions().lock().await.complete(oauth_state);
+            Ok(session.return_host)
+        }
+        Err(error) => {
+            state.oauth_sessions().lock().await.complete(oauth_state);
+            Err(validated_account_import_error_response(
+                error,
+                request_id.to_string(),
+            ))
+        }
+    }
+}
+
+fn redirect_to_host(return_host: &str, request_id: String) -> Response {
+    let location = format!("http://{return_host}/");
+    let Ok(location) = HeaderValue::from_str(&location) else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Invalid OAuth return host", (), request_id),
+        )
+        .into_response();
+    };
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    response.headers_mut().insert(LOCATION, location);
+    response
 }
 
 fn manual_account_claims(
