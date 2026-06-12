@@ -28,7 +28,7 @@ use crate::{
     config::{AppConfig, QuotaWarningThresholds},
     fingerprint::model::Fingerprint,
     http::{auth::admin_session_id, middleware::RequestId},
-    models::catalog::ModelPlanSnapshot,
+    models::catalog::{ModelCatalog, ModelPlanSnapshot},
     pagination::{clamp_limit, Page},
     state::AppState,
 };
@@ -696,6 +696,26 @@ pub async fn refresh_models(
             AdminEnvelope::new(50201, "Failed to refresh backend models", data, request_id),
         )
         .into_response();
+    }
+    match model_repo.list_plan_snapshots().await {
+        Ok(snapshots) => {
+            let allowlist =
+                ModelCatalog::from_config_and_snapshots(&state.config().model, &snapshots)
+                    .model_plan_allowlist();
+            // 刷新后的 model -> plans 要立即同步给调度器，避免新模型被分配到不支持的账号 plan。
+            state
+                .account_pool()
+                .lock()
+                .await
+                .set_model_plan_allowlist(allowlist);
+        }
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to load model snapshots", (), request_id),
+            )
+            .into_response();
+        }
     }
 
     AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data, request_id)).into_response()
