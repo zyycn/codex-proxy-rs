@@ -10,7 +10,10 @@ use crate::{
         sse::SseError,
         types::CodexResponsesRequest,
         usage::{extract_sse_usage, TokenUsage},
-        websocket::{ensure_http_sse_supported, WebSocketSupportError},
+        websocket::{
+            create_response_via_websocket, ensure_http_sse_supported, transport_for_request,
+            CodexTransport, CodexWebSocketError, WebSocketSupportError,
+        },
     },
     fingerprint::model::Fingerprint,
 };
@@ -25,6 +28,8 @@ pub enum CodexClientError {
     InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
     #[error("unsupported transport: {0}")]
     UnsupportedTransport(#[from] WebSocketSupportError),
+    #[error("websocket transport error: {0}")]
+    WebSocket(#[from] CodexWebSocketError),
     #[error("invalid upstream SSE response: {0}")]
     InvalidSse(#[from] SseError),
     #[error("upstream returned status {status}: {body}")]
@@ -83,6 +88,22 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendResponse> {
+        if transport_for_request(request) == CodexTransport::WebSocketRequired {
+            let body = create_response_via_websocket(
+                &self.base_url,
+                request,
+                self.request_headers(context)?,
+            )
+            .await?;
+            let usage = extract_sse_usage(&body)?;
+            return Ok(CodexBackendResponse {
+                body,
+                usage,
+                turn_state: None,
+                set_cookie_headers: Vec::new(),
+            });
+        }
+
         let response = self.send_response_request(request, context).await?;
         let status = response.status();
         let turn_state = turn_state(&response);

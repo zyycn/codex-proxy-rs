@@ -6,8 +6,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
+use futures::{SinkExt, StreamExt};
 use secrecy::ExposeSecret;
 use serde_json::{json, Value};
+use tokio::{net::TcpListener, sync::oneshot};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tower::ServiceExt;
 use wiremock::{
     matchers::{body_json, header, method, path},
@@ -741,6 +744,75 @@ async fn v1_responses_should_default_to_streaming_when_stream_is_omitted() {
     let body = response_text(response).await;
     assert!(body.contains("event: response.output_text.delta"));
     assert!(body.contains("event: response.completed"));
+}
+
+#[tokio::test]
+async fn v1_responses_should_use_websocket_for_previous_response_id_streaming() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let message = websocket.next().await.unwrap().unwrap();
+        let request = serde_json::from_str::<Value>(&message.into_text().unwrap()).unwrap();
+        request_tx.send(request).unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_route_ws",
+                        "object": "response",
+                        "usage": {
+                            "input_tokens": 8,
+                            "output_tokens": 5
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"previous_response_id":"resp_prev"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = response_text(response).await;
+    assert!(body.contains("event: response.completed"));
+    assert!(body.contains("\"id\":\"resp_route_ws\""));
+    let request = request_rx.await.unwrap();
+    assert_eq!(request["type"], "response.create");
+    assert_eq!(request["previous_response_id"], "resp_prev");
+    server.await.unwrap();
 }
 
 #[tokio::test]

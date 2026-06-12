@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
 
-**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Remaining major work starts at Task 4: real WebSocket transport for `previous_response_id`, then account fallback/rate limits, model refresh/cache, and scoped admin operations.
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Task 4 is implemented in the current pending stage: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Remaining major work starts at Task 5: account fallback/rate limits, model refresh/cache, and scoped admin operations.
 
 ---
 
@@ -56,12 +56,15 @@
 - Modify: `Cargo.toml`
 - Modify: `src/codex/websocket.rs`
 - Modify: `src/codex/client.rs`
+- Modify: `src/http/v1.rs`
 - Test: `tests/codex_websocket_test.rs`
+- Test: `tests/v1_upstream_route_test.rs`
 
-- [ ] Write failing tests proving `previous_response_id` uses WebSocket and HTTP fallback is not used when server-side history is required.
-- [ ] Run: `cargo test --test codex_websocket_test`
-- [ ] Add WebSocket response.create transport that emits SSE-compatible output.
-- [ ] Run: `cargo test --test codex_websocket_test`
+- [x] Write failing tests proving `previous_response_id` uses WebSocket and HTTP fallback is not used when server-side history is required.
+- [x] Run: `cargo test --test codex_websocket_test`
+- [x] Add WebSocket response.create transport that emits SSE-compatible output.
+- [x] Run: `cargo test --test codex_websocket_test`
+- [x] Run: `cargo test --test v1_upstream_route_test v1_responses_should_use_websocket_for_previous_response_id_streaming`
 
 ### Task 5: Upstream Retry, Fallback, And Rate Limits
 
