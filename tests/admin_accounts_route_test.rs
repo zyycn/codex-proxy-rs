@@ -1,16 +1,27 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
+use secrecy::ExposeSecret;
 use serde_json::{json, Value};
+use sqlx::Row;
+use tokio::sync::Mutex;
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
+    accounts::repository::AccountRepository,
     app::build_router,
+    auth::{
+        api_key::ApiKeyHasher,
+        refresh::{RefreshFailure, TokenRefresher},
+        token::TokenPair,
+    },
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
@@ -931,9 +942,16 @@ async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_withou
 }
 
 #[tokio::test]
-async fn admin_account_manual_add_should_store_encrypted_token_and_sync_runtime_pool() {
+async fn manual_add_should_derive_claims_ignore_metadata_and_sync_pool() {
     let (app, state, pool, _dir) =
         admin_accounts_test_app("admin-account-manual-add.sqlite", 26).await;
+    let token = test_jwt(
+        Some("jwt-account"),
+        Some("jwt-user"),
+        Some("jwt@example.com"),
+        Some("team"),
+        3600,
+    );
 
     let response = app
         .clone()
@@ -945,15 +963,15 @@ async fn admin_account_manual_add_should_store_encrypted_token_and_sync_runtime_
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
                     json!({
-                        "id": "acct_manual",
-                        "email": "manual@example.com",
-                        "accountId": "chatgpt-account",
-                        "userId": "chatgpt-user",
-                        "label": "Manual Team",
-                        "planType": "plus",
-                        "token": "manual-access-secret",
+                        "id": "caller-id",
+                        "email": "caller@example.com",
+                        "accountId": "caller-account",
+                        "userId": "caller-user",
+                        "label": "Caller Label",
+                        "planType": "caller-plan",
+                        "token": token,
                         "refreshToken": "manual-refresh-secret",
-                        "status": "active"
+                        "status": "disabled"
                     })
                     .to_string(),
                 ))
@@ -963,25 +981,48 @@ async fn admin_account_manual_add_should_store_encrypted_token_and_sync_runtime_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["id"], "acct_manual");
-    assert_eq!(body["data"]["label"], "Manual Team");
+    let response_id = body["data"]["id"].as_str().unwrap();
+    assert_ne!(response_id, "caller-id");
+    assert_eq!(body["data"]["email"], "jwt@example.com");
+    assert_eq!(body["data"]["accountId"], "jwt-account");
+    assert_eq!(body["data"]["userId"], "jwt-user");
+    assert_eq!(body["data"]["planType"], "team");
+    assert!(body["data"]["label"].is_null());
     assert_eq!(body["data"]["status"], "active");
     assert!(body["data"].get("token").is_none());
     assert!(body["data"].get("refreshToken").is_none());
 
-    let stored: (String, String, String, String) = sqlx::query_as(
-        "select access_token_cipher, refresh_token_cipher, label, plan_type from accounts where id = ?",
+    let stored = sqlx::query(
+        "select id, email, account_id, user_id, label, plan_type, status, access_token_cipher, refresh_token_cipher from accounts",
     )
-    .bind("acct_manual")
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(stored.0.starts_with("v1:"));
-    assert!(!stored.0.contains("manual-access-secret"));
-    assert!(stored.1.starts_with("v1:"));
-    assert!(!stored.1.contains("manual-refresh-secret"));
-    assert_eq!(stored.2, "Manual Team");
-    assert_eq!(stored.3, "plus");
+    assert_eq!(stored.get::<String, _>("id"), response_id);
+    assert_eq!(
+        stored.get::<Option<String>, _>("email").as_deref(),
+        Some("jwt@example.com")
+    );
+    assert_eq!(
+        stored.get::<Option<String>, _>("account_id").as_deref(),
+        Some("jwt-account")
+    );
+    assert_eq!(
+        stored.get::<Option<String>, _>("user_id").as_deref(),
+        Some("jwt-user")
+    );
+    assert_eq!(stored.get::<Option<String>, _>("label"), None);
+    assert_eq!(
+        stored.get::<Option<String>, _>("plan_type").as_deref(),
+        Some("team")
+    );
+    assert_eq!(stored.get::<String, _>("status"), "active");
+    let access_token_cipher = stored.get::<String, _>("access_token_cipher");
+    assert!(access_token_cipher.starts_with("v1:"));
+    assert!(!access_token_cipher.contains(&token));
+    let refresh_token_cipher = stored.get::<String, _>("refresh_token_cipher");
+    assert!(refresh_token_cipher.starts_with("v1:"));
+    assert!(!refresh_token_cipher.contains("manual-refresh-secret"));
 
     let acquired = state
         .account_pool()
@@ -989,15 +1030,19 @@ async fn admin_account_manual_add_should_store_encrypted_token_and_sync_runtime_
         .await
         .acquire("gpt-5.5")
         .unwrap();
-    assert_eq!(acquired.id, "acct_manual");
+    assert_eq!(acquired.id, response_id);
+    assert_eq!(acquired.email.as_deref(), Some("jwt@example.com"));
+    assert_eq!(acquired.account_id.as_deref(), Some("jwt-account"));
+    assert_eq!(acquired.user_id.as_deref(), Some("jwt-user"));
+    assert_eq!(acquired.plan_type.as_deref(), Some("team"));
 }
 
 #[tokio::test]
-async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accounts() {
+async fn admin_account_manual_add_should_reject_missing_invalid_expired_or_unbound_tokens() {
     let (app, _state, _pool, _dir) =
         admin_accounts_test_app("admin-account-manual-add-invalid.sqlite", 27).await;
 
-    let empty_token = app
+    let missing_tokens = app
         .clone()
         .oneshot(
             Request::builder()
@@ -1005,15 +1050,14 @@ async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accou
                 .uri("/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(r#"{"token":""}"#))
+                .body(Body::from(r#"{}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(empty_token.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(missing_tokens.status(), StatusCode::BAD_REQUEST);
 
-    import_test_account(&app, "session_1", "acct_duplicate").await;
-    let duplicate = app
+    let invalid = app
         .clone()
         .oneshot(
             Request::builder()
@@ -1023,8 +1067,7 @@ async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accou
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
                     json!({
-                        "id": "acct_duplicate",
-                        "token": "access-duplicate"
+                        "token": "not-a-jwt"
                     })
                     .to_string(),
                 ))
@@ -1032,9 +1075,10 @@ async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accou
         )
         .await
         .unwrap();
-    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 
-    let invalid_status = app
+    let expired = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -1043,9 +1087,13 @@ async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accou
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
                     json!({
-                        "id": "acct_invalid_status",
-                        "token": "access-invalid-status",
-                        "status": "pending"
+                        "token": test_jwt(
+                            Some("expired-account"),
+                            Some("expired-user"),
+                            Some("expired@example.com"),
+                            Some("plus"),
+                            -3600,
+                        )
                     })
                     .to_string(),
                 ))
@@ -1053,7 +1101,251 @@ async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accou
         )
         .await
         .unwrap();
-    assert_eq!(invalid_status.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(expired.status(), StatusCode::BAD_REQUEST);
+
+    let missing_account_claim = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "token": test_jwt(
+                            None,
+                            Some("claimless-user"),
+                            Some("claimless@example.com"),
+                            Some("free"),
+                            3600,
+                        )
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_account_claim.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_account_manual_add_should_exchange_refresh_token_only_and_rotate_refresh_token() {
+    let token = test_jwt(
+        Some("rt-account"),
+        Some("rt-user"),
+        Some("rt@example.com"),
+        Some("plus"),
+        3600,
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let refresher = StaticTokenRefresher {
+        result: Ok(TokenPair {
+            access_token: token.clone(),
+            refresh_token: Some("rotated-refresh".to_string()),
+        }),
+        calls: calls.clone(),
+    };
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_refresher(
+        "admin-account-manual-refresh-only.sqlite",
+        28,
+        refresher,
+    )
+    .await;
+
+    let response = post_admin_account(
+        &app,
+        json!({
+            "refreshToken": "initial-refresh",
+            "email": "caller@example.com",
+            "planType": "caller-plan"
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["email"], "rt@example.com");
+    assert_eq!(body["data"]["accountId"], "rt-account");
+    assert!(body["data"].get("token").is_none());
+    assert!(body["data"].get("refreshToken").is_none());
+    assert_eq!(*calls.lock().await, vec!["initial-refresh".to_string()]);
+
+    let repo = AccountRepository::new(pool, SecretBox::new([28u8; 32]));
+    let stored = repo
+        .get(body["data"]["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.access_token.expose_secret(), &token);
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "rotated-refresh"
+    );
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.refresh_token.as_deref(), Some("rotated-refresh"));
+}
+
+#[tokio::test]
+async fn admin_account_manual_add_should_preserve_input_refresh_token_when_exchange_omits_rotation()
+{
+    let token = test_jwt(
+        Some("rt-preserve-account"),
+        Some("rt-preserve-user"),
+        Some("preserve@example.com"),
+        Some("free"),
+        3600,
+    );
+    let refresher = StaticTokenRefresher {
+        result: Ok(TokenPair {
+            access_token: token,
+            refresh_token: None,
+        }),
+        calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_refresher(
+        "admin-account-manual-refresh-preserve.sqlite",
+        29,
+        refresher,
+    )
+    .await;
+
+    let response = post_admin_account(&app, json!({ "refreshToken": "preserved-refresh" })).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let repo = AccountRepository::new(pool, SecretBox::new([29u8; 32]));
+    let stored = repo
+        .get(body["data"]["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "preserved-refresh"
+    );
+}
+
+#[tokio::test]
+async fn admin_account_manual_add_should_update_existing_account_for_same_account_and_user() {
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app("admin-account-manual-update-existing.sqlite", 30).await;
+    let first_token = test_jwt(
+        Some("team-account"),
+        Some("same-user"),
+        Some("first@example.com"),
+        Some("free"),
+        3600,
+    );
+    let first_response = post_admin_account(
+        &app,
+        json!({
+            "token": first_token,
+            "refreshToken": "first-refresh"
+        }),
+    )
+    .await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_json(first_response).await;
+    let first_id = first_body["data"]["id"].as_str().unwrap().to_string();
+
+    let second_token = test_jwt(
+        Some("team-account"),
+        Some("same-user"),
+        Some("second@example.com"),
+        Some("team"),
+        7200,
+    );
+    let second_response = post_admin_account(&app, json!({ "token": second_token })).await;
+
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_json(second_response).await;
+    assert_eq!(second_body["data"]["id"], first_id);
+    assert_eq!(second_body["data"]["email"], "second@example.com");
+    assert_eq!(second_body["data"]["planType"], "team");
+
+    let count: (i64,) = sqlx::query_as("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 1);
+    let repo = AccountRepository::new(pool, SecretBox::new([30u8; 32]));
+    let stored = repo.get(&first_id).await.unwrap().unwrap();
+    assert_eq!(stored.access_token.expose_secret(), &second_token);
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "first-refresh"
+    );
+    assert_eq!(stored.email.as_deref(), Some("second@example.com"));
+    assert_eq!(stored.plan_type.as_deref(), Some("team"));
+
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.id, first_id);
+    assert_eq!(acquired.access_token, second_token);
+    assert_eq!(acquired.refresh_token.as_deref(), Some("first-refresh"));
+}
+
+#[tokio::test]
+async fn manual_add_should_preserve_existing_refresh_when_refresh_only_omits_rotation() {
+    let refreshed_token = test_jwt(
+        Some("rt-existing-account"),
+        Some("rt-existing-user"),
+        Some("second@example.com"),
+        Some("team"),
+        7200,
+    );
+    let refresher = StaticTokenRefresher {
+        result: Ok(TokenPair {
+            access_token: refreshed_token.clone(),
+            refresh_token: None,
+        }),
+        calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_refresher(
+        "admin-account-manual-refresh-existing-preserve.sqlite",
+        31,
+        refresher,
+    )
+    .await;
+    let first_token = test_jwt(
+        Some("rt-existing-account"),
+        Some("rt-existing-user"),
+        Some("first@example.com"),
+        Some("free"),
+        3600,
+    );
+    let first_response = post_admin_account(
+        &app,
+        json!({
+            "token": first_token,
+            "refreshToken": "old-refresh"
+        }),
+    )
+    .await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_json(first_response).await;
+    let account_id = first_body["data"]["id"].as_str().unwrap().to_string();
+
+    let second_response =
+        post_admin_account(&app, json!({ "refreshToken": "incoming-refresh" })).await;
+
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let repo = AccountRepository::new(pool, SecretBox::new([31u8; 32]));
+    let stored = repo.get(&account_id).await.unwrap().unwrap();
+    assert_eq!(stored.access_token.expose_secret(), &refreshed_token);
+    assert_eq!(stored.refresh_token.unwrap().expose_secret(), "old-refresh");
+    assert_eq!(stored.email.as_deref(), Some("second@example.com"));
+    assert_eq!(stored.plan_type.as_deref(), Some("team"));
 }
 
 async fn admin_accounts_test_app(
@@ -1072,6 +1364,45 @@ async fn admin_accounts_test_app(
     );
     let app = build_router(state.clone());
     (app, state, pool, dir)
+}
+
+async fn admin_accounts_test_app_with_refresher<C>(
+    db_name: &str,
+    key_byte: u8,
+    refresher: C,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir)
+where
+    C: TokenRefresher,
+{
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let state = AppState::with_pool_secret_api_key_hasher_and_token_refresher(
+        test_config(url),
+        pool.clone(),
+        SecretBox::new([key_byte; 32]),
+        ApiKeyHasher::new([key_byte; 32]),
+        refresher,
+    );
+    let app = build_router(state.clone());
+    (app, state, pool, dir)
+}
+
+async fn post_admin_account(app: &Router, payload: Value) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 async fn import_test_account(app: &Router, session_id: &str, account_id: &str) {
@@ -1128,4 +1459,61 @@ async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
 async fn response_json(response: axum::response::Response) -> Value {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+fn test_jwt(
+    account_id: Option<&str>,
+    user_id: Option<&str>,
+    email: Option<&str>,
+    plan_type: Option<&str>,
+    exp_offset_seconds: i64,
+) -> String {
+    let mut auth = serde_json::Map::new();
+    if let Some(account_id) = account_id {
+        auth.insert(
+            "chatgpt_account_id".to_string(),
+            Value::String(account_id.to_string()),
+        );
+    }
+    if let Some(user_id) = user_id {
+        auth.insert(
+            "chatgpt_user_id".to_string(),
+            Value::String(user_id.to_string()),
+        );
+    }
+    if let Some(plan_type) = plan_type {
+        auth.insert(
+            "chatgpt_plan_type".to_string(),
+            Value::String(plan_type.to_string()),
+        );
+    }
+    let mut profile = serde_json::Map::new();
+    if let Some(email) = email {
+        profile.insert("email".to_string(), Value::String(email.to_string()));
+    }
+    let payload = json!({
+        "exp": Utc::now().timestamp() + exp_offset_seconds,
+        "https://api.openai.com/auth": Value::Object(auth),
+        "https://api.openai.com/profile": Value::Object(profile),
+    });
+    let header = json!({ "alg": "none", "typ": "JWT" });
+    format!("{}.{}.", jwt_part(&header), jwt_part(&payload),)
+}
+
+fn jwt_part(value: &Value) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap())
+}
+
+#[derive(Clone)]
+struct StaticTokenRefresher {
+    result: Result<TokenPair, RefreshFailure>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl TokenRefresher for StaticTokenRefresher {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        self.calls.lock().await.push(refresh_token.to_string());
+        self.result.clone()
+    }
 }

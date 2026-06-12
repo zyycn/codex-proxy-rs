@@ -46,6 +46,18 @@ pub struct TokenUpdate {
     pub access_token_expires_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug)]
+pub struct AccountClaimsUpdate {
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub access_token: SecretString,
+    pub refresh_token: Option<SecretString>,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
+    pub status: AccountStatus,
+}
+
 #[derive(Debug, Clone)]
 pub struct StoredAccount {
     pub id: String,
@@ -170,6 +182,22 @@ impl AccountRepository {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.is_some())
+    }
+
+    pub async fn find_by_chatgpt_identity(
+        &self,
+        account_id: &str,
+        user_id: Option<&str>,
+    ) -> AccountRepositoryResult<Option<StoredAccount>> {
+        let row = sqlx::query(
+            "select id, email, account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at from accounts where account_id = ? and ((user_id is null and ? is null) or user_id = ?) order by added_at asc limit 1",
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| self.account_from_row(&row)).transpose()
     }
 
     pub async fn list(
@@ -371,6 +399,53 @@ impl AccountRepository {
             )
             .bind(access_token_cipher)
             .bind(expires_at)
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+        };
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_from_claims(
+        &self,
+        id: &str,
+        update: AccountClaimsUpdate,
+    ) -> AccountRepositoryResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let access_token_cipher = self.secret_box.encrypt(&update.access_token)?;
+        let expires_at = update
+            .access_token_expires_at
+            .map(|value| value.to_rfc3339());
+        let result = if let Some(refresh_token) = update.refresh_token {
+            let refresh_token_cipher = self.secret_box.encrypt(&refresh_token)?;
+            sqlx::query(
+                "update accounts set email = ?, account_id = ?, user_id = ?, plan_type = ?, access_token_cipher = ?, refresh_token_cipher = ?, access_token_expires_at = ?, status = ?, updated_at = ? where id = ?",
+            )
+            .bind(update.email)
+            .bind(update.account_id)
+            .bind(update.user_id)
+            .bind(update.plan_type)
+            .bind(access_token_cipher)
+            .bind(refresh_token_cipher)
+            .bind(expires_at)
+            .bind(status_to_db(update.status))
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+        } else {
+            // OpenAI 刷新/导入未给新 RT 时保留原值，避免把可继续刷新的账号写坏。
+            sqlx::query(
+                "update accounts set email = ?, account_id = ?, user_id = ?, plan_type = ?, access_token_cipher = ?, access_token_expires_at = ?, status = ?, updated_at = ? where id = ?",
+            )
+            .bind(update.email)
+            .bind(update.account_id)
+            .bind(update.user_id)
+            .bind(update.plan_type)
+            .bind(access_token_cipher)
+            .bind(expires_at)
+            .bind(status_to_db(update.status))
             .bind(now)
             .bind(id)
             .execute(&self.pool)
