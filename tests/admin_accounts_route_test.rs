@@ -699,6 +699,131 @@ async fn admin_accounts_batch_status_should_update_found_accounts_and_reject_inv
     assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn admin_account_cookies_should_set_get_and_delete_encrypted_cookie_header() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-account-cookies.sqlite", 22).await;
+    import_test_account(&app, "session_1", "acct_cookies").await;
+
+    let set_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_cookies/cookies")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    r#"{"cookies":"cf_clearance=clear-secret; __cf_bm=bm-secret"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set_response.status(), StatusCode::OK);
+    let body = response_json(set_response).await;
+    assert_eq!(
+        body["data"]["cookies"],
+        "__cf_bm=bm-secret; cf_clearance=clear-secret"
+    );
+
+    let stored = sqlx::query_as::<_, (String, String)>(
+        "select name, value_cipher from account_cookies where account_id = ? order by name asc",
+    )
+    .bind("acct_cookies")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|(_, cipher)| cipher.starts_with("v1:")));
+    assert!(stored
+        .iter()
+        .all(|(_, cipher)| !cipher.contains("clear-secret") && !cipher.contains("bm-secret")));
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/acct_cookies/cookies")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let body = response_json(get_response).await;
+    assert_eq!(
+        body["data"]["cookies"],
+        "__cf_bm=bm-secret; cf_clearance=clear-secret"
+    );
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/admin/accounts/acct_cookies/cookies")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+
+    let get_empty = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/acct_cookies/cookies")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_empty.status(), StatusCode::OK);
+    let body = response_json(get_empty).await;
+    assert!(body["data"]["cookies"].is_null());
+}
+
+#[tokio::test]
+async fn admin_account_cookies_should_require_existing_account_and_non_empty_cookies() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-cookies-invalid.sqlite", 23).await;
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/missing/cookies")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    import_test_account(&app, "session_1", "acct_cookie_invalid").await;
+    let invalid = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_cookie_invalid/cookies")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"cookies":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,
