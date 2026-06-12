@@ -18,7 +18,7 @@ OpenAI Chat compatibility is implemented as a real route, not an alias to Respon
 
 Responses compatibility keeps native Responses passthrough semantics but adds the TS implementation's in-scope fields: reasoning/service tier, tool choice, parallel tool calls, text formats, prompt cache key, include, client metadata, and Codex context headers. `previous_response_id` uses WebSocket transport rather than being rejected.
 
-Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Commit `3960a35` extends that fallback to HTTP SSE Responses setup and Chat Completions. Pending Task 6 cache groundwork stores backend model snapshots by account plan and lets `/v1/models*` read cached backend models when present. WebSocket-backed `previous_response_id` fallback remains a Task 5 follow-up because account affinity must be preserved.
+Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Commit `3960a35` extends that fallback to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: backend model snapshots are stored by account plan and `/v1/models*` reads cached backend models when present. WebSocket-backed `previous_response_id` fallback remains a Task 5 follow-up because account affinity must be preserved.
 
 ## Components
 
