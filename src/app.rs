@@ -1,6 +1,6 @@
 use axum::{
     middleware::from_fn,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use tower_http::trace::TraceLayer;
@@ -8,8 +8,9 @@ use tower_http::trace::TraceLayer;
 use crate::{
     http::{
         admin::{
-            accounts, api_keys, create_api_key, import_accounts, login, logs, refresh_models,
-            settings, usage_stats, usage_stats_summary,
+            accounts, api_keys, create_api_key, delete_account, import_accounts, login, logs,
+            refresh_models, settings, update_account_label, update_account_status, usage_stats,
+            usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -38,6 +39,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
         .route("/admin/accounts", get(accounts))
+        .route("/admin/accounts/{account_id}", delete(delete_account))
+        .route(
+            "/admin/accounts/{account_id}/label",
+            patch(update_account_label),
+        )
+        .route(
+            "/admin/accounts/{account_id}/status",
+            patch(update_account_status),
+        )
         .route("/admin/accounts/import", post(import_accounts))
         .route("/admin/api-keys", get(api_keys).post(create_api_key))
         .with_state(state)

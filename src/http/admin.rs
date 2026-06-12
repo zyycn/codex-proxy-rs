@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{
         header::{HeaderValue, SET_COOKIE},
         HeaderMap, StatusCode,
@@ -8,7 +8,7 @@ use axum::{
     Extension, Json,
 };
 use chrono::{Duration, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
@@ -19,7 +19,7 @@ use crate::{
         model::{Account, AccountStatus},
         repository::{
             AccountRepositoryError, AccountUsageListRecord, AccountUsageSummary, NewAccount,
-            StoredAccountMetadata,
+            StoredAccount, StoredAccountMetadata,
         },
     },
     auth::admin_session::verify_admin_password,
@@ -227,6 +227,38 @@ pub struct AccountImportData {
     pub imported: u32,
     pub skipped: u32,
     pub source_format: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountLabelRequest {
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountLabelData {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountStatusData {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountData {
+    pub deleted: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -873,6 +905,217 @@ pub async fn accounts(
     }
 }
 
+pub async fn update_account_label(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+    Json(payload): Json<UpdateAccountLabelRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    if payload
+        .label
+        .as_ref()
+        .is_some_and(|label| label.chars().count() > 64)
+    {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "Account label must be 64 characters or fewer",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+
+    match repo.set_label(&account_id, payload.label.clone()).await {
+        Ok(true) => {
+            // 管理后台改名后要同步内存调度池，否则列表和实际调度状态会短暂不一致。
+            state
+                .account_pool()
+                .lock()
+                .await
+                .set_label(&account_id, payload.label.clone());
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    UpdateAccountLabelData {
+                        id: account_id,
+                        label: payload.label,
+                    },
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+        Ok(false) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "Account not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to update account label", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn update_account_status(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+    Json(payload): Json<UpdateAccountStatusRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let status = match parse_admin_account_status(&payload.status) {
+        Ok(status) => status,
+        Err(message) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, message, (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.set_status(&account_id, status).await {
+        Ok(true) => {
+            if sync_runtime_account_status(&state, &repo, &account_id, status)
+                .await
+                .is_err()
+            {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to sync account status", (), request_id),
+                )
+                .into_response();
+            }
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    UpdateAccountStatusData {
+                        id: account_id,
+                        status: account_status_value(status).to_string(),
+                    },
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+        Ok(false) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "Account not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to update account status", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn delete_account(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.delete(&account_id).await {
+        Ok(true) => {
+            // DB 外键会级联清理账号关联数据；内存池仍需立即摘除，避免删除后继续被调度。
+            state.account_pool().lock().await.remove(&account_id);
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(DeleteAccountData { deleted: true }, request_id),
+            )
+            .into_response()
+        }
+        Ok(false) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "Account not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to delete account", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
 pub async fn import_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -1204,6 +1447,54 @@ async fn require_admin_session(
     }
 }
 
+async fn sync_runtime_account_status(
+    state: &AppState,
+    repo: &crate::accounts::repository::AccountRepository,
+    account_id: &str,
+    status: AccountStatus,
+) -> Result<(), AccountRepositoryError> {
+    let updated = state
+        .account_pool()
+        .lock()
+        .await
+        .set_status(account_id, status);
+    if updated || status != AccountStatus::Active {
+        return Ok(());
+    }
+
+    if let Some(account) = repo.get(account_id).await? {
+        state
+            .account_pool()
+            .lock()
+            .await
+            .insert(pool_account_from_stored(account));
+    }
+    Ok(())
+}
+
+fn pool_account_from_stored(account: StoredAccount) -> Account {
+    Account {
+        id: account.id,
+        email: account.email,
+        account_id: account.account_id,
+        user_id: account.user_id,
+        label: account.label,
+        plan_type: account.plan_type,
+        access_token: account.access_token.expose_secret().to_string(),
+        refresh_token: account
+            .refresh_token
+            .as_ref()
+            .map(|token| token.expose_secret().to_string()),
+        access_token_expires_at: account.access_token_expires_at,
+        status: account.status,
+        quota_limit_reached: false,
+        quota_cooldown_until: None,
+        cloudflare_cooldown_until: None,
+        added_at: account.added_at.to_rfc3339(),
+        last_used_at: None,
+    }
+}
+
 fn normalized_account_id(id: Option<String>) -> String {
     id.and_then(|id| empty_to_none(Some(id)))
         .unwrap_or_else(|| format!("acct_{}", Uuid::new_v4().simple()))
@@ -1469,6 +1760,14 @@ fn parse_import_status(status: Option<&str>) -> Result<AccountStatus, String> {
         "refreshing" => Ok(AccountStatus::Refreshing),
         "disabled" => Ok(AccountStatus::Disabled),
         "banned" => Ok(AccountStatus::Banned),
+        other => Err(format!("Unsupported account status: {other}")),
+    }
+}
+
+fn parse_admin_account_status(status: &str) -> Result<AccountStatus, String> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "active" => Ok(AccountStatus::Active),
+        "disabled" => Ok(AccountStatus::Disabled),
         other => Err(format!("Unsupported account status: {other}")),
     }
 }

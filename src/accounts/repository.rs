@@ -321,6 +321,14 @@ impl AccountRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn delete(&self, id: &str) -> AccountRepositoryResult<bool> {
+        let result = sqlx::query("delete from accounts where id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn update_tokens(
         &self,
         id: &str,
