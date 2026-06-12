@@ -114,6 +114,12 @@ impl AccountPool {
         removed
     }
 
+    pub fn clear(&mut self) {
+        self.accounts.clear();
+        self.slots.clear();
+        self.round_robin_cursor = 0;
+    }
+
     pub fn set_model_plan_allowlist(&mut self, allowlist: BTreeMap<String, Vec<String>>) {
         self.options.model_plan_allowlist = allowlist;
     }

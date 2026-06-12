@@ -299,6 +299,19 @@ impl AccountRepository {
         Ok(Page { items, next_cursor })
     }
 
+    pub async fn list_all_metadata(&self) -> AccountRepositoryResult<Vec<StoredAccountMetadata>> {
+        let rows = sqlx::query(
+            "select id, email, account_id, user_id, label, plan_type, access_token_expires_at, status, added_at, updated_at from accounts order by added_at desc, id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut accounts = Vec::with_capacity(rows.len());
+        for row in rows {
+            accounts.push(metadata_from_row(&row)?);
+        }
+        Ok(accounts)
+    }
+
     pub async fn list_pool_accounts(&self) -> AccountRepositoryResult<Vec<Account>> {
         let rows = sqlx::query(
             "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
@@ -368,6 +381,13 @@ impl AccountRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_all(&self) -> AccountRepositoryResult<u64> {
+        let result = sqlx::query("delete from accounts")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn update_tokens(
