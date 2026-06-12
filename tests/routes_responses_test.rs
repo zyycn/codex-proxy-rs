@@ -17,6 +17,10 @@ use codex_proxy_rs::{
         UsageStatsConfig,
     },
     crypto::SecretBox,
+    models::{
+        catalog::{BackendModelEntry, ModelPlanSnapshot},
+        repository::ModelSnapshotRepository,
+    },
     state::AppState,
     storage::db::connect_sqlite,
 };
@@ -103,6 +107,38 @@ async fn test_app_with_client_api_key() -> (Router, String, tempfile::TempDir) {
         test_config_with_database(url),
         pool,
         SecretBox::new([53u8; 32]),
+        hasher,
+    ));
+    (app, generated.plaintext, dir)
+}
+
+async fn test_app_with_backend_model_snapshot() -> (Router, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("routes-models.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let hasher = ApiKeyHasher::new([54u8; 32]);
+    let generated = hasher.generate_client_api_key("test");
+    ClientApiKeyRepository::new(pool.clone())
+        .insert_generated("test", &generated)
+        .await
+        .unwrap();
+    let snapshot = ModelPlanSnapshot::from_backend_entries(
+        "plus",
+        vec![BackendModelEntry {
+            id: Some("gpt-6".to_string()),
+            name: Some("GPT-6".to_string()),
+            ..BackendModelEntry::default()
+        }],
+    );
+    ModelSnapshotRepository::new(pool.clone())
+        .replace_plan_snapshot(&snapshot)
+        .await
+        .unwrap();
+    let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
+        test_config_with_database(url),
+        pool,
+        SecretBox::new([55u8; 32]),
         hasher,
     ));
     (app, generated.plaintext, dir)
@@ -217,6 +253,29 @@ async fn model_catalog_route_returns_codex_metadata_without_alias_entries() {
         body[0]["supportedReasoningEfforts"][0]["reasoningEffort"],
         "low"
     );
+}
+
+#[tokio::test]
+async fn model_catalog_route_returns_cached_backend_models() {
+    let (app, api_key, _dir) = test_app_with_backend_model_snapshot().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/catalog")
+                .header("authorization", format!("Bearer {api_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "gpt-6");
+    assert_eq!(body[0]["source"], "backend");
 }
 
 #[tokio::test]

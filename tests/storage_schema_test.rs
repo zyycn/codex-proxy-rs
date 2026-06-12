@@ -8,12 +8,12 @@ async fn sqlite_schema_creates_accounts_and_event_tables() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let row: (i64,) = sqlx::query_as(
-        "select count(*) from sqlite_master where type = 'table' and name in ('accounts', 'client_api_keys', 'event_logs')",
+        "select count(*) from sqlite_master where type = 'table' and name in ('accounts', 'client_api_keys', 'event_logs', 'model_plan_snapshots')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(row.0, 3);
+    assert_eq!(row.0, 4);
 }
 
 #[tokio::test]
