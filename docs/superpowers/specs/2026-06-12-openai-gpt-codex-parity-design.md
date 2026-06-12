@@ -18,7 +18,7 @@ OpenAI Chat compatibility is implemented as a real route, not an alias to Respon
 
 Responses compatibility keeps native Responses passthrough semantics but adds the TS implementation's in-scope fields: reasoning/service tier, tool choice, parallel tool calls, text formats, prompt cache key, include, client metadata, and Codex context headers. `previous_response_id` uses WebSocket transport rather than being rejected.
 
-Current staged progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Task 5 is partially staged for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Streaming Responses, WebSocket streaming fallback, and Chat Completions fallback remain Task 5 follow-ups.
+Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Streaming Responses, WebSocket streaming fallback, and Chat Completions fallback remain Task 5 follow-ups.
 
 ## Components
 
