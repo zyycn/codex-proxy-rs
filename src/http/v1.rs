@@ -99,7 +99,7 @@ pub async fn responses(
         .unwrap_or_else(|_| default_body(default_model.clone()));
     let client_stream = body.stream.unwrap_or(true);
     let requested_model = body.model.clone().unwrap_or(default_model);
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     if !catalog.is_recognized_model_name(&requested_model) {
         return (
             StatusCode::NOT_FOUND,
@@ -348,7 +348,7 @@ pub async fn chat_completions(
     };
     let client_stream = chat_request.stream;
     let requested_model = chat_request.model.clone();
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     if !catalog.is_recognized_model_name(&requested_model) {
         return model_not_found_response().into_response();
     }
@@ -554,6 +554,23 @@ fn no_available_accounts_response() -> (StatusCode, Json<Value>) {
             "no_available_accounts",
         )),
     )
+}
+
+async fn model_catalog_for_state(state: &AppState) -> ModelCatalog {
+    let Some(repo) = state.model_snapshot_repository() else {
+        return ModelCatalog::from_config(&state.config().model);
+    };
+    match repo.list_plan_snapshots().await {
+        Ok(snapshots) if !snapshots.is_empty() => {
+            ModelCatalog::from_config_and_snapshots(&state.config().model, &snapshots)
+        }
+        Ok(_) => ModelCatalog::from_config(&state.config().model),
+        Err(error) => {
+            // 模型缓存只是加速和扩展 catalog；读取失败时回退静态配置，避免影响核心请求链路。
+            tracing::warn!(?error, "failed to load cached model snapshots");
+            ModelCatalog::from_config(&state.config().model)
+        }
+    }
 }
 
 fn default_body(default_model: String) -> ResponsesBody {
@@ -1664,7 +1681,7 @@ pub async fn models(State(state): State<AppState>, headers: HeaderMap) -> impl I
         return missing_client_api_key_response();
     }
 
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     let data = catalog
         .models()
         .iter()
@@ -1684,7 +1701,7 @@ pub async fn model_catalog(State(state): State<AppState>, headers: HeaderMap) ->
         return missing_client_api_key_response();
     }
 
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     (StatusCode::OK, Json(json!(catalog.models())))
 }
 
@@ -1697,7 +1714,7 @@ pub async fn model_detail(
         return missing_client_api_key_response();
     }
 
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     if catalog.model_info(&model_id).is_none() {
         return model_not_found_response();
     }
@@ -1713,7 +1730,7 @@ pub async fn model_info(
         return missing_client_api_key_response();
     }
 
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     let Some(info) = catalog.model_info(&model_id) else {
         return model_not_found_response();
     };
@@ -1725,7 +1742,7 @@ pub async fn debug_models(State(state): State<AppState>, headers: HeaderMap) -> 
         return missing_client_api_key_response();
     }
 
-    let catalog = ModelCatalog::from_config(&state.config().model);
+    let catalog = model_catalog_for_state(&state).await;
     (StatusCode::OK, Json(json!(catalog.debug())))
 }
 

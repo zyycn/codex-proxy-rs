@@ -14,6 +14,7 @@ use crate::config::AppConfig;
 use crate::cookies::repository::CookieRepository;
 use crate::crypto::SecretBox;
 use crate::logs::repository::EventLogRepository;
+use crate::models::repository::ModelSnapshotRepository;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -160,6 +161,10 @@ impl AppState {
 
     pub fn client_api_key_repository(&self) -> Option<ClientApiKeyRepository> {
         Some(ClientApiKeyRepository::new(self.db()?.clone()))
+    }
+
+    pub fn model_snapshot_repository(&self) -> Option<ModelSnapshotRepository> {
+        Some(ModelSnapshotRepository::new(self.db()?.clone()))
     }
 
     pub fn api_key_hasher(&self) -> Option<&ApiKeyHasher> {

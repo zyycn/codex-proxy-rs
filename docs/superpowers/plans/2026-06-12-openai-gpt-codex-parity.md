@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
 
-**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Remaining major work continues with WebSocket/history fallback policy, model refresh/cache, and scoped admin operations.
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Pending Task 6 cache groundwork adds persisted backend model snapshots and cached `/v1/models*` reads. Remaining major work continues with WebSocket/history fallback policy, live model refresh, and scoped admin operations.
 
 ---
 
@@ -94,9 +94,11 @@
 - Modify: `src/http/v1.rs`
 - Test: `tests/model_catalog_test.rs`
 
-- [ ] Write failing tests for backend model snapshots, suffix parsing including `none` and `minimal`, plan allowlist generation, and `/admin/refresh-models`.
-- [ ] Run: `cargo test --test model_catalog_test`
-- [ ] Add SQLite-backed model cache and refresh route using existing Codex accounts.
+- [x] Write failing tests for backend model snapshots, suffix parsing including `none` and `minimal`, plan allowlist generation, cached `/v1/models/catalog`, and model snapshot storage.
+- [x] Run: `cargo test --test model_catalog_test`; `cargo test --test storage_schema_test`; `cargo test --test routes_responses_test model_catalog_route_returns_cached_backend_models`
+- [x] Add SQLite-backed model snapshot cache and make `/v1/models*` use cached backend snapshots when present.
+- [ ] Write failing tests for `/admin/refresh-models`.
+- [ ] Add refresh route using existing imported Codex accounts, without proxy-pool support.
 - [ ] Run: `cargo test --test model_catalog_test`
 
 ### Task 7: Scoped Admin Account Operations
