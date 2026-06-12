@@ -43,7 +43,7 @@ Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, 
 
 Uses imported Codex accounts to call `POST /codex/responses` on the configured Codex backend. The upstream request is sent with Codex Desktop headers, account bearer token, optional account id, request id, and encrypted account-scoped Cookie replay.
 
-When the client omits `stream` or sets `"stream": false`, the Rust route collects upstream HTTP SSE until `response.completed` and returns the completed OpenAI-compatible response JSON.
+When the client omits `stream` or sets `"stream": false`, the Rust route collects upstream HTTP SSE until `response.completed` and returns the completed OpenAI-compatible response JSON. If upstream sends assistant output through `response.output_item.done` or `response.output_text.delta` events while the completed payload has an empty `output`, the route reconstructs a standard assistant `output` message and synchronizes `output_text`.
 
 When the client sets `"stream": true`, the Rust route returns `text/event-stream` and passes through upstream SSE frames while collecting usage for the account after the stream finishes. Both modes capture upstream `Set-Cookie`, replay encrypted account-scoped Cookies, record account usage when usage appears in SSE, and write a `v1.response` event log with `requestId`, `accountId`, `route`, `model`, `statusCode`, `latencyMs`, and non-secret metadata.
 

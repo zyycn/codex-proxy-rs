@@ -333,6 +333,105 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_reconstruct_non_stream_output_text_from_sse_deltas() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"你好，我是\"}\n",
+        "\n",
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"一个中文助手。\"}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_text\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":6,\"output_tokens\":4}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_text");
+    assert_eq!(
+        body["output"][0]["content"][0]["text"],
+        "你好，我是一个中文助手。"
+    );
+    assert_eq!(body["output_text"], "你好，我是一个中文助手。");
+    assert_eq!(body["output"][0]["role"], "assistant");
+}
+
+#[tokio::test]
+async fn v1_responses_should_use_done_output_items_when_completed_output_is_empty() {
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "event: response.output_item.done\n",
+        "data: {\"item\":{\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"来自 done item\"}]}}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_item\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_item");
+    assert_eq!(body["output"][0]["content"][0]["text"], "来自 done item");
+    assert_eq!(body["output_text"], "来自 done item");
+}
+
+#[tokio::test]
 async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
     let server = MockServer::start().await;
     let sse_body = concat!(

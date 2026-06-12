@@ -792,18 +792,108 @@ fn ensure_stream_metadata(metadata: &mut Value, stream_value: bool) {
 
 fn completed_response_json(body: &str) -> Result<Option<Value>, crate::codex::sse::SseError> {
     let events = parse_sse_events(body)?;
+    let mut output_text = String::new();
+    let mut output_items = Vec::new();
+    let mut completed_response = None;
     for event in events {
-        if event.event.as_deref() != Some("response.completed") {
-            continue;
-        }
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
             continue;
         };
-        if let Some(response) = value.get("response") {
-            return Ok(Some(response.clone()));
+        match event.event.as_deref() {
+            Some("response.output_text.delta") => {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    output_text.push_str(delta);
+                }
+            }
+            Some("response.output_item.done") => {
+                if let Some(item) = value.get("item") {
+                    output_items.push(item.clone());
+                }
+            }
+            Some("response.completed") => {
+                if let Some(response) = value.get("response") {
+                    completed_response = Some(response.clone());
+                }
+            }
+            _ => {}
         }
     }
-    Ok(None)
+    let Some(mut response) = completed_response else {
+        return Ok(None);
+    };
+    ensure_completed_response_output(&mut response, &output_items, &output_text);
+    sync_output_text_from_output(&mut response);
+    Ok(Some(response))
+}
+
+fn ensure_completed_response_output(
+    response: &mut Value,
+    output_items: &[Value],
+    output_text: &str,
+) {
+    let output_is_empty = response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    if !output_is_empty {
+        return;
+    }
+
+    if !output_items.is_empty() {
+        response["output"] = Value::Array(output_items.to_vec());
+        return;
+    }
+    if output_text.is_empty() {
+        return;
+    }
+
+    // 原版 passthrough 会用 done item 或文本 delta 回填 completed.output，避免非流式客户端拿到空正文。
+    response["output"] = json!([{
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{
+            "type": "output_text",
+            "text": output_text,
+            "annotations": []
+        }]
+    }]);
+}
+
+fn sync_output_text_from_output(response: &mut Value) {
+    let output_text_is_empty = response
+        .get("output_text")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty);
+    if !output_text_is_empty {
+        return;
+    }
+    let Some(items) = response.get("output").and_then(Value::as_array) else {
+        return;
+    };
+    let texts = items
+        .iter()
+        .filter_map(output_text_from_item)
+        .collect::<Vec<_>>();
+    if texts.is_empty() {
+        return;
+    }
+    response["output_text"] = Value::String(texts.join("\n\n"));
+}
+
+fn output_text_from_item(item: &Value) -> Option<String> {
+    let content = item.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter_map(|part| {
+            let part_type = part.get("type")?.as_str()?;
+            if part_type != "output_text" && part_type != "text" {
+                return None;
+            }
+            part.get("text")?.as_str()
+        })
+        .collect::<String>();
+    (!text.is_empty()).then_some(text)
 }
 
 fn codex_client_error_response(error: CodexClientError) -> (StatusCode, Json<Value>) {
