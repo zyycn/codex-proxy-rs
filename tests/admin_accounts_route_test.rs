@@ -930,6 +930,132 @@ async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_withou
     assert!(body["data"]["accounts"][0].get("proxyUrl").is_none());
 }
 
+#[tokio::test]
+async fn admin_account_manual_add_should_store_encrypted_token_and_sync_runtime_pool() {
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app("admin-account-manual-add.sqlite", 26).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "id": "acct_manual",
+                        "email": "manual@example.com",
+                        "accountId": "chatgpt-account",
+                        "userId": "chatgpt-user",
+                        "label": "Manual Team",
+                        "planType": "plus",
+                        "token": "manual-access-secret",
+                        "refreshToken": "manual-refresh-secret",
+                        "status": "active"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["id"], "acct_manual");
+    assert_eq!(body["data"]["label"], "Manual Team");
+    assert_eq!(body["data"]["status"], "active");
+    assert!(body["data"].get("token").is_none());
+    assert!(body["data"].get("refreshToken").is_none());
+
+    let stored: (String, String, String, String) = sqlx::query_as(
+        "select access_token_cipher, refresh_token_cipher, label, plan_type from accounts where id = ?",
+    )
+    .bind("acct_manual")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored.0.starts_with("v1:"));
+    assert!(!stored.0.contains("manual-access-secret"));
+    assert!(stored.1.starts_with("v1:"));
+    assert!(!stored.1.contains("manual-refresh-secret"));
+    assert_eq!(stored.2, "Manual Team");
+    assert_eq!(stored.3, "plus");
+
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.id, "acct_manual");
+}
+
+#[tokio::test]
+async fn admin_account_manual_add_should_reject_empty_duplicate_or_invalid_accounts() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-manual-add-invalid.sqlite", 27).await;
+
+    let empty_token = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"token":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_token.status(), StatusCode::BAD_REQUEST);
+
+    import_test_account(&app, "session_1", "acct_duplicate").await;
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "id": "acct_duplicate",
+                        "token": "access-duplicate"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let invalid_status = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "id": "acct_invalid_status",
+                        "token": "access-invalid-status",
+                        "status": "pending"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_status.status(), StatusCode::BAD_REQUEST);
+}
+
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,
