@@ -33,6 +33,7 @@ use crate::{
     auth::{
         admin_session::verify_admin_password,
         cli_import::{default_codex_home, read_cli_auth_from_home},
+        oauth::{DeviceCode, OAuthError},
         refresh::RefreshFailure,
         token::TokenPair,
     },
@@ -229,6 +230,38 @@ pub struct AdminAuthPoolSummaryData {
 pub struct AdminAuthLogoutData {
     pub success: bool,
     pub deleted: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthDeviceLoginData {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: String,
+    pub device_code: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+impl From<DeviceCode> for AdminAuthDeviceLoginData {
+    fn from(device: DeviceCode) -> Self {
+        Self {
+            user_code: device.user_code,
+            verification_uri: device.verification_uri,
+            verification_uri_complete: device.verification_uri_complete,
+            device_code: device.device_code,
+            expires_in: device.expires_in,
+            interval: device.interval,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthDevicePollData {
+    pub success: bool,
+    pub pending: bool,
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -991,6 +1024,128 @@ pub async fn auth_logout(
             AdminEnvelope::new(50001, "Failed to clear accounts", (), request_id),
         )
         .into_response(),
+    }
+}
+
+pub async fn auth_device_login(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(oauth_client) = state.oauth_client() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "OAuth client is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+
+    match oauth_client.request_device_code().await {
+        Ok(device) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AdminAuthDeviceLoginData::from(device), request_id),
+        )
+        .into_response(),
+        Err(error) => oauth_error_response(error, request_id, "Device code request failed"),
+    }
+}
+
+pub async fn auth_device_poll(
+    State(state): State<AppState>,
+    Path(device_code): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(oauth_client) = state.oauth_client() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "OAuth client is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let device_code = device_code.trim();
+    if device_code.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "Device code is required", (), request_id),
+        )
+        .into_response();
+    }
+
+    match oauth_client.poll_device_token(device_code).await {
+        Ok(tokens) => match store_validated_account_import(
+            &state,
+            &repo,
+            Some(tokens.access_token),
+            tokens.refresh_token,
+        )
+        .await
+        {
+            Ok(_) => AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    AdminAuthDevicePollData {
+                        success: true,
+                        pending: false,
+                        code: None,
+                    },
+                    request_id,
+                ),
+            )
+            .into_response(),
+            Err(error) => validated_account_import_error_response(error, request_id),
+        },
+        Err(error) => {
+            if let Some(code) = error.pending_code() {
+                return AdminResponse::new(
+                    StatusCode::OK,
+                    AdminEnvelope::ok(
+                        AdminAuthDevicePollData {
+                            success: false,
+                            pending: true,
+                            code: Some(code.to_string()),
+                        },
+                        request_id,
+                    ),
+                )
+                .into_response();
+            }
+            oauth_error_response(error, request_id, "Device authorization failed")
+        }
     }
 }
 
@@ -4030,6 +4185,25 @@ fn validated_account_import_error_response(
         )
         .into_response(),
     }
+}
+
+fn oauth_error_response(error: OAuthError, request_id: String, message: &'static str) -> Response {
+    let status = match error {
+        OAuthError::Rejected(_) => StatusCode::BAD_REQUEST,
+        OAuthError::AuthorizationPending | OAuthError::SlowDown | OAuthError::Transport => {
+            StatusCode::BAD_GATEWAY
+        }
+    };
+    let body_code = if status == StatusCode::BAD_REQUEST {
+        40001
+    } else {
+        50201
+    };
+    AdminResponse::new(
+        status,
+        AdminEnvelope::new(body_code, message, (), request_id),
+    )
+    .into_response()
 }
 
 fn manual_account_claims(

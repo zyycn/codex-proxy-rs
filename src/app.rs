@@ -8,14 +8,14 @@ use tower_http::trace::TraceLayer;
 use crate::{
     http::{
         admin::{
-            account_quota, accounts, api_keys, auth_logout, auth_status, batch_delete_accounts,
-            batch_delete_api_keys, batch_update_account_status, create_account, create_api_key,
-            delete_account, delete_account_cookies, delete_api_key, export_accounts,
-            export_api_keys, get_account_cookies, health_check_accounts, import_accounts,
-            import_api_keys, import_cli_auth, login, logs, refresh_account, refresh_models,
-            reset_account_usage, set_account_cookies, settings, update_account_label,
-            update_account_status, update_api_key_label, update_api_key_status, usage_stats,
-            usage_stats_summary,
+            account_quota, accounts, api_keys, auth_device_login, auth_device_poll, auth_logout,
+            auth_status, batch_delete_accounts, batch_delete_api_keys, batch_update_account_status,
+            create_account, create_api_key, delete_account, delete_account_cookies, delete_api_key,
+            export_accounts, export_api_keys, get_account_cookies, health_check_accounts,
+            import_accounts, import_api_keys, import_cli_auth, login, logs, refresh_account,
+            refresh_models, reset_account_usage, set_account_cookies, settings,
+            update_account_label, update_account_status, update_api_key_label,
+            update_api_key_status, usage_stats, usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -40,6 +40,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/login", post(login))
         .route("/admin/auth/status", get(auth_status))
         .route("/admin/auth/logout", post(auth_logout))
+        .route("/admin/auth/device-login", post(auth_device_login))
+        .route(
+            "/admin/auth/device-poll/{device_code}",
+            get(auth_device_poll),
+        )
         .route("/admin/logs", get(logs))
         .route("/admin/settings", get(settings))
         .route("/admin/refresh-models", post(refresh_models))

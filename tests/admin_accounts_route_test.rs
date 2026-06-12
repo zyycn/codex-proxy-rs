@@ -23,6 +23,7 @@ use codex_proxy_rs::{
     app::build_router,
     auth::{
         api_key::ApiKeyHasher,
+        oauth::{DeviceCode, OAuthClient, OAuthError},
         refresh::{RefreshFailure, TokenRefresher},
         token::TokenPair,
     },
@@ -47,6 +48,13 @@ struct FailingTokenRefresher {
     failure: RefreshFailure,
 }
 
+#[derive(Clone)]
+struct StaticOAuthClient {
+    device_response: Result<DeviceCode, OAuthError>,
+    poll_response: Result<TokenPair, OAuthError>,
+    poll_calls: Arc<Mutex<Vec<String>>>,
+}
+
 #[async_trait]
 impl TokenRefresher for StaticTokenRefresher {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
@@ -59,6 +67,25 @@ impl TokenRefresher for StaticTokenRefresher {
 impl TokenRefresher for FailingTokenRefresher {
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
         Err(self.failure)
+    }
+}
+
+#[async_trait]
+impl TokenRefresher for StaticOAuthClient {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        Err(RefreshFailure::Transport)
+    }
+}
+
+#[async_trait]
+impl OAuthClient for StaticOAuthClient {
+    async fn request_device_code(&self) -> Result<DeviceCode, OAuthError> {
+        self.device_response.clone()
+    }
+
+    async fn poll_device_token(&self, device_code: &str) -> Result<TokenPair, OAuthError> {
+        self.poll_calls.lock().await.push(device_code.to_string());
+        self.poll_response.clone()
     }
 }
 
@@ -306,6 +333,184 @@ async fn admin_auth_logout_should_clear_accounts_and_runtime_pool() {
         .await
         .acquire("gpt-5.5")
         .is_none());
+}
+
+#[tokio::test]
+async fn admin_auth_device_login_should_require_admin_session_cookie() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-device-login-auth.sqlite", 37).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/device-login")
+                .header("x-request-id", "req_device_login_no_session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_device_login_no_session");
+}
+
+#[tokio::test]
+async fn admin_auth_device_login_should_return_openai_device_code() {
+    let client = StaticOAuthClient {
+        device_response: Ok(DeviceCode {
+            device_code: "device-secret".to_string(),
+            user_code: "ABCD-EFGH".to_string(),
+            verification_uri: "https://auth.openai.com/activate".to_string(),
+            verification_uri_complete: "https://auth.openai.com/activate?user_code=ABCD-EFGH"
+                .to_string(),
+            expires_in: 900,
+            interval: 5,
+        }),
+        poll_response: Err(OAuthError::AuthorizationPending),
+        poll_calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app_with_oauth_client("admin-auth-device-login.sqlite", 38, client)
+            .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/device-login")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_device_login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["userCode"], "ABCD-EFGH");
+    assert_eq!(
+        body["data"]["verificationUri"],
+        "https://auth.openai.com/activate"
+    );
+    assert_eq!(body["data"]["deviceCode"], "device-secret");
+    assert_eq!(body["data"]["expiresIn"], 900);
+    assert_eq!(body["data"]["interval"], 5);
+}
+
+#[tokio::test]
+async fn admin_auth_device_poll_should_return_pending_without_importing_account() {
+    let poll_calls = Arc::new(Mutex::new(Vec::new()));
+    let client = StaticOAuthClient {
+        device_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_response: Err(OAuthError::SlowDown),
+        poll_calls: poll_calls.clone(),
+    };
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app_with_oauth_client("admin-auth-device-pending.sqlite", 39, client)
+            .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/auth/device-poll/device-secret")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_device_pending")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["pending"], true);
+    assert_eq!(body["data"]["success"], false);
+    assert_eq!(body["data"]["code"], "slow_down");
+    assert_eq!(*poll_calls.lock().await, vec!["device-secret".to_string()]);
+    let account_count: (i64,) = sqlx::query_as("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(account_count.0, 0);
+}
+
+#[tokio::test]
+async fn admin_auth_device_poll_should_import_tokens_without_returning_secrets() {
+    let token = test_jwt(
+        Some("device-account"),
+        Some("device-user"),
+        Some("device@example.com"),
+        Some("plus"),
+        3600,
+    );
+    let poll_calls = Arc::new(Mutex::new(Vec::new()));
+    let client = StaticOAuthClient {
+        device_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_response: Ok(TokenPair {
+            access_token: token.clone(),
+            refresh_token: Some("device-refresh-secret".to_string()),
+        }),
+        poll_calls: poll_calls.clone(),
+    };
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app_with_oauth_client("admin-auth-device-success.sqlite", 40, client)
+            .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/auth/device-poll/device-success")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_device_success")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["success"], true);
+    assert_eq!(body["data"]["pending"], false);
+    assert!(body["data"].get("accessToken").is_none());
+    assert!(body["data"].get("refreshToken").is_none());
+    assert_eq!(*poll_calls.lock().await, vec!["device-success".to_string()]);
+
+    let stored = AccountRepository::new(pool.clone(), SecretBox::new([40; 32]))
+        .find_by_chatgpt_identity("device-account", Some("device-user"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.email.as_deref(), Some("device@example.com"));
+    assert_eq!(stored.account_id.as_deref(), Some("device-account"));
+    assert!(!stored.access_token.expose_secret().is_empty());
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "device-refresh-secret"
+    );
+    let raw: (String, String) = sqlx::query_as(
+        "select access_token_cipher, refresh_token_cipher from accounts where account_id = ?",
+    )
+    .bind("device-account")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!raw.0.contains(&token));
+    assert!(!raw.1.contains("device-refresh-secret"));
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.email.as_deref(), Some("device@example.com"));
 }
 
 #[tokio::test]
@@ -1965,6 +2170,30 @@ where
         SecretBox::new([key_byte; 32]),
         ApiKeyHasher::new([key_byte; 32]),
         token_refresher,
+    );
+    let app = build_router(state.clone());
+    (app, state, pool, dir)
+}
+
+async fn admin_accounts_test_app_with_oauth_client<C>(
+    db_name: &str,
+    key_byte: u8,
+    oauth_client: C,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir)
+where
+    C: OAuthClient + TokenRefresher,
+{
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let state = AppState::with_pool_secret_api_key_hasher_and_oauth_client(
+        test_config(url),
+        pool.clone(),
+        SecretBox::new([key_byte; 32]),
+        ApiKeyHasher::new([key_byte; 32]),
+        oauth_client,
     );
     let app = build_router(state.clone());
     (app, state, pool, dir)
