@@ -824,6 +824,112 @@ async fn admin_account_cookies_should_require_existing_account_and_non_empty_coo
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_filter_ids() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-export-native.sqlite", 24).await;
+    import_test_account(&app, "session_1", "acct_export_a").await;
+    import_test_account(&app, "session_1", "acct_export_b").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/export?ids=acct_export_a")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["sourceFormat"], "native");
+    assert_eq!(body["data"]["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["accounts"][0]["id"], "acct_export_a");
+    assert_eq!(body["data"]["accounts"][0]["token"], "access-acct_export_a");
+    assert_eq!(
+        body["data"]["accounts"][0]["refreshToken"],
+        "refresh-acct_export_a"
+    );
+    assert!(body["data"]["accounts"][0].get("proxyApiKey").is_none());
+
+    let invalid = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/export?format=proxy")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_without_proxy_fields() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-export-sub2api.sqlite", 25).await;
+    import_test_account(&app, "session_1", "acct_export_sub2api").await;
+
+    let label_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/accounts/acct_export_sub2api/label")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"label":"Sub2API Export"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(label_response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/export?format=sub2api")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["type"], "sub2api-data");
+    assert_eq!(body["data"]["version"], 1);
+    assert_eq!(body["data"]["proxies"], json!([]));
+    assert_eq!(body["data"]["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["accounts"][0]["name"], "Sub2API Export");
+    assert_eq!(body["data"]["accounts"][0]["platform"], "openai");
+    assert_eq!(body["data"]["accounts"][0]["type"], "oauth");
+    assert_eq!(
+        body["data"]["accounts"][0]["credentials"]["access_token"],
+        "access-acct_export_sub2api"
+    );
+    assert_eq!(
+        body["data"]["accounts"][0]["credentials"]["refresh_token"],
+        "refresh-acct_export_sub2api"
+    );
+    assert_eq!(
+        body["data"]["accounts"][0]["credentials"]["email"],
+        "acct_export_sub2api@example.com"
+    );
+    assert_eq!(
+        body["data"]["accounts"][0]["credentials"]["plan_type"],
+        "plus"
+    );
+    assert!(body["data"]["accounts"][0].get("proxy").is_none());
+    assert!(body["data"]["accounts"][0].get("proxyUrl").is_none());
+}
+
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,

@@ -215,6 +215,19 @@ impl AccountRepository {
         Ok(Page { items, next_cursor })
     }
 
+    pub async fn list_all(&self) -> AccountRepositoryResult<Vec<StoredAccount>> {
+        let rows = sqlx::query(
+            "select id, email, account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at from accounts order by added_at desc, id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut accounts = Vec::with_capacity(rows.len());
+        for row in rows {
+            accounts.push(self.account_from_row(&row)?);
+        }
+        Ok(accounts)
+    }
+
     pub async fn list_metadata(
         &self,
         cursor: Option<String>,
