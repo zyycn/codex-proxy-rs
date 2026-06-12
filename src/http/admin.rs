@@ -10,6 +10,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -183,22 +184,36 @@ pub struct AdminSettingsData {
     pub usage_history_retention_days: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountImportPayload {
-    pub accounts: Vec<AccountImportEntry>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountImportFormat {
+    Native,
+    Sub2Api,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountImportEntry {
+impl AccountImportFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Sub2Api => "sub2api",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedAccountImportPayload {
+    accounts: Vec<AccountImportEntry>,
+    source_format: AccountImportFormat,
+}
+
+#[derive(Debug, Clone)]
+struct AccountImportEntry {
     pub id: Option<String>,
     pub email: Option<String>,
     pub account_id: Option<String>,
     pub user_id: Option<String>,
     pub label: Option<String>,
     pub plan_type: Option<String>,
-    pub token: String,
+    pub token: Option<String>,
     pub refresh_token: Option<String>,
     pub status: Option<String>,
 }
@@ -208,6 +223,7 @@ pub struct AccountImportEntry {
 pub struct AccountImportData {
     pub imported: u32,
     pub skipped: u32,
+    pub source_format: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -700,7 +716,7 @@ pub async fn import_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
-    Json(payload): Json<AccountImportPayload>,
+    Json(payload): Json<Value>,
 ) -> Response {
     let request_id = request_id.as_str().to_string();
     let Some(pool) = state.db() else {
@@ -725,7 +741,8 @@ pub async fn import_accounts(
         )
         .into_response();
     };
-    if payload.accounts.is_empty() {
+    let parsed = parse_account_import_payload(&payload);
+    if parsed.accounts.is_empty() {
         return AdminResponse::new(
             StatusCode::BAD_REQUEST,
             AdminEnvelope::new(40001, "No importable accounts found", (), request_id),
@@ -735,8 +752,8 @@ pub async fn import_accounts(
 
     let mut imported = 0u32;
     let mut skipped = 0u32;
-    for entry in payload.accounts {
-        let token = entry.token.trim();
+    for entry in parsed.accounts {
+        let token = entry.token.as_deref().unwrap_or_default().trim();
         if token.is_empty() {
             skipped += 1;
             continue;
@@ -816,7 +833,14 @@ pub async fn import_accounts(
 
     AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountImportData { imported, skipped }, request_id),
+        AdminEnvelope::ok(
+            AccountImportData {
+                imported,
+                skipped,
+                source_format: parsed.source_format.as_str().to_string(),
+            },
+            request_id,
+        ),
     )
     .into_response()
 }
@@ -1024,6 +1048,235 @@ fn normalized_account_id(id: Option<String>) -> String {
         .unwrap_or_else(|| format!("acct_{}", Uuid::new_v4().simple()))
 }
 
+fn parse_account_import_payload(payload: &Value) -> ParsedAccountImportPayload {
+    if let Some(accounts) = parse_sub2api_oauth_payload(payload) {
+        return ParsedAccountImportPayload {
+            accounts,
+            source_format: AccountImportFormat::Sub2Api,
+        };
+    }
+
+    parse_native_account_payload(payload)
+}
+
+fn parse_sub2api_oauth_payload(payload: &Value) -> Option<Vec<AccountImportEntry>> {
+    let accounts = payload.get("accounts")?.as_array()?;
+    let looks_like_sub2api = string_at(payload, &["type"]).as_deref() == Some("sub2api-data")
+        || payload.get("proxies").is_some()
+        || accounts
+            .iter()
+            .any(|account| account.get("credentials").is_some());
+    if !looks_like_sub2api {
+        return None;
+    }
+
+    Some(
+        accounts
+            .iter()
+            .filter_map(sub2api_oauth_account_entry)
+            .collect(),
+    )
+}
+
+fn sub2api_oauth_account_entry(account: &Value) -> Option<AccountImportEntry> {
+    let platform = string_at(account, &["platform"])?.to_ascii_lowercase();
+    let account_type = string_at(account, &["type"])?.to_ascii_lowercase();
+    if platform != "openai" || account_type != "oauth" {
+        return None;
+    }
+    let credentials = account.get("credentials")?;
+    let fallback_label = normalized_label(string_at(account, &["name"]));
+    let mut entry = account_entry_from_value(credentials, fallback_label);
+    if entry.token.is_none() && entry.refresh_token.is_none() {
+        return None;
+    }
+    if entry.email.is_none() {
+        entry.email = string_at(credentials, &["email"]);
+    }
+    if entry.account_id.is_none() {
+        entry.account_id = first_string(
+            credentials,
+            &[&["chatgpt_account_id"], &["account_id"], &["accountId"]],
+        );
+    }
+    if entry.user_id.is_none() {
+        entry.user_id = first_string(
+            credentials,
+            &[&["chatgpt_user_id"], &["user_id"], &["userId"]],
+        );
+    }
+    if entry.plan_type.is_none() {
+        entry.plan_type = first_string(credentials, &[&["plan_type"], &["planType"]]);
+    }
+    Some(entry)
+}
+
+fn parse_native_account_payload(payload: &Value) -> ParsedAccountImportPayload {
+    if let Some(accounts) = payload.as_array() {
+        return ParsedAccountImportPayload {
+            accounts: accounts
+                .iter()
+                .filter_map(|account| {
+                    let entry = account_entry_from_value(account, None);
+                    (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
+                })
+                .collect(),
+            source_format: AccountImportFormat::Native,
+        };
+    }
+
+    if let Some(accounts) = payload.get("accounts").and_then(Value::as_array) {
+        let source_format = if looks_like_sub2api_native_export(accounts) {
+            AccountImportFormat::Sub2Api
+        } else {
+            AccountImportFormat::Native
+        };
+        return ParsedAccountImportPayload {
+            accounts: accounts
+                .iter()
+                .filter_map(|account| {
+                    let entry = account_entry_from_value(account, None);
+                    (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
+                })
+                .collect(),
+            source_format,
+        };
+    }
+
+    let entry = account_entry_from_value(payload, None);
+    let accounts = if entry.token.is_some() || entry.refresh_token.is_some() {
+        vec![entry]
+    } else {
+        Vec::new()
+    };
+    ParsedAccountImportPayload {
+        accounts,
+        source_format: AccountImportFormat::Native,
+    }
+}
+
+fn looks_like_sub2api_native_export(accounts: &[Value]) -> bool {
+    accounts.iter().any(|account| {
+        // sub2api 兼容导出会携带代理/配额运行态字段；这里只用于格式识别，代理数据不进入 Rust 服务。
+        account.get("proxyApiKey").is_some()
+            || account.get("cachedQuota").is_some()
+            || account.get("quotaVerifyRequired").is_some()
+    })
+}
+
+fn account_entry_from_value(value: &Value, fallback_label: Option<String>) -> AccountImportEntry {
+    let token = first_string(
+        value,
+        &[
+            &["token"],
+            &["accessToken"],
+            &["access_token"],
+            &["tokens", "accessToken"],
+            &["tokens", "access_token"],
+            &["credentials", "token"],
+            &["credentials", "accessToken"],
+            &["credentials", "access_token"],
+        ],
+    )
+    .map(normalize_bearer_token);
+    let refresh_token = first_string(
+        value,
+        &[
+            &["refreshToken"],
+            &["refresh_token"],
+            &["tokens", "refreshToken"],
+            &["tokens", "refresh_token"],
+            &["credentials", "refreshToken"],
+            &["credentials", "refresh_token"],
+        ],
+    );
+
+    AccountImportEntry {
+        id: first_string(value, &[&["id"]]),
+        email: first_string(value, &[&["email"], &["credentials", "email"]]),
+        account_id: first_string(
+            value,
+            &[
+                &["accountId"],
+                &["account_id"],
+                &["chatgpt_account_id"],
+                &["credentials", "accountId"],
+                &["credentials", "account_id"],
+                &["credentials", "chatgpt_account_id"],
+            ],
+        ),
+        user_id: first_string(
+            value,
+            &[
+                &["userId"],
+                &["user_id"],
+                &["chatgpt_user_id"],
+                &["credentials", "userId"],
+                &["credentials", "user_id"],
+                &["credentials", "chatgpt_user_id"],
+            ],
+        ),
+        label: label_from_value(value).or(fallback_label),
+        plan_type: first_string(
+            value,
+            &[
+                &["planType"],
+                &["plan_type"],
+                &["credentials", "planType"],
+                &["credentials", "plan_type"],
+            ],
+        ),
+        token,
+        refresh_token,
+        status: first_string(value, &[&["status"]]),
+    }
+}
+
+fn label_from_value(value: &Value) -> Option<String> {
+    normalized_label(first_string(
+        value,
+        &[
+            &["label"],
+            &["name"],
+            &["account_name"],
+            &["accountName"],
+            &["account_note"],
+            &["accountNote"],
+            &["note"],
+        ],
+    ))
+}
+
+fn normalized_label(value: Option<String>) -> Option<String> {
+    value.map(|label| label.chars().take(64).collect())
+}
+
+fn first_string(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| string_at(value, path))
+}
+
+fn string_at(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn normalize_bearer_token(value: String) -> String {
+    let trimmed = value.trim();
+    trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
 fn empty_to_none(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -1031,7 +1284,8 @@ fn empty_to_none(value: Option<String>) -> Option<String> {
 }
 
 fn parse_import_status(status: Option<&str>) -> Result<AccountStatus, String> {
-    match status.unwrap_or("active") {
+    let normalized = status.unwrap_or("active").trim().to_ascii_lowercase();
+    match normalized.as_str() {
         "active" => Ok(AccountStatus::Active),
         "expired" => Ok(AccountStatus::Expired),
         "quota_exhausted" => Ok(AccountStatus::QuotaExhausted),

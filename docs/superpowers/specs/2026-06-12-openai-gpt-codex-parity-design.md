@@ -18,7 +18,7 @@ OpenAI Chat compatibility is implemented as a real route, not an alias to Respon
 
 Responses compatibility keeps native Responses passthrough semantics but adds the TS implementation's in-scope fields: reasoning/service tier, tool choice, parallel tool calls, text formats, prompt cache key, include, client metadata, and Codex context headers. `previous_response_id` uses WebSocket transport rather than being rejected.
 
-Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Commit `3960a35` extends that fallback to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: backend model snapshots are stored by account plan and `/v1/models*` reads cached backend models when present. WebSocket-backed `previous_response_id` fallback remains a Task 5 follow-up because account affinity must be preserved.
+Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Commit `3ecd5b6` partially implements Task 5 for non-streaming `/v1/responses`: upstream 429/402/403 responses classify account state and retry another imported account when available. Commit `3960a35` extends that fallback to HTTP SSE Responses setup and Chat Completions. Commit `1738f24` adds Task 6 cache groundwork: backend model snapshots are stored by account plan and `/v1/models*` reads cached backend models when present. Pending Task 7 import work accepts Sub2API OpenAI OAuth exports and marks the detected source format while ignoring proxy-only fields. WebSocket-backed `previous_response_id` fallback remains a Task 5 follow-up because account affinity must be preserved.
 
 ## Components
 
@@ -30,7 +30,7 @@ Current progress: Tasks 1-4 are implemented for the OpenAI GPT/Codex scope. Comm
 - `src/http/v1.rs`: Separate `/v1/responses` and `/v1/chat/completions` handlers sharing upstream lifecycle helpers.
 - `src/accounts/pool.rs` and repositories: fallback selection, quota/rate-limit updates, durable usage release, and account state mutation hooks.
 - `src/models/catalog.rs`: static catalog plus persisted backend snapshots, plan allowlist derivation, and admin refresh trigger.
-- `src/http/admin.rs`: scoped account/API-key/account-health/quota/cookie/admin model operations needed to operate Codex-backed GPT compatibility.
+- `src/http/admin.rs`: scoped account/API-key/account-health/quota/cookie/admin model operations needed to operate Codex-backed GPT compatibility, including Sub2API account import normalization without proxy-pool support.
 
 ## Data Flow
 
