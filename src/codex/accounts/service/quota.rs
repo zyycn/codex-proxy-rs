@@ -2,7 +2,8 @@ use crate::codex::accounts::model::AccountStatus;
 
 use super::{
     health::{apply_codex_account_error, fetch_account_usage, public_codex_error},
-    AccountQuotaError, AccountQuotaResult, AccountService,
+    AccountQuotaError, AccountQuotaResult, AccountQuotaWarning, AccountQuotaWarnings,
+    AccountService, AccountServiceError, QuotaWarningLevel, QuotaWarningWindow,
 };
 
 use serde_json::{json, Map, Value};
@@ -43,6 +44,109 @@ impl AccountService {
                 Err(AccountQuotaError::Fetch(public_codex_error(&error)))
             }
         }
+    }
+
+    pub async fn quota_warnings(&self) -> Result<AccountQuotaWarnings, AccountServiceError> {
+        let snapshots = self
+            .repository()?
+            .list_quota_snapshots()
+            .await
+            .map_err(|_| AccountServiceError::QuotaWarnings)?;
+        let primary_thresholds = sorted_thresholds(&self.config.quota.warning_thresholds.primary);
+        let secondary_thresholds =
+            sorted_thresholds(&self.config.quota.warning_thresholds.secondary);
+        let mut warnings = Vec::new();
+        let mut updated_at = None;
+
+        for snapshot in snapshots {
+            let Ok(quota) = serde_json::from_str::<Value>(&snapshot.quota_json) else {
+                continue;
+            };
+            let before_len = warnings.len();
+            if let Some(warning) = warning_from_quota_window(
+                &snapshot.account_id,
+                snapshot.email.as_deref(),
+                &quota,
+                "rate_limit",
+                QuotaWarningWindow::Primary,
+                &primary_thresholds,
+            ) {
+                warnings.push(warning);
+            }
+            if let Some(warning) = warning_from_quota_window(
+                &snapshot.account_id,
+                snapshot.email.as_deref(),
+                &quota,
+                "secondary_rate_limit",
+                QuotaWarningWindow::Secondary,
+                &secondary_thresholds,
+            ) {
+                warnings.push(warning);
+            }
+            if warnings.len() > before_len {
+                updated_at = max_optional_datetime(updated_at, snapshot.quota_fetched_at);
+            }
+        }
+
+        Ok(AccountQuotaWarnings {
+            warnings,
+            updated_at,
+        })
+    }
+}
+
+fn warning_from_quota_window(
+    account_id: &str,
+    email: Option<&str>,
+    quota: &Value,
+    field: &str,
+    window: QuotaWarningWindow,
+    thresholds: &[u8],
+) -> Option<AccountQuotaWarning> {
+    let quota_window = quota.get(field).filter(|value| !value.is_null())?;
+    let used_percent = quota_window
+        .get("used_percent")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())?;
+    let level = warning_level(used_percent, thresholds)?;
+
+    Some(AccountQuotaWarning {
+        account_id: account_id.to_string(),
+        email: email.map(str::to_string),
+        window,
+        level,
+        used_percent,
+        reset_at: quota_window.get("reset_at").and_then(Value::as_i64),
+    })
+}
+
+fn warning_level(used_percent: f64, thresholds: &[u8]) -> Option<QuotaWarningLevel> {
+    let matched_index = thresholds
+        .iter()
+        .rposition(|threshold| used_percent >= f64::from(*threshold))?;
+    if matched_index + 1 == thresholds.len() {
+        Some(QuotaWarningLevel::Critical)
+    } else {
+        Some(QuotaWarningLevel::Warning)
+    }
+}
+
+fn sorted_thresholds(thresholds: &[u8]) -> Vec<u8> {
+    let mut thresholds = thresholds.to_vec();
+    thresholds.sort_unstable();
+    thresholds.dedup();
+    thresholds
+}
+
+fn max_optional_datetime(
+    current: Option<chrono::DateTime<chrono::Utc>>,
+    candidate: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
     }
 }
 
