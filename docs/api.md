@@ -47,6 +47,8 @@ When the client omits `stream` or sets `"stream": false`, the Rust route collect
 
 When the client sets `"stream": true`, the Rust route returns `text/event-stream` and passes through upstream SSE frames while collecting usage for the account after the stream finishes. Both modes capture upstream `Set-Cookie`, replay encrypted account-scoped Cookies, record account usage when usage appears in SSE, and write a `v1.response` event log with `requestId`, `accountId`, `route`, `model`, `statusCode`, `latencyMs`, and non-secret metadata.
 
+For non-streaming clients, upstream HTTP SSE `event: error` and `event: response.failed` terminal frames return a `502` OpenAI-compatible `upstream_error` JSON body instead of an empty-response error. For streaming clients, those terminal frames remain passthrough SSE output and the lifecycle log is marked as a failed upstream SSE response.
+
 If Codex returns `401` and the account has a stored refresh token, the route refreshes the account through the OpenAI OAuth token endpoint once, persists the rotated access token, preserves the old refresh token when the server omits a new one, updates the in-process account pool, and retries the same request once.
 Refresh failures are recorded as non-secret `account.refresh` event logs with the request id, account id, model, `trigger`, `failure`, and resulting `accountStatus`.
 
