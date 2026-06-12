@@ -455,6 +455,90 @@ async fn v1_responses_should_retry_next_account_after_429_retry_after() {
 }
 
 #[tokio::test]
+async fn v1_responses_stream_should_retry_next_account_after_429_retry_after() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"ok\"}\n",
+        "\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_stream_after_429\",\"object\":\"response\",\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "90")
+                .set_body_json(json!({
+                    "error": {"message": "rate limited"}
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = response_text(response).await;
+    assert!(body.contains("resp_stream_after_429"));
+}
+
+#[tokio::test]
 async fn v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_account() {
     let server = MockServer::start().await;
     let success_sse = concat!(

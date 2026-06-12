@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, Reqwest/rustls, serde, sqlx/SQLite, wiremock, tokio, futures, optional WebSocket transport dependency.
 
-**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Remaining major work continues with streaming/Chat fallback, model refresh/cache, and scoped admin operations.
+**Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. The current pending stage extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Remaining major work continues with WebSocket/history fallback policy, model refresh/cache, and scoped admin operations.
 
 ---
 
@@ -80,7 +80,10 @@
 - [x] Add non-streaming Responses error classification and fallback acquire/release paths without adding proxy-pool support.
 - [x] Run: `cargo test --test v1_upstream_route_test`
 - [x] Run: `cargo test --test account_pool_scheduling_test`
-- [ ] Extend fallback classification and account retry to streaming HTTP SSE, WebSocket-backed Responses streaming, and Chat Completions.
+- [x] Extend fallback classification and account retry to HTTP SSE Responses setup and Chat Completions.
+- [x] Run: `cargo test --test v1_upstream_route_test`
+- [x] Run: `cargo test --test chat_completions_route_test`
+- [ ] Define and implement WebSocket-backed Responses fallback policy without breaking `previous_response_id` account affinity.
 - [ ] Add tests for exhausted no-account responses, refresh retry preservation under fallback, successful rate-limit header capture, and durable quota cooldown persistence if needed.
 
 ### Task 6: Model Catalog Refresh
