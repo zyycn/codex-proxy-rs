@@ -24,8 +24,11 @@ use crate::{
     },
     auth::admin_session::verify_admin_password,
     auth::api_key_repository::StoredClientApiKey,
+    codex::client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
     config::{AppConfig, QuotaWarningThresholds},
+    fingerprint::model::Fingerprint,
     http::{auth::admin_session_id, middleware::RequestId},
+    models::catalog::ModelPlanSnapshot,
     pagination::{clamp_limit, Page},
     state::AppState,
 };
@@ -224,6 +227,14 @@ pub struct AccountImportData {
     pub imported: u32,
     pub skipped: u32,
     pub source_format: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshModelsData {
+    pub refreshed_plans: usize,
+    pub model_count: usize,
+    pub failed_plans: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -558,6 +569,136 @@ pub async fn settings(
         AdminEnvelope::ok(AdminSettingsData::from_config(state.config()), request_id),
     )
     .into_response()
+}
+
+pub async fn refresh_models(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(account_repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+    let Some(model_repo) = state.model_snapshot_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Model repository is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    let accounts = match account_repo.list_pool_accounts().await {
+        Ok(accounts) => accounts,
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to list accounts", (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let plan_accounts = distinct_active_plan_accounts(accounts);
+    if plan_accounts.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "No accounts available for model refresh",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let client = match build_reqwest_client(state.config().tls.force_http11) {
+        Ok(client) => CodexBackendClient::new(
+            client,
+            state.config().api.base_url.clone(),
+            Fingerprint::default_codex_desktop(),
+        ),
+        Err(_) => {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to build Codex client", (), request_id),
+            )
+            .into_response();
+        }
+    };
+
+    let mut refreshed_plans = 0usize;
+    let mut model_count = 0usize;
+    let mut failed_plans = 0usize;
+    for (plan_type, account) in plan_accounts {
+        let context = CodexRequestContext {
+            access_token: &account.access_token,
+            account_id: account.account_id.as_deref(),
+            request_id: &request_id,
+            turn_state: None,
+            turn_metadata: None,
+            beta_features: None,
+            include_timing_metrics: None,
+            version: None,
+            codex_window_id: None,
+            parent_thread_id: None,
+            cookie_header: None,
+        };
+        let entries = match client.fetch_models(context).await {
+            Ok(entries) if !entries.is_empty() => entries,
+            Ok(_) => {
+                failed_plans += 1;
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(?error, plan_type, "failed to refresh backend models");
+                failed_plans += 1;
+                continue;
+            }
+        };
+        let snapshot = ModelPlanSnapshot::from_backend_entries(plan_type, entries);
+        model_count += snapshot.models.len();
+        if model_repo.replace_plan_snapshot(&snapshot).await.is_err() {
+            return AdminResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AdminEnvelope::new(50001, "Failed to store model snapshot", (), request_id),
+            )
+            .into_response();
+        }
+        refreshed_plans += 1;
+    }
+
+    let data = RefreshModelsData {
+        refreshed_plans,
+        model_count,
+        failed_plans,
+    };
+    if refreshed_plans == 0 {
+        return AdminResponse::new(
+            StatusCode::BAD_GATEWAY,
+            AdminEnvelope::new(50201, "Failed to refresh backend models", data, request_id),
+        )
+        .into_response();
+    }
+
+    AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data, request_id)).into_response()
 }
 
 pub async fn usage_stats(
@@ -1046,6 +1187,22 @@ async fn require_admin_session(
 fn normalized_account_id(id: Option<String>) -> String {
     id.and_then(|id| empty_to_none(Some(id)))
         .unwrap_or_else(|| format!("acct_{}", Uuid::new_v4().simple()))
+}
+
+fn distinct_active_plan_accounts(accounts: Vec<Account>) -> Vec<(String, Account)> {
+    let mut by_plan = std::collections::BTreeMap::new();
+    for account in accounts {
+        if account.status != AccountStatus::Active {
+            continue;
+        }
+        let plan_type = account
+            .plan_type
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        // 同一 plan 的模型列表一致，刷新时只需要取一个账号，避免重复打上游。
+        by_plan.entry(plan_type).or_insert(account);
+    }
+    by_plan.into_iter().collect()
 }
 
 fn parse_account_import_payload(payload: &Value) -> ParsedAccountImportPayload {

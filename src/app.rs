@@ -8,8 +8,8 @@ use tower_http::trace::TraceLayer;
 use crate::{
     http::{
         admin::{
-            accounts, api_keys, create_api_key, import_accounts, login, logs, settings,
-            usage_stats, usage_stats_summary,
+            accounts, api_keys, create_api_key, import_accounts, login, logs, refresh_models,
+            settings, usage_stats, usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -34,6 +34,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/login", post(login))
         .route("/admin/logs", get(logs))
         .route("/admin/settings", get(settings))
+        .route("/admin/refresh-models", post(refresh_models))
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
         .route("/admin/accounts", get(accounts))
