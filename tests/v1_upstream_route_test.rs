@@ -56,6 +56,13 @@ struct FailingTokenRefresher {
     failure: RefreshFailure,
 }
 
+struct ImportAccount {
+    id: &'static str,
+    account_id: &'static str,
+    token: &'static str,
+    refresh_token: &'static str,
+}
+
 #[async_trait]
 impl TokenRefresher for StaticTokenRefresher {
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
@@ -129,6 +136,22 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
 }
 
 async fn build_imported_app(base_url: String) -> ImportedApp {
+    build_imported_app_with_accounts(
+        base_url,
+        &[ImportAccount {
+            id: "acct_imported",
+            account_id: "chatgpt-account",
+            token: "access-secret",
+            refresh_token: "refresh-secret",
+        }],
+    )
+    .await
+}
+
+async fn build_imported_app_with_accounts(
+    base_url: String,
+    accounts: &[ImportAccount],
+) -> ImportedApp {
     let tempdir = tempfile::tempdir().unwrap();
     let db = tempdir.path().join("v1-upstream.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -147,6 +170,18 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
         secret_box.clone(),
         hasher,
     ));
+    let accounts = accounts
+        .iter()
+        .map(|account| {
+            json!({
+                "id": account.id,
+                "accountId": account.account_id,
+                "token": account.token,
+                "refreshToken": account.refresh_token,
+                "status": "active"
+            })
+        })
+        .collect::<Vec<_>>();
 
     let import_response = app
         .clone()
@@ -156,18 +191,7 @@ async fn build_imported_app(base_url: String) -> ImportedApp {
                 .uri("/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(
-                    json!({
-                        "accounts": [{
-                            "id": "acct_imported",
-                            "accountId": "chatgpt-account",
-                            "token": "access-secret",
-                            "refreshToken": "refresh-secret",
-                            "status": "active"
-                        }]
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(json!({ "accounts": accounts }).to_string()))
                 .unwrap(),
         )
         .await
@@ -335,6 +359,327 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
     assert_eq!(event.3, 200);
     assert_eq!(event.4["stream"], false);
     assert_eq!(event.4["usage"]["inputTokens"], 7);
+}
+
+#[tokio::test]
+async fn v1_responses_should_retry_next_account_after_429_retry_after() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_after_429\",\"object\":\"response\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "120")
+                .set_body_json(json!({
+                    "error": {
+                        "message": "rate limited",
+                        "resets_in_seconds": 120
+                    }
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_429");
+    let usage_a: (i64, i64, i64) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens from account_usage where account_id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(usage_a, (1, 0, 0));
+    let usage_b: (i64, i64, i64) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens from account_usage where account_id = ?",
+    )
+    .bind("acct_b")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(usage_b, (1, 5, 2));
+}
+
+#[tokio::test]
+async fn v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_account() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_after_402\",\"object\":\"response\",\"usage\":{\"input_tokens\":6,\"output_tokens\":3}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {"message": "quota exhausted"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_402");
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_a")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "quota_exhausted");
+}
+
+#[tokio::test]
+async fn v1_responses_should_mark_banned_after_403_and_retry_next_account() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_after_403\",\"object\":\"response\",\"usage\":{\"input_tokens\":6,\"output_tokens\":3}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "error": {"message": "account banned"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_403");
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_a")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "banned");
+}
+
+#[tokio::test]
+async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
+    let server = MockServer::start().await;
+    let success_sse = concat!(
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_after_cf\",\"object\":\"response\",\"usage\":{\"input_tokens\":6,\"output_tokens\":3}}}\n",
+        "\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(403).set_body_string(
+            "<html><title>Just a moment...</title><body>cf_chl challenge</body></html>",
+        ))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(success_sse),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_cf");
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_a")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
 }
 
 #[tokio::test]

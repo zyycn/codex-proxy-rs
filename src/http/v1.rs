@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use futures::{stream, StreamExt};
 use reqwest::Url;
 use secrecy::SecretString;
@@ -49,6 +49,9 @@ use crate::{
 };
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
+const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS: u64 = 60;
+const MAX_RATE_LIMIT_BACKOFF_SECONDS: u64 = 86_400 * 7;
+const CLOUDFLARE_CHALLENGE_COOLDOWN_SECONDS: u64 = 10;
 
 #[derive(Deserialize)]
 struct ResponsesBody {
@@ -159,8 +162,8 @@ pub async fn responses(
     let Some(acquired) = acquired else {
         return no_available_accounts_response().into_response();
     };
-    let account = acquired.account;
-    let log_context = V1LogContext::new(
+    let mut account = acquired.account;
+    let mut log_context = V1LogContext::new(
         request_id.as_str(),
         &account.id,
         &codex_request.model,
@@ -172,29 +175,62 @@ pub async fn responses(
         return responses_stream(state, codex_request, account, log_context).await;
     }
 
-    let response = send_codex_request_with_refresh_retry(
-        &state,
-        &codex_request,
-        &account,
-        request_id.as_str(),
-    )
-    .await;
-    state.account_pool().lock().await.release(&account.id);
+    let mut excluded_account_ids = Vec::new();
+    let response = loop {
+        let response = send_codex_request_with_refresh_retry(
+            &state,
+            &codex_request,
+            &account,
+            request_id.as_str(),
+        )
+        .await;
+        state.account_pool().lock().await.release(&account.id);
 
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            let error_response = codex_client_error_response(error);
-            log_v1_response(
-                &state,
-                &log_context,
-                error_response.0,
-                EventLevel::Error,
-                "v1 responses upstream request failed",
-                json!({"stream": false}),
-            )
-            .await;
-            return error_response.into_response();
+        match response {
+            Ok(response) => break response,
+            Err(error) => {
+                if let Some(retry) = classify_upstream_account_retry(&error) {
+                    apply_upstream_account_retry(&state, &account, retry).await;
+                    excluded_account_ids.push(account.id.clone());
+                    log_v1_response(
+                        &state,
+                        &log_context,
+                        retry.status(),
+                        EventLevel::Warn,
+                        "v1 responses upstream retrying with fallback account",
+                        retry.metadata(false),
+                    )
+                    .await;
+                    let fallback = {
+                        state.account_pool().lock().await.acquire_with(
+                            AccountAcquireRequest::new(&codex_request.model, Utc::now())
+                                .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
+                        )
+                    };
+                    if let Some(fallback) = fallback {
+                        account = fallback.account;
+                        log_context = V1LogContext::new(
+                            request_id.as_str(),
+                            &account.id,
+                            &codex_request.model,
+                            client_stream,
+                            started_at,
+                        );
+                        continue;
+                    }
+                }
+                let error_response = codex_client_error_response(error);
+                log_v1_response(
+                    &state,
+                    &log_context,
+                    error_response.0,
+                    EventLevel::Error,
+                    "v1 responses upstream request failed",
+                    json!({"stream": false}),
+                )
+                .await;
+                return error_response.into_response();
+            }
         }
     };
     if persist_upstream_cookies(&state, &account.id, &response.set_cookie_headers)
@@ -587,11 +623,19 @@ async fn send_codex_request_with_refresh_retry(
     request_id: &str,
 ) -> Result<crate::codex::client::CodexBackendResponse, CodexClientError> {
     match send_codex_request(state, request, account, request_id).await {
-        Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
+        Err(CodexClientError::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        }) if status == StatusCode::UNAUTHORIZED => {
             let Some(refreshed) =
                 refresh_account_after_unauthorized(state, request, account, request_id).await
             else {
-                return Err(CodexClientError::Upstream { status, body });
+                return Err(CodexClientError::Upstream {
+                    status,
+                    body,
+                    retry_after_seconds,
+                });
             };
             send_codex_request(state, request, &refreshed, request_id).await
         }
@@ -642,11 +686,19 @@ async fn send_codex_stream_request_with_refresh_retry(
     request_id: &str,
 ) -> Result<CodexBackendStream, CodexClientError> {
     match send_codex_stream_request(state, request, account, request_id).await {
-        Err(CodexClientError::Upstream { status, body }) if status == StatusCode::UNAUTHORIZED => {
+        Err(CodexClientError::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        }) if status == StatusCode::UNAUTHORIZED => {
             let Some(refreshed) =
                 refresh_account_after_unauthorized(state, request, account, request_id).await
             else {
-                return Err(CodexClientError::Upstream { status, body });
+                return Err(CodexClientError::Upstream {
+                    status,
+                    body,
+                    retry_after_seconds,
+                });
             };
             send_codex_stream_request(state, request, &refreshed, request_id).await
         }
@@ -688,6 +740,146 @@ async fn send_codex_stream_request(
             },
         )
         .await
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UpstreamAccountRetry {
+    RateLimited { retry_after_seconds: u64 },
+    QuotaExhausted,
+    CloudflareChallenge { cooldown_seconds: u64 },
+    Banned,
+}
+
+impl UpstreamAccountRetry {
+    fn status(self) -> StatusCode {
+        match self {
+            Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
+            Self::QuotaExhausted => StatusCode::PAYMENT_REQUIRED,
+            Self::CloudflareChallenge { .. } => StatusCode::FORBIDDEN,
+            Self::Banned => StatusCode::FORBIDDEN,
+        }
+    }
+
+    fn metadata(self, stream: bool) -> Value {
+        match self {
+            Self::RateLimited {
+                retry_after_seconds,
+            } => json!({
+                "stream": stream,
+                "retry": true,
+                "reason": "rateLimited",
+                "retryAfterSeconds": retry_after_seconds,
+            }),
+            Self::QuotaExhausted => json!({
+                "stream": stream,
+                "retry": true,
+                "reason": "quotaExhausted",
+            }),
+            Self::CloudflareChallenge { cooldown_seconds } => json!({
+                "stream": stream,
+                "retry": true,
+                "reason": "cloudflareChallenge",
+                "cooldownSeconds": cooldown_seconds,
+            }),
+            Self::Banned => json!({
+                "stream": stream,
+                "retry": true,
+                "reason": "banned",
+            }),
+        }
+    }
+}
+
+fn classify_upstream_account_retry(error: &CodexClientError) -> Option<UpstreamAccountRetry> {
+    match error {
+        CodexClientError::Upstream {
+            status,
+            retry_after_seconds,
+            ..
+        } if *status == StatusCode::TOO_MANY_REQUESTS => Some(UpstreamAccountRetry::RateLimited {
+            retry_after_seconds: retry_after_seconds
+                .unwrap_or(DEFAULT_RATE_LIMIT_BACKOFF_SECONDS)
+                .min(MAX_RATE_LIMIT_BACKOFF_SECONDS),
+        }),
+        CodexClientError::Upstream { status, .. } if *status == StatusCode::PAYMENT_REQUIRED => {
+            Some(UpstreamAccountRetry::QuotaExhausted)
+        }
+        CodexClientError::Upstream { status, body, .. } if *status == StatusCode::FORBIDDEN => {
+            if is_cloudflare_challenge(body) {
+                Some(UpstreamAccountRetry::CloudflareChallenge {
+                    cooldown_seconds: CLOUDFLARE_CHALLENGE_COOLDOWN_SECONDS,
+                })
+            } else {
+                Some(UpstreamAccountRetry::Banned)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_cloudflare_challenge(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("cf-mitigated")
+        || lower.contains("cf-chl-bypass")
+        || lower.contains("_cf_chl")
+        || lower.contains("cf_chl")
+        || lower.contains("attention required")
+        || lower.contains("just a moment")
+}
+
+async fn apply_upstream_account_retry(
+    state: &AppState,
+    account: &Account,
+    retry: UpstreamAccountRetry,
+) {
+    match retry {
+        UpstreamAccountRetry::RateLimited {
+            retry_after_seconds,
+        } => {
+            let cooldown_until = Utc::now() + Duration::seconds(retry_after_seconds as i64);
+            state
+                .account_pool()
+                .lock()
+                .await
+                .mark_quota_limited_until(&account.id, cooldown_until);
+            if record_request_attempt(state, &account.id).await.is_err() {
+                tracing::warn!(
+                    account_id = %account.id,
+                    "failed to record rate-limited account attempt"
+                );
+            }
+        }
+        UpstreamAccountRetry::QuotaExhausted => {
+            set_account_status(state, account, AccountStatus::QuotaExhausted).await;
+        }
+        UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => {
+            let cooldown_until = Utc::now() + Duration::seconds(cooldown_seconds as i64);
+            state
+                .account_pool()
+                .lock()
+                .await
+                .set_cloudflare_cooldown_until(&account.id, cooldown_until);
+        }
+        UpstreamAccountRetry::Banned => {
+            set_account_status(state, account, AccountStatus::Banned).await;
+        }
+    }
+}
+
+async fn set_account_status(state: &AppState, account: &Account, status: AccountStatus) {
+    if let Some(repo) = state.account_repository() {
+        if repo.set_status(&account.id, status).await.is_err() {
+            tracing::warn!(
+                account_id = %account.id,
+                "failed to persist upstream account status"
+            );
+        }
+    }
+    state
+        .account_pool()
+        .lock()
+        .await
+        .set_status(&account.id, status);
 }
 
 async fn responses_stream(
@@ -1052,6 +1244,22 @@ async fn record_usage(state: &AppState, account_id: &str, usage: TokenUsage) -> 
     .map_err(|_| ())
 }
 
+async fn record_request_attempt(state: &AppState, account_id: &str) -> Result<(), ()> {
+    let Some(repo) = state.account_repository() else {
+        return Ok(());
+    };
+    repo.record_usage(
+        account_id,
+        UsageDelta {
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0,
+        },
+    )
+    .await
+    .map_err(|_| ())
+}
+
 #[derive(Clone)]
 struct V1LogContext {
     request_id: String,
@@ -1343,7 +1551,7 @@ fn codex_client_error_response(error: CodexClientError) -> (StatusCode, Json<Val
                 "websocket_required",
             )),
         ),
-        CodexClientError::Upstream { status, body } => (
+        CodexClientError::Upstream { status, body, .. } => (
             status,
             Json(openai_error(
                 &format!(

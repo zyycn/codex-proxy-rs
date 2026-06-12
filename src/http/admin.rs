@@ -786,6 +786,7 @@ pub async fn import_accounts(
             access_token_expires_at: None,
             status,
             quota_limit_reached: false,
+            quota_cooldown_until: None,
             cloudflare_cooldown_until: None,
             added_at: chrono::Utc::now().to_rfc3339(),
             last_used_at: None,

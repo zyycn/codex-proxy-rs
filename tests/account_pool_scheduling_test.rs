@@ -55,6 +55,28 @@ fn account_pool_should_skip_accounts_with_cached_quota_limit() {
 }
 
 #[test]
+fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(Account::test("limited", AccountStatus::Active));
+    pool.mark_quota_limited_until("limited", now + Duration::seconds(30));
+
+    assert!(pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .is_none());
+    assert_eq!(
+        pool.acquire_with(AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(31)
+        ))
+        .unwrap()
+        .account
+        .id,
+        "limited"
+    );
+}
+
+#[test]
 fn account_pool_should_prefer_configured_tier_priority() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         tier_priority: vec!["team".to_string(), "plus".to_string()],
