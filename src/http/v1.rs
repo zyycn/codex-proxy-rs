@@ -81,6 +81,8 @@ struct ResponsesBody {
     codex_window_id: Option<String>,
     #[serde(rename = "parentThreadId")]
     parent_thread_id: Option<String>,
+    #[serde(alias = "useWebSocket")]
+    use_websocket: Option<bool>,
 }
 
 pub async fn responses(
@@ -152,6 +154,7 @@ pub async fn responses(
     codex_request.parent_thread_id = body
         .parent_thread_id
         .or_else(|| header_string(&headers, "x-codex-parent-thread-id"));
+    codex_request.use_websocket = body.use_websocket.unwrap_or(false);
     let acquired = {
         state
             .account_pool()
@@ -190,27 +193,41 @@ pub async fn responses(
             Ok(response) => break response,
             Err(error) => {
                 if let Some(retry) = classify_upstream_account_retry(&error) {
-                    let fallback = apply_upstream_retry_and_acquire_fallback(
-                        &state,
-                        &account,
-                        retry,
-                        &codex_request.model,
-                        &mut excluded_account_ids,
-                    )
-                    .await;
-                    log_v1_response(
-                        &state,
-                        &log_context,
-                        retry.status(),
-                        EventLevel::Warn,
-                        "v1 responses upstream retrying with fallback account",
-                        retry.metadata(false),
-                    )
-                    .await;
-                    if let Some(fallback) = fallback {
-                        account = fallback;
-                        log_context = log_context.with_account(&account.id);
-                        continue;
+                    if codex_request.previous_response_id.is_some() {
+                        // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
+                        apply_upstream_account_retry(&state, &account, retry).await;
+                        log_v1_response(
+                            &state,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses websocket history request kept on original account",
+                            websocket_history_retry_metadata(retry, false),
+                        )
+                        .await;
+                    } else {
+                        let fallback = apply_upstream_retry_and_acquire_fallback(
+                            &state,
+                            &account,
+                            retry,
+                            &codex_request.model,
+                            &mut excluded_account_ids,
+                        )
+                        .await;
+                        log_v1_response(
+                            &state,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses upstream retrying with fallback account",
+                            retry.metadata(false),
+                        )
+                        .await;
+                        if let Some(fallback) = fallback {
+                            account = fallback;
+                            log_context = log_context.with_account(&account.id);
+                            continue;
+                        }
                     }
                 }
                 let error_response = codex_client_error_response(error);
@@ -614,6 +631,7 @@ fn default_body(default_model: String) -> ResponsesBody {
         include_timing_metrics: None,
         codex_window_id: None,
         parent_thread_id: None,
+        use_websocket: None,
     }
 }
 
@@ -1085,32 +1103,73 @@ async fn responses_stream(
 async fn responses_websocket_stream(
     state: AppState,
     request: CodexResponsesRequest,
-    account: Account,
-    log_context: V1LogContext,
+    mut account: Account,
+    mut log_context: V1LogContext,
 ) -> Response {
-    let response = send_codex_request_with_refresh_retry(
-        &state,
-        &request,
-        &account,
-        log_context.request_id.as_str(),
-    )
-    .await;
-    state.account_pool().lock().await.release(&account.id);
+    let mut excluded_account_ids = Vec::new();
+    let response = loop {
+        let response = send_codex_request_with_refresh_retry(
+            &state,
+            &request,
+            &account,
+            log_context.request_id.as_str(),
+        )
+        .await;
+        state.account_pool().lock().await.release(&account.id);
 
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            let error_response = codex_client_error_response(error);
-            log_v1_response(
-                &state,
-                &log_context,
-                error_response.0,
-                EventLevel::Error,
-                "v1 responses websocket stream upstream request failed",
-                json!({"stream": true, "transport": "websocket"}),
-            )
-            .await;
-            return error_response.into_response();
+        match response {
+            Ok(response) => break response,
+            Err(error) => {
+                if let Some(retry) = classify_upstream_account_retry(&error) {
+                    if request.previous_response_id.is_some() {
+                        // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
+                        apply_upstream_account_retry(&state, &account, retry).await;
+                        log_v1_response(
+                            &state,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses websocket history request kept on original account",
+                            websocket_history_retry_metadata(retry, true),
+                        )
+                        .await;
+                    } else {
+                        let fallback = apply_upstream_retry_and_acquire_fallback(
+                            &state,
+                            &account,
+                            retry,
+                            &request.model,
+                            &mut excluded_account_ids,
+                        )
+                        .await;
+                        log_v1_response(
+                            &state,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses websocket upstream retrying with fallback account",
+                            retry.metadata(true),
+                        )
+                        .await;
+                        if let Some(fallback) = fallback {
+                            account = fallback;
+                            log_context = log_context.with_account(&account.id);
+                            continue;
+                        }
+                    }
+                }
+                let error_response = codex_client_error_response(error);
+                log_v1_response(
+                    &state,
+                    &log_context,
+                    error_response.0,
+                    EventLevel::Error,
+                    "v1 responses websocket stream upstream request failed",
+                    json!({"stream": true, "transport": "websocket"}),
+                )
+                .await;
+                return error_response.into_response();
+            }
         }
     };
 
@@ -1137,12 +1196,14 @@ async fn responses_websocket_stream(
             .into_response();
     }
 
+    let rate_limit_headers = response.rate_limit_headers.clone();
     let mut level = EventLevel::Info;
     let mut message = "v1 responses websocket stream completed";
     let mut metadata = json!({
         "stream": true,
         "transport": "websocket",
         "usage": response.usage,
+        "rateLimitHeaders": rate_limit_headers.clone(),
     });
     if let Some(usage) = response.usage {
         if record_usage(&state, &account.id, usage).await.is_err() {
@@ -1152,6 +1213,7 @@ async fn responses_websocket_stream(
                 "stream": true,
                 "transport": "websocket",
                 "usage": usage,
+                "rateLimitHeaders": rate_limit_headers.clone(),
                 "usageStoreError": true,
             });
         }
@@ -1181,6 +1243,43 @@ async fn responses_websocket_stream(
             )
                 .into_response()
         })
+}
+
+fn websocket_history_retry_metadata(retry: UpstreamAccountRetry, stream: bool) -> Value {
+    match retry {
+        UpstreamAccountRetry::RateLimited {
+            retry_after_seconds,
+        } => json!({
+            "stream": stream,
+            "transport": "websocket",
+            "retry": false,
+            "reason": "rateLimited",
+            "retryAfterSeconds": retry_after_seconds,
+            "accountAffinity": "previousResponseId",
+        }),
+        UpstreamAccountRetry::QuotaExhausted => json!({
+            "stream": stream,
+            "transport": "websocket",
+            "retry": false,
+            "reason": "quotaExhausted",
+            "accountAffinity": "previousResponseId",
+        }),
+        UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => json!({
+            "stream": stream,
+            "transport": "websocket",
+            "retry": false,
+            "reason": "cloudflareChallenge",
+            "cooldownSeconds": cooldown_seconds,
+            "accountAffinity": "previousResponseId",
+        }),
+        UpstreamAccountRetry::Banned => json!({
+            "stream": stream,
+            "transport": "websocket",
+            "retry": false,
+            "reason": "banned",
+            "accountAffinity": "previousResponseId",
+        }),
+    }
 }
 
 async fn refresh_account_after_unauthorized(

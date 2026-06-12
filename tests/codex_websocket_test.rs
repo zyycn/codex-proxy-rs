@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::Mutex,
+};
 use tokio_tungstenite::{
     accept_hdr_async,
     tungstenite::{
@@ -12,7 +16,7 @@ use tokio_tungstenite::{
 };
 
 use codex_proxy_rs::codex::{
-    client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
+    client::{build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext},
     types::CodexResponsesRequest,
     websocket::{ensure_http_sse_supported, transport_for_request, CodexTransport},
 };
@@ -148,6 +152,171 @@ async fn previous_response_id_should_use_websocket_transport() {
         .any(|(name, value)| { name == "authorization" && value == "Bearer access-token" }));
 }
 
+#[tokio::test]
+async fn websocket_handshake_429_should_surface_as_upstream_error_before_body_is_sent() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_upgrade_request(&mut stream).await;
+        assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
+        assert!(request.contains("authorization: Bearer access-token"));
+        let body = r#"{"error":{"message":"rate limited"}}"#;
+        let response = format!(
+            "HTTP/1.1 429 Too Many Requests\r\nretry-after: 33\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let mut request = base_request();
+    request.use_websocket = true;
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+
+    let error = client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                access_token: "access-token",
+                account_id: Some("chatgpt-account"),
+                request_id: "req_ws_429",
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    server.await.unwrap();
+    let CodexClientError::Upstream {
+        status,
+        retry_after_seconds,
+        body,
+    } = error
+    else {
+        panic!("expected upstream error, found {error:?}");
+    };
+    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(retry_after_seconds, Some(33));
+    assert!(body.contains("rate limited"));
+}
+
+#[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "tokio-tungstenite handshake callbacks use a large error response type"
+)]
+async fn websocket_success_should_capture_handshake_headers_and_rate_limit_headers() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket =
+            accept_hdr_async(stream, |_request: &WsRequest, mut response: WsResponse| {
+                response
+                    .headers_mut()
+                    .insert("x-codex-turn-state", "turn-ws".parse().unwrap());
+                response.headers_mut().insert(
+                    "set-cookie",
+                    "cf_clearance=ws; Domain=.chatgpt.com; Path=/"
+                        .parse()
+                        .unwrap(),
+                );
+                response
+                    .headers_mut()
+                    .insert("x-ratelimit-remaining-requests", "41".parse().unwrap());
+                Ok(response)
+            })
+            .await
+            .unwrap();
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_ws_headers",
+                        "object": "response",
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+
+    let mut request = base_request();
+    request.use_websocket = true;
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+
+    let response = client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                access_token: "access-token",
+                account_id: Some("chatgpt-account"),
+                request_id: "req_ws_headers",
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    server.await.unwrap();
+    assert_eq!(response.turn_state.as_deref(), Some("turn-ws"));
+    assert_eq!(
+        response.set_cookie_headers,
+        vec!["cf_clearance=ws; Domain=.chatgpt.com; Path=/".to_string()]
+    );
+    assert!(response
+        .rate_limit_headers
+        .iter()
+        .any(|(name, value)| { name == "x-ratelimit-remaining-requests" && value == "41" }));
+}
+
 fn base_request() -> CodexResponsesRequest {
     CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new())
+}
+
+async fn read_http_upgrade_request(stream: &mut tokio::net::TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(request).unwrap()
 }
