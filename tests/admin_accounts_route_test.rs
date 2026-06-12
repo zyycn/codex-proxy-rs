@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, fs, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{
@@ -1346,6 +1346,96 @@ async fn manual_add_should_preserve_existing_refresh_when_refresh_only_omits_rot
     assert_eq!(stored.refresh_token.unwrap().expose_secret(), "old-refresh");
     assert_eq!(stored.email.as_deref(), Some("second@example.com"));
     assert_eq!(stored.plan_type.as_deref(), Some("team"));
+}
+
+#[tokio::test]
+async fn admin_accounts_import_cli_should_read_codex_auth_file_store_encrypted_and_sync_pool() {
+    let (app, state, pool, dir) =
+        admin_accounts_test_app("admin-account-import-cli.sqlite", 28).await;
+    let codex_home = dir.path().join("codex-home");
+    fs::create_dir_all(&codex_home).unwrap();
+    let token = test_jwt(
+        Some("cli-account"),
+        Some("cli-user"),
+        Some("cli@example.com"),
+        Some("plus"),
+        3600,
+    );
+    fs::write(
+        codex_home.join("auth.json"),
+        json!({
+            "access_token": token,
+            "refresh_token": "cli-refresh-secret"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/import-cli")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_import_cli")
+                .body(Body::from(
+                    json!({
+                        "codexHome": codex_home.display().to_string(),
+                        "id": "caller-id",
+                        "email": "caller@example.com",
+                        "accountId": "caller-account",
+                        "userId": "caller-user",
+                        "label": "caller-label",
+                        "planType": "caller-plan"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["sourceFormat"], "codex_cli");
+    assert_eq!(body["data"]["imported"], 1);
+    assert!(body["data"].get("token").is_none());
+    assert!(body["data"].get("refreshToken").is_none());
+
+    let stored: (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "select id, email, account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher from accounts limit 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_ne!(stored.0, "caller-id");
+    assert_eq!(stored.1, "cli@example.com");
+    assert_eq!(stored.2, "cli-account");
+    assert_eq!(stored.3, "cli-user");
+    assert_eq!(stored.4, None);
+    assert_eq!(stored.5, "plus");
+    assert!(stored.6.starts_with("v1:"));
+    assert!(!stored.6.contains(&token));
+    assert!(stored.7.starts_with("v1:"));
+    assert!(!stored.7.contains("cli-refresh-secret"));
+
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.id, stored.0);
 }
 
 async fn admin_accounts_test_app(
