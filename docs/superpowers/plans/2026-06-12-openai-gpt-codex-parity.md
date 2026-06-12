@@ -12,6 +12,32 @@
 
 ---
 
+### Parity Drift Audit 2026-06-12
+
+This audit is the correction point against the TypeScript reference at `/home/zyy/桌面/Codes/codex-proxy`. Only OpenAI GPT/Codex-compatible behavior backed by imported ChatGPT/Codex accounts is in scope. Outbound proxy pools, non-OpenAI provider pools, Electron/frontend/update flows, and third-party provider API key management remain non-goals.
+
+| Area / commit | TypeScript reference behavior | Rust current behavior | Classification | Action |
+| --- | --- | --- | --- | --- |
+| Sub2API OpenAI OAuth import / `0b6cc7e` | Account import accepts token/refresh-token account exports and Sub2API-shaped OpenAI OAuth data through `AccountImportService`; proxy fields can exist in source data. | `/admin/accounts/import` accepts native and Sub2API OpenAI OAuth payloads, returns `sourceFormat`, and ignores proxy-only fields. | Original parity, scoped. | Keep. Use the real Sub2API export only for private smoke verification; never print or commit secrets. |
+| Account label/status/delete and batch mutations / `db6cb98`, `16eb4ed` | `/auth/accounts/:id/label`, `/status`, delete, batch-delete, and batch-status mutate the account pool. | `/admin/accounts/*` mutates SQLite and synchronizes the runtime account pool with the admin envelope contract. | Partial parity, adapted. | Keep. Finish quota, health, reset-usage, and login/import variants separately. |
+| Account Cookie get/set/delete / `203270f` | Account routes can store browser Cookie headers for account-scoped replay. | `/admin/accounts/{id}/cookies` stores, reads, and clears encrypted per-account Cookies. | Original parity, adapted. | Keep; preserve account-scoped replay and encryption invariants. |
+| Account export / `72438c6` | `/auth/accounts/export` supports `full`, `minimal`, `cockpit_tools`, `sub2api`, and `cpa`. | `/admin/accounts/export` supports native/full Rust export and Sub2API OpenAI OAuth export only, without proxy fields. | Partial parity, scoped. | Keep native and Sub2API. Treat `minimal`, `cockpit_tools`, and `cpa` as omitted unless an OpenAI/Codex operation needs them. |
+| Manual account creation / `16938e6` | `POST /auth/accounts` accepts only `token` and/or `refreshToken`, runs `AccountImportService.importOne`, exchanges refresh-token-only imports, probes the account, caches quota on success, and schedules refresh. | `POST /admin/accounts` accepts raw metadata (`id`, `email`, `accountId`, `userId`, `label`, `planType`, `status`) and directly stores encrypted tokens without upstream validation or refresh-token exchange. | Drift / needs correction. | Next code correction: narrow the request to TS-like token/refreshToken import, validate or exchange upstream, avoid arbitrary caller-supplied status/metadata, and keep the response sanitized. |
+| Local client API key status/delete / `8af350d` | `/auth/api-keys` manages third-party provider key pools such as OpenAI, Anthropic, Gemini, OpenRouter/custom, plus model bindings and capabilities. | `/admin/api-keys/*` manages local `cpr_` client auth keys used only for this Rust service's `/v1/*` authorization. | Rust local extension, not TS parity. | Keep only as local admin utility if accepted. Do not count as provider API-key parity and do not add non-OpenAI provider pools. |
+| Local client API key label/batch-delete / `960bbb2` | TS label/batch-delete applies to third-party provider key pool entries. | Rust label/batch-delete applies to local HMAC-hashed `cpr_` client keys. | Rust local extension, possible drift if strict parity is required. | Reclassify in docs as local admin utility. Remove only if strict original parity excludes local client-key management beyond create/list/status/delete. |
+| API key export/import variants | TS can export/import third-party provider keys for reimport. | Rust local `cpr_` key plaintext is shown only at creation and then HMAC-hashed; provider key pools are not implemented. | Intentional scope cut. | Do not port TS provider key import/export. Document that local client keys cannot be safely exported after creation. |
+| Model refresh and plan allowlist sync / `f75db60`, `4b19846` | TS has provider/key model catalog behavior mixed with account/provider management. | Rust probes Codex backend models via imported accounts and syncs plan allowlists into the account pool. | Partial parity, scoped Rust adaptation. | Keep; avoid third-party provider catalog behavior. Finish full Codex model metadata parity later if needed. |
+| OAuth/device/CLI account login/import variants | Original scope includes ChatGPT/Codex OAuth login, device login, CLI token import, manual validated token import, logout/status, quota, and health checks. | Rust still lacks OAuth PKCE login-start/code-relay/callback, device login/poll, CLI import, validated manual token import, logout/auth status equivalents, quota fetch, and health check routes. | OpenAI/Codex parity gap. | Continue after correcting manual account creation. |
+| Proxy/provider metadata and routes | TS project includes per-account proxy assignment, proxy health, and non-OpenAI provider routes. | Rust imports ignore proxy fields and has no outbound proxy/provider pools. | Intentional scope cut. | Keep omitted. Do not add proxy routing, proxy UI/API, Anthropic/Gemini/Ollama/custom provider support, or Electron/frontend flows. |
+
+Immediate priority after this audit:
+
+1. Correct `POST /admin/accounts` so it matches TS `importOne` semantics or explicitly demote the current raw insert path to a non-parity local utility.
+2. Finish in-scope account operation parity: OAuth PKCE, device login, CLI import, validated manual import, quota fetch, health check, logout/status/reset-usage.
+3. Finish Task 5 WebSocket/history fallback policy without breaking `previous_response_id` account affinity.
+
+---
+
 ### Task 1: Chat Completions Translation
 
 **Files:**
@@ -135,7 +161,9 @@
 - [x] Write failing tests for manual account creation.
 - [x] Implement manual account creation without proxy/provider compatibility.
 - [x] Run: `cargo test --test admin_accounts_route_test`
-- [ ] Write failing tests for quota fetch, health check, account login/import variants, and API key export/import variants.
+- [ ] Correct manual account creation to TS-like `token`/`refreshToken` import semantics, or explicitly demote the raw metadata insert path to a non-parity local utility.
+- [ ] Reclassify local client API key label/batch operations as Rust-local admin utilities, and avoid treating TS provider API key export/import as in-scope parity.
+- [ ] Write failing tests for quota fetch, health check, account login/import variants, and any accepted local client-key utilities.
 - [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`
 - [ ] Implement scoped admin operations needed to operate Codex-backed OpenAI GPT routes.
 - [ ] Run: `cargo test --test admin_accounts_route_test --test admin_api_keys_route_test`
