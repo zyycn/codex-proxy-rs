@@ -137,6 +137,23 @@ impl ClientApiKeyRepository {
         }
         Ok(false)
     }
+
+    pub async fn set_enabled(&self, id: &str, enabled: bool) -> ClientApiKeyRepositoryResult<bool> {
+        let result = sqlx::query("update client_api_keys set enabled = ? where id = ?")
+            .bind(if enabled { 1_i64 } else { 0_i64 })
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete(&self, id: &str) -> ClientApiKeyRepositoryResult<bool> {
+        let result = sqlx::query("delete from client_api_keys where id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 fn key_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredClientApiKey {

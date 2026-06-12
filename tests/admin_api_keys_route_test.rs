@@ -5,7 +5,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
@@ -156,6 +156,194 @@ async fn admin_api_keys_should_create_list_and_authorize_v1_requests() {
         .await
         .unwrap();
     assert_eq!(models_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_api_key_status_should_disable_and_reenable_client_key_authorization() {
+    let (app, _dir) = admin_api_keys_test_app("admin-api-key-status.sqlite").await;
+    let (key_id, plaintext) = create_admin_api_key(&app, "session_1", "status-key").await;
+
+    let disabled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/status"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"status":"disabled"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    let body = response_json(disabled).await;
+    assert_eq!(body["data"]["enabled"], false);
+
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", format!("Bearer {plaintext}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+    let enabled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/status"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"status":"active"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let body = response_json(enabled).await;
+    assert_eq!(body["data"]["enabled"], true);
+
+    let accepted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", format!("Bearer {plaintext}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let invalid = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/api-keys/{key_id}/status"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"status":"expired"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_api_key_delete_should_remove_client_key_authorization() {
+    let (app, _dir) = admin_api_keys_test_app("admin-api-key-delete.sqlite").await;
+    let (key_id, plaintext) = create_admin_api_key(&app, "session_1", "delete-key").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/admin/api-keys/{key_id}"))
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["deleted"], true);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api-keys?limit=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = response_json(list_response).await;
+    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .header("authorization", format!("Bearer {plaintext}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/admin/api-keys/{key_id}"))
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+async fn admin_api_keys_test_app(db_name: &str) -> (axum::Router, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
+        test_config(url),
+        pool,
+        SecretBox::new([43u8; 32]),
+        ApiKeyHasher::new([44u8; 32]),
+    ));
+    (app, dir)
+}
+
+async fn create_admin_api_key(
+    app: &axum::Router,
+    session_id: &str,
+    name: &str,
+) -> (String, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api-keys")
+                .header("content-type", "application/json")
+                .header("cookie", format!("cpr_admin_session={session_id}"))
+                .body(Body::from(json!({ "name": name }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    (
+        body["data"]["id"].as_str().unwrap().to_string(),
+        body["data"]["plaintext"].as_str().unwrap().to_string(),
+    )
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
