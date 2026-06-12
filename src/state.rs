@@ -8,7 +8,9 @@ use crate::accounts::{
     repository::{AccountRepository, AccountRepositoryResult, AccountUsageRepository},
 };
 use crate::auth::{
-    api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository, oauth::OAuthClient,
+    api_key::ApiKeyHasher,
+    api_key_repository::ClientApiKeyRepository,
+    oauth::{OAuthClient, PkceSessionStore},
     refresh::TokenRefresher,
 };
 use crate::config::AppConfig;
@@ -30,6 +32,7 @@ pub struct AppServices {
     pub api_key_hasher: Option<ApiKeyHasher>,
     pub token_refresher: Option<Arc<dyn TokenRefresher>>,
     pub oauth_client: Option<Arc<dyn OAuthClient>>,
+    pub oauth_sessions: Arc<Mutex<PkceSessionStore>>,
     pub account_pool: Arc<Mutex<AccountPool>>,
 }
 
@@ -45,6 +48,7 @@ impl AppState {
                 api_key_hasher: None,
                 token_refresher: None,
                 oauth_client: None,
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -61,6 +65,7 @@ impl AppState {
                 api_key_hasher: None,
                 token_refresher: None,
                 oauth_client: None,
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -81,6 +86,7 @@ impl AppState {
                 api_key_hasher: None,
                 token_refresher: None,
                 oauth_client: None,
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -102,6 +108,7 @@ impl AppState {
                 api_key_hasher: Some(api_key_hasher),
                 token_refresher: None,
                 oauth_client: None,
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -127,6 +134,7 @@ impl AppState {
                 api_key_hasher: Some(api_key_hasher),
                 token_refresher: Some(Arc::new(token_refresher)),
                 oauth_client: None,
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -155,6 +163,7 @@ impl AppState {
                 api_key_hasher: Some(api_key_hasher),
                 token_refresher: Some(token_refresher),
                 oauth_client: Some(oauth_client),
+                oauth_sessions: Arc::new(Mutex::new(PkceSessionStore::default())),
                 account_pool,
             }),
         }
@@ -212,6 +221,10 @@ impl AppState {
 
     pub fn oauth_client(&self) -> Option<Arc<dyn OAuthClient>> {
         self.services.oauth_client.clone()
+    }
+
+    pub fn oauth_sessions(&self) -> Arc<Mutex<PkceSessionStore>> {
+        self.services.oauth_sessions.clone()
     }
 
     pub async fn reload_account_pool_from_repository(&self) -> AccountRepositoryResult<usize> {

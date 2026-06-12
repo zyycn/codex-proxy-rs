@@ -52,7 +52,16 @@ struct FailingTokenRefresher {
 struct StaticOAuthClient {
     device_response: Result<DeviceCode, OAuthError>,
     poll_response: Result<TokenPair, OAuthError>,
+    exchange_response: Result<TokenPair, OAuthError>,
     poll_calls: Arc<Mutex<Vec<String>>>,
+    exchange_calls: Arc<Mutex<Vec<ExchangeCall>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExchangeCall {
+    code: String,
+    code_verifier: String,
+    redirect_uri: String,
 }
 
 #[async_trait]
@@ -79,6 +88,20 @@ impl TokenRefresher for StaticOAuthClient {
 
 #[async_trait]
 impl OAuthClient for StaticOAuthClient {
+    async fn exchange_code(
+        &self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<TokenPair, OAuthError> {
+        self.exchange_calls.lock().await.push(ExchangeCall {
+            code: code.to_string(),
+            code_verifier: code_verifier.to_string(),
+            redirect_uri: redirect_uri.to_string(),
+        });
+        self.exchange_response.clone()
+    }
+
     async fn request_device_code(&self) -> Result<DeviceCode, OAuthError> {
         self.device_response.clone()
     }
@@ -371,7 +394,9 @@ async fn admin_auth_device_login_should_return_openai_device_code() {
             interval: 5,
         }),
         poll_response: Err(OAuthError::AuthorizationPending),
+        exchange_response: Err(OAuthError::Rejected("not used".to_string())),
         poll_calls: Arc::new(Mutex::new(Vec::new())),
+        exchange_calls: Arc::new(Mutex::new(Vec::new())),
     };
     let (app, _state, _pool, _dir) =
         admin_accounts_test_app_with_oauth_client("admin-auth-device-login.sqlite", 38, client)
@@ -408,7 +433,9 @@ async fn admin_auth_device_poll_should_return_pending_without_importing_account(
     let client = StaticOAuthClient {
         device_response: Err(OAuthError::Rejected("not used".to_string())),
         poll_response: Err(OAuthError::SlowDown),
+        exchange_response: Err(OAuthError::Rejected("not used".to_string())),
         poll_calls: poll_calls.clone(),
+        exchange_calls: Arc::new(Mutex::new(Vec::new())),
     };
     let (app, _state, pool, _dir) =
         admin_accounts_test_app_with_oauth_client("admin-auth-device-pending.sqlite", 39, client)
@@ -456,7 +483,9 @@ async fn admin_auth_device_poll_should_import_tokens_without_returning_secrets()
             access_token: token.clone(),
             refresh_token: Some("device-refresh-secret".to_string()),
         }),
+        exchange_response: Err(OAuthError::Rejected("not used".to_string())),
         poll_calls: poll_calls.clone(),
+        exchange_calls: Arc::new(Mutex::new(Vec::new())),
     };
     let (app, state, pool, _dir) =
         admin_accounts_test_app_with_oauth_client("admin-auth-device-success.sqlite", 40, client)
@@ -511,6 +540,251 @@ async fn admin_auth_device_poll_should_import_tokens_without_returning_secrets()
         .acquire("gpt-5.5")
         .unwrap();
     assert_eq!(acquired.email.as_deref(), Some("device@example.com"));
+}
+
+#[tokio::test]
+async fn admin_auth_login_start_should_require_admin_session_cookie() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-login-start-auth.sqlite", 41).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/login-start")
+                .header("x-request-id", "req_login_start_no_session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_login_start_no_session");
+}
+
+#[tokio::test]
+async fn admin_auth_login_start_should_return_pkce_auth_url_and_state() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-login-start.sqlite", 42).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/login-start")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("host", "127.0.0.1:8080")
+                .header("x-request-id", "req_login_start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let state = body["data"]["state"].as_str().unwrap();
+    let auth_url = body["data"]["authUrl"].as_str().unwrap();
+    assert_eq!(state.len(), 32);
+    assert!(auth_url.starts_with("https://auth.openai.com/oauth/authorize?"));
+    assert!(auth_url.contains("response_type=code"));
+    assert!(auth_url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
+    assert!(auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    assert!(auth_url.contains("scope=openid%20profile%20email%20offline_access"));
+    assert!(auth_url.contains("code_challenge_method=S256"));
+    assert!(auth_url.contains("originator=codex_cli_rs"));
+    assert!(auth_url.contains(&format!("state={state}")));
+}
+
+#[tokio::test]
+async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
+    let token = test_jwt(
+        Some("pkce-account"),
+        Some("pkce-user"),
+        Some("pkce@example.com"),
+        Some("plus"),
+        3600,
+    );
+    let exchange_calls = Arc::new(Mutex::new(Vec::new()));
+    let client = StaticOAuthClient {
+        device_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_response: Err(OAuthError::AuthorizationPending),
+        exchange_response: Ok(TokenPair {
+            access_token: token.clone(),
+            refresh_token: Some("pkce-refresh-secret".to_string()),
+        }),
+        poll_calls: Arc::new(Mutex::new(Vec::new())),
+        exchange_calls: exchange_calls.clone(),
+    };
+    let (app, state, pool, _dir) =
+        admin_accounts_test_app_with_oauth_client("admin-auth-code-relay.sqlite", 43, client).await;
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/login-start")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("host", "127.0.0.1:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let start_body = response_json(start).await;
+    let state_value = start_body["data"]["state"].as_str().unwrap();
+    let callback_url =
+        format!("http://localhost:1455/auth/callback?code=oauth-code&state={state_value}");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/code-relay")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_code_relay")
+                .body(Body::from(
+                    json!({ "callbackUrl": callback_url }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["success"], true);
+    assert!(body["data"].get("accessToken").is_none());
+    assert!(body["data"].get("refreshToken").is_none());
+    let calls = exchange_calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].code, "oauth-code");
+    assert!(!calls[0].code_verifier.is_empty());
+    assert_eq!(calls[0].redirect_uri, "http://localhost:1455/auth/callback");
+    drop(calls);
+    let stored = AccountRepository::new(pool.clone(), SecretBox::new([43; 32]))
+        .find_by_chatgpt_identity("pkce-account", Some("pkce-user"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.email.as_deref(), Some("pkce@example.com"));
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "pkce-refresh-secret"
+    );
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .unwrap();
+    assert_eq!(acquired.account_id.as_deref(), Some("pkce-account"));
+}
+
+#[tokio::test]
+async fn admin_auth_code_relay_should_reject_invalid_callback_url() {
+    let client = StaticOAuthClient {
+        device_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_response: Err(OAuthError::AuthorizationPending),
+        exchange_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_calls: Arc::new(Mutex::new(Vec::new())),
+        exchange_calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let (app, _state, _pool, _dir) = admin_accounts_test_app_with_oauth_client(
+        "admin-auth-code-relay-invalid.sqlite",
+        44,
+        client,
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/code-relay")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_code_relay_invalid")
+                .body(Body::from(
+                    json!({ "callbackUrl": "not a url" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40001);
+}
+
+#[tokio::test]
+async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() {
+    let token = test_jwt(
+        Some("callback-account"),
+        Some("callback-user"),
+        Some("callback@example.com"),
+        Some("plus"),
+        3600,
+    );
+    let exchange_calls = Arc::new(Mutex::new(Vec::new()));
+    let client = StaticOAuthClient {
+        device_response: Err(OAuthError::Rejected("not used".to_string())),
+        poll_response: Err(OAuthError::AuthorizationPending),
+        exchange_response: Ok(TokenPair {
+            access_token: token,
+            refresh_token: Some("callback-refresh-secret".to_string()),
+        }),
+        poll_calls: Arc::new(Mutex::new(Vec::new())),
+        exchange_calls: exchange_calls.clone(),
+    };
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app_with_oauth_client("admin-auth-callback.sqlite", 45, client).await;
+    let start = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/login-start")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("host", "codex.local:1455")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let start_body = response_json(start).await;
+    let state_value = start_body["data"]["state"].as_str().unwrap();
+    let callback_path = format!("/auth/callback?code=callback-code&state={state_value}");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(callback_path)
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "http://codex.local:1455/"
+    );
+    assert_eq!(exchange_calls.lock().await[0].code, "callback-code");
+    let stored = AccountRepository::new(pool.clone(), SecretBox::new([45; 32]))
+        .find_by_chatgpt_identity("callback-account", Some("callback-user"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.email.as_deref(), Some("callback@example.com"));
 }
 
 #[tokio::test]
