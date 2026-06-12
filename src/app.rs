@@ -9,8 +9,9 @@ use crate::{
     http::{
         admin::{
             accounts, api_keys, batch_delete_accounts, batch_update_account_status, create_api_key,
-            delete_account, import_accounts, login, logs, refresh_models, settings,
-            update_account_label, update_account_status, usage_stats, usage_stats_summary,
+            delete_account, delete_api_key, import_accounts, login, logs, refresh_models, settings,
+            update_account_label, update_account_status, update_api_key_status, usage_stats,
+            usage_stats_summary,
         },
         health::health,
         middleware::attach_request_id,
@@ -55,6 +56,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/admin/accounts/import", post(import_accounts))
         .route("/admin/api-keys", get(api_keys).post(create_api_key))
+        .route("/admin/api-keys/{key_id}", delete(delete_api_key))
+        .route(
+            "/admin/api-keys/{key_id}/status",
+            patch(update_api_key_status),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(from_fn(attach_request_id))

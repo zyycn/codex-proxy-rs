@@ -325,6 +325,25 @@ pub struct CreatedClientApiKeyData {
     pub plaintext: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateClientApiKeyStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateClientApiKeyStatusData {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteClientApiKeyData {
+    pub deleted: bool,
+}
+
 impl From<StoredClientApiKey> for ClientApiKeyData {
     fn from(key: StoredClientApiKey) -> Self {
         Self {
@@ -1537,6 +1556,121 @@ pub async fn create_api_key(
     }
 }
 
+pub async fn update_api_key_status(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Json(payload): Json<UpdateClientApiKeyStatusRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let enabled = match parse_client_api_key_enabled_status(&payload.status) {
+        Ok(enabled) => enabled,
+        Err(message) => {
+            return AdminResponse::new(
+                StatusCode::BAD_REQUEST,
+                AdminEnvelope::new(40001, message, (), request_id),
+            )
+            .into_response();
+        }
+    };
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.set_enabled(&key_id, enabled).await {
+        Ok(true) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                UpdateClientApiKeyStatusData {
+                    id: key_id,
+                    enabled,
+                },
+                request_id,
+            ),
+        )
+        .into_response(),
+        Ok(false) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "API key not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to update API key status", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn delete_api_key(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.delete(&key_id).await {
+        Ok(true) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(DeleteClientApiKeyData { deleted: true }, request_id),
+        )
+        .into_response(),
+        Ok(false) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "API key not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to delete API key", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
 #[derive(Debug)]
 struct AdminUserRow {
     id: String,
@@ -1944,6 +2078,14 @@ fn parse_admin_account_status(status: &str) -> Result<AccountStatus, String> {
         "active" => Ok(AccountStatus::Active),
         "disabled" => Ok(AccountStatus::Disabled),
         other => Err(format!("Unsupported account status: {other}")),
+    }
+}
+
+fn parse_client_api_key_enabled_status(status: &str) -> Result<bool, String> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "active" => Ok(true),
+        "disabled" => Ok(false),
+        other => Err(format!("Unsupported API key status: {other}")),
     }
 }
 
