@@ -15,7 +15,8 @@ use wiremock::{
 
 use codex_proxy_rs::{
     accounts::{
-        model::AccountStatus,
+        model::{Account, AccountStatus},
+        pool::AccountAcquireRequest,
         repository::{AccountRepository, NewAccount},
     },
     app::build_router,
@@ -154,12 +155,20 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
     insert_account(&account_repo, "acct_plus_a", "plus", "access-plus-a").await;
     insert_account(&account_repo, "acct_plus_b", "plus", "access-plus-b").await;
     insert_account(&account_repo, "acct_team", "team", "access-team").await;
-    let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
+    let state = AppState::with_pool_secret_and_api_key_hasher(
         test_config(url, server.uri()),
         pool.clone(),
         secret_box,
         hasher,
-    ));
+    );
+    {
+        let account_pool = state.account_pool();
+        let mut account_pool = account_pool.lock().await;
+        account_pool.insert(pool_account("acct_aaa_free", "free"));
+        account_pool.insert(pool_account("acct_plus_a", "plus"));
+        account_pool.insert(pool_account("acct_team", "team"));
+    }
+    let app = build_router(state.clone());
 
     let response = app
         .clone()
@@ -201,6 +210,14 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
     let catalog = response_json(catalog_response).await;
     assert_eq!(catalog[0]["id"], "gpt-refresh");
     assert_eq!(catalog[0]["source"], "backend");
+
+    let acquired = state
+        .account_pool()
+        .lock()
+        .await
+        .acquire_with(AccountAcquireRequest::new("gpt-refresh", Utc::now()))
+        .unwrap();
+    assert_ne!(acquired.account.plan_type.as_deref(), Some("free"));
 }
 
 async fn insert_account(
@@ -223,6 +240,12 @@ async fn insert_account(
     })
     .await
     .unwrap();
+}
+
+fn pool_account(id: &str, plan_type: &str) -> Account {
+    let mut account = Account::test(id, AccountStatus::Active);
+    account.plan_type = Some(plan_type.to_string());
+    account
 }
 
 async fn seed_admin_session(pool: &sqlx::SqlitePool, session_id: &str) {
