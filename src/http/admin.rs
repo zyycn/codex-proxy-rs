@@ -325,6 +325,7 @@ pub struct CreateApiKeyRequest {
 pub struct ClientApiKeyData {
     pub id: String,
     pub name: String,
+    pub label: Option<String>,
     pub prefix: String,
     pub enabled: bool,
     pub created_at: String,
@@ -336,6 +337,7 @@ pub struct ClientApiKeyData {
 pub struct CreatedClientApiKeyData {
     pub id: String,
     pub name: String,
+    pub label: Option<String>,
     pub prefix: String,
     pub enabled: bool,
     pub created_at: String,
@@ -349,11 +351,30 @@ pub struct UpdateClientApiKeyStatusRequest {
     pub status: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateClientApiKeyLabelRequest {
+    pub label: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateClientApiKeyStatusData {
     pub id: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteClientApiKeysRequest {
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteClientApiKeysData {
+    pub deleted: u32,
+    pub not_found: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -367,6 +388,7 @@ impl From<StoredClientApiKey> for ClientApiKeyData {
         Self {
             id: key.id,
             name: key.name,
+            label: key.label,
             prefix: key.prefix,
             enabled: key.enabled,
             created_at: key.created_at,
@@ -380,6 +402,7 @@ impl CreatedClientApiKeyData {
         Self {
             id: key.id,
             name: key.name,
+            label: key.label,
             prefix: key.prefix,
             enabled: key.enabled,
             created_at: key.created_at,
@@ -1815,6 +1838,136 @@ pub async fn create_api_key(
         Err(_) => AdminResponse::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             AdminEnvelope::new(50001, "Failed to create API key", (), request_id),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn batch_delete_api_keys(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<BatchDeleteClientApiKeysRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    if payload.ids.is_empty() {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(40001, "API key ids are required", (), request_id),
+        )
+        .into_response();
+    }
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    let mut deleted = 0u32;
+    let mut not_found = Vec::new();
+    for key_id in payload.ids {
+        match repo.delete(&key_id).await {
+            Ok(true) => deleted += 1,
+            Ok(false) => not_found.push(key_id),
+            Err(_) => {
+                return AdminResponse::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    AdminEnvelope::new(50001, "Failed to delete API key", (), request_id),
+                )
+                .into_response();
+            }
+        }
+    }
+
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            BatchDeleteClientApiKeysData { deleted, not_found },
+            request_id,
+        ),
+    )
+    .into_response()
+}
+
+pub async fn update_api_key_label(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Json(payload): Json<UpdateClientApiKeyLabelRequest>,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    if payload
+        .label
+        .as_ref()
+        .is_some_and(|label| label.chars().count() > 64)
+    {
+        return AdminResponse::new(
+            StatusCode::BAD_REQUEST,
+            AdminEnvelope::new(
+                40001,
+                "API key label must be 64 characters or fewer",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    }
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.client_api_key_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "API key repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    // label 是后台显示备注，不能影响 cpr_ key 的 hash、prefix 或启用状态。
+    match repo.set_label(&key_id, payload.label).await {
+        Ok(Some(key)) => AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(ClientApiKeyData::from(key), request_id),
+        )
+        .into_response(),
+        Ok(None) => AdminResponse::new(
+            StatusCode::NOT_FOUND,
+            AdminEnvelope::new(40401, "API key not found", (), request_id),
+        )
+        .into_response(),
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to update API key label", (), request_id),
         )
         .into_response(),
     }
