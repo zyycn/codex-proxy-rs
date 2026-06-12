@@ -118,6 +118,14 @@ pub struct AccountUsageListRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountQuotaSnapshot {
+    pub account_id: String,
+    pub email: Option<String>,
+    pub quota_json: String,
+    pub quota_fetched_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountUsageSummary {
     pub account_count: i64,
@@ -345,6 +353,19 @@ impl AccountRepository {
             });
         }
         Ok(accounts)
+    }
+
+    pub async fn list_quota_snapshots(&self) -> AccountRepositoryResult<Vec<AccountQuotaSnapshot>> {
+        let rows = sqlx::query(
+            "select id, email, quota_json, quota_fetched_at from accounts where quota_json is not null and trim(quota_json) <> '' order by coalesce(quota_fetched_at, '') desc, id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut snapshots = Vec::with_capacity(rows.len());
+        for row in rows {
+            snapshots.push(quota_snapshot_from_row(&row)?);
+        }
+        Ok(snapshots)
     }
 
     pub async fn set_status(
@@ -592,6 +613,17 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> AccountRepositoryResult<Acco
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+    })
+}
+
+fn quota_snapshot_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> AccountRepositoryResult<AccountQuotaSnapshot> {
+    Ok(AccountQuotaSnapshot {
+        account_id: row.get("id"),
+        email: row.get("email"),
+        quota_json: row.get("quota_json"),
+        quota_fetched_at: parse_optional_rfc3339(row.get::<Option<String>, _>("quota_fetched_at"))?,
     })
 }
 

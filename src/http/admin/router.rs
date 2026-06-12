@@ -10,8 +10,8 @@ use super::{
         account_quota, accounts, batch_delete_accounts, batch_update_account_status,
         create_account, delete_account, delete_account_cookies, export_accounts,
         get_account_cookies, health_check_accounts, import_accounts, import_cli_auth,
-        refresh_account, reset_account_usage, set_account_cookies, update_account_label,
-        update_account_status,
+        quota_warnings, refresh_account, reset_account_usage, set_account_cookies,
+        update_account_label, update_account_status,
     },
     api_keys::{
         api_keys, batch_delete_api_keys, create_api_key, delete_api_key, export_api_keys,
@@ -49,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
         .route("/admin/accounts", get(accounts).post(create_account))
         .route("/admin/accounts/health-check", post(health_check_accounts))
+        .route("/admin/accounts/quota-warnings", get(quota_warnings))
         .route("/admin/accounts/batch-delete", post(batch_delete_accounts))
         .route(
             "/admin/accounts/batch-status",

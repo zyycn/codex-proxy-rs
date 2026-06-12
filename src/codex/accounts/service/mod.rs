@@ -56,6 +56,7 @@ pub enum AccountServiceError {
     EmptyIds,
     InvalidStatus(String),
     LabelTooLong,
+    QuotaWarnings,
 }
 
 #[derive(Debug)]
@@ -127,6 +128,52 @@ pub struct AccountProbeResult {
 pub struct AccountQuotaResult {
     pub quota: Value,
     pub raw: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountQuotaWarnings {
+    pub warnings: Vec<AccountQuotaWarning>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountQuotaWarning {
+    pub account_id: String,
+    pub email: Option<String>,
+    pub window: QuotaWarningWindow,
+    pub level: QuotaWarningLevel,
+    pub used_percent: f64,
+    pub reset_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaWarningWindow {
+    Primary,
+    Secondary,
+}
+
+impl QuotaWarningWindow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaWarningLevel {
+    Warning,
+    Critical,
+}
+
+impl QuotaWarningLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+        }
+    }
 }
 
 #[derive(Debug)]

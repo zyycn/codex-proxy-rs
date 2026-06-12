@@ -328,6 +328,33 @@ Success response:
 
 Returns stored Codex accounts with cursor pagination. Access tokens and refresh tokens are never decrypted or returned.
 
+### `GET /admin/accounts/quota-warnings`
+
+Returns active quota warnings computed from cached account quota snapshots in SQLite. The route requires an admin session cookie and does not call the upstream Codex backend.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "warnings": [
+      {
+        "accountId": "acct_01",
+        "email": "user@example.com",
+        "window": "primary",
+        "level": "warning",
+        "usedPercent": 85.0,
+        "resetAt": 1770000100
+      }
+    ],
+    "updatedAt": "2026-06-13T00:00:00Z"
+  },
+  "requestId": "req_01"
+}
+```
+
 ### `POST /admin/accounts/import`
 
 Imports accounts into encrypted SQLite storage. The request body uses the Rust import format, which accepts the exported account object fields needed by this service and ignores unrelated fields.

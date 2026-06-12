@@ -369,6 +369,111 @@ async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secre
 }
 
 #[tokio::test]
+async fn admin_account_quota_warnings_should_require_admin_session_cookie() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-quota-warnings-auth.sqlite", 33).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/quota-warnings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_account_quota_warnings_should_return_threshold_matches_from_cached_quota() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-account-quota-warnings.sqlite", 34).await;
+    import_test_account(&app, "session_1", "acct_warn").await;
+    import_test_account(&app, "session_1", "acct_quiet").await;
+
+    sqlx::query(
+        "update accounts set quota_json = ?, quota_fetched_at = ?, updated_at = ? where id = ?",
+    )
+    .bind(
+        json!({
+            "rate_limit": {
+                "used_percent": 85,
+                "reset_at": 1770000100
+            },
+            "secondary_rate_limit": {
+                "used_percent": 91,
+                "reset_at": 1770000200
+            }
+        })
+        .to_string(),
+    )
+    .bind("2026-06-13T00:00:00Z")
+    .bind("2026-06-13T00:00:00Z")
+    .bind("acct_warn")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "update accounts set quota_json = ?, quota_fetched_at = ?, updated_at = ? where id = ?",
+    )
+    .bind(
+        json!({
+            "rate_limit": {
+                "used_percent": 25,
+                "reset_at": 1770000300
+            },
+            "secondary_rate_limit": null
+        })
+        .to_string(),
+    )
+    .bind("2026-06-13T01:00:00Z")
+    .bind("2026-06-13T01:00:00Z")
+    .bind("acct_quiet")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/accounts/quota-warnings")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["updatedAt"], "2026-06-13T00:00:00Z");
+    let warnings = body["data"]["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings
+        .iter()
+        .all(|warning| warning["accountId"] == "acct_warn"));
+    assert!(warnings.iter().all(|warning| {
+        warning["email"] == "acct_warn@example.com" && warning["usedPercent"].as_f64().is_some()
+    }));
+    assert!(warnings.iter().any(|warning| {
+        warning["window"] == "primary"
+            && warning["level"] == "warning"
+            && warning["usedPercent"] == 85.0
+            && warning["resetAt"] == 1770000100
+    }));
+    assert!(warnings.iter().any(|warning| {
+        warning["window"] == "secondary"
+            && warning["level"] == "critical"
+            && warning["usedPercent"] == 91.0
+            && warning["resetAt"] == 1770000200
+    }));
+}
+
+#[tokio::test]
 async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accounts() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

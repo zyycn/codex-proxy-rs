@@ -34,7 +34,7 @@ This audit is the correction point against the TypeScript reference at `/home/zy
 
 Immediate priority after this audit:
 
-1. Finish remaining in-scope account operation gaps such as quota warnings and durable quota cooldown persistence.
+1. Finish remaining in-scope account operation gaps such as durable quota cooldown persistence and account persistence-health reporting.
 2. Run final verification for the completed Task 5 fallback paths, including WebSocket history affinity.
 3. Keep local client API key utilities documented as Rust-local auth, not TypeScript provider-key parity.
 
