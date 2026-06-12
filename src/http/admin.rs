@@ -191,6 +191,46 @@ pub struct LoginData {
     pub expires_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthStatusData {
+    pub authenticated: bool,
+    pub user: Option<AdminAuthUserData>,
+    pub pool: AdminAuthPoolSummaryData,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthUserData {
+    pub id: String,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub status: String,
+    pub access_token_expires_at: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthPoolSummaryData {
+    pub total: usize,
+    pub active: usize,
+    pub expired: usize,
+    pub quota_exhausted: usize,
+    pub refreshing: usize,
+    pub disabled: usize,
+    pub banned: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuthLogoutData {
+    pub success: bool,
+    pub deleted: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsData {
@@ -634,6 +674,39 @@ impl From<StoredAccountMetadata> for AdminAccountData {
     }
 }
 
+fn account_auth_user(account: &StoredAccountMetadata) -> AdminAuthUserData {
+    AdminAuthUserData {
+        id: account.id.clone(),
+        email: account.email.clone(),
+        account_id: account.account_id.clone(),
+        user_id: account.user_id.clone(),
+        label: account.label.clone(),
+        plan_type: account.plan_type.clone(),
+        status: account_status_value(account.status).to_string(),
+        access_token_expires_at: account
+            .access_token_expires_at
+            .map(|value| value.to_rfc3339()),
+    }
+}
+
+fn account_auth_pool_summary(accounts: &[StoredAccountMetadata]) -> AdminAuthPoolSummaryData {
+    let mut summary = AdminAuthPoolSummaryData {
+        total: accounts.len(),
+        ..AdminAuthPoolSummaryData::default()
+    };
+    for account in accounts {
+        match account.status {
+            AccountStatus::Active => summary.active += 1,
+            AccountStatus::Expired => summary.expired += 1,
+            AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
+            AccountStatus::Refreshing => summary.refreshing += 1,
+            AccountStatus::Disabled => summary.disabled += 1,
+            AccountStatus::Banned => summary.banned += 1,
+        }
+    }
+    summary
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminUsageStatsData {
@@ -807,6 +880,118 @@ pub async fn login(
     .into_response();
     response.headers_mut().insert(SET_COOKIE, cookie);
     response
+}
+
+pub async fn auth_status(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.list_all_metadata().await {
+        Ok(accounts) => {
+            let summary = account_auth_pool_summary(&accounts);
+            let user = accounts.first().map(account_auth_user);
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    AdminAuthStatusData {
+                        authenticated: summary.total > 0,
+                        user,
+                        pool: summary,
+                    },
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Failed to inspect account auth status",
+                (),
+                request_id,
+            ),
+        )
+        .into_response(),
+    }
+}
+
+pub async fn auth_logout(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = request_id.as_str().to_string();
+    let Some(pool) = state.db() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Database is not initialized", (), request_id),
+        )
+        .into_response();
+    };
+    if let Err(response) = require_admin_session(pool, &headers, &request_id).await {
+        return response;
+    }
+    let Some(repo) = state.account_repository() else {
+        return AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(
+                50001,
+                "Account repository is not initialized",
+                (),
+                request_id,
+            ),
+        )
+        .into_response();
+    };
+
+    match repo.delete_all().await {
+        Ok(deleted) => {
+            // 账号 logout 要同时清掉调度池；SQLite 外键会级联 usage/cookies 等账号附属数据。
+            state.account_pool().lock().await.clear();
+            AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(
+                    AdminAuthLogoutData {
+                        success: true,
+                        deleted,
+                    },
+                    request_id,
+                ),
+            )
+            .into_response()
+        }
+        Err(_) => AdminResponse::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AdminEnvelope::new(50001, "Failed to clear accounts", (), request_id),
+        )
+        .into_response(),
+    }
 }
 
 pub async fn logs(

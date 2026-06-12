@@ -158,6 +158,157 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
 }
 
 #[tokio::test]
+async fn admin_auth_status_should_require_admin_session_cookie() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-status-auth.sqlite", 33).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/auth/status")
+                .header("x-request-id", "req_auth_status_no_session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_auth_status_no_session");
+}
+
+#[tokio::test]
+async fn admin_auth_status_should_report_empty_account_pool() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-status-empty.sqlite", 34).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/auth/status")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_auth_status_empty")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["authenticated"], false);
+    assert!(body["data"]["user"].is_null());
+    assert_eq!(body["data"]["pool"]["total"], 0);
+    assert_eq!(body["data"]["pool"]["active"], 0);
+}
+
+#[tokio::test]
+async fn admin_auth_status_should_report_user_and_pool_summary_without_secrets() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-auth-status-summary.sqlite", 35).await;
+    import_test_account(&app, "session_1", "acct_auth_status").await;
+    import_test_account(&app, "session_1", "acct_auth_disabled").await;
+    sqlx::query("update accounts set status = 'disabled' where id = ?")
+        .bind("acct_auth_disabled")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/auth/status")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_auth_status_summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["authenticated"], true);
+    assert_eq!(body["data"]["pool"]["total"], 2);
+    assert_eq!(body["data"]["pool"]["active"], 1);
+    assert_eq!(body["data"]["pool"]["disabled"], 1);
+    assert!(body["data"]["user"].get("accessToken").is_none());
+    assert!(body["data"]["user"].get("token").is_none());
+    assert!(body["data"]["user"].get("refreshToken").is_none());
+}
+
+#[tokio::test]
+async fn admin_auth_logout_should_clear_accounts_and_runtime_pool() {
+    let (app, state, pool, _dir) = admin_accounts_test_app("admin-auth-logout.sqlite", 36).await;
+    import_test_account(&app, "session_1", "acct_auth_logout").await;
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens) values (?, 2, 3, 4, 1)",
+    )
+    .bind("acct_auth_logout")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let set_cookies = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/accounts/acct_auth_logout/cookies")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"cookies":"cf_clearance=secret"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set_cookies.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/auth/logout")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_auth_logout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["success"], true);
+    assert_eq!(body["data"]["deleted"], 1);
+    let account_count: (i64,) = sqlx::query_as("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(account_count.0, 0);
+    let usage_count: (i64,) = sqlx::query_as("select count(*) from account_usage")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(usage_count.0, 0);
+    let cookie_count: (i64,) = sqlx::query_as("select count(*) from account_cookies")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cookie_count.0, 0);
+    assert!(state
+        .account_pool()
+        .lock()
+        .await
+        .acquire("gpt-5.5")
+        .is_none());
+}
+
+#[tokio::test]
 async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-accounts.sqlite");
