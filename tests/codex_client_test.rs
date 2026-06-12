@@ -56,22 +56,18 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
 
     let response = client
         .create_response(
-            &CodexResponsesRequest {
-                model: "gpt-5.5".to_string(),
-                instructions: String::new(),
-                input: Vec::new(),
-                stream: true,
-                store: false,
-                reasoning: None,
-                tools: None,
-                previous_response_id: None,
-                use_websocket: false,
-            },
+            &CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new()),
             CodexRequestContext {
                 access_token: "access-token",
                 account_id: Some("chatgpt-account"),
                 request_id: "req_1",
                 turn_state: Some("turn_1"),
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
                 cookie_header: Some("cf_clearance=old"),
             },
         )

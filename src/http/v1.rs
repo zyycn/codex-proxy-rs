@@ -39,7 +39,12 @@ use crate::{
     logs::event::{EventLevel, EventLog},
     models::catalog::ModelCatalog,
     state::AppState,
-    translation::codex_to_openai::openai_error,
+    translation::{
+        codex_to_openai::{
+            chat_completion_from_codex_sse, chat_completion_stream_from_codex_sse, openai_error,
+        },
+        openai_to_codex::{translate_chat_to_codex, ChatCompletionRequest},
+    },
 };
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
@@ -51,8 +56,27 @@ struct ResponsesBody {
     instructions: Option<String>,
     reasoning: Option<Value>,
     tools: Option<Vec<Value>>,
+    service_tier: Option<String>,
+    tool_choice: Option<Value>,
+    parallel_tool_calls: Option<bool>,
+    text: Option<Value>,
+    prompt_cache_key: Option<String>,
+    include: Option<Vec<String>>,
+    client_metadata: Option<Value>,
     previous_response_id: Option<String>,
     stream: Option<bool>,
+    #[serde(rename = "turnState")]
+    turn_state: Option<String>,
+    #[serde(rename = "turnMetadata")]
+    turn_metadata: Option<String>,
+    #[serde(rename = "betaFeatures")]
+    beta_features: Option<String>,
+    #[serde(rename = "includeTimingMetrics")]
+    include_timing_metrics: Option<String>,
+    #[serde(rename = "codexWindowId")]
+    codex_window_id: Option<String>,
+    #[serde(rename = "parentThreadId")]
+    parent_thread_id: Option<String>,
 }
 
 pub async fn responses(
@@ -69,7 +93,7 @@ pub async fn responses(
     let default_model = state.config().model.default_model.clone();
     let body = serde_json::from_slice::<ResponsesBody>(&body)
         .unwrap_or_else(|_| default_body(default_model.clone()));
-    let client_stream = body.stream.unwrap_or(false);
+    let client_stream = body.stream.unwrap_or(true);
     let requested_model = body.model.clone().unwrap_or(default_model);
     let catalog = ModelCatalog::from_config(&state.config().model);
     if !catalog.is_recognized_model_name(&requested_model) {
@@ -80,17 +104,50 @@ pub async fn responses(
             .into_response();
     }
     let parsed_model = catalog.parse_model_name(&requested_model);
-    let codex_request = CodexResponsesRequest {
-        model: parsed_model.model_id.clone(),
-        instructions: body.instructions.unwrap_or_default(),
-        input: body.input.unwrap_or_default(),
-        stream: true,
-        store: false,
-        reasoning: body.reasoning,
-        tools: body.tools,
-        previous_response_id: body.previous_response_id,
-        use_websocket: false,
-    };
+    let mut codex_request = CodexResponsesRequest::new_http_sse(
+        parsed_model.model_id.clone(),
+        body.instructions.unwrap_or_default(),
+        body.input.unwrap_or_default(),
+    );
+    codex_request.reasoning = body.reasoning;
+    codex_request.tools = body.tools;
+    codex_request.tool_choice = body.tool_choice;
+    codex_request.parallel_tool_calls = body.parallel_tool_calls;
+    codex_request.text = body.text;
+    codex_request.prompt_cache_key = body.prompt_cache_key;
+    codex_request.include = body.include;
+    codex_request.client_metadata = body.client_metadata;
+    codex_request.previous_response_id = body.previous_response_id;
+    codex_request.reasoning = responses_reasoning(
+        codex_request.reasoning.take(),
+        parsed_model.reasoning_effort.as_deref(),
+        state.config().model.default_reasoning_effort.as_deref(),
+    );
+    codex_request.service_tier = body
+        .service_tier
+        .or(parsed_model.service_tier)
+        .or_else(|| state.config().model.service_tier.clone())
+        .map(normalize_service_tier_for_upstream);
+    ensure_reasoning_include(&mut codex_request);
+    codex_request.turn_state = body
+        .turn_state
+        .or_else(|| header_string(&headers, "x-codex-turn-state"));
+    codex_request.turn_metadata = body
+        .turn_metadata
+        .or_else(|| header_string(&headers, "x-codex-turn-metadata"));
+    codex_request.beta_features = body
+        .beta_features
+        .or_else(|| header_string(&headers, "x-codex-beta-features"));
+    codex_request.include_timing_metrics = body
+        .include_timing_metrics
+        .or_else(|| header_string(&headers, "x-responsesapi-include-timing-metrics"));
+    codex_request.version = header_string(&headers, "version");
+    codex_request.codex_window_id = body
+        .codex_window_id
+        .or_else(|| header_string(&headers, "x-codex-window-id"));
+    codex_request.parent_thread_id = body
+        .parent_thread_id
+        .or_else(|| header_string(&headers, "x-codex-parent-thread-id"));
     let acquired = {
         state
             .account_pool()
@@ -237,6 +294,200 @@ pub async fn responses(
     }
 }
 
+pub async fn chat_completions(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let started_at = Instant::now();
+    if !authorize_client_api_key(&state, &headers).await {
+        return missing_client_api_key_response().into_response();
+    }
+
+    let Ok(chat_request) = serde_json::from_slice::<ChatCompletionRequest>(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(openai_error(
+                "Invalid chat completion request",
+                "invalid_request",
+            )),
+        )
+            .into_response();
+    };
+    let client_stream = chat_request.stream;
+    let requested_model = chat_request.model.clone();
+    let catalog = ModelCatalog::from_config(&state.config().model);
+    if !catalog.is_recognized_model_name(&requested_model) {
+        return model_not_found_response().into_response();
+    }
+    let parsed_model = catalog.parse_model_name(&requested_model);
+    let display_model = ModelCatalog::build_display_model_name(&parsed_model);
+    let mut codex_request = match translate_chat_to_codex(chat_request) {
+        Ok(request) => request,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(openai_error(
+                    "Invalid chat completion request",
+                    "invalid_request",
+                )),
+            )
+                .into_response();
+        }
+    };
+    codex_request.model = parsed_model.model_id.clone();
+    if codex_request.reasoning.is_none() {
+        let effort = parsed_model
+            .reasoning_effort
+            .clone()
+            .or_else(|| state.config().model.default_reasoning_effort.clone());
+        if let Some(effort) = effort {
+            codex_request.reasoning = Some(json!({"effort": effort, "summary": "auto"}));
+        }
+    }
+    if codex_request.service_tier.is_none() {
+        codex_request.service_tier = parsed_model
+            .service_tier
+            .clone()
+            .or_else(|| state.config().model.service_tier.clone());
+    }
+    codex_request.service_tier = codex_request
+        .service_tier
+        .map(normalize_service_tier_for_upstream);
+    let include_reasoning = codex_request.reasoning.is_some();
+
+    let acquired = {
+        state
+            .account_pool()
+            .lock()
+            .await
+            .acquire_with(AccountAcquireRequest::new(&codex_request.model, Utc::now()))
+    };
+    let Some(acquired) = acquired else {
+        return no_available_accounts_response().into_response();
+    };
+    let account = acquired.account;
+    let log_context = V1LogContext::new(
+        request_id.as_str(),
+        &account.id,
+        &codex_request.model,
+        client_stream,
+        started_at,
+    );
+
+    let response = send_codex_request_with_refresh_retry(
+        &state,
+        &codex_request,
+        &account,
+        request_id.as_str(),
+    )
+    .await;
+    state.account_pool().lock().await.release(&account.id);
+
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let error_response = codex_client_error_response(error);
+            log_v1_response(
+                &state,
+                &log_context,
+                error_response.0,
+                EventLevel::Error,
+                "v1 chat completions upstream request failed",
+                json!({"stream": false}),
+            )
+            .await;
+            return error_response.into_response();
+        }
+    };
+    if persist_upstream_cookies(&state, &account.id, &response.set_cookie_headers)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(openai_error(
+                "Failed to persist upstream cookies",
+                "cookie_store_error",
+            )),
+        )
+            .into_response();
+    }
+    if let Some(usage) = response.usage {
+        if record_usage(&state, &account.id, usage).await.is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(openai_error(
+                    "Failed to record account usage",
+                    "usage_store_error",
+                )),
+            )
+                .into_response();
+        }
+    }
+
+    if client_stream {
+        match chat_completion_stream_from_codex_sse(
+            &response.body,
+            &display_model,
+            include_reasoning,
+        ) {
+            Ok(Some(body)) => Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "text/event-stream")
+                .header(CACHE_CONTROL, "no-cache")
+                .body(Body::from(body))
+                .unwrap_or_else(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(openai_error(
+                            "Failed to build stream response",
+                            "stream_response_error",
+                        )),
+                    )
+                        .into_response()
+                }),
+            Ok(None) => (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Codex response did not include response.completed",
+                    "empty_upstream_response",
+                )),
+            )
+                .into_response(),
+            Err(_) => (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Invalid Codex SSE response",
+                    "invalid_upstream_sse",
+                )),
+            )
+                .into_response(),
+        }
+    } else {
+        match chat_completion_from_codex_sse(&response.body, &display_model, include_reasoning) {
+            Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
+            Ok(None) => (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Codex response did not include response.completed",
+                    "empty_upstream_response",
+                )),
+            )
+                .into_response(),
+            Err(_) => (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Invalid Codex SSE response",
+                    "invalid_upstream_sse",
+                )),
+            )
+                .into_response(),
+        }
+    }
+}
+
 fn no_available_accounts_response() -> (StatusCode, Json<Value>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -254,9 +505,78 @@ fn default_body(default_model: String) -> ResponsesBody {
         instructions: Some(String::new()),
         reasoning: None,
         tools: None,
+        service_tier: None,
+        tool_choice: None,
+        parallel_tool_calls: None,
+        text: None,
+        prompt_cache_key: None,
+        include: None,
+        client_metadata: None,
         previous_response_id: None,
         stream: None,
+        turn_state: None,
+        turn_metadata: None,
+        beta_features: None,
+        include_timing_metrics: None,
+        codex_window_id: None,
+        parent_thread_id: None,
     }
+}
+
+fn responses_reasoning(
+    client_reasoning: Option<Value>,
+    suffix_effort: Option<&str>,
+    default_effort: Option<&str>,
+) -> Option<Value> {
+    let effort = client_reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .or(suffix_effort)
+        .or(default_effort);
+    let summary = client_reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or("auto");
+    if effort.is_none() && client_reasoning.is_none() {
+        return None;
+    }
+    let mut reasoning = json!({"summary": summary});
+    if let Some(effort) = effort {
+        reasoning["effort"] = Value::String(effort.to_string());
+    }
+    Some(reasoning)
+}
+
+fn normalize_service_tier_for_upstream(service_tier: String) -> String {
+    if service_tier == "fast" {
+        "priority".to_string()
+    } else {
+        service_tier
+    }
+}
+
+fn ensure_reasoning_include(request: &mut CodexResponsesRequest) {
+    if request.reasoning.is_none() {
+        return;
+    }
+    let include = request.include.get_or_insert_with(Vec::new);
+    if include
+        .iter()
+        .any(|item| item == "reasoning.encrypted_content")
+    {
+        return;
+    }
+    include.push("reasoning.encrypted_content".to_string());
+}
+
+fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
 }
 
 async fn send_codex_request_with_refresh_retry(
@@ -301,7 +621,13 @@ async fn send_codex_request(
                 access_token: &account.access_token,
                 account_id: account.account_id.as_deref(),
                 request_id,
-                turn_state: None,
+                turn_state: request.turn_state.as_deref(),
+                turn_metadata: request.turn_metadata.as_deref(),
+                beta_features: request.beta_features.as_deref(),
+                include_timing_metrics: request.include_timing_metrics.as_deref(),
+                version: request.version.as_deref(),
+                codex_window_id: request.codex_window_id.as_deref(),
+                parent_thread_id: request.parent_thread_id.as_deref(),
                 cookie_header: cookie_header.as_deref(),
             },
         )
@@ -350,7 +676,13 @@ async fn send_codex_stream_request(
                 access_token: &account.access_token,
                 account_id: account.account_id.as_deref(),
                 request_id,
-                turn_state: None,
+                turn_state: request.turn_state.as_deref(),
+                turn_metadata: request.turn_metadata.as_deref(),
+                beta_features: request.beta_features.as_deref(),
+                include_timing_metrics: request.include_timing_metrics.as_deref(),
+                version: request.version.as_deref(),
+                codex_window_id: request.codex_window_id.as_deref(),
+                parent_thread_id: request.parent_thread_id.as_deref(),
                 cookie_header: cookie_header.as_deref(),
             },
         )

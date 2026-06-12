@@ -26,16 +26,17 @@ fn transport_for_request_should_require_websocket_for_previous_response_id() {
     );
 }
 
+#[test]
+fn use_websocket_should_not_serialize_to_upstream_json() {
+    let mut request = base_request();
+    request.use_websocket = true;
+
+    let body = serde_json::to_value(&request).unwrap();
+
+    assert!(body.get("use_websocket").is_none());
+    assert!(body.get("useWebSocket").is_none());
+}
+
 fn base_request() -> CodexResponsesRequest {
-    CodexResponsesRequest {
-        model: "gpt-5.5".to_string(),
-        instructions: String::new(),
-        input: Vec::new(),
-        stream: true,
-        store: false,
-        reasoning: None,
-        tools: None,
-        previous_response_id: None,
-        use_websocket: false,
-    }
+    CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new())
 }
