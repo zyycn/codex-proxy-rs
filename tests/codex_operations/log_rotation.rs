@@ -1,34 +1,32 @@
 use std::{fs, io::Write};
 
-use tracing_subscriber::fmt::MakeWriter;
-
-use codex_proxy_rs::codex::logs::rotation::{RotatingLogWriter, RotationConfig};
+use codex_proxy_rs::codex::logs::rotation::{build_file_appender, RotationConfig};
 
 #[test]
-fn rotating_writer_splits_files_when_size_limit_is_reached() {
+fn rolling_appender_should_write_daily_codex_log_file() {
     let dir = tempfile::tempdir().unwrap();
-    let writer = RotatingLogWriter::new(RotationConfig::new(dir.path(), 16, 14)).unwrap();
+    let config = RotationConfig::new(dir.path(), 14);
+    let mut appender = build_file_appender(&config).unwrap();
 
-    {
-        let mut file = writer.make_writer();
-        file.write_all(b"first log line\n").unwrap();
-        file.write_all(b"second log line\n").unwrap();
-        file.flush().unwrap();
-    }
+    appender.write_all(b"hello\n").unwrap();
+    appender.flush().unwrap();
 
-    let log_files = fs::read_dir(dir.path())
+    let names = fs::read_dir(dir.path())
         .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("codex-proxy-rs") && name.ends_with(".log"))
-        })
-        .count();
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
 
     assert!(
-        log_files >= 2,
-        "expected rotated log files, found {log_files}"
+        names
+            .iter()
+            .any(|name| name.starts_with("codex-proxy-rs.") && name.ends_with(".log")),
+        "expected a daily codex log file, found {names:?}"
     );
+}
+
+#[test]
+fn rotation_config_should_not_accept_size_limit() {
+    let config = RotationConfig::new("logs", 14);
+
+    assert_eq!(config.retention_days, 14);
 }

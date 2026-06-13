@@ -1,4 +1,4 @@
-use codex_proxy_rs::config::AppConfig;
+use codex_proxy_rs::config::{AppConfig, LoggingConfig};
 use std::fs;
 
 #[test]
@@ -60,7 +60,6 @@ admin:
   session_ttl_minutes: 1440
 logging:
   directory: logs
-  max_file_bytes: 10485760
   retention_days: 14
   enabled: false
   capacity: 2000
@@ -87,5 +86,25 @@ logging:
     assert_eq!(cfg.model.default_model, "gpt-5.5");
     assert_eq!(cfg.auth.max_concurrent_per_account, 3);
     assert_eq!(cfg.logging.directory, "local-logs");
-    assert_eq!(cfg.logging.max_file_bytes, 10485760);
+    assert_eq!(cfg.logging.retention_days, 14);
+}
+
+#[test]
+fn logging_config_rejects_removed_size_rotation_field() {
+    let err = serde_yml::from_str::<LoggingConfig>(
+        r#"
+directory: logs
+max_file_bytes: 10485760
+retention_days: 14
+enabled: false
+capacity: 2000
+capture_body: false
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("max_file_bytes"),
+        "expected max_file_bytes to be rejected, got {err}"
+    );
 }

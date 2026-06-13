@@ -175,7 +175,7 @@ impl ResponsesService {
                                     &log_context,
                                     StatusCode::OK,
                                     EventLevel::Warn,
-                                    "v1 responses empty response, retrying",
+                                    "v1 responses 空响应，准备重试",
                                     json!({
                                         "stream": false,
                                         "emptyResponse": true,
@@ -190,7 +190,7 @@ impl ResponsesService {
                                     &log_context,
                                     StatusCode::BAD_GATEWAY,
                                     EventLevel::Error,
-                                    "v1 responses empty response after max retries",
+                                    "v1 responses 空响应重试次数已耗尽",
                                     json!({
                                         "stream": false,
                                         "emptyResponse": true,
@@ -217,13 +217,13 @@ impl ResponsesService {
                             self.upstream.apply_account_retry(&account, retry).await;
                             self.upstream
                                 .log_response(
-                                &log_context,
-                                retry.status(),
-                                EventLevel::Warn,
-                                "v1 responses websocket history request kept on original account",
-                                websocket_history_retry_metadata(retry, false),
-                            )
-                            .await;
+                                    &log_context,
+                                    retry.status(),
+                                    EventLevel::Warn,
+                                    "v1 responses WebSocket history 请求保持原账户",
+                                    websocket_history_retry_metadata(retry, false),
+                                )
+                                .await;
                         } else {
                             let fallback = self
                                 .upstream
@@ -239,7 +239,7 @@ impl ResponsesService {
                                     &log_context,
                                     retry.status(),
                                     EventLevel::Warn,
-                                    "v1 responses upstream retrying with fallback account",
+                                    "v1 responses 上游请求将使用备用账户重试",
                                     retry.metadata(false),
                                 )
                                 .await;
@@ -256,7 +256,7 @@ impl ResponsesService {
                             &log_context,
                             error_response.0,
                             EventLevel::Error,
-                            "v1 responses upstream request failed",
+                            "v1 responses 上游请求失败",
                             json!({"stream": false}),
                         )
                         .await;
@@ -275,7 +275,7 @@ impl ResponsesService {
                     &log_context,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     EventLevel::Error,
-                    "v1 responses cookie persistence failed",
+                    "v1 responses 持久化 cookie 失败",
                     json!({"stream": false, "cookieStoreError": true}),
                 )
                 .await;
@@ -300,7 +300,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::INTERNAL_SERVER_ERROR,
                         EventLevel::Error,
-                        "v1 responses usage persistence failed",
+                        "v1 responses 持久化 usage 失败",
                         json!({"stream": false, "usage": usage, "usageStoreError": true}),
                     )
                     .await;
@@ -331,7 +331,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::OK,
                         EventLevel::Info,
-                        "v1 responses completed",
+                        "v1 responses 已完成",
                         json!({"stream": false, "usage": response.usage}),
                     )
                     .await;
@@ -343,7 +343,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::BAD_GATEWAY,
                         EventLevel::Error,
-                        "v1 responses empty response",
+                        "v1 responses 空响应",
                         json!({"stream": false, "emptyResponse": true}),
                     )
                     .await;
@@ -362,7 +362,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::BAD_GATEWAY,
                         EventLevel::Error,
-                        "v1 responses upstream SSE failed",
+                        "v1 responses 上游 SSE 失败",
                         failure.metadata(false),
                     )
                     .await;
@@ -381,7 +381,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::BAD_GATEWAY,
                         EventLevel::Warn,
-                        "v1 responses completed event missing",
+                        "v1 responses 缺少 completed 事件",
                         json!({"stream": false, "usage": response.usage}),
                     )
                     .await;
@@ -400,7 +400,7 @@ impl ResponsesService {
                         &log_context,
                         StatusCode::BAD_GATEWAY,
                         EventLevel::Warn,
-                        "v1 responses invalid SSE response",
+                        "v1 responses SSE 响应无效",
                         json!({"stream": false, "sseParseError": error.to_string()}),
                     )
                     .await;

@@ -334,7 +334,7 @@ Example item:
   "model": "gpt-5.5",
   "statusCode": 200,
   "latencyMs": 123,
-  "message": "v1 responses completed",
+  "message": "v1 responses 已完成",
   "metadata": {
     "stream": false,
     "usage": {

@@ -9,32 +9,30 @@ use tokio::signal;
 async fn main() -> anyhow::Result<()> {
     let config = AppConfig::load()?;
 
-    let _log_writer = init_tracing(RotationConfig::new(
+    let _log_guard = init_tracing(RotationConfig::new(
         &config.logging.directory,
-        config.logging.max_file_bytes,
         config.logging.retention_days,
     ))?;
 
     let host = config.server.host.clone();
     let port = config.server.port;
     let (state, db_pool, restored_accounts) = build_state(config.clone()).await?;
-    tracing::info!(restored_accounts, "account pool restored from sqlite");
+    tracing::info!(account_count = restored_accounts, "账户池已从 SQLite 恢复");
 
     let background_tasks = start_background_tasks(&state, db_pool.clone(), &config).await;
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
-    tracing::info!(host, port, "codex-proxy-rs listening");
+    tracing::info!(host, port, "codex-proxy-rs 已开始监听");
 
-    // 运行服务器，同时监听关闭信号
     tokio::select! {
         result = axum::serve(listener, app) => {
             if let Err(e) = result {
-                tracing::error!(error = %e, "server error");
+                tracing::error!(error = %e, "服务器运行失败");
             }
         }
         _ = signal::ctrl_c() => {
-            tracing::info!("received shutdown signal");
+            tracing::info!("收到关闭信号");
         }
     }
 

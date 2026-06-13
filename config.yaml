@@ -41,7 +41,6 @@ admin:
   default_password: admin
 logging:
   directory: logs
-  max_file_bytes: 10485760
   retention_days: 14
   enabled: false
   capacity: 2000

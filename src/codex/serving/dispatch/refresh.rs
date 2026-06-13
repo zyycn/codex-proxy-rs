@@ -108,7 +108,7 @@ async fn log_account_refresh_failure(
     let mut event = EventLog::new(
         "account.refresh",
         EventLevel::Warn,
-        "account refresh failed after upstream 401",
+        "上游 401 后账户刷新失败",
     );
     event.request_id = Some(request_id.to_string());
     event.account_id = Some(account.id.clone());
@@ -121,7 +121,7 @@ async fn log_account_refresh_failure(
         "accountStatus": status.map(account_status_value),
     });
     if let Err(error) = repo.insert(event).await {
-        tracing::warn!(?error, "failed to insert account refresh event log");
+        tracing::warn!(error = %error, "写入账户刷新事件日志失败");
     }
 }
 

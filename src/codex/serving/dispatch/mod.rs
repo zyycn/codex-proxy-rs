@@ -301,7 +301,7 @@ async fn responses_http_sse_stream(
                         &log_context,
                         retry.status(),
                         EventLevel::Warn,
-                        "v1 responses stream upstream retrying with fallback account",
+                        "v1 responses stream 上游请求将使用备用账户重试",
                         retry.metadata(true),
                     )
                     .await;
@@ -317,7 +317,7 @@ async fn responses_http_sse_stream(
                     &log_context,
                     error_response.0,
                     EventLevel::Error,
-                    "v1 responses stream upstream request failed",
+                    "v1 responses stream 上游请求失败",
                     json!({"stream": true}),
                 )
                 .await;
@@ -336,7 +336,7 @@ async fn responses_http_sse_stream(
             &log_context,
             StatusCode::INTERNAL_SERVER_ERROR,
             EventLevel::Error,
-            "v1 responses stream cookie persistence failed",
+            "v1 responses stream 持久化 cookie 失败",
             json!({"stream": true, "cookieStoreError": true}),
         )
         .await;
@@ -674,7 +674,7 @@ async fn record_response_affinity_with_deps(
         Err(error) => {
             tracing::warn!(
                 error = %error,
-                "failed to parse completed response metadata for session affinity"
+                "解析已完成响应 metadata 用于 session affinity 失败"
             );
             return;
         }
@@ -727,14 +727,15 @@ async fn apply_upstream_account_retry_with_deps(
         } => {
             let cooldown_until = Utc::now() + Duration::seconds(retry_after_seconds as i64);
             if let Some(repo) = deps.account_repository.as_ref() {
-                if repo
+                if let Err(error) = repo
                     .set_quota_cooldown_until(&account.id, cooldown_until)
                     .await
-                    .is_err()
                 {
                     tracing::warn!(
+                        error = %error,
                         account_id = %account.id,
-                        "failed to persist quota cooldown"
+                        cooldown_until = %cooldown_until,
+                        "持久化 quota cooldown 失败"
                     );
                 }
             }
@@ -742,10 +743,11 @@ async fn apply_upstream_account_retry_with_deps(
                 .lock()
                 .await
                 .mark_quota_limited_until(&account.id, cooldown_until);
-            if record_request_attempt(deps, &account.id).await.is_err() {
+            if let Err(error) = record_request_attempt(deps, &account.id).await {
                 tracing::warn!(
+                    error = ?error,
                     account_id = %account.id,
-                    "failed to record rate-limited account attempt"
+                    "记录被 rate limit 的账户请求尝试失败"
                 );
             }
         }
@@ -755,26 +757,24 @@ async fn apply_upstream_account_retry_with_deps(
         UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => {
             let cooldown_until = Utc::now() + Duration::seconds(cooldown_seconds as i64);
             if let Some(cookie_repo) = deps.cookie_repository.as_ref() {
-                if cookie_repo
-                    .delete_account_cookies(&account.id)
-                    .await
-                    .is_err()
-                {
+                if let Err(error) = cookie_repo.delete_account_cookies(&account.id).await {
                     tracing::warn!(
+                        error = %error,
                         account_id = %account.id,
-                        "failed to clear Cloudflare-blocked account cookies"
+                        "清理 Cloudflare 阻断账户 cookies 失败"
                     );
                 }
             }
             if let Some(repo) = deps.account_repository.as_ref() {
-                if repo
+                if let Err(error) = repo
                     .set_cloudflare_cooldown_until(&account.id, cooldown_until)
                     .await
-                    .is_err()
                 {
                     tracing::warn!(
+                        error = %error,
                         account_id = %account.id,
-                        "failed to persist Cloudflare cooldown"
+                        cooldown_until = %cooldown_until,
+                        "持久化 Cloudflare cooldown 失败"
                     );
                 }
             }
@@ -795,10 +795,12 @@ async fn set_account_status(
     status: AccountStatus,
 ) {
     if let Some(repo) = deps.account_repository.as_ref() {
-        if repo.set_status(&account.id, status).await.is_err() {
+        if let Err(error) = repo.set_status(&account.id, status).await {
             tracing::warn!(
+                error = %error,
                 account_id = %account.id,
-                "failed to persist upstream account status"
+                status = ?status,
+                "持久化上游账户状态失败"
             );
         }
     }
@@ -843,7 +845,7 @@ async fn responses_websocket_stream(
                             &log_context,
                             retry.status(),
                             EventLevel::Warn,
-                            "v1 responses websocket history request kept on original account",
+                            "v1 responses WebSocket history 请求保持原账户",
                             websocket_history_retry_metadata(retry, true),
                         )
                         .await;
@@ -861,7 +863,7 @@ async fn responses_websocket_stream(
                             &log_context,
                             retry.status(),
                             EventLevel::Warn,
-                            "v1 responses websocket upstream retrying with fallback account",
+                            "v1 responses WebSocket 上游请求将使用备用账户重试",
                             retry.metadata(true),
                         )
                         .await;
@@ -878,7 +880,7 @@ async fn responses_websocket_stream(
                     &log_context,
                     error_response.0,
                     EventLevel::Error,
-                    "v1 responses websocket stream upstream request failed",
+                    "v1 responses WebSocket stream 上游请求失败",
                     json!({"stream": true, "transport": "websocket"}),
                 )
                 .await;
@@ -897,7 +899,7 @@ async fn responses_websocket_stream(
             &log_context,
             StatusCode::INTERNAL_SERVER_ERROR,
             EventLevel::Error,
-            "v1 responses websocket stream cookie persistence failed",
+            "v1 responses WebSocket stream 持久化 cookie 失败",
             json!({"stream": true, "transport": "websocket", "cookieStoreError": true}),
         )
         .await;
@@ -1059,7 +1061,7 @@ impl StreamAudit {
         let body = String::from_utf8_lossy(body);
         let mut status = StatusCode::OK;
         let mut level = EventLevel::Info;
-        let mut message = "v1 responses stream completed";
+        let mut message = "v1 responses stream 已完成";
         let mut metadata = match extract_sse_usage(&body) {
             Ok(usage) => {
                 if let Some(usage) = usage {
@@ -1068,7 +1070,7 @@ impl StreamAudit {
                         .is_err()
                     {
                         level = EventLevel::Warn;
-                        message = "v1 responses stream completed with usage store error";
+                        message = "v1 responses stream 已完成但 usage 存储失败";
                         json!({"stream": true, "usage": usage, "usageStoreError": true})
                     } else {
                         json!({"stream": true, "usage": usage})
@@ -1079,7 +1081,7 @@ impl StreamAudit {
             }
             Err(error) => {
                 level = EventLevel::Warn;
-                message = "v1 responses stream completed with invalid SSE usage";
+                message = "v1 responses stream 已完成但 SSE usage 无效";
                 json!({"stream": true, "sseParseError": error.to_string()})
             }
         };
@@ -1088,13 +1090,13 @@ impl StreamAudit {
                 // SSE 响应头已发出，HTTP 状态不能回滚；用终止事件透传给客户端，并在审计里标记上游失败。
                 status = StatusCode::BAD_GATEWAY;
                 level = EventLevel::Error;
-                message = "v1 responses stream upstream SSE failed";
+                message = "v1 responses stream 上游 SSE 失败";
                 failure.extend_metadata(&mut metadata);
             }
             Ok(None) => {}
             Err(error) => {
                 level = EventLevel::Warn;
-                message = "v1 responses stream completed with invalid SSE failure metadata";
+                message = "v1 responses stream 已完成但 SSE 失败 metadata 无效";
                 metadata = json!({"stream": true, "sseParseError": error.to_string()});
             }
         }
@@ -1117,7 +1119,7 @@ impl StreamAudit {
             &self.context,
             StatusCode::BAD_GATEWAY,
             EventLevel::Error,
-            "v1 responses stream transport failed",
+            "v1 responses stream transport 失败",
             json!({"stream": true, "transportError": error.to_string()}),
         )
         .await;
@@ -1173,7 +1175,7 @@ impl WebSocketStreamAudit {
 
         let mut status = StatusCode::OK;
         let mut level = EventLevel::Info;
-        let mut message = "v1 responses websocket stream completed";
+        let mut message = "v1 responses WebSocket stream 已完成";
         let mut metadata = match usage_result {
             Ok(Some(usage)) => {
                 if record_usage_with_deps(&self.deps, &self.context.account_id, usage)
@@ -1181,7 +1183,7 @@ impl WebSocketStreamAudit {
                     .is_err()
                 {
                     level = EventLevel::Warn;
-                    message = "v1 responses websocket stream completed with usage store error";
+                    message = "v1 responses WebSocket stream 已完成但 usage 存储失败";
                     json!({
                         "stream": true,
                         "transport": "websocket",
@@ -1206,7 +1208,7 @@ impl WebSocketStreamAudit {
             }),
             Err(error) => {
                 level = EventLevel::Warn;
-                message = "v1 responses websocket stream completed with invalid SSE usage";
+                message = "v1 responses WebSocket stream 已完成但 SSE usage 无效";
                 json!({
                     "stream": true,
                     "transport": "websocket",
@@ -1220,14 +1222,13 @@ impl WebSocketStreamAudit {
                 // SSE 响应头已经发给客户端，HTTP 状态不能回滚，只能在审计中标记上游失败。
                 status = StatusCode::BAD_GATEWAY;
                 level = EventLevel::Error;
-                message = "v1 responses websocket stream upstream SSE failed";
+                message = "v1 responses WebSocket stream 上游 SSE 失败";
                 failure.extend_metadata(&mut metadata);
             }
             Ok(None) => {}
             Err(error) => {
                 level = EventLevel::Warn;
-                message =
-                    "v1 responses websocket stream completed with invalid SSE failure metadata";
+                message = "v1 responses WebSocket stream 已完成但 SSE 失败 metadata 无效";
                 metadata = json!({
                     "stream": true,
                     "transport": "websocket",
@@ -1255,7 +1256,7 @@ impl WebSocketStreamAudit {
             &self.context,
             StatusCode::BAD_GATEWAY,
             EventLevel::Error,
-            "v1 responses websocket stream transport failed",
+            "v1 responses WebSocket stream transport 失败",
             json!({
                 "stream": true,
                 "transport": "websocket",
@@ -1329,6 +1330,6 @@ async fn log_codex_upstream_response_with_deps(
     event.latency_ms = Some(context.latency_ms());
     event.metadata = metadata;
     if let Err(error) = repo.insert(event).await {
-        tracing::warn!(?error, "failed to insert v1 response event log");
+        tracing::warn!(error = %error, "写入 v1 response 事件日志失败");
     }
 }

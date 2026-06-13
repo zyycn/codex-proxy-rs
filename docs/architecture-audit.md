@@ -256,7 +256,6 @@ pub enum AccountServiceError {
 ```yaml
 logging:
   capacity: 2000           # SQLite 内存容量
-  max_file_bytes: 10485760 # 10MB per file
   retention_days: 14
 ```
 

@@ -20,28 +20,25 @@ impl SessionCleanupScheduler {
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(self.interval_secs));
-            info!(
-                interval_secs = self.interval_secs,
-                "Session cleanup scheduler started"
-            );
+            info!(interval_secs = self.interval_secs, "会话清理调度器已启动");
 
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
                         match self.cleanup_expired_sessions().await {
                             Ok(count) if count > 0 => {
-                                info!(count, "Cleaned up expired sessions");
+                                info!(count, "已清理过期会话");
                             }
                             Ok(_) => {
                                 // 没有过期会话，不输出日志
                             }
                             Err(e) => {
-                                error!(error = %e, "Failed to clean up expired sessions");
+                                error!(error = %e, "清理过期会话失败");
                             }
                         }
                     }
                     _ = shutdown_rx.recv() => {
-                        info!("Session cleanup scheduler shut down gracefully");
+                        info!("会话清理调度器已关闭");
                         break;
                     }
                 }

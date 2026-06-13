@@ -43,7 +43,7 @@ impl ModelRefresher {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
 
         tokio::spawn(async move {
-            info!("model refresher started");
+            info!("模型刷新器已启动");
 
             // 初始延迟后开始首次刷新
             sleep(Duration::from_millis(self.initial_delay_ms)).await;
@@ -55,7 +55,7 @@ impl ModelRefresher {
             while attempt < self.max_retries {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
-                        info!("model refresher shutting down before first fetch");
+                        info!("模型刷新器在首次拉取前关闭");
                         return;
                     }
                     _ = async {} => {}
@@ -67,7 +67,7 @@ impl ModelRefresher {
                         info!(
                             refreshed_plans = result.refreshed_plans,
                             model_count = result.model_count,
-                            "initial model refresh successful"
+                            "首次模型刷新成功"
                         );
                         has_fetched_once = true;
                         break;
@@ -82,9 +82,7 @@ impl ModelRefresher {
                         );
 
                         if is_no_accounts {
-                            warn!(
-                                "initial model refresh skipped: no accounts available, will retry periodically"
-                            );
+                            warn!("首次模型刷新跳过：没有可用账户，将进入周期重试");
                             break;
                         }
 
@@ -92,13 +90,13 @@ impl ModelRefresher {
                             attempt,
                             max_retries = self.max_retries,
                             error = ?e,
-                            "initial model refresh failed"
+                            "首次模型刷新失败"
                         );
 
                         if attempt < self.max_retries {
                             tokio::select! {
                                 _ = shutdown_rx.recv() => {
-                                    info!("model refresher shutting down during retry wait");
+                                    info!("模型刷新器在重试等待期间关闭");
                                     return;
                                 }
                                 _ = sleep(Duration::from_millis(self.retry_delay_ms)) => {}
@@ -109,9 +107,7 @@ impl ModelRefresher {
             }
 
             if !has_fetched_once {
-                warn!(
-                    "model refresher failed all initial attempts, falling back to periodic refresh"
-                );
+                warn!("模型刷新器首次尝试全部失败，切换到周期刷新");
             }
 
             // 定期刷新
@@ -124,7 +120,7 @@ impl ModelRefresher {
                         self.tick().await;
                     }
                     _ = shutdown_rx.recv() => {
-                        info!("model refresher shutting down");
+                        info!("模型刷新器正在关闭");
                         break;
                     }
                 }
@@ -142,11 +138,11 @@ impl ModelRefresher {
                     refreshed_plans = result.refreshed_plans,
                     model_count = result.model_count,
                     failed_plans = result.failed_plans,
-                    "models refreshed"
+                    "模型列表已刷新"
                 );
             }
             Err(e) => {
-                warn!(error = ?e, "failed to refresh models");
+                warn!(error = ?e, "刷新模型列表失败");
             }
         }
     }

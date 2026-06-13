@@ -134,7 +134,7 @@ impl ChatService {
                                 &log_context,
                                 retry.status(),
                                 EventLevel::Warn,
-                                "v1 chat completions upstream retrying with fallback account",
+                                "v1 chat completions 上游请求将使用备用账户重试",
                                 retry.metadata(client_stream),
                             )
                             .await;
@@ -150,7 +150,7 @@ impl ChatService {
                             &log_context,
                             error_response.0,
                             EventLevel::Error,
-                            "v1 chat completions upstream request failed",
+                            "v1 chat completions 上游请求失败",
                             json!({"stream": client_stream}),
                         )
                         .await;

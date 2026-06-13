@@ -621,6 +621,13 @@ pub fn http_sse_fallback_allowed(request: &CodexResponsesRequest) -> bool {
     )
 }
 
+#[tracing::instrument(
+    skip(base_url, request, headers),
+    fields(
+        model = %request.model,
+        has_previous_response_id = request.previous_response_id.is_some(),
+    )
+)]
 pub async fn create_response_via_websocket(
     base_url: &str,
     request: &CodexResponsesRequest,
@@ -649,6 +656,13 @@ pub async fn create_response_via_websocket(
     })
 }
 
+#[tracing::instrument(
+    skip(base_url, request, headers),
+    fields(
+        model = %request.model,
+        has_previous_response_id = request.previous_response_id.is_some(),
+    )
+)]
 pub async fn create_response_via_websocket_stream(
     base_url: &str,
     request: &CodexResponsesRequest,
@@ -657,6 +671,13 @@ pub async fn create_response_via_websocket_stream(
     create_response_via_websocket_stream_inner(base_url, request, headers, None).await
 }
 
+#[tracing::instrument(
+    skip(base_url, request, headers, pool, pool_key),
+    fields(
+        model = %request.model,
+        has_previous_response_id = request.previous_response_id.is_some(),
+    )
+)]
 pub async fn create_response_via_websocket_stream_with_pool(
     base_url: &str,
     request: &CodexResponsesRequest,

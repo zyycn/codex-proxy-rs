@@ -72,7 +72,7 @@ impl ModelService {
             Ok(_) => ModelCatalog::from_config(&self.config.model),
             Err(error) => {
                 // Cached model snapshots extend the catalog; fallback keeps proxy routes available.
-                tracing::warn!(?error, "failed to load cached model snapshots");
+                tracing::warn!(error = %error, "加载缓存模型快照失败");
                 ModelCatalog::from_config(&self.config.model)
             }
         }
@@ -138,7 +138,7 @@ impl ModelService {
                     continue;
                 }
                 Err(error) => {
-                    tracing::warn!(?error, plan_type, "failed to refresh backend models");
+                    tracing::warn!(error = %error, plan_type, "刷新后端模型失败");
                     result.failed_plans += 1;
                     continue;
                 }

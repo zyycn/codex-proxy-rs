@@ -50,7 +50,7 @@ pub async fn build_state(config: AppConfig) -> BootstrapResult<(AppState, Sqlite
                 version = %fp.app_version,
                 build = %fp.build_number,
                 source = "database",
-                "loaded fingerprint for requests"
+                "已从数据库加载请求 fingerprint"
             );
             fp
         }
@@ -60,14 +60,14 @@ pub async fn build_state(config: AppConfig) -> BootstrapResult<(AppState, Sqlite
                 version = %fp.app_version,
                 build = %fp.build_number,
                 source = "default",
-                "using default fingerprint for requests"
+                "使用默认请求 fingerprint"
             );
             fp
         }
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "failed to load fingerprint from database, using default"
+                "从数据库加载 fingerprint 失败，使用默认值"
             );
             Fingerprint::default_codex_desktop()
         }
@@ -117,7 +117,7 @@ async fn ensure_default_admin_exists(
 
         tracing::info!(
             username = %config.admin.default_username,
-            "created default admin user"
+            "已创建默认管理员用户"
         );
     }
 

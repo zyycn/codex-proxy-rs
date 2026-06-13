@@ -39,10 +39,7 @@ impl QuotaRefresher {
             let mut ticker = interval(Duration::from_secs(self.interval_secs));
             let mut last_refreshed: HashMap<String, Instant> = HashMap::new();
 
-            info!(
-                interval_secs = self.interval_secs,
-                "quota refresher started"
-            );
+            info!(interval_secs = self.interval_secs, "quota 刷新器已启动");
 
             loop {
                 tokio::select! {
@@ -50,7 +47,7 @@ impl QuotaRefresher {
                         self.tick(&mut last_refreshed).await;
                     }
                     _ = shutdown_rx.recv() => {
-                        info!("quota refresher shutting down");
+                        info!("quota 刷新器正在关闭");
                         break;
                     }
                 }
@@ -68,13 +65,13 @@ impl QuotaRefresher {
         let accounts_to_refresh = self.account_service.list_quota_locked_accounts().await;
 
         if accounts_to_refresh.is_empty() {
-            debug!("no quota-locked accounts found");
+            debug!("未找到 quota 锁定账户");
             return;
         }
 
         info!(
             count = accounts_to_refresh.len(),
-            "found quota-locked accounts to refresh"
+            "发现需要刷新 quota 的锁定账户"
         );
 
         for account_id in accounts_to_refresh {
@@ -83,13 +80,13 @@ impl QuotaRefresher {
                 if now.duration_since(last_time) < min_interval {
                     debug!(
                         account_id = %account_id,
-                        "skipping - recently refreshed"
+                        "账户最近已刷新，跳过 quota 刷新"
                     );
                     continue;
                 }
             }
 
-            info!(account_id = %account_id, "actively refreshing quota");
+            info!(account_id = %account_id, "正在主动刷新 quota");
 
             // 记录刷新时间
             last_refreshed.insert(account_id.clone(), now);
@@ -102,13 +99,13 @@ impl QuotaRefresher {
                 .await
             {
                 Ok(_) => {
-                    info!(account_id = %account_id, "quota refreshed successfully");
+                    info!(account_id = %account_id, "quota 刷新成功");
                 }
                 Err(e) => {
                     warn!(
                         account_id = %account_id,
                         error = ?e,
-                        "failed to refresh quota"
+                        "quota 刷新失败"
                     );
                 }
             }
