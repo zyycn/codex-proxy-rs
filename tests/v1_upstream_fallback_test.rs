@@ -12,7 +12,8 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
-    codex::accounts::repository::AccountRepository, codex::oauth::RefreshFailure,
+    codex::oauth::RefreshFailure,
+    codex::{accounts::repository::AccountRepository, cookies::repository::CookieRepository},
 };
 
 mod common;
@@ -83,7 +84,6 @@ async fn v1_responses_should_retry_next_account_after_429_retry_after() {
         ],
     )
     .await;
-
     let response = imported
         .app
         .oneshot(
@@ -180,7 +180,6 @@ async fn v1_responses_stream_should_retry_next_account_after_429_retry_after() {
         ],
     )
     .await;
-
     let response = imported
         .app
         .oneshot(
@@ -395,6 +394,23 @@ async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
         ],
     )
     .await;
+    let cookie_repo = CookieRepository::new(imported.pool.clone(), imported.secret_box.clone());
+    cookie_repo
+        .set_cookie_header("acct_a", "cf_clearance=old")
+        .await
+        .unwrap();
+    cookie_repo
+        .set_cookie_header("acct_b", "cf_clearance=keep")
+        .await
+        .unwrap();
+    assert_eq!(
+        cookie_repo
+            .cookie_header("acct_a", "chatgpt.com")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=old")
+    );
 
     let response = imported
         .app
@@ -434,6 +450,21 @@ async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
         .unwrap()
         .with_timezone(&Utc);
     assert!(cooldown_until > started_at);
+    assert_eq!(
+        cookie_repo
+            .cookie_header("acct_a", "chatgpt.com")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        cookie_repo
+            .cookie_header("acct_b", "chatgpt.com")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=keep")
+    );
 }
 
 #[tokio::test]

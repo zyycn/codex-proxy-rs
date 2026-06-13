@@ -186,6 +186,9 @@ pub(super) async fn apply_codex_account_error(
         }
         Some(CodexAccountErrorAction::CloudflareChallenge { cooldown_seconds }) => {
             let cooldown_until = Utc::now() + chrono::Duration::seconds(cooldown_seconds as i64);
+            if let Some(cookie_repo) = service.cookie_repository.as_ref() {
+                let _ = cookie_repo.delete_account_cookies(&account.id).await;
+            }
             let _ = repo
                 .set_cloudflare_cooldown_until(&account.id, cooldown_until)
                 .await;
