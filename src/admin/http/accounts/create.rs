@@ -417,6 +417,15 @@ fn account_entry_from_value(value: &Value, fallback_label: Option<String>) -> Ac
         ),
         token,
         refresh_token,
+        access_token_expires_at: first_string(
+            value,
+            &[
+                &["accessTokenExpiresAt"],
+                &["access_token_expires_at"],
+                &["credentials", "accessTokenExpiresAt"],
+                &["credentials", "access_token_expires_at"],
+            ],
+        ),
         status: first_string(value, &[&["status"]]),
     }
 }

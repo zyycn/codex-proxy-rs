@@ -106,6 +106,7 @@ async fn app_state_should_restore_account_pool_from_sqlite_accounts() {
             input_tokens: 10,
             output_tokens: 3,
             cached_tokens: 2,
+            empty_response_count: 0,
         },
     )
     .await

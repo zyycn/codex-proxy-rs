@@ -55,6 +55,7 @@ pub(super) fn pool_account_from_stored(account: StoredAccount) -> Account {
         quota_cooldown_until: None,
         cloudflare_cooldown_until: None,
         request_count: 0,
+        empty_response_count: 0,
         window_request_count: 0,
         window_started_at: None,
         window_reset_at: None,

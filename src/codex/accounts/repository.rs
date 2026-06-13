@@ -93,12 +93,14 @@ pub struct UsageDelta {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub empty_response_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUsageRecord {
     pub account_id: String,
     pub request_count: i64,
+    pub empty_response_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -112,6 +114,7 @@ pub struct AccountUsageListRecord {
     pub label: Option<String>,
     pub plan_type: Option<String>,
     pub request_count: i64,
+    pub empty_response_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -130,6 +133,7 @@ pub struct AccountQuotaSnapshot {
 pub struct AccountUsageSummary {
     pub account_count: i64,
     pub request_count: i64,
+    pub empty_response_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -322,7 +326,7 @@ impl AccountRepository {
 
     pub async fn list_pool_accounts(&self) -> AccountRepositoryResult<Vec<Account>> {
         let rows = sqlx::query(
-            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, quota_limit_reached, quota_cooldown_until, cloudflare_cooldown_until, coalesce(account_usage.request_count, 0) as usage_request_count, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
+            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, quota_limit_reached, quota_cooldown_until, cloudflare_cooldown_until, coalesce(account_usage.request_count, 0) as usage_request_count, coalesce(account_usage.empty_response_count, 0) as usage_empty_response_count, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -353,6 +357,7 @@ impl AccountRepository {
                     row.get::<Option<String>, _>("cloudflare_cooldown_until"),
                 )?,
                 request_count: row.get::<i64, _>("usage_request_count").max(0) as u64,
+                empty_response_count: row.get::<i64, _>("usage_empty_response_count").max(0) as u64,
                 window_request_count: 0,
                 window_started_at: None,
                 window_reset_at: None,
@@ -511,9 +516,10 @@ impl AccountRepository {
     ) -> AccountRepositoryResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 1, ?, ?, ?, ?) on conflict(account_id) do update set request_count = request_count + 1, input_tokens = input_tokens + excluded.input_tokens, output_tokens = output_tokens + excluded.output_tokens, cached_tokens = cached_tokens + excluded.cached_tokens, last_used_at = excluded.last_used_at",
+            "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 1, ?, ?, ?, ?, ?) on conflict(account_id) do update set request_count = request_count + 1, empty_response_count = empty_response_count + excluded.empty_response_count, input_tokens = input_tokens + excluded.input_tokens, output_tokens = output_tokens + excluded.output_tokens, cached_tokens = cached_tokens + excluded.cached_tokens, last_used_at = excluded.last_used_at",
         )
         .bind(account_id)
+        .bind(usage.empty_response_count)
         .bind(usage.input_tokens)
         .bind(usage.output_tokens)
         .bind(usage.cached_tokens)
@@ -528,7 +534,7 @@ impl AccountRepository {
         account_id: &str,
     ) -> AccountRepositoryResult<Option<AccountUsageRecord>> {
         let row = sqlx::query(
-            "select account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at from account_usage where account_id = ?",
+            "select account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at from account_usage where account_id = ?",
         )
         .bind(account_id)
         .fetch_optional(&self.pool)
@@ -684,6 +690,7 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> AccountRepositoryResult<Acco
     Ok(AccountUsageRecord {
         account_id: row.get("account_id"),
         request_count: row.get("request_count"),
+        empty_response_count: row.get("empty_response_count"),
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
@@ -722,7 +729,7 @@ impl AccountUsageRepository {
             let (last_used_at, account_id) =
                 decode_cursor(&cursor).ok_or(AccountRepositoryError::InvalidCursor)?;
             sqlx::query(
-                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id where coalesce(account_usage.last_used_at, '') < ? or (coalesce(account_usage.last_used_at, '') = ? and account_usage.account_id < ?) order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
+                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.empty_response_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id where coalesce(account_usage.last_used_at, '') < ? or (coalesce(account_usage.last_used_at, '') = ? and account_usage.account_id < ?) order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
             )
             .bind(&last_used_at)
             .bind(last_used_at)
@@ -732,7 +739,7 @@ impl AccountUsageRepository {
             .await?
         } else {
             sqlx::query(
-                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
+                "select account_usage.account_id, accounts.email, accounts.label, accounts.plan_type, account_usage.request_count, account_usage.empty_response_count, account_usage.input_tokens, account_usage.output_tokens, account_usage.cached_tokens, account_usage.last_used_at from account_usage left join accounts on accounts.id = account_usage.account_id order by coalesce(account_usage.last_used_at, '') desc, account_usage.account_id desc limit ?",
             )
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -763,13 +770,14 @@ impl AccountUsageRepository {
 
     pub async fn summary(&self) -> AccountRepositoryResult<AccountUsageSummary> {
         let row = sqlx::query(
-            "select count(*) as account_count, coalesce(sum(request_count), 0) as request_count, coalesce(sum(input_tokens), 0) as input_tokens, coalesce(sum(output_tokens), 0) as output_tokens, coalesce(sum(cached_tokens), 0) as cached_tokens from account_usage",
+            "select count(*) as account_count, coalesce(sum(request_count), 0) as request_count, coalesce(sum(empty_response_count), 0) as empty_response_count, coalesce(sum(input_tokens), 0) as input_tokens, coalesce(sum(output_tokens), 0) as output_tokens, coalesce(sum(cached_tokens), 0) as cached_tokens from account_usage",
         )
         .fetch_one(&self.pool)
         .await?;
         Ok(AccountUsageSummary {
             account_count: row.get("account_count"),
             request_count: row.get("request_count"),
+            empty_response_count: row.get("empty_response_count"),
             input_tokens: row.get("input_tokens"),
             output_tokens: row.get("output_tokens"),
             cached_tokens: row.get("cached_tokens"),
@@ -778,7 +786,7 @@ impl AccountUsageRepository {
 
     pub async fn reset_account(&self, account_id: &str) -> AccountRepositoryResult<()> {
         sqlx::query(
-            "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 0, 0, 0, 0, null) on conflict(account_id) do update set request_count = 0, input_tokens = 0, output_tokens = 0, cached_tokens = 0, last_used_at = null",
+            "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 0, 0, 0, 0, 0, null) on conflict(account_id) do update set request_count = 0, empty_response_count = 0, input_tokens = 0, output_tokens = 0, cached_tokens = 0, last_used_at = null",
         )
         .bind(account_id)
         .execute(&self.pool)
@@ -796,6 +804,7 @@ fn usage_list_from_row(
         label: row.get("label"),
         plan_type: row.get("plan_type"),
         request_count: row.get("request_count"),
+        empty_response_count: row.get("empty_response_count"),
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),

@@ -17,8 +17,8 @@ use codex_proxy_rs::codex::gateway::oauth::{RefreshFailure, TokenPair};
 use crate::support::{
     admin_accounts::{
         admin_accounts_test_app, admin_accounts_test_app_with_base_url,
-        admin_accounts_test_app_with_refresher, import_test_account, FailingTokenRefresher,
-        StaticTokenRefresher,
+        admin_accounts_test_app_with_refresher, import_test_account, test_jwt,
+        FailingTokenRefresher, StaticTokenRefresher,
     },
     response_json,
 };
@@ -150,12 +150,19 @@ async fn admin_account_cookies_should_require_existing_account_and_non_empty_coo
 
 #[tokio::test]
 async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_returning_secrets() {
+    let refreshed_access_token = test_jwt(
+        Some("chatgpt-account"),
+        Some("chatgpt-user"),
+        Some("refresh@example.com"),
+        Some("plus"),
+        3600,
+    );
     let (app, state, pool, _dir) = admin_accounts_test_app_with_refresher(
         "admin-account-refresh.sqlite",
         28,
         StaticTokenRefresher {
             result: Ok(TokenPair {
-                access_token: "new-admin-refresh-access".to_string(),
+                access_token: refreshed_access_token.clone(),
                 refresh_token: Some("new-admin-refresh-rt".to_string()),
             }),
             calls: Arc::new(Mutex::new(Vec::new())),
@@ -183,7 +190,7 @@ async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_ret
     assert_eq!(body["data"]["result"], "alive");
     assert_eq!(body["data"]["previousStatus"], "active");
     let serialized = serde_json::to_string(&body).unwrap();
-    assert!(!serialized.contains("new-admin-refresh-access"));
+    assert!(!serialized.contains(&refreshed_access_token));
     assert!(!serialized.contains("new-admin-refresh-rt"));
 
     let stored: (String, String) = sqlx::query_as(
@@ -203,7 +210,7 @@ async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_ret
         .acquire_runtime_account("gpt-5.5")
         .await
         .unwrap();
-    assert_eq!(acquired.access_token, "new-admin-refresh-access");
+    assert_eq!(acquired.access_token, refreshed_access_token);
 }
 
 #[tokio::test]

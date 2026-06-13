@@ -93,6 +93,7 @@ pub struct AccountImportEntry {
     pub plan_type: Option<String>,
     pub token: Option<String>,
     pub refresh_token: Option<String>,
+    pub access_token_expires_at: Option<String>,
     pub status: Option<String>,
 }
 

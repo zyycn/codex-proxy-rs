@@ -6,6 +6,8 @@ use codex_proxy_rs::codex::accounts::{
     pool::{AccountAcquireRequest, AccountPool, AccountPoolOptions, RotationStrategy},
 };
 
+use crate::support::admin_accounts::test_jwt;
+
 #[test]
 fn account_pool_should_respect_max_concurrent_slots_per_account() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {
@@ -74,6 +76,60 @@ fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
         .id,
         "limited"
     );
+}
+
+#[test]
+fn acquire_should_skip_accounts_with_expired_token_metadata() {
+    let now = fixed_time();
+    let mut expired = Account::test("expired", AccountStatus::Active);
+    expired.access_token_expires_at = Some(now - Duration::seconds(1));
+    let mut pool = AccountPool::default();
+    pool.insert(expired);
+
+    let acquired = pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
+
+    assert!(acquired.is_none());
+}
+
+#[test]
+fn acquire_should_skip_accounts_with_expired_jwt_when_metadata_is_missing() {
+    let now = Utc::now();
+    let mut expired = Account::test("expired", AccountStatus::Active);
+    expired.access_token = test_jwt(None, None, None, None, -60);
+    expired.access_token_expires_at = None;
+    let mut pool = AccountPool::default();
+    pool.insert(expired);
+
+    let acquired = pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
+
+    assert!(acquired.is_none());
+}
+
+#[test]
+fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
+    let now = fixed_time();
+    let mut account = Account::test("acct_a", AccountStatus::Active);
+    account.quota_limit_reached = true;
+    account.quota_cooldown_until = Some(now - Duration::seconds(1));
+    account.cloudflare_cooldown_until = Some(now - Duration::seconds(1));
+    account.window_request_count = 7;
+    account.window_reset_at = Some(now - Duration::seconds(1));
+    account.limit_window_seconds = Some(60);
+    let mut pool = AccountPool::default();
+    pool.insert(account);
+
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert!(!acquired.account.quota_limit_reached);
+    assert!(acquired.account.quota_cooldown_until.is_none());
+    assert!(acquired.account.cloudflare_cooldown_until.is_none());
+    assert_eq!(acquired.account.window_request_count, 1);
+    assert!(acquired
+        .account
+        .window_reset_at
+        .is_some_and(|reset| reset > now));
 }
 
 #[test]
