@@ -186,6 +186,92 @@ async fn admin_logs_state_should_return_runtime_logging_state_and_stored_count()
 }
 
 #[tokio::test]
+async fn admin_logs_state_patch_should_require_admin_session_cookie() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-state-patch-auth.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/logs/state")
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_logs_state_patch")
+                .body(Body::from(
+                    serde_json::json!({ "enabled": true }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_logs_state_patch");
+}
+
+#[tokio::test]
+async fn admin_logs_state_patch_should_update_runtime_logging_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-state-patch.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/logs/state")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_state_patch")
+                .body(Body::from(
+                    serde_json::json!({
+                        "enabled": true,
+                        "captureBody": true,
+                        "capacity": 512
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_logs_state_patch");
+    assert_eq!(body["data"]["enabled"], true);
+    assert_eq!(body["data"]["captureBody"], true);
+    assert_eq!(body["data"]["capacity"], 512);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs/state")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["enabled"], true);
+    assert_eq!(body["data"]["captureBody"], true);
+    assert_eq!(body["data"]["capacity"], 512);
+}
+
+#[tokio::test]
 async fn admin_logs_detail_should_return_one_event_by_id() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-logs-detail.sqlite");

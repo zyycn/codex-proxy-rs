@@ -22,7 +22,7 @@ use super::{
         auth_logout, auth_status, login,
     },
     diagnostics::diagnostics,
-    logs::{clear_logs, log_detail, logs, logs_state},
+    logs::{clear_logs, log_detail, logs, logs_state, update_logs_state},
     models::refresh_models,
     settings::{settings, update_settings},
     usage::{usage_stats, usage_stats_summary},
@@ -45,7 +45,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/admin/diagnostics", get(diagnostics))
         .route("/admin/logs", get(logs).delete(clear_logs))
-        .route("/admin/logs/state", get(logs_state))
+        .route(
+            "/admin/logs/state",
+            get(logs_state).patch(update_logs_state),
+        )
         .route("/admin/logs/{log_id}", get(log_detail))
         .route("/admin/settings", get(settings).patch(update_settings))
         .route("/admin/refresh-models", post(refresh_models))

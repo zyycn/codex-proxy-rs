@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
+
 use crate::{
     config::LoggingConfig,
     logs::{event::EventLog, repository::EventLogRepository},
@@ -6,7 +10,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct LogService {
-    config: LoggingConfig,
+    config: Arc<RwLock<LoggingConfig>>,
     repository: Option<EventLogRepository>,
 }
 
@@ -17,6 +21,7 @@ pub enum LogServiceError {
     Get,
     Count,
     Clear,
+    InvalidCapacity,
 }
 
 #[derive(Debug)]
@@ -32,9 +37,19 @@ pub struct ClearLogs {
     pub cleared: u64,
 }
 
+#[derive(Debug, Default)]
+pub struct LogStateUpdate {
+    pub enabled: Option<bool>,
+    pub capacity: Option<u32>,
+    pub capture_body: Option<bool>,
+}
+
 impl LogService {
     pub fn new(config: LoggingConfig, repository: Option<EventLogRepository>) -> Self {
-        Self { config, repository }
+        Self {
+            config: Arc::new(RwLock::new(config)),
+            repository,
+        }
     }
 
     pub async fn list(
@@ -54,12 +69,34 @@ impl LogService {
             .count()
             .await
             .map_err(|_| LogServiceError::Count)?;
+        let config = self.config.read().await;
         Ok(LogState {
-            enabled: self.config.enabled,
-            capacity: self.config.capacity,
-            capture_body: self.config.capture_body,
+            enabled: config.enabled,
+            capacity: config.capacity,
+            capture_body: config.capture_body,
             stored_count,
         })
+    }
+
+    pub async fn update_state(&self, update: LogStateUpdate) -> Result<LogState, LogServiceError> {
+        if matches!(update.capacity, Some(0)) {
+            return Err(LogServiceError::InvalidCapacity);
+        }
+
+        {
+            let mut config = self.config.write().await;
+            if let Some(enabled) = update.enabled {
+                config.enabled = enabled;
+            }
+            if let Some(capacity) = update.capacity {
+                config.capacity = capacity;
+            }
+            if let Some(capture_body) = update.capture_body {
+                config.capture_body = capture_body;
+            }
+        }
+
+        self.state().await
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<EventLog>, LogServiceError> {
