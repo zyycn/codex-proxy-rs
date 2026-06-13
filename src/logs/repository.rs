@@ -1,4 +1,4 @@
-use sqlx::{Row, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::{
     logs::event::{EventLevel, EventLog},
@@ -8,6 +8,18 @@ use crate::{
 #[derive(Clone)]
 pub struct EventLogRepository {
     pool: SqlitePool,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct EventLogFilters {
+    pub kind: Option<String>,
+    pub level: Option<String>,
+    pub request_id: Option<String>,
+    pub account_id: Option<String>,
+    pub route: Option<String>,
+    pub model: Option<String>,
+    pub status_code: Option<i64>,
+    pub search: Option<String>,
 }
 
 impl EventLogRepository {
@@ -42,25 +54,64 @@ impl EventLogRepository {
         cursor: Option<String>,
         limit: u32,
     ) -> Result<Page<EventLog>, sqlx::Error> {
+        self.list_filtered(EventLogFilters::default(), cursor, limit)
+            .await
+    }
+
+    pub async fn list_filtered(
+        &self,
+        filters: EventLogFilters,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<Page<EventLog>, sqlx::Error> {
         let limit = clamp_limit(limit);
-        let mut rows = if let Some(cursor) = cursor.and_then(|c| decode_cursor(&c)) {
-            sqlx::query(
-                "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs where (created_at < ? or (created_at = ? and id < ?)) order by created_at desc, id desc limit ?",
-            )
-            .bind(&cursor.0)
-            .bind(&cursor.0)
-            .bind(&cursor.1)
-            .bind(i64::from(limit + 1))
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query(
-                "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs order by created_at desc, id desc limit ?",
-            )
-            .bind(i64::from(limit + 1))
-            .fetch_all(&self.pool)
-            .await?
-        };
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs",
+        );
+        let mut has_condition = false;
+        append_optional_text_filter(&mut builder, &mut has_condition, "kind", filters.kind);
+        append_optional_text_filter(&mut builder, &mut has_condition, "level", filters.level);
+        append_optional_text_filter(
+            &mut builder,
+            &mut has_condition,
+            "request_id",
+            filters.request_id,
+        );
+        append_optional_text_filter(
+            &mut builder,
+            &mut has_condition,
+            "account_id",
+            filters.account_id,
+        );
+        append_optional_text_filter(&mut builder, &mut has_condition, "route", filters.route);
+        append_optional_text_filter(&mut builder, &mut has_condition, "model", filters.model);
+        if let Some(status_code) = filters.status_code {
+            append_condition_prefix(&mut builder, &mut has_condition);
+            builder.push("status_code = ");
+            builder.push_bind(status_code);
+        }
+        if let Some(search) = filters.search {
+            append_condition_prefix(&mut builder, &mut has_condition);
+            let pattern = format!("%{search}%");
+            builder.push("(message like ");
+            builder.push_bind(pattern.clone());
+            builder.push(" or metadata_json like ");
+            builder.push_bind(pattern);
+            builder.push(")");
+        }
+        if let Some(cursor) = cursor.and_then(|c| decode_cursor(&c)) {
+            append_condition_prefix(&mut builder, &mut has_condition);
+            builder.push("(created_at < ");
+            builder.push_bind(cursor.0.clone());
+            builder.push(" or (created_at = ");
+            builder.push_bind(cursor.0);
+            builder.push(" and id < ");
+            builder.push_bind(cursor.1);
+            builder.push("))");
+        }
+        builder.push(" order by created_at desc, id desc limit ");
+        builder.push_bind(i64::from(limit + 1));
+        let mut rows = builder.build().fetch_all(&self.pool).await?;
 
         let has_next = rows.len() > limit as usize;
         if has_next {
@@ -99,6 +150,30 @@ impl EventLogRepository {
             .execute(&self.pool)
             .await
             .map(|result| result.rows_affected())
+    }
+}
+
+fn append_optional_text_filter(
+    builder: &mut QueryBuilder<Sqlite>,
+    has_condition: &mut bool,
+    column: &'static str,
+    value: Option<String>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    append_condition_prefix(builder, has_condition);
+    builder.push(column);
+    builder.push(" = ");
+    builder.push_bind(value);
+}
+
+fn append_condition_prefix(builder: &mut QueryBuilder<Sqlite>, has_condition: &mut bool) {
+    if *has_condition {
+        builder.push(" and ");
+    } else {
+        builder.push(" where ");
+        *has_condition = true;
     }
 }
 

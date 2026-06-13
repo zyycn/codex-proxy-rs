@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app::state::AppState,
     http::middleware::RequestId,
-    service::log::{ClearLogs, LogServiceError, LogState, LogStateUpdate},
+    service::log::{ClearLogs, LogListFilter, LogServiceError, LogState, LogStateUpdate},
     utils::pagination::clamp_limit,
 };
 
@@ -20,6 +20,14 @@ use super::{require_admin_session, AdminEnvelope, AdminError, AdminPageEnvelope,
 pub struct LogsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
+    pub kind: Option<String>,
+    pub level: Option<String>,
+    pub request_id: Option<String>,
+    pub account_id: Option<String>,
+    pub route: Option<String>,
+    pub model: Option<String>,
+    pub status_code: Option<i64>,
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,7 +63,8 @@ pub async fn logs(
     require_admin_session(&state, &headers, &request_id).await?;
 
     let limit = clamp_limit(query.limit.unwrap_or(50));
-    match state.services.logs.list(query.cursor, limit).await {
+    let cursor = query.cursor.clone();
+    match state.services.logs.list(cursor, limit, query.into()).await {
         Ok(page) => Ok(AdminResponse::new(
             StatusCode::OK,
             AdminPageEnvelope::ok(page, limit, request_id),
@@ -167,6 +176,27 @@ impl From<UpdateLogStateRequest> for LogStateUpdate {
             capture_body: request.capture_body,
         }
     }
+}
+
+impl From<LogsQuery> for LogListFilter {
+    fn from(query: LogsQuery) -> Self {
+        Self {
+            kind: non_empty(query.kind),
+            level: non_empty(query.level),
+            request_id: non_empty(query.request_id),
+            account_id: non_empty(query.account_id),
+            route: non_empty(query.route),
+            model: non_empty(query.model),
+            status_code: query.status_code,
+            search: non_empty(query.search),
+        }
+    }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn log_service_error(error: LogServiceError, request_id: String) -> AdminError {
