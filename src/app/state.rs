@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -18,7 +18,7 @@ use crate::config::AppConfig;
 use crate::logs::repository::EventLogRepository;
 use crate::service::{
     admin_auth::AdminAuthService, api_key::ApiKeyService, chat::ChatService, log::LogService,
-    responses::ResponsesService, usage::UsageService,
+    responses::ResponsesService, settings::SettingsService, usage::UsageService,
 };
 use crate::utils::crypto::SecretBox;
 
@@ -34,6 +34,7 @@ pub struct AppServices {
     pub api_keys: ApiKeyService,
     pub logs: LogService,
     pub usage: UsageService,
+    pub settings: SettingsService,
     pub chat: ChatService,
     pub responses: ResponsesService,
     pub models: ModelService,
@@ -46,6 +47,7 @@ struct AppStateDependencies {
     api_key_hasher: Option<ApiKeyHasher>,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     oauth_client: Option<Arc<dyn OAuthClient>>,
+    local_config_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -58,6 +60,21 @@ impl AppState {
             config,
             AppStateDependencies {
                 pool: Some(pool),
+                ..AppStateDependencies::default()
+            },
+        )
+    }
+
+    pub fn with_pool_and_local_config_path(
+        config: AppConfig,
+        pool: SqlitePool,
+        local_config_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self::from_dependencies(
+            config,
+            AppStateDependencies {
+                pool: Some(pool),
+                local_config_path: Some(local_config_path.into()),
                 ..AppStateDependencies::default()
             },
         )
@@ -139,6 +156,7 @@ impl AppState {
                 api_key_hasher: Some(api_key_hasher),
                 token_refresher: Some(token_refresher),
                 oauth_client: Some(oauth_client),
+                ..AppStateDependencies::default()
             },
         )
     }
@@ -161,6 +179,7 @@ impl AppState {
             api_key_hasher,
             token_refresher,
             oauth_client,
+            local_config_path,
         } = dependencies;
         let pool_ref = pool.as_ref();
         let secret_box_ref = secret_box.as_ref();
@@ -169,6 +188,10 @@ impl AppState {
         let api_keys = api_key_service(pool_ref, api_key_hasher.as_ref());
         let logs = log_service(pool_ref);
         let usage = usage_service(pool_ref);
+        let settings = SettingsService::new(
+            config.clone(),
+            local_config_path.unwrap_or_else(|| PathBuf::from("local.yaml")),
+        );
         let accounts = account_service(
             &config,
             account_repository(pool_ref, secret_box_ref),
@@ -205,6 +228,7 @@ impl AppState {
                 api_keys,
                 logs,
                 usage,
+                settings,
                 chat,
                 responses,
                 models,

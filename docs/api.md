@@ -96,7 +96,7 @@ Invalid password response uses HTTP `401` and body code `40102`.
 
 ### `GET /admin/settings`
 
-Returns the in-scope runtime settings visible to the admin UI. This endpoint is read-only; persistent settings mutation will be added separately and must use admin sessions, not client API keys.
+Returns the in-scope runtime settings visible to the admin UI. This endpoint uses admin sessions, not client API keys.
 
 Success response:
 
@@ -130,6 +130,49 @@ Success response:
   "requestId": "req_01"
 }
 ```
+
+### `PATCH /admin/settings`
+
+Updates retained settings and writes them to root `local.yaml` as a config overlay. The route requires the admin session cookie. Client API keys and removed TypeScript-era fields are not accepted.
+
+Request:
+
+```json
+{
+  "defaultModel": "gpt-6",
+  "defaultReasoningEffort": "medium",
+  "serviceTier": "priority",
+  "modelAliases": {
+    "fast": "gpt-6-fast"
+  },
+  "refreshEnabled": false,
+  "refreshMarginSeconds": 180,
+  "refreshConcurrency": 3,
+  "maxConcurrentPerAccount": 5,
+  "requestIntervalMs": 125,
+  "rotationStrategy": "round_robin",
+  "tierPriority": ["pro", "plus"],
+  "quotaRefreshIntervalMinutes": 15,
+  "quotaWarningThresholds": {
+    "primary": [75, 90],
+    "secondary": [65, 95]
+  },
+  "quotaSkipExhausted": false,
+  "logsEnabled": false,
+  "logsCapacity": 3000,
+  "logsCaptureBody": true,
+  "usageHistoryRetentionDays": 60
+}
+```
+
+Success response uses the same `data` shape as `GET /admin/settings`.
+
+Validation:
+
+- `rotationStrategy` must be `least_used`, `round_robin`, or `sticky`.
+- Count/capacity/retention fields that represent concurrency, capacity, intervals, or retention must be greater than zero where zero would disable required service behavior.
+- Quota warning thresholds must be between `0` and `100`.
+- Removed settings such as `proxyUrl`, `openaiApiKey`, `ollama`, provider settings, proxy API key settings, and Electron/self-update settings return HTTP `400` with body code `40001`.
 
 ### `GET /admin/logs`
 

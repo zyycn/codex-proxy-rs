@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::Path};
 
 use axum::{
     body::Body,
@@ -81,6 +81,14 @@ fn test_config(database_url: String) -> AppConfig {
     }
 }
 
+fn write_config_yaml(path: &Path, config: &AppConfig) {
+    fs::write(
+        path.join("config.yaml"),
+        serde_yaml::to_string(config).unwrap(),
+    )
+    .unwrap();
+}
+
 #[tokio::test]
 async fn admin_settings_should_require_admin_session_cookie() {
     let dir = tempfile::tempdir().unwrap();
@@ -105,6 +113,172 @@ async fn admin_settings_should_require_admin_session_cookie() {
     let body = response_json(response).await;
     assert_eq!(body["code"], 40101);
     assert_eq!(body["requestId"], "req_settings");
+}
+
+#[tokio::test]
+async fn admin_settings_patch_should_require_admin_session_cookie() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-settings-patch-auth.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/settings")
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_settings_patch_auth")
+                .body(Body::from(r#"{"defaultModel":"gpt-5.5"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_settings_patch_auth");
+}
+
+#[tokio::test]
+async fn admin_settings_patch_should_persist_retained_fields_to_local_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-settings-patch.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let config = test_config(url);
+    write_config_yaml(dir.path(), &config);
+    let pool = connect_sqlite(&config.database.url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_and_local_config_path(
+        config,
+        pool,
+        dir.path().join("local.yaml"),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/settings")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_patch")
+                .body(Body::from(
+                    json!({
+                        "defaultModel": "gpt-6",
+                        "defaultReasoningEffort": "medium",
+                        "serviceTier": "priority",
+                        "modelAliases": { "fast": "gpt-6-fast" },
+                        "refreshEnabled": false,
+                        "refreshMarginSeconds": 180,
+                        "refreshConcurrency": 3,
+                        "maxConcurrentPerAccount": 5,
+                        "requestIntervalMs": 125,
+                        "rotationStrategy": "round_robin",
+                        "tierPriority": ["pro", "plus"],
+                        "quotaRefreshIntervalMinutes": 15,
+                        "quotaWarningThresholds": {
+                            "primary": [75, 90],
+                            "secondary": [65, 95]
+                        },
+                        "quotaSkipExhausted": false,
+                        "logsEnabled": false,
+                        "logsCapacity": 3000,
+                        "logsCaptureBody": true,
+                        "usageHistoryRetentionDays": 60
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_settings_patch");
+    assert_eq!(body["data"]["defaultModel"], "gpt-6");
+    assert_eq!(body["data"]["rotationStrategy"], "round_robin");
+    assert_eq!(
+        body["data"]["quotaWarningThresholds"]["primary"],
+        json!([75, 90])
+    );
+
+    let local_yaml = fs::read_to_string(dir.path().join("local.yaml")).unwrap();
+    assert!(!local_yaml.contains("proxyUrl"));
+    assert!(!local_yaml.contains("openaiApiKey"));
+    assert!(!local_yaml.contains("ollama"));
+    let reloaded = AppConfig::load_from_dir(dir.path()).unwrap();
+    assert_eq!(reloaded.model.default_model, "gpt-6");
+    assert_eq!(
+        reloaded.model.aliases.get("fast").map(String::as_str),
+        Some("gpt-6-fast")
+    );
+    assert!(!reloaded.auth.refresh_enabled);
+    assert_eq!(reloaded.auth.rotation_strategy, "round_robin");
+    assert_eq!(reloaded.quota.warning_thresholds.primary, vec![75, 90]);
+    assert_eq!(reloaded.usage_stats.history_retention_days, Some(60));
+
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/settings")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let body = response_json(get_response).await;
+    assert_eq!(body["data"]["defaultModel"], "gpt-6");
+}
+
+#[tokio::test]
+async fn admin_settings_patch_should_reject_removed_or_invalid_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-settings-patch-invalid.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let config = test_config(url);
+    write_config_yaml(dir.path(), &config);
+    let pool = connect_sqlite(&config.database.url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_and_local_config_path(
+        config,
+        pool,
+        dir.path().join("local.yaml"),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/settings")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_patch_invalid")
+                .body(Body::from(
+                    json!({
+                        "proxyUrl": "http://127.0.0.1:8080",
+                        "rotationStrategy": "random"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40001);
+    assert_eq!(body["requestId"], "req_settings_patch_invalid");
+    assert!(!dir.path().join("local.yaml").exists());
 }
 
 #[tokio::test]
