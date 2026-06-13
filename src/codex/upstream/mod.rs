@@ -451,6 +451,18 @@ async fn apply_upstream_account_retry_with_deps(
             retry_after_seconds,
         } => {
             let cooldown_until = Utc::now() + Duration::seconds(retry_after_seconds as i64);
+            if let Some(repo) = deps.account_repository.as_ref() {
+                if repo
+                    .set_quota_cooldown_until(&account.id, cooldown_until)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        account_id = %account.id,
+                        "failed to persist quota cooldown"
+                    );
+                }
+            }
             deps.account_pool
                 .lock()
                 .await
@@ -467,6 +479,18 @@ async fn apply_upstream_account_retry_with_deps(
         }
         UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => {
             let cooldown_until = Utc::now() + Duration::seconds(cooldown_seconds as i64);
+            if let Some(repo) = deps.account_repository.as_ref() {
+                if repo
+                    .set_cloudflare_cooldown_until(&account.id, cooldown_until)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        account_id = %account.id,
+                        "failed to persist Cloudflare cooldown"
+                    );
+                }
+            }
             deps.account_pool
                 .lock()
                 .await

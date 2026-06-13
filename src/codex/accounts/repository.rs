@@ -322,7 +322,7 @@ impl AccountRepository {
 
     pub async fn list_pool_accounts(&self) -> AccountRepositoryResult<Vec<Account>> {
         let rows = sqlx::query(
-            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
+            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, quota_limit_reached, quota_cooldown_until, cloudflare_cooldown_until, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -345,9 +345,13 @@ impl AccountRepository {
                 refresh_token,
                 access_token_expires_at: stored.access_token_expires_at,
                 status: stored.status,
-                quota_limit_reached: false,
-                quota_cooldown_until: None,
-                cloudflare_cooldown_until: None,
+                quota_limit_reached: row.get::<i64, _>("quota_limit_reached") != 0,
+                quota_cooldown_until: parse_optional_rfc3339(
+                    row.get::<Option<String>, _>("quota_cooldown_until"),
+                )?,
+                cloudflare_cooldown_until: parse_optional_rfc3339(
+                    row.get::<Option<String>, _>("cloudflare_cooldown_until"),
+                )?,
                 added_at: stored.added_at.to_rfc3339(),
                 last_used_at: row.get("usage_last_used_at"),
             });
@@ -540,6 +544,38 @@ impl AccountRepository {
         .bind(&now)
         .bind(now)
         .bind(account_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn set_quota_cooldown_until(
+        &self,
+        id: &str,
+        cooldown_until: DateTime<Utc>,
+    ) -> AccountRepositoryResult<bool> {
+        let result = sqlx::query(
+            "update accounts set quota_limit_reached = 1, quota_cooldown_until = ?, updated_at = ? where id = ?",
+        )
+        .bind(cooldown_until.to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn set_cloudflare_cooldown_until(
+        &self,
+        id: &str,
+        cooldown_until: DateTime<Utc>,
+    ) -> AccountRepositoryResult<bool> {
+        let result = sqlx::query(
+            "update accounts set cloudflare_cooldown_until = ?, updated_at = ? where id = ?",
+        )
+        .bind(cooldown_until.to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)

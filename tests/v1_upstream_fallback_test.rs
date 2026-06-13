@@ -2,6 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::{DateTime, Utc};
 use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -36,6 +37,7 @@ const STREAM_AFTER_REFRESH_SSE: &str =
 
 #[tokio::test]
 async fn v1_responses_should_retry_next_account_after_429_retry_after() {
+    let started_at = Utc::now();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -120,6 +122,18 @@ async fn v1_responses_should_retry_next_account_after_429_retry_after() {
     .await
     .unwrap();
     assert_eq!(usage_b, (1, 5, 2));
+    let cooldown: (i64, Option<String>) = sqlx::query_as(
+        "select quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(cooldown.0, 1);
+    let cooldown_until = DateTime::parse_from_rfc3339(cooldown.1.as_deref().unwrap())
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(cooldown_until > started_at);
 }
 
 #[tokio::test]
@@ -342,6 +356,7 @@ async fn v1_responses_should_mark_banned_after_403_and_retry_next_account() {
 
 #[tokio::test]
 async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
+    let started_at = Utc::now();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -409,6 +424,16 @@ async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
         .await
         .unwrap();
     assert_eq!(account_status.0, "active");
+    let (cooldown_until,): (Option<String>,) =
+        sqlx::query_as("select cloudflare_cooldown_until from accounts where id = ?")
+            .bind("acct_a")
+            .fetch_one(&imported.pool)
+            .await
+            .unwrap();
+    let cooldown_until = DateTime::parse_from_rfc3339(cooldown_until.as_deref().unwrap())
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(cooldown_until > started_at);
 }
 
 #[tokio::test]
