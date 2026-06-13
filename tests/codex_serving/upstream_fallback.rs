@@ -639,7 +639,7 @@ async fn v1_responses_should_log_refresh_failure_after_401() {
     .unwrap();
     let metadata: Value = serde_json::from_str(&refresh_event.2).unwrap();
     assert_eq!(refresh_event.0, "warn");
-    assert_eq!(refresh_event.1, "account refresh failed after upstream 401");
+    assert_eq!(refresh_event.1, "上游 401 后账户刷新失败");
     assert_eq!(metadata["failure"], "invalidGrant");
     assert_eq!(metadata["accountStatus"], "expired");
     assert_eq!(metadata["trigger"], "upstream_401");

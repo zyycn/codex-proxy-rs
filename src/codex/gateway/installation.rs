@@ -48,7 +48,11 @@ fn resolve_installation_id(database_path: Option<&str>) -> String {
         // 生成并持久化新 UUID
         let generated = Uuid::new_v4().to_string();
         if let Err(e) = persist_uuid(&our_file, &generated) {
-            tracing::warn!("Failed to persist installation_id to {:?}: {}", our_file, e);
+            tracing::warn!(
+                error = %e,
+                path = %our_file.display(),
+                "持久化 installation_id 失败"
+            );
         }
         return generated;
     }

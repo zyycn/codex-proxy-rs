@@ -109,10 +109,10 @@ fn default_admin_password() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     pub directory: String,
-    pub max_file_bytes: u64,
-    pub retention_days: u64,
+    pub retention_days: usize,
     pub enabled: bool,
     pub capacity: u32,
     pub capture_body: bool,

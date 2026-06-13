@@ -61,7 +61,7 @@ impl RefreshScheduler {
     /// 为所有账户调度刷新
     pub async fn schedule_all(&self) -> SchedulerResult<()> {
         if !self.config.auth.refresh_enabled {
-            info!("Auto-refresh disabled (refresh_enabled = false)");
+            info!("自动刷新已关闭（refresh_enabled = false）");
             return Ok(());
         }
 
@@ -89,7 +89,7 @@ impl RefreshScheduler {
             match account.status {
                 AccountStatus::Refreshing => {
                     // 崩溃恢复：进程终止时正在刷新
-                    info!(account_id = %account.id, "Recovering from 'refreshing' state");
+                    info!(account_id = %account.id, "正在从 refreshing 状态恢复");
                     self.do_refresh(account.id.clone()).await;
                 }
                 AccountStatus::Expired => {
@@ -99,7 +99,7 @@ impl RefreshScheduler {
                     info!(
                         account_id = %account.id,
                         delay_secs = delay.as_secs(),
-                        "Expired account, scheduling recovery attempt"
+                        "账户已过期，已调度恢复尝试"
                     );
                     self.schedule_recovery(account.id.clone(), delay).await;
                 }
@@ -119,7 +119,7 @@ impl RefreshScheduler {
     pub async fn trigger_refresh_now(&self, account_id: String) -> SchedulerResult<()> {
         // 检查账户是否正在刷新
         if self.is_refreshing(&account_id).await {
-            debug!(account_id = %account_id, "Account already refreshing, skipping");
+            debug!(account_id = %account_id, "账户正在刷新，跳过本次触发");
             return Ok(());
         }
 
@@ -140,7 +140,7 @@ impl RefreshScheduler {
         let exp = match self.parse_jwt_exp(&access_token) {
             Some(exp) => exp,
             None => {
-                warn!(account_id = %account_id, "Failed to parse JWT exp, skipping schedule");
+                warn!(account_id = %account_id, "解析 JWT exp 失败，跳过刷新调度");
                 return Ok(());
             }
         };
@@ -151,7 +151,7 @@ impl RefreshScheduler {
 
         if refresh_at <= now {
             // 已经过了刷新时间 - 立即尝试刷新
-            debug!(account_id = %account_id, "Token already past refresh time, refreshing immediately");
+            debug!(account_id = %account_id, "token 已超过刷新时间，立即刷新");
             self.do_refresh(account_id).await;
             return Ok(());
         }
@@ -160,7 +160,7 @@ impl RefreshScheduler {
         info!(
             account_id = %account_id,
             delay_secs = delay.as_secs(),
-            "Refresh scheduled"
+            "已调度 token 刷新"
         );
 
         // 启动定时器 - 直接刷新，不再调用 do_refresh
@@ -204,7 +204,7 @@ impl RefreshScheduler {
         let exp = match self.parse_jwt_exp(&access_token) {
             Some(exp) => exp,
             None => {
-                warn!(account_id = %account_id, "Failed to parse JWT exp, skipping schedule");
+                warn!(account_id = %account_id, "解析 JWT exp 失败，跳过刷新调度");
                 return Ok(());
             }
         };
@@ -215,7 +215,7 @@ impl RefreshScheduler {
 
         if refresh_at <= now {
             // 已经过了刷新时间
-            debug!(account_id = %account_id, "Token already past refresh time after refresh");
+            debug!(account_id = %account_id, "刷新后 token 仍已超过下次刷新时间");
             return Ok(());
         }
 
@@ -223,7 +223,7 @@ impl RefreshScheduler {
         info!(
             account_id = %account_id,
             delay_secs = delay.as_secs(),
-            "Next refresh scheduled"
+            "已调度下一次 token 刷新"
         );
 
         // 启动定时器
@@ -280,7 +280,7 @@ impl RefreshScheduler {
         {
             let mut in_flight = self.in_flight.write().await;
             if in_flight.contains_key(&account_id) {
-                debug!(account_id = %account_id, "Already in flight, skipping");
+                debug!(account_id = %account_id, "刷新任务已在执行，跳过");
                 return;
             }
             in_flight.insert(account_id.clone(), Instant::now());
@@ -293,20 +293,21 @@ impl RefreshScheduler {
         self.in_flight.write().await.remove(&account_id);
 
         if let Err(e) = result {
-            error!(account_id = %account_id, error = %e, "Refresh failed");
+            error!(account_id = %account_id, error = %e, "token 刷新失败");
         }
     }
 
     /// 内部刷新逻辑（带重试和错误处理）
+    #[tracing::instrument(skip(self), fields(account_id = %account_id))]
     async fn do_refresh_inner(&self, account_id: &str) -> SchedulerResult<()> {
-        info!(account_id = %account_id, "Starting token refresh");
+        info!(account_id = %account_id, "开始刷新 token");
 
         let mut permanent_hits = 0;
 
         for attempt in 1..=MAX_ATTEMPTS {
             match self.account_service.refresh_account(account_id).await {
                 Ok(_result) => {
-                    info!(account_id = %account_id, "Token refreshed successfully");
+                    info!(account_id = %account_id, "token 刷新成功");
                     // 获取新令牌并重新调度下次刷新
                     if let Ok(accounts) = self
                         .account_service
@@ -339,7 +340,7 @@ impl RefreshScheduler {
                             error!(
                                 account_id = %account_id,
                                 hits = permanent_hits,
-                                "Permanent failure detected"
+                                "检测到永久刷新失败"
                             );
                             // refresh_account 已经标记了状态，这里不需要再次标记
                             return Err(SchedulerError::AccountNotFound(format!(
@@ -351,7 +352,7 @@ impl RefreshScheduler {
                             account_id = %account_id,
                             hits = permanent_hits,
                             threshold = PERMANENT_THRESHOLD,
-                            "Permanent error detected, retrying"
+                            "检测到永久错误，继续重试确认"
                         );
                     }
 
@@ -367,7 +368,7 @@ impl RefreshScheduler {
                             max_attempts = MAX_ATTEMPTS,
                             delay_secs = delay.as_secs(),
                             error = %e,
-                            "Refresh attempt failed, retrying"
+                            "token 刷新尝试失败，准备重试"
                         );
                         tokio::time::sleep(delay).await;
                     } else {
@@ -375,7 +376,7 @@ impl RefreshScheduler {
                             account_id = %account_id,
                             attempts = MAX_ATTEMPTS,
                             error = %e,
-                            "All refresh attempts exhausted"
+                            "token 刷新重试次数已耗尽"
                         );
                         // 调度恢复尝试（不在循环内调用 await，避免递归）
                         let account_id_recovery = account_id.to_string();
@@ -433,7 +434,7 @@ impl RefreshScheduler {
             }
             timers.clear();
 
-            info!("Refresh scheduler shut down gracefully");
+            info!("token 刷新调度器已关闭");
         });
 
         SchedulerHandle::new(shutdown_tx)

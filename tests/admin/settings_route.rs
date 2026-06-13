@@ -73,7 +73,6 @@ fn test_config(database_url: String) -> AppConfig {
         },
         logging: LoggingConfig {
             directory: "logs".to_string(),
-            max_file_bytes: 10_485_760,
             retention_days: 14,
             enabled: true,
             capacity: 2_000,

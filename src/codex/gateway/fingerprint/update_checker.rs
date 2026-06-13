@@ -79,19 +79,19 @@ impl UpdateChecker {
             let mut ticker = interval(POLL_INTERVAL);
 
             info!(
-                "[UpdateChecker] 启动后台指纹版本检查器，间隔：{:?}",
-                POLL_INTERVAL
+                interval_secs = POLL_INTERVAL.as_secs(),
+                "UpdateChecker 后台 fingerprint 版本检查器已启动"
             );
 
             // 立即执行首次检查
             if let Err(e) = self.check_and_apply_update().await {
-                warn!("[UpdateChecker] 首次检查失败: {}", e);
+                warn!(error = %e, "UpdateChecker 首次检查失败");
             }
 
             loop {
                 ticker.tick().await;
                 if let Err(e) = self.check_and_apply_update().await {
-                    warn!("[UpdateChecker] 定期检查失败: {}", e);
+                    warn!(error = %e, "UpdateChecker 定期检查失败");
                 }
             }
         })
@@ -101,8 +101,12 @@ impl UpdateChecker {
         let update_state = self.check_for_update().await?;
 
         if update_state.update_available {
-            let version = update_state.latest_version.as_ref().unwrap();
-            let build = update_state.latest_build.as_ref().unwrap();
+            let (Some(version), Some(build)) = (
+                update_state.latest_version.as_ref(),
+                update_state.latest_build.as_ref(),
+            ) else {
+                return Ok(());
+            };
 
             let state = self.state.lock().await;
             let current_version = state.current_version.clone();
@@ -110,8 +114,11 @@ impl UpdateChecker {
             drop(state);
 
             info!(
-                "[UpdateChecker] *** 发现新版本: v{} (build {}) — 当前: v{} (build {})",
-                version, build, current_version, current_build
+                version = %version,
+                build = %build,
+                current_version = %current_version,
+                current_build = %current_build,
+                "UpdateChecker 发现新的 fingerprint 版本"
             );
 
             self.apply_version_update(version, build).await?;
@@ -120,7 +127,11 @@ impl UpdateChecker {
             state.current_version = version.clone();
             state.current_build = build.clone();
 
-            info!("[UpdateChecker] 已自动应用: v{} (build {})", version, build);
+            info!(
+                version = %version,
+                build = %build,
+                "UpdateChecker 已自动应用 fingerprint 版本"
+            );
         }
 
         Ok(())

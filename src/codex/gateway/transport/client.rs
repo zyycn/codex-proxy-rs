@@ -129,6 +129,15 @@ impl CodexBackendClient {
         self
     }
 
+    #[tracing::instrument(
+        skip(self, request, context),
+        fields(
+            request_id = %context.request_id,
+            account_id = %context.account_id.unwrap_or("unknown"),
+            model = %request.model,
+            transport = ?transport_for_request(request),
+        )
+    )]
     pub async fn create_response(
         &self,
         request: &CodexResponsesRequest,
@@ -159,9 +168,9 @@ impl CodexBackendClient {
                     if transport == CodexTransport::WebSocketPreferred
                         && websocket_error_allows_http_sse_fallback(&error) =>
                 {
-                    tracing::warn!(
+                    tracing::info!(
                         error = %error,
-                        "Codex WebSocket unavailable; falling back to HTTP SSE"
+                        "Codex WebSocket 不可用，降级到 HTTP SSE"
                     );
                 }
                 Err(error) => return Err(codex_websocket_error(error)),
@@ -196,6 +205,15 @@ impl CodexBackendClient {
         })
     }
 
+    #[tracing::instrument(
+        skip(self, request, context),
+        fields(
+            request_id = %context.request_id,
+            account_id = %context.account_id.unwrap_or("unknown"),
+            model = %request.model,
+            transport = "http_sse",
+        )
+    )]
     pub async fn stream_response(
         &self,
         request: &CodexResponsesRequest,
@@ -229,6 +247,15 @@ impl CodexBackendClient {
         })
     }
 
+    #[tracing::instrument(
+        skip(self, request, context),
+        fields(
+            request_id = %context.request_id,
+            account_id = %context.account_id.unwrap_or("unknown"),
+            model = %request.model,
+            transport = "websocket",
+        )
+    )]
     pub async fn websocket_stream_response(
         &self,
         request: &CodexResponsesRequest,
