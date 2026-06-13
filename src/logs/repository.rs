@@ -67,34 +67,60 @@ impl EventLogRepository {
             rows.truncate(limit as usize);
         }
 
-        let items = rows
-            .into_iter()
-            .map(|row| EventLog {
-                id: row.get("id"),
-                request_id: row.get("request_id"),
-                kind: row.get("kind"),
-                level: match row.get::<String, _>("level").as_str() {
-                    "debug" => EventLevel::Debug,
-                    "warn" => EventLevel::Warn,
-                    "error" => EventLevel::Error,
-                    _ => EventLevel::Info,
-                },
-                account_id: row.get("account_id"),
-                route: row.get("route"),
-                model: row.get("model"),
-                status_code: row.get("status_code"),
-                latency_ms: row.get("latency_ms"),
-                message: row.get("message"),
-                metadata: serde_json::from_str(&row.get::<String, _>("metadata_json"))
-                    .unwrap_or_else(|_| serde_json::json!({})),
-                created_at: row.get("created_at"),
-            })
-            .collect::<Vec<_>>();
+        let items = rows.into_iter().map(row_to_event_log).collect::<Vec<_>>();
         let next_cursor = if has_next {
             items.last().map(|e| encode_cursor(&e.created_at, &e.id))
         } else {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<EventLog>, sqlx::Error> {
+        sqlx::query(
+            "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs where id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(row_to_event_log))
+    }
+
+    pub async fn count(&self) -> Result<u64, sqlx::Error> {
+        let row = sqlx::query("select count(*) as count from event_logs")
+            .fetch_one(&self.pool)
+            .await?;
+        let count = row.get::<i64, _>("count");
+        Ok(count.max(0) as u64)
+    }
+
+    pub async fn clear(&self) -> Result<u64, sqlx::Error> {
+        sqlx::query("delete from event_logs")
+            .execute(&self.pool)
+            .await
+            .map(|result| result.rows_affected())
+    }
+}
+
+fn row_to_event_log(row: sqlx::sqlite::SqliteRow) -> EventLog {
+    EventLog {
+        id: row.get("id"),
+        request_id: row.get("request_id"),
+        kind: row.get("kind"),
+        level: match row.get::<String, _>("level").as_str() {
+            "debug" => EventLevel::Debug,
+            "warn" => EventLevel::Warn,
+            "error" => EventLevel::Error,
+            _ => EventLevel::Info,
+        },
+        account_id: row.get("account_id"),
+        route: row.get("route"),
+        model: row.get("model"),
+        status_code: row.get("status_code"),
+        latency_ms: row.get("latency_ms"),
+        message: row.get("message"),
+        metadata: serde_json::from_str(&row.get::<String, _>("metadata_json"))
+            .unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get("created_at"),
     }
 }
