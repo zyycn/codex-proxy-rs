@@ -23,7 +23,7 @@ use super::{
     },
     logs::logs,
     models::refresh_models,
-    settings::settings,
+    settings::{settings, update_settings},
     usage::{usage_stats, usage_stats_summary},
 };
 
@@ -43,7 +43,7 @@ pub fn router() -> Router<AppState> {
             get(auth_device_poll),
         )
         .route("/admin/logs", get(logs))
-        .route("/admin/settings", get(settings))
+        .route("/admin/settings", get(settings).patch(update_settings))
         .route("/admin/refresh-models", post(refresh_models))
         .route("/admin/usage-stats", get(usage_stats))
         .route("/admin/usage-stats/summary", get(usage_stats_summary))
