@@ -9,7 +9,7 @@ use crate::{
         model::{Account, AccountStatus},
         repository::{AccountClaimsUpdate, AccountRepository, NewAccount, StoredAccount},
     },
-    codex::oauth::RefreshFailure,
+    codex::gateway::oauth::RefreshFailure,
 };
 
 use super::{

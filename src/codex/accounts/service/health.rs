@@ -12,8 +12,8 @@ use crate::{
         model::AccountStatus,
         repository::{AccountRepository, StoredAccount},
     },
-    codex::fingerprint::model::Fingerprint,
-    codex::transport::client::{
+    codex::gateway::fingerprint::model::Fingerprint,
+    codex::gateway::transport::client::{
         build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
     },
 };
@@ -139,6 +139,8 @@ pub(super) async fn fetch_account_usage(
             codex_window_id: None,
             parent_thread_id: None,
             cookie_header: cookie_header.as_deref(),
+            installation_id: None,
+            session_id: None,
         })
         .await
 }

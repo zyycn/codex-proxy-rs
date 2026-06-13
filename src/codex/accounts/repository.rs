@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     codex::accounts::model::{Account, AccountStatus},
-    utils::crypto::{CryptoError, SecretBox},
+    platform::crypto::{CryptoError, SecretBox},
     utils::pagination::{decode_cursor, encode_cursor, Page},
 };
 

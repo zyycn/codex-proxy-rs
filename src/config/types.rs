@@ -86,6 +86,26 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AdminConfig {
     pub session_ttl_minutes: u64,
+    #[serde(default = "default_session_cleanup_interval")]
+    pub session_cleanup_interval_secs: u64,
+    /// 默认管理员用户名（首次启动时创建）
+    #[serde(default = "default_admin_username")]
+    pub default_username: String,
+    /// 默认管理员密码（首次启动时创建）
+    #[serde(default = "default_admin_password")]
+    pub default_password: String,
+}
+
+fn default_session_cleanup_interval() -> u64 {
+    3600 // 默认每小时清理一次过期会话
+}
+
+fn default_admin_username() -> String {
+    "admin".to_string()
+}
+
+fn default_admin_password() -> String {
+    "admin".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

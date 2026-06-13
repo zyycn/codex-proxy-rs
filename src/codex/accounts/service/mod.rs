@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
+    codex::accounts::cookies::repository::CookieRepository,
     codex::accounts::{
         model::AccountStatus,
         pool::AccountPool,
@@ -19,15 +20,14 @@ use crate::{
             AccountRepository, AccountUsageRepository, StoredAccount, StoredAccountMetadata,
         },
     },
-    codex::cookies::repository::CookieRepository,
-    codex::oauth::TokenRefresher,
+    codex::gateway::oauth::TokenRefresher,
     config::AppConfig,
     utils::pagination::Page,
 };
 
 #[derive(Clone)]
 pub struct AccountService {
-    config: AppConfig,
+    config: Arc<AppConfig>,
     repository: Option<AccountRepository>,
     usage_repository: Option<AccountUsageRepository>,
     cookie_repository: Option<CookieRepository>,
@@ -201,6 +201,18 @@ pub enum RefreshAccountError {
     StoreRefreshed,
 }
 
+impl std::fmt::Display for RefreshAccountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RepositoryUnavailable => write!(f, "repository unavailable"),
+            Self::Load => write!(f, "failed to load account"),
+            Self::NotFound => write!(f, "account not found"),
+            Self::TokenRefresherUnavailable => write!(f, "token refresher unavailable"),
+            Self::StoreRefreshed => write!(f, "failed to store refreshed tokens"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum StoreImportAccountError {
     RepositoryUnavailable,
@@ -226,7 +238,7 @@ pub enum ValidatedAccountImportError {
 
 impl AccountService {
     pub fn new(
-        config: AppConfig,
+        config: Arc<AppConfig>,
         repository: Option<AccountRepository>,
         usage_repository: Option<AccountUsageRepository>,
         cookie_repository: Option<CookieRepository>,
@@ -305,5 +317,19 @@ impl AccountService {
             Ok(false) => Err(AccountServiceError::AccountNotFound),
             Err(_) => Err(AccountServiceError::Inspect),
         }
+    }
+
+    /// 列出所有账户用于刷新调度器
+    pub async fn list_all_for_refresh(&self) -> Result<Vec<StoredAccount>, AccountServiceError> {
+        self.repository()?
+            .list_all()
+            .await
+            .map_err(|_| AccountServiceError::List)
+    }
+
+    /// 列出所有配额锁定的账户ID（用于主动配额刷新）
+    pub async fn list_quota_locked_accounts(&self) -> Vec<String> {
+        let pool = self.account_pool.lock().await;
+        pool.list_quota_locked_accounts()
     }
 }
