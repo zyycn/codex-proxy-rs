@@ -34,7 +34,7 @@ The document should state that `utils` may contain `pagination`, `json`, and `cr
 - Delete: `src/pagination.rs`
 - Delete: `src/crypto.rs`
 
-- [ ] **Step 1: Add the utils module root**
+- [x] **Step 1: Add the utils module root**
 
 ```rust
 pub mod crypto;
@@ -42,15 +42,15 @@ pub mod json;
 pub mod pagination;
 ```
 
-- [ ] **Step 2: Move pagination helpers**
+- [x] **Step 2: Move pagination helpers**
 
 Move `Page<T>`, `encode_cursor`, `decode_cursor`, and `clamp_limit` into `src/utils/pagination.rs` unchanged.
 
-- [ ] **Step 3: Move crypto helpers**
+- [x] **Step 3: Move crypto helpers**
 
 Move `CryptoError`, `CryptoResult<T>`, and `SecretBox` into `src/utils/crypto.rs` unchanged.
 
-- [ ] **Step 4: Add JSON string helpers**
+- [x] **Step 4: Add JSON string helpers**
 
 ```rust
 use serde_json::Value;
@@ -72,7 +72,7 @@ pub fn string_at(value: &Value, path: &[&str]) -> Option<String> {
 }
 ```
 
-- [ ] **Step 5: Expose `utils` from the library**
+- [x] **Step 5: Expose `utils` from the library**
 
 ```rust
 pub mod utils;
@@ -93,17 +93,17 @@ Remove the old top-level `pub mod crypto;` and `pub mod pagination;` declaration
 - Modify: `tests/*.rs`
 - Modify: `tests/common/*.rs`
 
-- [ ] **Step 1: Update source imports**
+- [x] **Step 1: Update source imports**
 
 Use `crate::utils::crypto::{CryptoError, SecretBox}` and
 `crate::utils::pagination::{clamp_limit, decode_cursor, encode_cursor, Page}`.
 
-- [ ] **Step 2: Update integration test imports**
+- [x] **Step 2: Update integration test imports**
 
 Use `codex_proxy_rs::utils::crypto::SecretBox` and
 `codex_proxy_rs::utils::pagination::Page`.
 
-- [ ] **Step 3: Remove duplicate JSON helper functions**
+- [x] **Step 3: Remove duplicate JSON helper functions**
 
 Import `crate::utils::json::first_string` in `src/service/api_key_service.rs` and
 `src/http/admin/accounts.rs`, then delete the local `first_string` and `string_at`
@@ -114,7 +114,7 @@ definitions.
 **Files:**
 - No source edits after this task unless verification fails.
 
-- [ ] **Step 1: Format**
+- [x] **Step 1: Format**
 
 Run:
 
@@ -122,7 +122,7 @@ Run:
 cargo fmt
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -130,7 +130,7 @@ Run:
 cargo test --test crypto_test --test account_repository_test --test admin_accounts_import_export_test --test admin_api_keys_route_test
 ```
 
-- [ ] **Step 3: Run full gate**
+- [x] **Step 3: Run full gate**
 
 Run:
 

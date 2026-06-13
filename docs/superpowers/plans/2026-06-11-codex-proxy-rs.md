@@ -3016,9 +3016,9 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 
 - [ ] Old `/admin/*` settings mutations used the proxy API key as a write gate. Rust must use admin sessions only.
 - [ ] Old refresh fallback could be dangerous for one-time refresh tokens if retried after a mid-flight failure. Rust must keep the one-time RT preservation rule and retry only when the request definitely did not reach the server.
-- [ ] Old settings exposed proxy and provider knobs that are out of scope. Rust config and API must not keep dead settings as no-op compatibility fields.
-- [ ] Old route responses mix multiple body shapes. Rust must keep `/v1/*` OpenAI-compatible and `/admin/*` lower camelCase `code/message/data/requestId`.
-- [ ] Empty placeholder modules are not acceptable. A module either owns tested behavior or is removed from the target structure with a documented reason.
+- [x] Old settings exposed proxy and provider knobs that are out of scope. Rust config and API keep proxy URL, provider, Ollama, OpenAI official key, proxy API key, and Electron/self-update fields out of the retained settings surface.
+- [x] Old route responses mix multiple body shapes. Rust keeps `/v1/*` OpenAI-compatible and `/admin/*` lower camelCase `code/message/data/requestId`, backed by dedicated API contract tests.
+- [x] Empty placeholder modules are not acceptable. Current module roots either expose real submodules or owned behavior; no empty Rust source modules remain in `src/`.
 
 ---
 
