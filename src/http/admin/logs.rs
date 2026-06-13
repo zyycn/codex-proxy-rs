@@ -2,14 +2,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     app::state::AppState,
     http::middleware::RequestId,
-    service::log::{ClearLogs, LogServiceError, LogState},
+    service::log::{ClearLogs, LogServiceError, LogState, LogStateUpdate},
     utils::pagination::clamp_limit,
 };
 
@@ -35,6 +35,14 @@ pub struct LogStateData {
 #[serde(rename_all = "camelCase")]
 pub struct ClearLogsData {
     pub cleared: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateLogStateRequest {
+    pub enabled: Option<bool>,
+    pub capacity: Option<u32>,
+    pub capture_body: Option<bool>,
 }
 
 pub async fn logs(
@@ -65,6 +73,24 @@ pub async fn logs_state(
     require_admin_session(&state, &headers, &request_id).await?;
 
     match state.services.logs.state().await {
+        Ok(state) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(LogStateData::from(state), request_id),
+        )),
+        Err(error) => Err(log_service_error(error, request_id)),
+    }
+}
+
+pub async fn update_logs_state(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateLogStateRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+
+    match state.services.logs.update_state(payload.into()).await {
         Ok(state) => Ok(AdminResponse::new(
             StatusCode::OK,
             AdminEnvelope::ok(LogStateData::from(state), request_id),
@@ -133,6 +159,16 @@ impl From<ClearLogs> for ClearLogsData {
     }
 }
 
+impl From<UpdateLogStateRequest> for LogStateUpdate {
+    fn from(request: UpdateLogStateRequest) -> Self {
+        Self {
+            enabled: request.enabled,
+            capacity: request.capacity,
+            capture_body: request.capture_body,
+        }
+    }
+}
+
 fn log_service_error(error: LogServiceError, request_id: String) -> AdminError {
     match error {
         LogServiceError::RepositoryUnavailable => AdminError::new(
@@ -163,6 +199,12 @@ fn log_service_error(error: LogServiceError, request_id: String) -> AdminError {
             StatusCode::INTERNAL_SERVER_ERROR,
             50001,
             "Failed to clear event logs",
+            request_id,
+        ),
+        LogServiceError::InvalidCapacity => AdminError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            42201,
+            "logsCapacity must be greater than 0",
             request_id,
         ),
     }

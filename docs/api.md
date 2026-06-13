@@ -357,6 +357,22 @@ Success response:
 }
 ```
 
+### `PATCH /admin/logs/state`
+
+Updates the in-process logging state used by admin log controls. This is runtime-only; persistent configuration changes still go through `PATCH /admin/settings`.
+
+Request:
+
+```json
+{
+  "enabled": true,
+  "capacity": 2000,
+  "captureBody": false
+}
+```
+
+Success response uses the same data shape as `GET /admin/logs/state`.
+
 ### `GET /admin/logs/{id}`
 
 Returns a single stored event log by id using the same event shape as list items. Missing ids return HTTP `404` with body code `40401`.
