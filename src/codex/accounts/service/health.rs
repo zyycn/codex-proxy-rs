@@ -174,6 +174,9 @@ pub(super) async fn apply_codex_account_error(
             retry_after_seconds,
         }) => {
             let cooldown_until = Utc::now() + chrono::Duration::seconds(retry_after_seconds as i64);
+            let _ = repo
+                .set_quota_cooldown_until(&account.id, cooldown_until)
+                .await;
             service
                 .account_pool
                 .lock()
@@ -183,6 +186,9 @@ pub(super) async fn apply_codex_account_error(
         }
         Some(CodexAccountErrorAction::CloudflareChallenge { cooldown_seconds }) => {
             let cooldown_until = Utc::now() + chrono::Duration::seconds(cooldown_seconds as i64);
+            let _ = repo
+                .set_cloudflare_cooldown_until(&account.id, cooldown_until)
+                .await;
             service
                 .account_pool
                 .lock()

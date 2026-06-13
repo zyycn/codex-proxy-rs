@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use secrecy::SecretString;
 
 use codex_proxy_rs::{
@@ -122,4 +122,52 @@ async fn app_state_should_restore_account_pool_from_sqlite_accounts() {
     assert_eq!(acquired.id, "acct_restored");
     assert_eq!(acquired.access_token, "access-secret");
     assert!(acquired.last_used_at.is_some());
+}
+
+#[tokio::test]
+async fn app_state_should_restore_persisted_cooldowns_into_runtime_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("startup-pool-cooldown.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let secret_box = SecretBox::new([32u8; 32]);
+    let repo = codex_proxy_rs::codex::accounts::repository::AccountRepository::new(
+        pool.clone(),
+        secret_box.clone(),
+    );
+    repo.insert(NewAccount {
+        id: "acct_cooling".to_string(),
+        email: Some("cooling@example.com".to_string()),
+        account_id: Some("chatgpt-cooling".to_string()),
+        user_id: None,
+        label: None,
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("access-cooling".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-cooling".to_string().into())),
+        access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+    let cooldown_until = (Utc::now() + Duration::minutes(10)).to_rfc3339();
+    sqlx::query(
+        "update accounts set quota_limit_reached = 1, quota_cooldown_until = ?, cloudflare_cooldown_until = ? where id = ?",
+    )
+    .bind(&cooldown_until)
+    .bind(&cooldown_until)
+    .bind("acct_cooling")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let state = AppState::with_pool_and_secret_box(test_config(url), pool, secret_box);
+
+    let restored = state.reload_account_pool_from_repository().await.unwrap();
+
+    assert_eq!(restored, 1);
+    assert!(state
+        .services
+        .accounts
+        .acquire_runtime_account("gpt-5.5")
+        .await
+        .is_none());
 }
