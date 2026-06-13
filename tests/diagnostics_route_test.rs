@@ -3,6 +3,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
+use wiremock::{
+    matchers::{header, method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 mod common;
 
@@ -117,6 +121,78 @@ async fn debug_fingerprint_should_reject_forwarded_remote_requests() {
                 .method("GET")
                 .uri("/debug/fingerprint")
                 .header("x-real-ip", "203.0.113.20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn debug_upstream_should_probe_codex_models_endpoint_without_returning_secrets() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header("originator", "Codex Desktop"))
+        .and(header("x-client-request-id", "req_debug_probe"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": {
+                "message": "missing or invalid token"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/upstream")
+                .header("x-request-id", "req_debug_probe")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["target"], "codexModels");
+    assert_eq!(body["backendBaseUrl"], server.uri());
+    assert_eq!(body["reachable"], true);
+    assert_eq!(body["statusCode"], 401);
+    assert_eq!(body["authorization"], "rejected");
+    assert!(body["endpoint"].as_str().unwrap().contains("/codex/models"));
+
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("access-secret"));
+    assert!(!serialized.contains("refresh-secret"));
+}
+
+#[tokio::test]
+async fn debug_upstream_should_reject_forwarded_remote_requests_without_probe() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/upstream")
+                .header("x-forwarded-for", "203.0.113.50")
                 .body(Body::empty())
                 .unwrap(),
         )

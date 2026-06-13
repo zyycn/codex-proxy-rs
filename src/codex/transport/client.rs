@@ -72,6 +72,12 @@ pub struct CodexBackendResponse {
     pub rate_limit_headers: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexConnectivityProbe {
+    pub endpoint: String,
+    pub status: StatusCode,
+}
+
 pub struct CodexBackendStream {
     pub response: ReqwestResponse,
     pub turn_state: Option<String>,
@@ -201,6 +207,24 @@ impl CodexBackendClient {
         }
 
         Err(CodexClientError::ModelsUnavailable)
+    }
+
+    pub async fn probe_models_endpoint(
+        &self,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexConnectivityProbe> {
+        let endpoint = format!(
+            "{}/codex/models?client_version={}",
+            self.base_url, self.fingerprint.app_version
+        );
+        let mut headers = self.request_headers(context)?;
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        let response = self.client.get(&endpoint).headers(headers).send().await?;
+
+        Ok(CodexConnectivityProbe {
+            endpoint,
+            status: response.status(),
+        })
     }
 
     pub async fn fetch_usage(&self, context: CodexRequestContext<'_>) -> CodexClientResult<Value> {

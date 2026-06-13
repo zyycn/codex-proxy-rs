@@ -17,8 +17,9 @@ use crate::codex::upstream::CodexUpstreamService;
 use crate::config::AppConfig;
 use crate::logs::repository::EventLogRepository;
 use crate::service::{
-    admin_auth::AdminAuthService, api_key::ApiKeyService, chat::ChatService, log::LogService,
-    responses::ResponsesService, settings::SettingsService, usage::UsageService,
+    admin_auth::AdminAuthService, api_key::ApiKeyService, chat::ChatService,
+    diagnostics::DiagnosticsService, log::LogService, responses::ResponsesService,
+    settings::SettingsService, usage::UsageService,
 };
 use crate::utils::crypto::SecretBox;
 
@@ -35,6 +36,7 @@ pub struct AppServices {
     pub logs: LogService,
     pub usage: UsageService,
     pub settings: SettingsService,
+    pub diagnostics: DiagnosticsService,
     pub chat: ChatService,
     pub responses: ResponsesService,
     pub models: ModelService,
@@ -192,6 +194,7 @@ impl AppState {
             config.clone(),
             local_config_path.unwrap_or_else(|| PathBuf::from("local.yaml")),
         );
+        let diagnostics = DiagnosticsService::new(config.clone());
         let accounts = account_service(
             &config,
             account_repository(pool_ref, secret_box_ref),
@@ -229,6 +232,7 @@ impl AppState {
                 logs,
                 usage,
                 settings,
+                diagnostics,
                 chat,
                 responses,
                 models,
