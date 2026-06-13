@@ -150,6 +150,22 @@ pub async fn diagnostics(State(state): State<AppState>, headers: HeaderMap) -> i
         .into_response()
 }
 
+pub async fn debug_fingerprint(headers: HeaderMap) -> impl IntoResponse {
+    if !is_local_debug_request(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "debug endpoint is local-only" })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(fingerprint_diagnostics(Fingerprint::default_codex_desktop())),
+    )
+        .into_response()
+}
+
 fn paths_diagnostics(state: &AppState, config: &AppConfig) -> PathDiagnostics {
     PathDiagnostics {
         config: "config.yaml",
@@ -167,22 +183,26 @@ fn paths_diagnostics(state: &AppState, config: &AppConfig) -> PathDiagnostics {
 }
 
 fn transport_diagnostics(config: &AppConfig, fingerprint: Fingerprint) -> TransportDiagnostics {
-    let user_agent = fingerprint.user_agent();
     TransportDiagnostics {
         backend_base_url: config.api.base_url.clone(),
         tls: TlsDiagnostics {
             force_http11: config.tls.force_http11,
         },
-        fingerprint: FingerprintDiagnostics {
-            source: "staticDefault",
-            originator: fingerprint.originator,
-            app_version: fingerprint.app_version,
-            build_number: fingerprint.build_number,
-            platform: fingerprint.platform,
-            arch: fingerprint.arch,
-            chromium_version: fingerprint.chromium_version,
-            user_agent,
-        },
+        fingerprint: fingerprint_diagnostics(fingerprint),
+    }
+}
+
+fn fingerprint_diagnostics(fingerprint: Fingerprint) -> FingerprintDiagnostics {
+    let user_agent = fingerprint.user_agent();
+    FingerprintDiagnostics {
+        source: "staticDefault",
+        originator: fingerprint.originator,
+        app_version: fingerprint.app_version,
+        build_number: fingerprint.build_number,
+        platform: fingerprint.platform,
+        arch: fingerprint.arch,
+        chromium_version: fingerprint.chromium_version,
+        user_agent,
     }
 }
 

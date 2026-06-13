@@ -76,3 +76,52 @@ async fn debug_diagnostics_should_reject_forwarded_remote_requests() {
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn debug_fingerprint_should_return_local_static_fingerprint_summary() {
+    let imported = build_imported_app("https://chatgpt.test/backend-api".to_string()).await;
+
+    let response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/fingerprint")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["source"], "staticDefault");
+    assert_eq!(body["originator"], "Codex Desktop");
+    assert_eq!(body["appVersion"], "26.519.81530");
+    assert_eq!(body["buildNumber"], "3178");
+    assert_eq!(
+        body["userAgent"],
+        "Codex/26.519.81530 (darwin; arm64) Chromium/146"
+    );
+}
+
+#[tokio::test]
+async fn debug_fingerprint_should_reject_forwarded_remote_requests() {
+    let imported = build_imported_app("https://chatgpt.test/backend-api".to_string()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/fingerprint")
+                .header("x-real-ip", "203.0.113.20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
