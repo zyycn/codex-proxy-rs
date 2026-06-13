@@ -724,7 +724,7 @@ fn websocket_error_allows_http_sse_fallback(error: &CodexWebSocketError) -> bool
                 | StatusCode::UPGRADE_REQUIRED
                 | StatusCode::NOT_IMPLEMENTED
         ),
-        CodexWebSocketError::InvalidRequest(_) => false,
+        CodexWebSocketError::InvalidRequest(_) | CodexWebSocketError::ClosedBeforeTerminal => false,
     }
 }
 

@@ -6,7 +6,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tokio::{net::TcpStream, sync::Mutex};
+use tokio::{net::TcpStream, sync::Mutex, time::timeout};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
@@ -52,6 +52,8 @@ pub enum CodexWebSocketError {
     },
     #[error("websocket response ended before any events")]
     EmptyResponse,
+    #[error("websocket closed before terminal event")]
+    ClosedBeforeTerminal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,41 +101,289 @@ impl CodexWebSocketPoolKey {
 
 #[derive(Clone)]
 pub struct CodexWebSocketPool {
-    inner: Arc<Mutex<HashMap<CodexWebSocketPoolKey, PooledWebSocketConnection>>>,
-    max_age: Duration,
+    inner: Arc<Mutex<WebSocketPoolState>>,
+    config: CodexWebSocketPoolConfig,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodexWebSocketPoolConfig {
+    pub enabled: bool,
+    pub max_age: Duration,
+    pub max_per_account: usize,
+    pub maintenance_interval: Option<Duration>,
+    pub ping_interval: Option<Duration>,
+    pub ping_timeout: Duration,
+    pub liveness_timeout: Option<Duration>,
 }
 
 impl CodexWebSocketPool {
     const DEFAULT_MAX_AGE: Duration = Duration::from_secs(55 * 60);
+    const DEFAULT_MAX_PER_ACCOUNT: usize = 8;
+    const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
+    const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
+    const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(5);
+    const DEFAULT_LIVENESS_TIMEOUT: Duration = Duration::from_millis(62_500);
 
     pub fn with_default_max_age() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-            max_age: Self::DEFAULT_MAX_AGE,
-        }
+        Self::with_config(CodexWebSocketPoolConfig::default())
+    }
+
+    pub fn with_limits(max_age: Duration, max_per_account: usize) -> Self {
+        Self::with_config(CodexWebSocketPoolConfig {
+            max_age,
+            max_per_account,
+            maintenance_interval: None,
+            ping_interval: None,
+            liveness_timeout: None,
+            ..CodexWebSocketPoolConfig::default()
+        })
+    }
+
+    pub fn with_config(config: CodexWebSocketPoolConfig) -> Self {
+        let pool = Self {
+            inner: Arc::new(Mutex::new(WebSocketPoolState::default())),
+            config,
+        };
+        pool.spawn_maintenance_task();
+        pool
     }
 
     pub async fn evict_account(&self, account_id: &str) {
-        self.inner
-            .lock()
-            .await
-            .retain(|key, _| key.account_id() != account_id);
+        let mut idle_connections = Vec::new();
+        {
+            let mut state = self.inner.lock().await;
+            let keys = state
+                .slots
+                .keys()
+                .filter(|key| key.account_id() == account_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            for key in keys {
+                if let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) {
+                    idle_connections.push(*connection);
+                }
+            }
+        }
+        close_idle_connections(idle_connections).await;
     }
 
-    async fn take(&self, key: &CodexWebSocketPoolKey) -> Option<PooledWebSocketConnection> {
-        let connection = self.inner.lock().await.remove(key)?;
-        if connection.created_at.elapsed() <= self.max_age {
-            Some(connection)
-        } else {
-            None
+    pub async fn shutdown(&self) {
+        let idle_connections = {
+            let mut state = self.inner.lock().await;
+            state.shutting_down = true;
+            state
+                .slots
+                .drain()
+                .filter_map(|(_, slot)| match slot {
+                    WebSocketPoolSlot::Idle(connection) => Some(*connection),
+                    WebSocketPoolSlot::Busy | WebSocketPoolSlot::Checking => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        close_idle_connections(idle_connections).await;
+    }
+
+    pub async fn gc_sweep(&self) {
+        self.maintain_idle_connections().await;
+    }
+
+    async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {
+        let mut expired_connection = None;
+        let acquire = {
+            let mut state = self.inner.lock().await;
+            if !self.config.enabled || state.shutting_down {
+                return WebSocketPoolAcquire::Bypass;
+            }
+            match state.slots.get(key) {
+                Some(WebSocketPoolSlot::Busy | WebSocketPoolSlot::Checking) => {
+                    return WebSocketPoolAcquire::Bypass;
+                }
+                Some(WebSocketPoolSlot::Idle(_)) => {
+                    let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(key) else {
+                        return WebSocketPoolAcquire::Bypass;
+                    };
+                    if connection.created_at.elapsed() <= self.config.max_age {
+                        state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
+                        return WebSocketPoolAcquire::Reused(connection);
+                    }
+                    expired_connection = Some(*connection);
+                }
+                None => {}
+            }
+
+            if self.config.max_per_account == 0
+                || account_slot_count(&state.slots, key.account_id()) >= self.config.max_per_account
+            {
+                WebSocketPoolAcquire::Bypass
+            } else {
+                state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
+                WebSocketPoolAcquire::FreshReserved
+            }
+        };
+
+        if let Some(connection) = expired_connection {
+            close_idle_connections(vec![connection]).await;
         }
+
+        acquire
     }
 
     async fn put(&self, key: CodexWebSocketPoolKey, connection: PooledWebSocketConnection) {
-        if connection.created_at.elapsed() > self.max_age {
-            return;
+        let mut connection = Some(connection);
+        {
+            let mut state = self.inner.lock().await;
+            let expired = connection
+                .as_ref()
+                .is_some_and(|connection| connection.created_at.elapsed() > self.config.max_age);
+            if expired || state.shutting_down || !self.config.enabled {
+                state.slots.remove(&key);
+            } else if matches!(state.slots.get(&key), Some(WebSocketPoolSlot::Busy)) {
+                if let Some(connection) = connection.take() {
+                    state
+                        .slots
+                        .insert(key, WebSocketPoolSlot::Idle(Box::new(connection)));
+                }
+            }
         }
-        self.inner.lock().await.insert(key, connection);
+        if let Some(connection) = connection {
+            close_pooled_connection(connection).await;
+        }
+    }
+
+    async fn discard(&self, key: &CodexWebSocketPoolKey) {
+        let idle_connection = {
+            let mut state = self.inner.lock().await;
+            match state.slots.remove(key) {
+                Some(WebSocketPoolSlot::Idle(connection)) => Some(*connection),
+                Some(WebSocketPoolSlot::Busy | WebSocketPoolSlot::Checking) | None => None,
+            }
+        };
+        if let Some(connection) = idle_connection {
+            close_idle_connections(vec![connection]).await;
+        }
+    }
+
+    fn spawn_maintenance_task(&self) {
+        let Some(interval_duration) = self.config.maintenance_interval else {
+            return;
+        };
+        let inner = Arc::downgrade(&self.inner);
+        let config = self.config;
+        let Ok(_handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(interval_duration);
+            loop {
+                interval.tick().await;
+                let Some(inner) = inner.upgrade() else {
+                    break;
+                };
+                let pool = CodexWebSocketPool { inner, config };
+                if pool.is_shutting_down().await {
+                    break;
+                }
+                pool.maintain_idle_connections().await;
+            }
+        });
+    }
+
+    async fn is_shutting_down(&self) -> bool {
+        self.inner.lock().await.shutting_down
+    }
+
+    pub async fn maintain_idle_connections(&self) {
+        let maintenance = self.take_idle_connections_for_maintenance().await;
+        close_idle_connections(maintenance.close).await;
+        for (key, connection) in maintenance.probe {
+            let connection = probe_idle_connection(connection, self.config.ping_timeout).await;
+            self.return_maintained_connection(key, connection).await;
+        }
+    }
+
+    async fn take_idle_connections_for_maintenance(&self) -> WebSocketPoolMaintenance {
+        let mut close = Vec::new();
+        let mut probe = Vec::new();
+        let now = Instant::now();
+        let Some(ping_interval) = self.config.ping_interval else {
+            let mut state = self.inner.lock().await;
+            if state.shutting_down || !self.config.enabled {
+                return WebSocketPoolMaintenance { close, probe };
+            }
+            let expired_keys = expired_idle_keys(&state.slots, self.config.max_age);
+            for key in expired_keys {
+                if let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) {
+                    close.push(*connection);
+                }
+            }
+            return WebSocketPoolMaintenance { close, probe };
+        };
+
+        let mut state = self.inner.lock().await;
+        if state.shutting_down || !self.config.enabled {
+            return WebSocketPoolMaintenance { close, probe };
+        }
+        let keys = state
+            .slots
+            .iter()
+            .filter_map(|(key, slot)| match slot {
+                WebSocketPoolSlot::Idle(connection)
+                    if should_close_idle_connection(
+                        connection,
+                        now,
+                        self.config.max_age,
+                        self.config.liveness_timeout,
+                    ) || should_probe_idle_connection(connection, now, ping_interval) =>
+                {
+                    Some(key.clone())
+                }
+                WebSocketPoolSlot::Idle(_)
+                | WebSocketPoolSlot::Busy
+                | WebSocketPoolSlot::Checking => None,
+            })
+            .collect::<Vec<_>>();
+        for key in keys {
+            let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) else {
+                continue;
+            };
+            if should_close_idle_connection(
+                &connection,
+                now,
+                self.config.max_age,
+                self.config.liveness_timeout,
+            ) {
+                close.push(*connection);
+            } else {
+                state.slots.insert(key.clone(), WebSocketPoolSlot::Checking);
+                probe.push((key, *connection));
+            }
+        }
+        WebSocketPoolMaintenance { close, probe }
+    }
+
+    async fn return_maintained_connection(
+        &self,
+        key: CodexWebSocketPoolKey,
+        connection: Option<PooledWebSocketConnection>,
+    ) {
+        let mut connection = connection;
+        {
+            let mut state = self.inner.lock().await;
+            if state.shutting_down || !self.config.enabled {
+                state.slots.remove(&key);
+            } else if matches!(state.slots.get(&key), Some(WebSocketPoolSlot::Checking)) {
+                if let Some(connection) = connection.take() {
+                    state
+                        .slots
+                        .insert(key, WebSocketPoolSlot::Idle(Box::new(connection)));
+                } else {
+                    state.slots.remove(&key);
+                }
+            }
+        }
+        if let Some(connection) = connection {
+            close_pooled_connection(connection).await;
+        }
     }
 }
 
@@ -141,6 +391,26 @@ impl Default for CodexWebSocketPool {
     fn default() -> Self {
         Self::with_default_max_age()
     }
+}
+
+impl Default for CodexWebSocketPoolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_age: CodexWebSocketPool::DEFAULT_MAX_AGE,
+            max_per_account: CodexWebSocketPool::DEFAULT_MAX_PER_ACCOUNT,
+            maintenance_interval: Some(CodexWebSocketPool::DEFAULT_MAINTENANCE_INTERVAL),
+            ping_interval: Some(CodexWebSocketPool::DEFAULT_PING_INTERVAL),
+            ping_timeout: CodexWebSocketPool::DEFAULT_PING_TIMEOUT,
+            liveness_timeout: Some(CodexWebSocketPool::DEFAULT_LIVENESS_TIMEOUT),
+        }
+    }
+}
+
+#[derive(Default)]
+struct WebSocketPoolState {
+    slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    shutting_down: bool,
 }
 
 type CodexWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -166,6 +436,116 @@ struct PooledWebSocketConnection {
     websocket: CodexWsStream,
     metadata: CodexWebSocketConnectionMetadata,
     created_at: Instant,
+    last_activity_at: Instant,
+    last_ping_at: Option<Instant>,
+}
+
+enum WebSocketPoolSlot {
+    Idle(Box<PooledWebSocketConnection>),
+    Busy,
+    Checking,
+}
+
+enum WebSocketPoolAcquire {
+    Reused(Box<PooledWebSocketConnection>),
+    FreshReserved,
+    Bypass,
+}
+
+fn account_slot_count(
+    inner: &HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    account_id: &str,
+) -> usize {
+    inner
+        .keys()
+        .filter(|key| key.account_id() == account_id)
+        .count()
+}
+
+async fn close_idle_connections(connections: Vec<PooledWebSocketConnection>) {
+    for connection in connections {
+        close_pooled_connection(connection).await;
+    }
+}
+
+async fn close_pooled_connection(connection: PooledWebSocketConnection) {
+    let mut websocket = connection.websocket;
+    let _ = websocket.close(None).await;
+}
+
+struct WebSocketPoolMaintenance {
+    close: Vec<PooledWebSocketConnection>,
+    probe: Vec<(CodexWebSocketPoolKey, PooledWebSocketConnection)>,
+}
+
+fn expired_idle_keys(
+    slots: &HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    max_age: Duration,
+) -> Vec<CodexWebSocketPoolKey> {
+    slots
+        .iter()
+        .filter_map(|(key, slot)| match slot {
+            WebSocketPoolSlot::Idle(connection) if connection.created_at.elapsed() > max_age => {
+                Some(key.clone())
+            }
+            WebSocketPoolSlot::Idle(_) | WebSocketPoolSlot::Busy | WebSocketPoolSlot::Checking => {
+                None
+            }
+        })
+        .collect()
+}
+
+fn should_close_idle_connection(
+    connection: &PooledWebSocketConnection,
+    now: Instant,
+    max_age: Duration,
+    liveness_timeout: Option<Duration>,
+) -> bool {
+    connection.created_at.elapsed() > max_age
+        || liveness_timeout.is_some_and(|timeout| {
+            !timeout.is_zero() && now.duration_since(connection.last_activity_at) > timeout
+        })
+}
+
+fn should_probe_idle_connection(
+    connection: &PooledWebSocketConnection,
+    now: Instant,
+    ping_interval: Duration,
+) -> bool {
+    !ping_interval.is_zero()
+        && connection
+            .last_ping_at
+            .is_none_or(|last_ping_at| now.duration_since(last_ping_at) >= ping_interval)
+}
+
+async fn probe_idle_connection(
+    mut connection: PooledWebSocketConnection,
+    ping_timeout: Duration,
+) -> Option<PooledWebSocketConnection> {
+    let now = Instant::now();
+    connection.last_ping_at = Some(now);
+    if connection
+        .websocket
+        .send(Message::Ping(Vec::new().into()))
+        .await
+        .is_err()
+    {
+        close_pooled_connection(connection).await;
+        return None;
+    }
+    if ping_timeout.is_zero() {
+        return Some(connection);
+    }
+    match timeout(ping_timeout, connection.websocket.next()).await {
+        Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) | Err(_) => {
+            close_pooled_connection(connection).await;
+            None
+        }
+        Ok(Some(Ok(_message))) => {
+            connection.last_activity_at = Instant::now();
+            Some(connection)
+        }
+    }
 }
 
 struct ActiveWebSocket {
@@ -173,6 +553,7 @@ struct ActiveWebSocket {
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketPoolReturn>,
     reused: bool,
+    last_activity_at: Instant,
 }
 
 struct WebSocketPoolReturn {
@@ -188,6 +569,7 @@ impl ActiveWebSocket {
             metadata,
             pool_return,
             reused: _,
+            last_activity_at,
         } = self;
         let Some(pool_return) = pool_return else {
             let mut websocket = websocket;
@@ -202,13 +584,22 @@ impl ActiveWebSocket {
                     websocket,
                     metadata,
                     created_at: pool_return.created_at,
+                    last_activity_at,
+                    last_ping_at: None,
                 },
             )
             .await;
     }
 
     async fn discard(self) {
-        let mut websocket = self.websocket;
+        let Self {
+            mut websocket,
+            pool_return,
+            ..
+        } = self;
+        if let Some(pool_return) = pool_return {
+            pool_return.pool.discard(&pool_return.key).await;
+        }
         let _ = websocket.close(None).await;
     }
 }
@@ -283,9 +674,10 @@ async fn create_response_via_websocket_stream_inner(
     headers: HeaderMap,
     pool: Option<(Arc<CodexWebSocketPool>, CodexWebSocketPoolKey)>,
 ) -> Result<CodexWebSocketStreamResponse, CodexWebSocketError> {
-    let mut retry_stale_reuse = pool.is_some();
+    let mut pool_context = pool;
+    let mut retry_stale_reuse = pool_context.is_some();
     loop {
-        let mut active = acquire_websocket(base_url, headers.clone(), pool.clone()).await?;
+        let mut active = acquire_websocket(base_url, headers.clone(), pool_context.clone()).await?;
         if let Err(error) = active
             .websocket
             .send(Message::Text(
@@ -297,6 +689,7 @@ async fn create_response_via_websocket_stream_inner(
             active.discard().await;
             if reused && retry_stale_reuse {
                 retry_stale_reuse = false;
+                pool_context = None;
                 continue;
             }
             return Err(CodexWebSocketError::Transport(error));
@@ -309,6 +702,7 @@ async fn create_response_via_websocket_stream_inner(
                 active.discard().await;
                 if reused && retry_stale_reuse {
                     retry_stale_reuse = false;
+                    pool_context = None;
                     break;
                 }
                 return Err(CodexWebSocketError::EmptyResponse);
@@ -320,21 +714,27 @@ async fn create_response_via_websocket_stream_inner(
                     active.discard().await;
                     if reused && retry_stale_reuse {
                         retry_stale_reuse = false;
+                        pool_context = None;
                         break;
                     }
                     return Err(CodexWebSocketError::Transport(error));
                 }
             };
+            active.last_activity_at = Instant::now();
             let Some(raw) = websocket_message_text(message) else {
                 continue;
             };
             if is_internal_websocket_event(&raw) {
                 continue;
             }
-            if let Some(status) = classify_ws_error_frame(&raw) {
-                active.finish().await;
+            if let Some(classified) = classify_ws_error_frame(&raw) {
+                if classified.connection_fatal {
+                    active.discard().await;
+                } else {
+                    active.finish().await;
+                }
                 return Err(CodexWebSocketError::Upstream {
-                    status,
+                    status: classified.status,
                     retry_after_seconds: retry_after_seconds_from_body(&raw),
                     body: raw,
                 });
@@ -373,30 +773,59 @@ async fn acquire_websocket(
     pool: Option<(Arc<CodexWebSocketPool>, CodexWebSocketPoolKey)>,
 ) -> Result<ActiveWebSocket, CodexWebSocketError> {
     let Some((pool, key)) = pool else {
+        let created_at = Instant::now();
         let (websocket, metadata) = connect_websocket(base_url, headers).await?;
         return Ok(ActiveWebSocket {
             websocket,
             metadata,
             pool_return: None,
             reused: false,
+            last_activity_at: created_at,
         });
     };
 
-    if let Some(connection) = pool.take(&key).await {
-        return Ok(ActiveWebSocket {
-            websocket: connection.websocket,
-            metadata: connection.metadata,
-            pool_return: Some(WebSocketPoolReturn {
-                pool,
-                key,
-                created_at: connection.created_at,
-            }),
-            reused: true,
-        });
+    match pool.acquire(&key).await {
+        WebSocketPoolAcquire::Reused(connection) => {
+            let PooledWebSocketConnection {
+                websocket,
+                metadata,
+                created_at,
+                last_activity_at,
+                last_ping_at: _,
+            } = *connection;
+            return Ok(ActiveWebSocket {
+                websocket,
+                metadata,
+                pool_return: Some(WebSocketPoolReturn {
+                    pool,
+                    key,
+                    created_at,
+                }),
+                reused: true,
+                last_activity_at,
+            });
+        }
+        WebSocketPoolAcquire::FreshReserved => {}
+        WebSocketPoolAcquire::Bypass => {
+            let (websocket, metadata) = connect_websocket(base_url, headers).await?;
+            return Ok(ActiveWebSocket {
+                websocket,
+                metadata,
+                pool_return: None,
+                reused: false,
+                last_activity_at: Instant::now(),
+            });
+        }
     }
 
     let created_at = Instant::now();
-    let (websocket, metadata) = connect_websocket(base_url, headers).await?;
+    let (websocket, metadata) = match connect_websocket(base_url, headers).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            pool.discard(&key).await;
+            return Err(error);
+        }
+    };
     Ok(ActiveWebSocket {
         websocket,
         metadata,
@@ -406,6 +835,7 @@ async fn acquire_websocket(
             created_at,
         }),
         reused: false,
+        last_activity_at: created_at,
     })
 }
 
@@ -535,6 +965,7 @@ async fn forward_websocket_as_sse(
     while let Some(message) = active.websocket.next().await {
         match message {
             Ok(message) => {
+                active.last_activity_at = Instant::now();
                 let Some(raw) = websocket_message_text(message) else {
                     continue;
                 };
@@ -546,22 +977,30 @@ async fn forward_websocket_as_sse(
                 let chunk = websocket_sse_chunk(&raw, event.as_deref());
                 if tx.unbounded_send(Ok(chunk)).is_err() {
                     active.discard().await;
-                    break;
+                    return;
                 }
                 if terminal {
                     active.finish().await;
-                    break;
+                    return;
                 }
             }
             Err(error) => {
                 let _ = tx.unbounded_send(Err(CodexWebSocketError::Transport(error)));
-                break;
+                active.discard().await;
+                return;
             }
         }
     }
+    let _ = tx.unbounded_send(Err(CodexWebSocketError::ClosedBeforeTerminal));
+    active.discard().await;
 }
 
-fn classify_ws_error_frame(raw: &str) -> Option<StatusCode> {
+struct ClassifiedWebSocketError {
+    status: StatusCode,
+    connection_fatal: bool,
+}
+
+fn classify_ws_error_frame(raw: &str) -> Option<ClassifiedWebSocketError> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let event_type = value.get("type").and_then(Value::as_str)?;
     if event_type != "error" && event_type != "response.failed" {
@@ -574,7 +1013,11 @@ fn classify_ws_error_frame(raw: &str) -> Option<StatusCode> {
         .or_else(|| value.pointer("/error/type"))
         .and_then(Value::as_str)?
         .to_ascii_lowercase();
-    rotatable_error_status(&code)
+    let status = rotatable_error_status(&code)?;
+    Some(ClassifiedWebSocketError {
+        status,
+        connection_fatal: code == "websocket_connection_limit_reached",
+    })
 }
 
 fn rotatable_error_status(code: &str) -> Option<StatusCode> {
@@ -588,6 +1031,7 @@ fn rotatable_error_status(code: &str) -> Option<StatusCode> {
         }
         "forbidden" | "account_banned" | "banned" => Some(StatusCode::FORBIDDEN),
         "previous_response_not_found" => Some(StatusCode::BAD_REQUEST),
+        "websocket_connection_limit_reached" => Some(StatusCode::SERVICE_UNAVAILABLE),
         _ => None,
     }
 }
