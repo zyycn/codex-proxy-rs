@@ -1,17 +1,23 @@
+use std::sync::Arc;
+
+use chrono::{Duration, Utc};
 use secrecy::{ExposeSecret, SecretString};
+use uuid::Uuid;
 
 use crate::{
     codex::accounts::{
         model::{Account, AccountStatus},
         repository::{AccountRepository, StoredAccount, TokenUpdate},
     },
-    codex::gateway::oauth::RefreshFailure,
+    codex::gateway::oauth::{RefreshFailure, TokenPair, TokenRefresher},
 };
 
 use super::{
     health::skipped_probe_result, runtime_pool::pool_account_from_stored, AccountProbeOutcome,
     AccountProbeResult, AccountService, RefreshAccountError,
 };
+
+const REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
 
 impl AccountService {
     pub async fn refresh_account(
@@ -30,16 +36,59 @@ impl AccountService {
         if account.status == AccountStatus::Disabled {
             return Ok(skipped_probe_result(&account, "manually disabled"));
         }
+        if account.refresh_token.is_none() {
+            return Ok(skipped_probe_result(&account, "no refresh token"));
+        }
+        let Some(refresher) = self.token_refresher.as_ref().cloned() else {
+            return Err(RefreshAccountError::TokenRefresherUnavailable);
+        };
+        let lease_owner = refresh_lease_owner();
+        let lease_until = Utc::now() + Duration::seconds(REFRESH_LEASE_TTL_SECONDS);
+        match repo
+            .try_acquire_refresh_lease(account_id, &lease_owner, lease_until)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(skipped_probe_result(&account, "refresh lease held"));
+            }
+            Err(_) => return Err(RefreshAccountError::LeaseAcquire),
+        }
+
+        let result = self
+            .refresh_account_with_lease(repo, account_id, refresher)
+            .await;
+        if let Err(error) = repo.release_refresh_lease(account_id, &lease_owner).await {
+            tracing::warn!(
+                error = %error,
+                account_id = %account_id,
+                "释放 refresh lease 失败"
+            );
+        }
+        result
+    }
+
+    async fn refresh_account_with_lease(
+        &self,
+        repo: &AccountRepository,
+        account_id: &str,
+        refresher: Arc<dyn TokenRefresher>,
+    ) -> Result<AccountProbeResult, RefreshAccountError> {
+        let account = match repo.get(account_id).await {
+            Ok(Some(account)) => account,
+            Ok(None) => return Err(RefreshAccountError::NotFound),
+            Err(_) => return Err(RefreshAccountError::Load),
+        };
+        if account.status == AccountStatus::Disabled {
+            return Ok(skipped_probe_result(&account, "manually disabled"));
+        }
         let Some(refresh_token) = account.refresh_token.as_ref() else {
             return Ok(skipped_probe_result(&account, "no refresh token"));
         };
-        let Some(refresher) = self.token_refresher.as_ref() else {
-            return Err(RefreshAccountError::TokenRefresherUnavailable);
-        };
-
         let started_at = std::time::Instant::now();
         let previous_status = account.status;
-        match refresher.refresh(refresh_token.expose_secret()).await {
+        match refresh_with_latest_disk_token_retry(repo, &account, refresh_token, &refresher).await
+        {
             Ok(tokens) => {
                 let updated = self
                     .persist_refreshed_account(
@@ -114,6 +163,56 @@ impl AccountService {
             .set_status(&account.id, status);
         Some(status)
     }
+}
+
+async fn refresh_with_latest_disk_token_retry(
+    repo: &AccountRepository,
+    account: &StoredAccount,
+    refresh_token: &SecretString,
+    refresher: &Arc<dyn TokenRefresher>,
+) -> Result<TokenPair, RefreshFailure> {
+    let used_token = refresh_token.expose_secret().to_string();
+    match refresher.refresh(&used_token).await {
+        Err(RefreshFailure::InvalidGrant) => {
+            if let Some(latest_token) = latest_disk_refresh_token(repo, account, &used_token).await
+            {
+                tracing::info!(
+                    account_id = %account.id,
+                    "检测到磁盘 refresh_token 已更新，使用最新值重试刷新"
+                );
+                return refresher.refresh(&latest_token).await;
+            }
+            Err(RefreshFailure::InvalidGrant)
+        }
+        result => result,
+    }
+}
+
+async fn latest_disk_refresh_token(
+    repo: &AccountRepository,
+    account: &StoredAccount,
+    used_token: &str,
+) -> Option<String> {
+    match repo.get(&account.id).await {
+        Ok(Some(latest)) => latest
+            .refresh_token
+            .as_ref()
+            .map(|token| token.expose_secret().to_string())
+            .filter(|token| token != used_token),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                account_id = %account.id,
+                "刷新失败后重新读取磁盘 refresh_token 失败"
+            );
+            None
+        }
+    }
+}
+
+fn refresh_lease_owner() -> String {
+    format!("{}:{}", std::process::id(), Uuid::new_v4())
 }
 
 fn status_for_refresh_failure(failure: RefreshFailure) -> Option<AccountStatus> {

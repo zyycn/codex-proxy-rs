@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,6 +41,12 @@ pub struct SessionAffinityMap {
 
 const DEFAULT_TTL: Duration = Duration::from_secs(4 * 60 * 60); // 4小时
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60); // 10分钟
+
+pub(super) fn compute_variant_hash(value: &impl Serialize) -> Option<String> {
+    serde_json::to_string(value)
+        .ok()
+        .filter(|serialized| !serialized.is_empty())
+}
 
 impl SessionAffinityMap {
     pub fn new(ttl: Duration) -> Self {
@@ -246,6 +253,8 @@ impl Drop for SessionAffinityMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::gateway::transport::types::CodexResponsesRequest;
+    use serde_json::json;
 
     #[tokio::test]
     async fn session_affinity_records_and_retrieves_account() {
@@ -357,5 +366,19 @@ mod tests {
         map.forget("resp_123").await;
 
         assert!(map.lookup_account("resp_123").await.is_none());
+    }
+
+    #[test]
+    fn compute_variant_hash_should_follow_serialized_request_body() {
+        let mut request = CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "You are Codex.",
+            vec![json!({"role": "user", "content": "hello"})],
+        );
+        let first = compute_variant_hash(&request).unwrap();
+        request.instructions = "You are Codex with different instructions.".to_string();
+        let second = compute_variant_hash(&request).unwrap();
+
+        assert_ne!(first, second);
     }
 }

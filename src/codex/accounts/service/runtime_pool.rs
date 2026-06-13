@@ -54,6 +54,11 @@ pub(super) fn pool_account_from_stored(account: StoredAccount) -> Account {
         quota_limit_reached: false,
         quota_cooldown_until: None,
         cloudflare_cooldown_until: None,
+        request_count: 0,
+        window_request_count: 0,
+        window_started_at: None,
+        window_reset_at: None,
+        limit_window_seconds: None,
         added_at: account.added_at.to_rfc3339(),
         last_used_at: None,
     }

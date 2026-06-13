@@ -1,5 +1,10 @@
+use rand::RngExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
+use tokio::{
+    sync::{RwLock, Semaphore},
+    task::JoinHandle,
+    time::Instant,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -18,11 +23,13 @@ pub type SchedulerResult<T> = Result<T, SchedulerError>;
 /// - 永久失败检测（invalid_grant / invalid_token）
 /// - 临时失败的恢复调度（10分钟）
 /// - 崩溃恢复：refreshing → 立即重试，expired + refreshToken → 延迟重试
+#[derive(Clone)]
 pub struct RefreshScheduler {
     account_service: Arc<AccountService>,
     config: AppConfig,
     timers: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
     in_flight: Arc<RwLock<HashMap<String, Instant>>>,
+    refresh_permits: Arc<Semaphore>,
     destroyed: Arc<RwLock<bool>>,
 }
 
@@ -44,11 +51,15 @@ const EXPIRED_ERRORS: &[&str] = &[
 
 impl RefreshScheduler {
     pub fn new(account_service: Arc<AccountService>, config: AppConfig) -> Self {
+        let refresh_permits = Arc::new(Semaphore::new(refresh_concurrency_limit(
+            config.auth.refresh_concurrency,
+        )));
         Self {
             account_service,
             config,
             timers: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(RwLock::new(HashMap::new())),
+            refresh_permits,
             destroyed: Arc::new(RwLock::new(false)),
         }
     }
@@ -156,36 +167,14 @@ impl RefreshScheduler {
             return Ok(());
         }
 
-        let delay = Duration::from_secs(refresh_at - now);
+        let delay = jitter_delay(Duration::from_secs(refresh_at - now));
         info!(
             account_id = %account_id,
             delay_secs = delay.as_secs(),
             "已调度 token 刷新"
         );
 
-        // 启动定时器 - 直接刷新，不再调用 do_refresh
-        let account_id_clone = account_id.clone();
-        let account_service = self.account_service.clone();
-        let in_flight = self.in_flight.clone();
-
-        let handle = tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-
-            // 标记为正在处理
-            {
-                let mut in_flight_lock = in_flight.write().await;
-                if in_flight_lock.contains_key(&account_id_clone) {
-                    return; // 已经在刷新中
-                }
-                in_flight_lock.insert(account_id_clone.clone(), Instant::now());
-            }
-
-            // 执行刷新
-            let _ = account_service.refresh_account(&account_id_clone).await;
-
-            // 清理标记
-            in_flight.write().await.remove(&account_id_clone);
-        });
+        let handle = self.spawn_delayed_refresh(account_id.clone(), delay);
 
         self.timers.write().await.insert(account_id, handle);
         Ok(())
@@ -219,32 +208,14 @@ impl RefreshScheduler {
             return Ok(());
         }
 
-        let delay = Duration::from_secs(refresh_at - now);
+        let delay = jitter_delay(Duration::from_secs(refresh_at - now));
         info!(
             account_id = %account_id,
             delay_secs = delay.as_secs(),
             "已调度下一次 token 刷新"
         );
 
-        // 启动定时器
-        let account_id_clone = account_id.clone();
-        let account_service = self.account_service.clone();
-        let in_flight = self.in_flight.clone();
-
-        let handle = tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-
-            {
-                let mut in_flight_lock = in_flight.write().await;
-                if in_flight_lock.contains_key(&account_id_clone) {
-                    return;
-                }
-                in_flight_lock.insert(account_id_clone.clone(), Instant::now());
-            }
-
-            let _ = account_service.refresh_account(&account_id_clone).await;
-            in_flight.write().await.remove(&account_id_clone);
-        });
+        let handle = self.spawn_delayed_refresh(account_id.clone(), delay);
 
         self.timers.write().await.insert(account_id, handle);
         Ok(())
@@ -252,14 +223,19 @@ impl RefreshScheduler {
 
     /// 调度恢复尝试（用于临时失败）
     async fn schedule_recovery(&self, account_id: String, delay: Duration) {
-        let account_id_clone = account_id.clone();
-        let account_service = self.account_service.clone();
-        let handle = tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            let _ = account_service.refresh_account(&account_id_clone).await;
-        });
+        let handle = self.spawn_delayed_refresh(account_id.clone(), jitter_delay(delay));
 
         self.timers.write().await.insert(account_id, handle);
+    }
+
+    fn spawn_delayed_refresh(&self, account_id: String, delay: Duration) -> JoinHandle<()> {
+        let scheduler = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            // 定时器触发后先移除自身，避免刷新成功后调度下一次时 abort 当前任务。
+            scheduler.timers.write().await.remove(&account_id);
+            scheduler.do_refresh(account_id).await;
+        })
     }
 
     /// 取消单个账户的定时器
@@ -285,6 +261,19 @@ impl RefreshScheduler {
             }
             in_flight.insert(account_id.clone(), Instant::now());
         }
+
+        let _permit = match self.refresh_permits.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                self.in_flight.write().await.remove(&account_id);
+                error!(
+                    account_id = %account_id,
+                    error = %error,
+                    "refresh 并发控制已关闭"
+                );
+                return;
+            }
+        };
 
         // 执行刷新逻辑
         let result = self.do_refresh_inner(&account_id).await;
@@ -378,13 +367,11 @@ impl RefreshScheduler {
                             error = %e,
                             "token 刷新重试次数已耗尽"
                         );
-                        // 调度恢复尝试（不在循环内调用 await，避免递归）
-                        let account_id_recovery = account_id.to_string();
-                        let account_service = self.account_service.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_millis(RECOVERY_DELAY_MS)).await;
-                            let _ = account_service.refresh_account(&account_id_recovery).await;
-                        });
+                        self.schedule_recovery(
+                            account_id.to_string(),
+                            Duration::from_millis(RECOVERY_DELAY_MS),
+                        )
+                        .await;
                         return Err(SchedulerError::AccountNotFound(format!(
                             "Max attempts reached: {}",
                             e
@@ -453,5 +440,44 @@ impl RefreshScheduler {
 
         // 清理 in_flight
         self.in_flight.write().await.clear();
+    }
+}
+
+fn refresh_concurrency_limit(configured: u32) -> usize {
+    configured.max(1) as usize
+}
+
+fn jitter_delay(delay: Duration) -> Duration {
+    let mut rng = rand::rng();
+    jitter_delay_with_factor(delay, rng.random_range(0.8..=1.2))
+}
+
+fn jitter_delay_with_factor(delay: Duration, factor: f64) -> Duration {
+    let factor = factor.clamp(0.8, 1.2);
+    let millis = (delay.as_millis() as f64 * factor)
+        .round()
+        .min(u64::MAX as f64);
+    Duration::from_millis(millis as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_concurrency_limit_should_never_be_zero() {
+        assert_eq!(refresh_concurrency_limit(0), 1);
+    }
+
+    #[test]
+    fn jitter_delay_with_factor_should_keep_delay_inside_original_range() {
+        assert_eq!(
+            jitter_delay_with_factor(Duration::from_secs(100), 0.8),
+            Duration::from_secs(80)
+        );
+        assert_eq!(
+            jitter_delay_with_factor(Duration::from_secs(100), 1.2),
+            Duration::from_secs(120)
+        );
     }
 }

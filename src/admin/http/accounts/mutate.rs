@@ -255,6 +255,12 @@ fn refresh_account_error(error: RefreshAccountError, request_id: &str) -> AdminE
             "Account not found",
             request_id,
         ),
+        RefreshAccountError::LeaseAcquire => AdminError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            50001,
+            "Failed to acquire refresh lease",
+            request_id,
+        ),
         RefreshAccountError::TokenRefresherUnavailable => AdminError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             50001,
