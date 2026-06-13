@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -11,6 +11,7 @@ use crate::{
     app::state::AppState,
     codex::{accounts::pool::AccountCapacitySummary, fingerprint::model::Fingerprint},
     config::AppConfig,
+    http::middleware::RequestId,
     service::admin_auth::AdminAuthPoolSummary,
 };
 
@@ -162,6 +163,32 @@ pub async fn debug_fingerprint(headers: HeaderMap) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(fingerprint_diagnostics(Fingerprint::default_codex_desktop())),
+    )
+        .into_response()
+}
+
+pub async fn debug_upstream(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !is_local_debug_request(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "debug endpoint is local-only" })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(
+            state
+                .services
+                .diagnostics
+                .probe_upstream(request_id.as_str())
+                .await,
+        ),
     )
         .into_response()
 }

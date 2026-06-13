@@ -58,6 +58,26 @@ Success response:
 }
 ```
 
+### `GET /debug/upstream`
+
+Runs a local-only Codex backend connectivity probe against the Codex models endpoint using the runtime TLS and Desktop fingerprint headers. The route rejects forwarded remote requests using `x-forwarded-for` or `x-real-ip`, returns only status metadata, and does not expose account tokens or upstream response bodies.
+
+Success response for a reachable backend that rejects the synthetic diagnostic token:
+
+```json
+{
+  "target": "codexModels",
+  "status": "reachable",
+  "backendBaseUrl": "https://chatgpt.com/backend-api",
+  "endpoint": "https://chatgpt.com/backend-api/codex/models?client_version=26.519.81530",
+  "reachable": true,
+  "statusCode": 401,
+  "authorization": "rejected",
+  "durationMs": 23,
+  "error": null
+}
+```
+
 ### `GET /debug/diagnostics`
 
 Returns a local-only runtime diagnostics summary. The route is intended for production-local troubleshooting and rejects forwarded remote requests using `x-forwarded-for` or `x-real-ip`.

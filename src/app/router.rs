@@ -3,7 +3,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::http::{
     admin,
-    diagnostics::{debug_fingerprint, diagnostics},
+    diagnostics::{debug_fingerprint, debug_upstream, diagnostics},
     health::health,
     middleware::attach_request_id,
     v1,
@@ -16,6 +16,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/debug/diagnostics", get(diagnostics))
         .route("/debug/fingerprint", get(debug_fingerprint))
+        .route("/debug/upstream", get(debug_upstream))
         .merge(v1::router())
         .merge(admin::router())
         .with_state(state)
