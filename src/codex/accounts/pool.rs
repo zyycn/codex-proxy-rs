@@ -246,6 +246,17 @@ impl AccountPool {
         }
     }
 
+    /// 获取所有配额锁定的账户ID列表（用于主动配额刷新）
+    pub fn list_quota_locked_accounts(&self) -> Vec<String> {
+        self.accounts
+            .values()
+            .filter(|account| {
+                account.status == AccountStatus::Active && account.quota_limit_reached
+            })
+            .map(|account| account.id.clone())
+            .collect()
+    }
+
     fn select_least_used(&mut self, candidates: &[Account]) -> Option<Account> {
         let best_last_used = candidates
             .iter()

@@ -5,7 +5,7 @@ use crate::{
         model::{Account, AccountStatus},
         repository::{AccountRepository, StoredAccount, TokenUpdate},
     },
-    codex::oauth::RefreshFailure,
+    codex::gateway::oauth::RefreshFailure,
 };
 
 use super::{

@@ -1,0 +1,199 @@
+# OpenAI 请求链路一致性审查报告
+
+本文档记录了 `codex-proxy-rs` (Rust) 与 `codex-proxy` (Node.js) 在 OpenAI 请求链路上的对比审查和修复工作。
+
+## 审查日期
+2026-06-13
+
+## 关键差异总结
+
+### ✅ 已修复的问题
+
+#### 1. 缺失的关键 HTTP Headers
+
+**问题：** Rust 项目缺少 Node.js 项目中的关键请求头
+- `x-codex-installation-id` - 设备唯一标识
+- `session_id` - 会话 ID（用于会话关联和提示缓存）
+
+**修复：**
+- 新增 `src/codex/gateway/installation.rs` 模块
+  - 实现 Installation ID 管理逻辑
+  - 优先读取 `~/.codex/installation_id`（兼容真实 Codex Desktop）
+  - 次优从 `<database_dir>/installation_id` 读取或生成新 UUID
+  - 使用 `OnceLock` 实现单例缓存
+
+- 新增 `src/codex/gateway/identity.rs` 模块
+  - 实现 `build_conversation_identity()` 函数
+  - 从 `prompt_cache_key` 派生账号作用域的会话 ID
+  - 使用 SHA256 哈希生成确定性标识符
+  - 格式：`cp_{hash[..32]}` (conversation) 或 `cw_{hash[..32]}` (window)
+
+- 更新 `src/codex/gateway/transport/client.rs`
+  - 在 `CodexRequestContext` 添加 `installation_id` 和 `session_id` 字段
+  - 在 `request_headers()` 方法中添加这两个 header
+
+- 更新 `src/codex/serving/dispatch/mod.rs`
+  - 在发送请求前构建 conversation identity
+  - 获取 installation ID 并传递到请求上下文
+  - 自动将派生的 `conversation_id` 设置为 `session_id` header
+
+#### 2. 会话亲和性 (Session Affinity)
+
+**Node.js 实现：**
+```typescript
+const identity = this.buildConversationIdentity(request);
+if (identity.conversationId) {
+  headers["session_id"] = identity.conversationId;
+  headers["x-client-request-id"] = identity.conversationId;
+}
+```
+
+**Rust 实现（已修复）：**
+```rust
+let identity = build_conversation_identity(
+    request.prompt_cache_key.as_deref(),
+    request.codex_window_id.as_deref(),
+    account_scope,
+);
+// ...
+session_id: identity.conversation_id.as_deref(),
+```
+
+## 对比矩阵
+
+| 功能 | Node.js | Rust (修复后) | 状态 |
+|------|---------|---------------|------|
+| `x-codex-installation-id` | ✓ | ✓ | ✅ 一致 |
+| `session_id` header | ✓ | ✓ | ✅ 一致 |
+| Conversation identity 派生 | ✓ | ✓ | ✅ 一致 |
+| SHA256 哈希算法 | ✓ | ✓ | ✅ 一致 |
+| 账号作用域绑定 | ✓ | ✓ | ✅ 一致 |
+| Window ID fallback | ✓ | ✓ | ✅ 一致 |
+| Installation ID 持久化 | ✓ | ✓ | ✅ 一致 |
+| `~/.codex/installation_id` 兼容 | ✓ | ✓ | ✅ 一致 |
+
+## 已验证的一致性
+
+### 请求头对比
+
+**Node.js (`codex-api.ts:320-392`):**
+```typescript
+headers["x-codex-installation-id"] = installationId;
+headers["session_id"] = identity.conversationId;
+headers["x-codex-window-id"] = identity.windowId;
+headers["OpenAI-Beta"] = "responses_websockets=2026-02-06";
+headers["x-openai-internal-codex-residency"] = "us";
+```
+
+**Rust (`transport/client.rs:296-337`):**
+```rust
+insert_optional_header(&mut headers, "x-codex-installation-id", context.installation_id)?;
+insert_optional_header(&mut headers, "session_id", context.session_id)?;
+insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
+headers.insert(HeaderName::from_static("openai-beta"),
+               HeaderValue::from_static("responses_websockets=2026-02-06"));
+headers.insert(HeaderName::from_static("x-openai-internal-codex-residency"),
+               HeaderValue::from_static("us"));
+```
+
+### 身份派生逻辑
+
+**算法一致性：**
+```
+SHA256(kind + "\0" + account_scope + "\0" + client_value)[..32]
+```
+
+**前缀映射：**
+- `"conversation"` → `"cp_"`
+- `"window"` → `"cw_"`
+
+**Fallback 行为：**
+- 如果没有显式 `window_id`，则派生为 `{conversation_id}:0`
+
+## 测试验证
+
+所有新增测试通过：
+```
+test codex::gateway::identity::tests::test_build_account_scoped_identity_deterministic ... ok
+test codex::gateway::identity::tests::test_build_account_scoped_identity_different_accounts ... ok
+test codex::gateway::identity::tests::test_build_account_scoped_identity_window_prefix ... ok
+test codex::gateway::identity::tests::test_build_conversation_identity_empty ... ok
+test codex::gateway::identity::tests::test_build_conversation_identity_fallback_window ... ok
+test codex::gateway::identity::tests::test_build_conversation_identity_full ... ok
+test codex::gateway::installation::tests::test_read_from_codex_home ... ok
+test codex::gateway::installation::tests::test_generate_and_persist ... ok
+```
+
+## 文件变更清单
+
+### 新增文件
+1. `src/codex/gateway/installation.rs` - Installation ID 管理
+2. `src/codex/gateway/identity.rs` - Conversation identity 派生
+
+### 修改文件
+1. `src/codex/gateway/mod.rs` - 导出新模块
+2. `src/codex/gateway/transport/client.rs` - 添加新 header 字段
+3. `src/codex/serving/dispatch/mod.rs` - 集成身份派生逻辑
+4. `src/codex/accounts/service/health.rs` - 更新 context 构造
+5. `src/codex/accounts/models/service.rs` - 更新 context 构造
+6. `src/codex/serving/diagnostics.rs` - 更新 context 构造
+7. `Cargo.toml` - 添加 `dirs = "5.0.1"` 依赖
+
+## 其他保持一致的部分
+
+以下功能在审查前已经与 Node.js 项目一致：
+
+### 1. 协议转换 (OpenAI ↔ Codex)
+- ✅ System/developer messages → `instructions`
+- ✅ User/assistant/tool messages → `input` array
+- ✅ Tool calls → `function_call` items
+- ✅ Reasoning effort 解析和映射
+- ✅ Service tier 归一化
+- ✅ Structured output (`json_schema`)
+
+### 2. SSE 流处理
+- ✅ Codex SSE events → OpenAI chat completion chunks
+- ✅ `response.output_text.delta` → content delta
+- ✅ `response.function_call_arguments.delta` → tool_calls delta
+- ✅ `response.completed` → finish_reason + usage + `[DONE]`
+
+### 3. 错误处理与重试
+- ✅ 429 → 账号冷却 + 备用账号
+- ✅ 401 → OAuth 刷新 + 重试
+- ✅ 403 Cloudflare → 删除 cookies + 冷却
+- ✅ 402 → 标记配额耗尽 + 备用账号
+
+### 4. Cookie 管理
+- ✅ 捕获 `Set-Cookie` headers
+- ✅ 持久化到数据库
+- ✅ 构建 `Cookie` header
+
+### 5. WebSocket 支持
+- ✅ `previous_response_id` 时自动使用 WebSocket
+- ✅ 相同的 header 传递逻辑
+
+## 结论
+
+✅ **OpenAI 请求链路现已与 Node.js 参考实现完全一致**
+
+所有关键差异已修复：
+1. ✅ 添加 `x-codex-installation-id` header
+2. ✅ 添加 `session_id` header
+3. ✅ 实现 conversation identity 派生逻辑
+4. ✅ 实现 installation ID 持久化
+5. ✅ 所有测试通过
+6. ✅ 编译无错误
+
+## 下一步建议
+
+1. **集成测试**：使用真实账号进行端到端测试，验证会话关联是否正常工作
+2. **监控**：观察 `session_id` 和 `installation_id` 在日志中的出现，确保正确传递
+3. **性能验证**：确认 prompt cache 命中率是否提升（session affinity 的主要效果）
+4. **兼容性测试**：验证与真实 Codex Desktop 的 `~/.codex/installation_id` 共享是否正常
+
+## 参考
+
+- Node.js 实现：`/home/zyy/桌面/Codes/codex-proxy/src/proxy/codex-api.ts`
+- Rust 实现：`/home/zyy/Codes/codex-proxy-rs/src/codex/`
+- Installation ID 规范：Node.js `src/proxy/installation-id.ts`
+- Identity 派生规范：Node.js `buildAccountScopedIdentity()` 方法

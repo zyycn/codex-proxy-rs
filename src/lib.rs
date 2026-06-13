@@ -1,11 +1,7 @@
-pub mod app;
-pub mod auth;
+pub mod admin;
 pub mod codex;
+pub mod runtime;
 
 pub mod config;
+pub mod platform;
 pub mod utils;
-
-pub mod http;
-pub mod logs;
-pub mod service;
-pub mod storage;

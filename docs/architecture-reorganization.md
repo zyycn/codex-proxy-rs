@@ -82,8 +82,8 @@ As of this cleanup pass:
   import/export, OAuth/auth, and cookies/quota/refresh/health scenario files.
 - `tests/v1_upstream_route_test.rs` has been split into Responses HTTP/SSE,
   Responses WebSocket, upstream fallback/refresh, and upstream error scenario files.
-- `src/app.rs` and `src/state.rs` have been moved into `src/app/router.rs` and
-  `src/app/state.rs`; `src/app/bootstrap.rs` owns production `AppState` construction.
+- `src/app.rs` and `src/state.rs` have been moved into `src/runtime/router.rs` and
+  `src/runtime/state.rs`; `src/runtime/bootstrap.rs` owns production `AppState` construction.
 - `src/config.rs` has been split into `src/config/types.rs` and
   `src/config/loader.rs`.
 - `src/crypto.rs` and `src/pagination.rs` have been moved into `src/utils/`, and the
@@ -430,7 +430,7 @@ until module responsibilities stabilize.
 - `codex/upstream` owns v1 upstream dispatch, fallback, refresh retry, stream
   collection, usage recording, and lifecycle logging helpers used by Chat and
   Responses services.
-- Top-level `logs`, `storage`, `config`, `utils`, `app`, `http`, and system `auth`
+- Top-level `logs`, `storage`, `config`, `utils`, `runtime`, `http`, and system `auth`
   remain backend-system modules.
 
 ### Completed Structural Increment
@@ -439,8 +439,8 @@ The current low-risk structural increment moved the remaining top-level helper a
 application wiring files into the target directories without changing behavior:
 
 ```text
-src/app.rs        -> src/app/router.rs
-src/state.rs      -> src/app/state.rs
+src/app.rs        -> src/runtime/router.rs
+src/state.rs      -> src/runtime/state.rs
 src/config.rs     -> src/config/{types,loader}.rs
 src/crypto.rs     -> src/utils/crypto.rs
 src/pagination.rs -> src/utils/pagination.rs
@@ -547,7 +547,7 @@ pub fn router() -> Router<AppState> {
 }
 ```
 
-`src/app/router.rs` should then merge admin routes instead of importing every admin handler:
+`src/runtime/router.rs` should then merge admin routes instead of importing every admin handler:
 
 ```rust
 Router::new()

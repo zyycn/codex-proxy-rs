@@ -37,6 +37,8 @@ tls:
   force_http11: false
 admin:
   session_ttl_minutes: 1440
+  default_username: admin
+  default_password: admin
 logging:
   directory: logs
   max_file_bytes: 10485760
