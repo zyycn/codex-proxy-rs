@@ -10,7 +10,7 @@
 
 **Checkpoint 2026-06-12:** Commit `b9c30ba` completed Tasks 1-3 for the in-scope OpenAI GPT/Codex path: Chat Completions route/translation/output, Responses request field parity, default Responses streaming, Codex context headers, and local-only WebSocket flag serialization cleanup. Commit `350ffbe` completed Task 4: `previous_response_id` requests use WebSocket `response.create` and return SSE-compatible output. Commit `3ecd5b6` partially completed Task 5 for non-streaming `/v1/responses`: 429/402/403 account-state classification and fallback retry across imported accounts. Commit `3960a35` extends the same fallback path to HTTP SSE Responses setup and Chat Completions. Commit `6d18d2c` completes Task 5 policy for WebSocket-backed Responses: handshake upstream errors are classified before request body send, non-history WebSocket requests may fallback accounts, successful handshakes capture rate-limit headers, and `previous_response_id` requests remain account-affine for streaming and non-streaming clients. Commit `1738f24` adds Task 6 cache groundwork: persisted backend model snapshots and cached `/v1/models*` reads. Commit `0b6cc7e` adds Task 7 import compatibility for Sub2API OpenAI OAuth exports and marks the detected source format while ignoring proxy-only fields. Commit `f75db60` adds `/admin/refresh-models` backed by imported accounts. Commit `4b19846` syncs refreshed model-plan allowlists into the runtime account pool. Commit `db6cb98` adds admin account label/status/delete mutations with runtime pool synchronization. Commit `16eb4ed` adds batch delete/status mutations. Commit `8af350d` adds local client API key status/delete mutations. Commit `203270f` adds encrypted account Cookie get/set/delete. Commit `960bbb2` adds local client API key label and batch-delete mutations. Commit `72438c6` adds native and Sub2API account export. Commit `16938e6` adds manual account creation for Codex OAuth tokens. Commit `869b6f8` narrows `POST /admin/accounts` to TS-like `token`/`refreshToken` import semantics for OpenAI GPT/Codex accounts. Commit `e1f35e0` adds deterministic Codex CLI `auth.json` import through the same validated JWT-claim path. Commit `93cfee3` adds admin health-check, per-account refresh, reset-usage, and quota routes for imported Codex accounts. Commit `bfe561d` maps HTTP SSE terminal failures to OpenAI-compatible upstream errors for non-streaming clients while preserving streaming passthrough. Commit `cf5ff0b` adds Rust-local client API key metadata export/import with target-local key rotation. Commit `a32a53c` adds admin-session-gated `/admin/auth/status` and `/admin/auth/logout`, returning sanitized account/pool state and clearing SQLite accounts plus the runtime pool without token exposure. Commit `1d6c301` adds admin-session-gated `/admin/auth/device-login` and `/admin/auth/device-poll/{device_code}` backed by the OpenAI OAuth device-code flow and shared validated account import path. Commit `a3b4d2b` adds `/admin/auth/login-start`, `/admin/auth/code-relay`, `/admin/auth/callback`, and the registered `/auth/callback` redirect path, with in-memory PKCE sessions, OpenAI authorization-code exchange, and shared validated account import.
 
-**Checkpoint 2026-06-13:** Commit `b879dd6` adds admin-session-gated `/admin/accounts/quota-warnings`, computed from cached SQLite quota snapshots and configured warning thresholds without calling the upstream Codex backend.
+**Checkpoint 2026-06-13:** Commit `b879dd6` adds admin-session-gated `/admin/accounts/quota-warnings`, computed from cached SQLite quota snapshots and configured warning thresholds without calling the upstream Codex backend. Commit `0daa96b` adds `0005_account_cooldowns.sql` and persists quota/Cloudflare cooldown state for runtime pool restore. Commit `efbbe8a` clears the challenged account's persisted Cookies when Cloudflare blocks an upstream request.
 
 **Scoped HTTP SSE error update:** Non-WebSocket `/v1/responses` HTTP SSE collection now detects upstream `event: error` and `event: response.failed` terminal frames. Non-streaming clients receive a `502` OpenAI-compatible `upstream_error` body with the upstream message, while streaming clients keep passthrough SSE frames and record the lifecycle event as an upstream SSE failure.
 
@@ -36,7 +36,7 @@ This audit is the correction point against the TypeScript reference at `/home/zy
 
 Immediate priority after this audit:
 
-1. Finish remaining in-scope account operation gaps such as durable quota cooldown persistence and account persistence-health reporting.
+1. Finish remaining in-scope account operation gaps such as account persistence-health reporting and durable quota-window recovery.
 2. Run final verification for the completed Task 5 fallback paths, including WebSocket history affinity.
 3. Keep local client API key utilities documented as Rust-local auth, not TypeScript provider-key parity.
 
@@ -46,7 +46,7 @@ Immediate priority after this audit:
 
 **Files:**
 - Modify: `src/codex/protocol/openai_to_codex.rs`
-- Modify: `src/codex/types.rs`
+- Modify: `src/codex/transport/types.rs`
 - Test: `tests/routes_chat_test.rs`
 
 - [x] Write failing tests for system/developer instructions, tool calls, function outputs, image parts, response_format, reasoning effort, and service tier.
@@ -57,8 +57,9 @@ Immediate priority after this audit:
 ### Task 2: Chat Completions Route And Output
 
 **Files:**
-- Modify: `src/app.rs`
-- Modify: `src/http/v1.rs`
+- Modify: `src/app/router.rs`
+- Modify: `src/http/v1/chat.rs`
+- Modify: `src/service/chat.rs`
 - Modify: `src/codex/protocol/codex_to_openai.rs`
 - Test: `tests/chat_completions_route_test.rs`
 
@@ -70,10 +71,11 @@ Immediate priority after this audit:
 ### Task 3: Responses Field Parity
 
 **Files:**
-- Modify: `src/codex/types.rs`
-- Modify: `src/http/v1.rs`
-- Modify: `src/codex/client.rs`
-- Test: `tests/responses_field_parity_test.rs`
+- Modify: `src/codex/transport/types.rs`
+- Modify: `src/http/v1/responses.rs`
+- Modify: `src/service/responses.rs`
+- Modify: `src/codex/transport/client.rs`
+- Test: `tests/v1_responses_http_sse_test.rs`
 
 - [x] Write failing tests for `service_tier`, `tool_choice`, `parallel_tool_calls`, `text.format`, `prompt_cache_key`, `include`, `client_metadata`, and Codex context headers.
 - [x] Run: `cargo test --test v1_upstream_route_test`
@@ -84,11 +86,12 @@ Immediate priority after this audit:
 
 **Files:**
 - Modify: `Cargo.toml`
-- Modify: `src/codex/websocket.rs`
-- Modify: `src/codex/client.rs`
-- Modify: `src/http/v1.rs`
+- Modify: `src/codex/transport/websocket.rs`
+- Modify: `src/codex/transport/client.rs`
+- Modify: `src/http/v1/responses.rs`
+- Modify: `src/service/responses.rs`
 - Test: `tests/codex_websocket_test.rs`
-- Test: `tests/v1_upstream_route_test.rs`
+- Test: `tests/v1_responses_websocket_test.rs`
 
 - [x] Write failing tests proving `previous_response_id` uses WebSocket and HTTP fallback is not used when server-side history is required.
 - [x] Run: `cargo test --test codex_websocket_test`
@@ -99,10 +102,15 @@ Immediate priority after this audit:
 ### Task 5: Upstream Retry, Fallback, And Rate Limits
 
 **Files:**
-- Modify: `src/http/v1.rs`
+- Modify: `src/http/v1/chat.rs`
+- Modify: `src/http/v1/responses.rs`
+- Modify: `src/service/chat.rs`
+- Modify: `src/service/responses.rs`
 - Modify: `src/codex/accounts/pool.rs`
 - Modify: `src/codex/accounts/repository.rs`
-- Test: `tests/v1_upstream_route_test.rs`
+- Modify: `src/codex/upstream/*`
+- Test: `tests/v1_upstream_fallback_test.rs`
+- Test: `tests/v1_upstream_errors_test.rs`
 - Test: `tests/account_pool_scheduling_test.rs`
 
 - [x] Write failing tests for non-streaming Responses 429 retry-after handling, fallback account retry, 402 quota exhaustion, 403 banned classification, and Cloudflare 403 cooldown.
@@ -118,7 +126,7 @@ Immediate priority after this audit:
 - [x] Run targeted tests: `cargo test --test v1_upstream_route_test v1_responses_non_stream_should_return_upstream_error`; `cargo test --test v1_upstream_route_test v1_responses_stream_should_passthrough`
 - [x] Define and implement WebSocket-backed Responses fallback policy without breaking `previous_response_id` account affinity.
 - [x] Add tests for exhausted no-account responses, refresh retry preservation under fallback, and successful rate-limit header capture.
-- [x] Document durable quota cooldown limitation: current SQLite account schema has no dedicated quota cooldown column, so 429 cooldown remains in-memory until a safe migration is added.
+- [x] Persist durable quota and Cloudflare cooldown state with `0005_account_cooldowns.sql`, restore that state into the runtime account pool at startup, and clear challenged account Cookies on Cloudflare blocks.
 - [x] Run: `cargo test --test codex_websocket_test`
 - [x] Run targeted WebSocket route tests: `cargo test --test v1_upstream_route_test v1_responses_previous_response_id_websocket_429_should_not_retry_different_account`; `cargo test --test v1_upstream_route_test v1_responses_non_stream_previous_response_id_websocket_429_should_not_retry_different_account`; `cargo test --test v1_upstream_route_test v1_responses_websocket_without_history_should_fallback_and_refresh_fallback_account`; `cargo test --test v1_upstream_route_test v1_responses_websocket_without_history_should_return_429_when_fallback_accounts_exhausted`
 
@@ -127,7 +135,9 @@ Immediate priority after this audit:
 **Files:**
 - Modify: `src/codex/models/catalog.rs`
 - Create: `src/codex/models/repository.rs`
-- Modify: `src/http/v1.rs`
+- Modify: `src/http/v1/models.rs`
+- Modify: `src/http/v1/router.rs`
+- Modify: `src/http/admin/models.rs`
 - Test: `tests/model_catalog_test.rs`
 
 - [x] Write failing tests for backend model snapshots, suffix parsing including `none` and `minimal`, plan allowlist generation, cached `/v1/models/catalog`, and model snapshot storage.
@@ -141,10 +151,16 @@ Immediate priority after this audit:
 ### Task 7: Scoped Admin Account Operations
 
 **Files:**
-- Modify: `src/http/admin.rs`
+- Modify: `src/http/admin/accounts.rs`
+- Modify: `src/http/admin/api_keys.rs`
+- Modify: `src/http/admin/models.rs`
 - Modify: `src/codex/accounts/repository.rs`
 - Modify: `src/codex/cookies/repository.rs`
-- Test: `tests/admin_accounts_route_test.rs`
+- Test: `tests/admin_accounts_list_test.rs`
+- Test: `tests/admin_accounts_mutation_test.rs`
+- Test: `tests/admin_accounts_import_export_test.rs`
+- Test: `tests/admin_accounts_oauth_test.rs`
+- Test: `tests/admin_accounts_cookies_quota_test.rs`
 - Test: `tests/admin_api_keys_route_test.rs`
 
 - [x] Write failing tests for Sub2API OpenAI OAuth import payloads and native exports that carry proxy/runtime metadata.
