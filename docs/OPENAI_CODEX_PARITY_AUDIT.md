@@ -57,9 +57,11 @@ Rust 状态：
 - key 以账号和 conversation 维度复用，一条 WS 严格单 in-flight，busy/cap/dead 时旁路 one-shot。
 
 Rust 状态：
-- 到位：`src/codex/gateway/transport/websocket.rs` 增加进程内 `CodexWebSocketPool`，默认 55 分钟过期。
-- 到位：池 key 由 base URL、本地账号和派生后的 conversation/prompt cache key 组成；活跃连接从池中移出，terminal frame 后再放回，确保单连接严格单 in-flight。
-- 到位：复用连接如果在首帧前发现已被对端关闭，会丢弃后用 fresh WS 重试一次；账号状态被标记限流/封禁/额度耗尽时会驱逐该账号的空闲 WS。
+- 到位：`src/codex/gateway/transport/websocket.rs` 增加进程内 `CodexWebSocketPool`，默认 55 分钟过期，默认每 25 秒维护空闲连接。
+- 到位：池 key 由 base URL、本地账号和派生后的 conversation/prompt cache key 组成；同 key busy、账号连接数达到上限或 pool disabled/shutdown 时旁路 one-shot，避免排队和死锁。
+- 到位：复用连接如果在首帧前发现已被对端关闭，会丢弃后用 fresh one-shot WS 重试一次；mid-stream 提前关闭会向客户端 stream 报错，不做重试。
+- 到位：空闲连接支持 keepalive ping/pong 和 liveness timeout，周期 sweep 会关闭过期、无响应或被 shutdown/evict 的连接；`websocket_connection_limit_reached` 会按连接级 fatal 错误剔除。
+- 到位：账号状态被标记限流/封禁/额度耗尽时会驱逐该账号的空闲 WS，忙碌中的连接完成后不会再放回池中。
 
 ## 5. 非目标：IP 代理/VPN
 
