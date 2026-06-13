@@ -201,3 +201,62 @@ async fn debug_upstream_should_reject_forwarded_remote_requests_without_probe() 
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn admin_diagnostics_should_require_admin_session_cookie() {
+    let imported = build_imported_app("https://chatgpt.test/backend-api".to_string()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/diagnostics")
+                .header("x-request-id", "req_admin_diagnostics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40101);
+    assert_eq!(body["requestId"], "req_admin_diagnostics");
+}
+
+#[tokio::test]
+async fn admin_diagnostics_should_return_admin_enveloped_runtime_summary_without_secrets() {
+    let imported = build_imported_app("https://chatgpt.test/backend-api".to_string()).await;
+
+    let response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/diagnostics")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_admin_diagnostics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_admin_diagnostics");
+    assert_eq!(body["data"]["status"], "ok");
+    assert_eq!(
+        body["data"]["transport"]["backendBaseUrl"],
+        "https://chatgpt.test/backend-api"
+    );
+    assert_eq!(body["data"]["accounts"]["pool"]["active"], 1);
+    assert_eq!(body["data"]["accounts"]["capacity"]["totalSlots"], 3);
+
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("access-secret"));
+    assert!(!serialized.contains("refresh-secret"));
+}

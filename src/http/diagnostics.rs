@@ -17,7 +17,7 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DiagnosticsData {
+pub(crate) struct DiagnosticsData {
     status: &'static str,
     runtime: RuntimeDiagnostics,
     paths: PathDiagnostics,
@@ -120,35 +120,35 @@ pub async fn diagnostics(State(state): State<AppState>, headers: HeaderMap) -> i
             .into_response();
     }
 
+    (StatusCode::OK, Json(diagnostics_data(&state).await)).into_response()
+}
+
+pub(crate) async fn diagnostics_data(state: &AppState) -> DiagnosticsData {
     let config = state.services.settings.current().await;
     let auth_status = state.services.admin_auth.status().await.ok();
     let capacity = state.services.accounts.runtime_capacity_summary().await;
     let fingerprint = Fingerprint::default_codex_desktop();
 
-    (
-        StatusCode::OK,
-        Json(DiagnosticsData {
-            status: "ok",
-            runtime: RuntimeDiagnostics {
-                package_name: env!("CARGO_PKG_NAME"),
-                package_version: env!("CARGO_PKG_VERSION"),
-            },
-            paths: paths_diagnostics(&state, &config),
-            transport: transport_diagnostics(&config, fingerprint),
-            accounts: AccountDiagnostics {
-                repository_available: state.services.accounts.has_repository(),
-                authenticated_state: auth_status
-                    .as_ref()
-                    .is_some_and(|status| status.authenticated),
-                pool: auth_status
-                    .map(|status| AccountPoolDiagnostics::from(status.pool))
-                    .unwrap_or_default(),
-                capacity: CapacityDiagnostics::from(capacity),
-            },
-            settings: SettingsDiagnostics::from(&config),
-        }),
-    )
-        .into_response()
+    DiagnosticsData {
+        status: "ok",
+        runtime: RuntimeDiagnostics {
+            package_name: env!("CARGO_PKG_NAME"),
+            package_version: env!("CARGO_PKG_VERSION"),
+        },
+        paths: paths_diagnostics(state, &config),
+        transport: transport_diagnostics(&config, fingerprint),
+        accounts: AccountDiagnostics {
+            repository_available: state.services.accounts.has_repository(),
+            authenticated_state: auth_status
+                .as_ref()
+                .is_some_and(|status| status.authenticated),
+            pool: auth_status
+                .map(|status| AccountPoolDiagnostics::from(status.pool))
+                .unwrap_or_default(),
+            capacity: CapacityDiagnostics::from(capacity),
+        },
+        settings: SettingsDiagnostics::from(&config),
+    }
 }
 
 pub async fn debug_fingerprint(headers: HeaderMap) -> impl IntoResponse {

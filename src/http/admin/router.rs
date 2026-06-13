@@ -21,6 +21,7 @@ use super::{
         auth_callback, auth_code_relay, auth_device_login, auth_device_poll, auth_login_start,
         auth_logout, auth_status, login,
     },
+    diagnostics::diagnostics,
     logs::{clear_logs, log_detail, logs, logs_state},
     models::refresh_models,
     settings::{settings, update_settings},
@@ -42,6 +43,7 @@ pub fn router() -> Router<AppState> {
             "/admin/auth/device-poll/{device_code}",
             get(auth_device_poll),
         )
+        .route("/admin/diagnostics", get(diagnostics))
         .route("/admin/logs", get(logs).delete(clear_logs))
         .route("/admin/logs/state", get(logs_state))
         .route("/admin/logs/{log_id}", get(log_detail))
