@@ -310,6 +310,17 @@ Validation:
 
 Returns cursor-paginated event logs for admin troubleshooting. The list uses the standard admin page envelope and lower camelCase fields.
 
+Supported query filters:
+
+- `kind`
+- `level`
+- `requestId`
+- `accountId`
+- `route`
+- `model`
+- `statusCode`
+- `search` across message and metadata text
+
 Example item:
 
 ```json

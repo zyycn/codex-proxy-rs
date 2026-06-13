@@ -121,6 +121,56 @@ async fn admin_logs_are_cursor_paginated_and_include_request_id() {
 }
 
 #[tokio::test]
+async fn admin_logs_should_filter_by_kind_level_and_search_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-filter.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let repo = EventLogRepository::new(pool.clone());
+    let mut matching = EventLog::new("request", EventLevel::Error, "upstream timeout");
+    matching.id = "log_matching".to_string();
+    matching.route = Some("/v1/responses".to_string());
+    repo.insert(matching).await.unwrap();
+    repo.insert(EventLog::new(
+        "request",
+        EventLevel::Info,
+        "upstream timeout",
+    ))
+    .await
+    .unwrap();
+    repo.insert(EventLog::new(
+        "account",
+        EventLevel::Error,
+        "upstream timeout",
+    ))
+    .await
+    .unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs?kind=request&level=error&search=timeout")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_filter")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["requestId"], "req_logs_filter");
+    let items = body["data"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], "log_matching");
+    assert_eq!(items[0]["route"], "/v1/responses");
+}
+
+#[tokio::test]
 async fn admin_logs_reject_missing_admin_session_cookie() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-logs.sqlite");

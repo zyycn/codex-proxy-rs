@@ -4,7 +4,10 @@ use tokio::sync::RwLock;
 
 use crate::{
     config::LoggingConfig,
-    logs::{event::EventLog, repository::EventLogRepository},
+    logs::{
+        event::EventLog,
+        repository::{EventLogFilters, EventLogRepository},
+    },
     utils::pagination::Page,
 };
 
@@ -44,6 +47,18 @@ pub struct LogStateUpdate {
     pub capture_body: Option<bool>,
 }
 
+#[derive(Debug, Default)]
+pub struct LogListFilter {
+    pub kind: Option<String>,
+    pub level: Option<String>,
+    pub request_id: Option<String>,
+    pub account_id: Option<String>,
+    pub route: Option<String>,
+    pub model: Option<String>,
+    pub status_code: Option<i64>,
+    pub search: Option<String>,
+}
+
 impl LogService {
     pub fn new(config: LoggingConfig, repository: Option<EventLogRepository>) -> Self {
         Self {
@@ -56,9 +71,10 @@ impl LogService {
         &self,
         cursor: Option<String>,
         limit: u32,
+        filter: LogListFilter,
     ) -> Result<Page<EventLog>, LogServiceError> {
         self.repository()?
-            .list(cursor, limit)
+            .list_filtered(EventLogFilters::from(filter), cursor, limit)
             .await
             .map_err(|_| LogServiceError::List)
     }
@@ -118,5 +134,20 @@ impl LogService {
         self.repository
             .as_ref()
             .ok_or(LogServiceError::RepositoryUnavailable)
+    }
+}
+
+impl From<LogListFilter> for EventLogFilters {
+    fn from(filter: LogListFilter) -> Self {
+        Self {
+            kind: filter.kind,
+            level: filter.level,
+            request_id: filter.request_id,
+            account_id: filter.account_id,
+            route: filter.route,
+            model: filter.model,
+            status_code: filter.status_code,
+            search: filter.search,
+        }
     }
 }
