@@ -1,7 +1,9 @@
+use chrono::Utc;
 use secrecy::ExposeSecret;
 
 use crate::codex::accounts::{
     model::Account,
+    pool::AccountCapacitySummary,
     repository::{AccountRepositoryResult, StoredAccount},
 };
 
@@ -27,6 +29,10 @@ impl AccountService {
 
     pub async fn acquire_runtime_account(&self, model: &str) -> Option<Account> {
         self.account_pool.lock().await.acquire(model)
+    }
+
+    pub async fn runtime_capacity_summary(&self) -> AccountCapacitySummary {
+        self.account_pool.lock().await.capacity_summary(Utc::now())
     }
 }
 

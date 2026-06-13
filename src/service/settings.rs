@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -69,6 +73,10 @@ impl SettingsService {
 
     pub async fn current(&self) -> AppConfig {
         self.current.read().await.clone()
+    }
+
+    pub fn local_config_path(&self) -> &Path {
+        self.local_config_path.as_ref()
     }
 
     pub async fn update(&self, update: SettingsUpdate) -> Result<AppConfig, SettingsServiceError> {
