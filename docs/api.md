@@ -271,6 +271,47 @@ Example item:
 }
 ```
 
+### `GET /admin/logs/state`
+
+Returns the current retained logging configuration plus the number of stored SQLite event logs.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "enabled": false,
+    "capacity": 2000,
+    "captureBody": false,
+    "storedCount": 42
+  },
+  "requestId": "req_01"
+}
+```
+
+### `GET /admin/logs/{id}`
+
+Returns a single stored event log by id using the same event shape as list items. Missing ids return HTTP `404` with body code `40401`.
+
+### `DELETE /admin/logs`
+
+Clears stored SQLite event logs.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "cleared": 42
+  },
+  "requestId": "req_01"
+}
+```
+
 ### `GET /admin/usage-stats`
 
 Returns cursor-paginated account usage counters recorded after `/v1/*` calls. The endpoint never returns account access tokens, refresh tokens, Cookie values, or client API keys.

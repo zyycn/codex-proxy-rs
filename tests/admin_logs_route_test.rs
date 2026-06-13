@@ -145,3 +145,130 @@ async fn admin_logs_reject_missing_admin_session_cookie() {
     assert_eq!(body["code"], 40101);
     assert_eq!(body["requestId"], "req_admin");
 }
+
+#[tokio::test]
+async fn admin_logs_state_should_return_runtime_logging_state_and_stored_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-state.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let repo = EventLogRepository::new(pool.clone());
+    repo.insert(EventLog::new("request", EventLevel::Info, "first"))
+        .await
+        .unwrap();
+    repo.insert(EventLog::new("request", EventLevel::Warn, "second"))
+        .await
+        .unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs/state")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_logs_state");
+    assert_eq!(body["data"]["enabled"], false);
+    assert_eq!(body["data"]["captureBody"], false);
+    assert_eq!(body["data"]["capacity"], 2000);
+    assert_eq!(body["data"]["storedCount"], 2);
+}
+
+#[tokio::test]
+async fn admin_logs_detail_should_return_one_event_by_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-detail.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let repo = EventLogRepository::new(pool.clone());
+    let mut event = EventLog::new("request", EventLevel::Error, "detail");
+    event.id = "log_detail".to_string();
+    event.request_id = Some("req_upstream".to_string());
+    repo.insert(event).await.unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs/log_detail")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_detail")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_logs_detail");
+    assert_eq!(body["data"]["id"], "log_detail");
+    assert_eq!(body["data"]["requestId"], "req_upstream");
+    assert_eq!(body["data"]["level"], "error");
+    assert_eq!(body["data"]["message"], "detail");
+}
+
+#[tokio::test]
+async fn admin_logs_clear_should_delete_stored_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-logs-clear.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let repo = EventLogRepository::new(pool.clone());
+    repo.insert(EventLog::new("request", EventLevel::Info, "first"))
+        .await
+        .unwrap();
+    repo.insert(EventLog::new("request", EventLevel::Info, "second"))
+        .await
+        .unwrap();
+    let app = build_router(AppState::with_pool(test_config(url), pool));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/admin/logs")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_clear")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 200);
+    assert_eq!(body["requestId"], "req_logs_clear");
+    assert_eq!(body["data"]["cleared"], 2);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/logs?limit=50")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+}

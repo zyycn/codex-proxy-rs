@@ -186,7 +186,7 @@ impl AppState {
         let account_pool = account_pool_from_config(&config);
         let oauth_sessions = Arc::new(Mutex::new(PkceSessionStore::default()));
         let api_keys = api_key_service(pool_ref, api_key_hasher.as_ref());
-        let logs = log_service(pool_ref);
+        let logs = log_service(&config, pool_ref);
         let usage = usage_service(pool_ref);
         let settings = SettingsService::new(
             config.clone(),
@@ -371,8 +371,11 @@ fn api_key_service(pool: Option<&SqlitePool>, hasher: Option<&ApiKeyHasher>) -> 
     )
 }
 
-fn log_service(pool: Option<&SqlitePool>) -> LogService {
-    LogService::new(pool.cloned().map(EventLogRepository::new))
+fn log_service(config: &AppConfig, pool: Option<&SqlitePool>) -> LogService {
+    LogService::new(
+        config.logging.clone(),
+        pool.cloned().map(EventLogRepository::new),
+    )
 }
 
 fn usage_service(pool: Option<&SqlitePool>) -> UsageService {
