@@ -39,6 +39,72 @@ data: {"error":{"message":"Upstream failed","type":"server_error","param":null,"
 
 Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, `-xhigh`, `-fast`, and `-flex` suffixes.
 
+### `GET /debug/diagnostics`
+
+Returns a local-only runtime diagnostics summary. The route is intended for production-local troubleshooting and rejects forwarded remote requests using `x-forwarded-for` or `x-real-ip`.
+
+Success response:
+
+```json
+{
+  "status": "ok",
+  "runtime": {
+    "packageName": "codex-proxy-rs",
+    "packageVersion": "0.1.0"
+  },
+  "paths": {
+    "config": "config.yaml",
+    "localConfig": "local.yaml",
+    "databaseUrl": "sqlite://data/codex-proxy.sqlite",
+    "logsDirectory": "logs",
+    "masterKeyFile": "data/master.key",
+    "apiKeyPepperFile": "data/api-key-pepper.key"
+  },
+  "transport": {
+    "backendBaseUrl": "https://chatgpt.com/backend-api",
+    "tls": {
+      "forceHttp11": false
+    },
+    "fingerprint": {
+      "source": "staticDefault",
+      "originator": "Codex Desktop",
+      "appVersion": "26.519.81530",
+      "buildNumber": "3178",
+      "platform": "darwin",
+      "arch": "arm64",
+      "chromiumVersion": "146",
+      "userAgent": "Codex/26.519.81530 (darwin; arm64) Chromium/146"
+    }
+  },
+  "accounts": {
+    "repositoryAvailable": true,
+    "authenticatedState": true,
+    "pool": {
+      "total": 1,
+      "active": 1,
+      "expired": 0,
+      "quotaExhausted": 0,
+      "refreshing": 0,
+      "disabled": 0,
+      "banned": 0
+    },
+    "capacity": {
+      "maxConcurrentPerAccount": 3,
+      "totalSlots": 3,
+      "usedSlots": 0,
+      "availableSlots": 3
+    }
+  },
+  "settings": {
+    "defaultModel": "gpt-5.5",
+    "refreshEnabled": true,
+    "rotationStrategy": "least_used",
+    "quotaSkipExhausted": true,
+    "logsEnabled": false
+  }
+}
+```
+
 ### `POST /v1/responses`
 
 Uses imported Codex accounts to call `POST /codex/responses` on the configured Codex backend. The upstream request is sent with Codex Desktop headers, account bearer token, optional account id, request id, and encrypted account-scoped Cookie replay.
