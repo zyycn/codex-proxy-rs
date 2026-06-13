@@ -39,6 +39,25 @@ data: {"error":{"message":"Upstream failed","type":"server_error","param":null,"
 
 Model name parsing supports configured aliases plus `-low`, `-medium`, `-high`, `-xhigh`, `-fast`, and `-flex` suffixes.
 
+### `GET /debug/fingerprint`
+
+Returns the local runtime Codex Desktop fingerprint summary. The route is local-only and rejects forwarded remote requests using `x-forwarded-for` or `x-real-ip`.
+
+Success response:
+
+```json
+{
+  "source": "staticDefault",
+  "originator": "Codex Desktop",
+  "appVersion": "26.519.81530",
+  "buildNumber": "3178",
+  "platform": "darwin",
+  "arch": "arm64",
+  "chromiumVersion": "146",
+  "userAgent": "Codex/26.519.81530 (darwin; arm64) Chromium/146"
+}
+```
+
 ### `GET /debug/diagnostics`
 
 Returns a local-only runtime diagnostics summary. The route is intended for production-local troubleshooting and rejects forwarded remote requests using `x-forwarded-for` or `x-real-ip`.
