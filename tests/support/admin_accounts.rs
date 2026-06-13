@@ -273,6 +273,7 @@ pub async fn import_test_account(app: &Router, session_id: &str, account_id: &st
             "planType": "plus",
             "token": format!("access-{account_id}"),
             "refreshToken": format!("refresh-{account_id}"),
+            "accessTokenExpiresAt": "2999-01-01T00:00:00Z",
             "status": "active"
         }]
     });

@@ -176,6 +176,12 @@ impl AccountService {
         let label = empty_to_none(entry.label);
         let plan_type = empty_to_none(entry.plan_type);
         let refresh_token = empty_to_none(entry.refresh_token);
+        let access_token_expires_at = entry
+            .access_token_expires_at
+            .as_deref()
+            .map(parse_import_datetime)
+            .transpose()
+            .map_err(StoreImportAccountError::Invalid)?;
         let access_token = access_token.to_string();
         let now = Utc::now().to_rfc3339();
         let pool_account = Account {
@@ -187,12 +193,13 @@ impl AccountService {
             plan_type: plan_type.clone(),
             access_token: access_token.clone(),
             refresh_token: refresh_token.clone(),
-            access_token_expires_at: None,
+            access_token_expires_at,
             status,
             quota_limit_reached: false,
             quota_cooldown_until: None,
             cloudflare_cooldown_until: None,
             request_count: 0,
+            empty_response_count: 0,
             window_request_count: 0,
             window_started_at: None,
             window_reset_at: None,
@@ -209,7 +216,7 @@ impl AccountService {
             plan_type,
             access_token: SecretString::new(access_token.into()),
             refresh_token: refresh_token.map(|token| SecretString::new(token.into())),
-            access_token_expires_at: None,
+            access_token_expires_at,
             status,
         };
         repo.insert(account)
@@ -281,6 +288,12 @@ pub(super) fn empty_to_none(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_import_datetime(value: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| "Invalid accessTokenExpiresAt".to_string())
 }
 
 pub(super) fn normalized_account_id(id: Option<String>) -> String {

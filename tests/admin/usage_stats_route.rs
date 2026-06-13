@@ -110,6 +110,7 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
     assert_eq!(first_body["data"].as_array().unwrap().len(), 1);
     assert_eq!(first_body["data"][0]["accountId"], "acct_b");
     assert_eq!(first_body["data"][0]["requestCount"], 2);
+    assert_eq!(first_body["data"][0]["emptyResponseCount"], 1);
     assert_eq!(first_body["data"][0]["inputTokens"], 7);
     assert_eq!(first_body["page"]["limit"], 1);
     let cursor = first_body["page"]["nextCursor"].as_str().unwrap();
@@ -160,6 +161,7 @@ async fn admin_usage_stats_summary_should_return_usage_totals() {
     assert_eq!(body["code"], 200);
     assert_eq!(body["data"]["accountCount"], 2);
     assert_eq!(body["data"]["requestCount"], 5);
+    assert_eq!(body["data"]["emptyResponseCount"], 1);
     assert_eq!(body["data"]["inputTokens"], 19);
     assert_eq!(body["data"]["outputTokens"], 8);
     assert_eq!(body["data"]["cachedTokens"], 3);
@@ -212,10 +214,11 @@ async fn seed_usage(pool: &sqlx::SqlitePool) {
         .unwrap();
     }
     sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?)",
+        "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("acct_a")
     .bind(3_i64)
+    .bind(0_i64)
     .bind(12_i64)
     .bind(5_i64)
     .bind(1_i64)
@@ -224,10 +227,11 @@ async fn seed_usage(pool: &sqlx::SqlitePool) {
     .await
     .unwrap();
     sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?)",
+        "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("acct_b")
     .bind(2_i64)
+    .bind(1_i64)
     .bind(7_i64)
     .bind(3_i64)
     .bind(2_i64)

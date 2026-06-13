@@ -1,6 +1,6 @@
 use std::{fs, path::Path, str::FromStr, time::Duration};
 
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
 
 pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     ensure_sqlite_parent_dir(database_url)?;
@@ -20,6 +20,24 @@ pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Erro
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let schema = include_str!("schema.sql");
     sqlx::raw_sql(schema).execute(pool).await?;
+    ensure_account_usage_schema(pool).await?;
+    Ok(())
+}
+
+async fn ensure_account_usage_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query("pragma table_info(account_usage)")
+        .fetch_all(pool)
+        .await?;
+    let exists = rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "empty_response_count");
+    if !exists {
+        sqlx::query(
+            "alter table account_usage add column empty_response_count integer not null default 0",
+        )
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 

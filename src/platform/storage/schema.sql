@@ -82,6 +82,7 @@ create index if not exists idx_account_refresh_leases_expires on account_refresh
 create table if not exists account_usage (
   account_id text primary key references accounts(id) on delete cascade,
   request_count integer not null default 0,
+  empty_response_count integer not null default 0,
   input_tokens integer not null default 0,
   output_tokens integer not null default 0,
   cached_tokens integer not null default 0,

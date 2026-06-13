@@ -65,7 +65,7 @@ use self::{
     refresh::refresh_account_after_unauthorized,
     routing::request_domain,
     stream::{completed_response_metadata, ensure_stream_metadata, responses_sse_failure},
-    usage::{record_request_attempt, record_usage_with_deps},
+    usage::{record_empty_response_with_deps, record_request_attempt, record_usage_with_deps},
 };
 
 #[derive(Clone)]
@@ -237,6 +237,10 @@ impl CodexUpstreamService {
 
     pub(crate) async fn record_usage(&self, account_id: &str, usage: TokenUsage) -> Result<(), ()> {
         record_usage_with_deps(&self.deps, account_id, usage).await
+    }
+
+    pub(crate) async fn record_empty_response(&self, account_id: &str) -> Result<(), ()> {
+        record_empty_response_with_deps(&self.deps, account_id).await
     }
 
     pub(crate) async fn record_response_affinity(

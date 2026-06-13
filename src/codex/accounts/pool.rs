@@ -5,7 +5,10 @@ use std::{
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::codex::accounts::model::{Account, AccountStatus};
+use crate::codex::accounts::{
+    jwt::{jwt_expiry, JwtExpiry},
+    model::{Account, AccountStatus},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationStrategy {
@@ -155,6 +158,7 @@ impl AccountPool {
         };
         account.last_used_at = None;
         account.request_count = 0;
+        account.empty_response_count = 0;
         account.window_request_count = 0;
         account.window_started_at = None;
         account.window_reset_at = None;
@@ -202,6 +206,7 @@ impl AccountPool {
 
     pub fn acquire_with(&mut self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
         self.cleanup_stale_slots(request.now);
+        self.refresh_account_statuses(request.now);
         let candidates = self.candidates(&request);
         let selected = if let Some(preferred_account_id) = &request.preferred_account_id {
             candidates
@@ -240,6 +245,7 @@ impl AccountPool {
 
     pub fn capacity_summary(&mut self, now: DateTime<Utc>) -> AccountCapacitySummary {
         self.cleanup_stale_slots(now);
+        self.refresh_account_statuses(now);
         let active_accounts = self
             .accounts
             .values()
@@ -386,6 +392,29 @@ impl AccountPool {
         });
     }
 
+    fn refresh_account_statuses(&mut self, now: DateTime<Utc>) {
+        let account_ids = self.accounts.keys().cloned().collect::<Vec<_>>();
+        for account_id in account_ids {
+            self.refresh_account_status(&account_id, now);
+        }
+    }
+
+    fn refresh_account_status(&mut self, account_id: &str, now: DateTime<Utc>) {
+        let mut should_clear_slots = false;
+        if let Some(account) = self.accounts.get_mut(account_id) {
+            if account.status == AccountStatus::Active && access_token_expired(account, now) {
+                account.status = AccountStatus::Expired;
+                should_clear_slots = true;
+            } else {
+                refresh_quota_window(account, now);
+                refresh_cloudflare_cooldown(account, now);
+            }
+        }
+        if should_clear_slots {
+            self.slots.remove(account_id);
+        }
+    }
+
     fn is_model_allowed(&self, account: &Account, model: &str) -> bool {
         let Some(allowed_plans) = self.options.model_plan_allowlist.get(model) else {
             return true;
@@ -402,6 +431,70 @@ impl AccountPool {
                 .find(|account| account.plan_type.as_deref() == Some(tier.as_str()))
                 .and_then(|account| account.plan_type.clone())
         })
+    }
+}
+
+fn access_token_expired(account: &Account, now: DateTime<Utc>) -> bool {
+    if account
+        .access_token_expires_at
+        .is_some_and(|expires_at| now >= expires_at)
+    {
+        return true;
+    }
+
+    match jwt_expiry(&account.access_token, now) {
+        JwtExpiry::Expired => true,
+        JwtExpiry::Valid => false,
+        JwtExpiry::MissingOrInvalid => account.access_token_expires_at.is_none(),
+    }
+}
+
+fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
+    let window_expired = account
+        .window_reset_at
+        .is_some_and(|reset_at| now >= reset_at);
+    let cooldown_expired = account
+        .quota_cooldown_until
+        .is_some_and(|cooldown_until| now >= cooldown_until);
+
+    if window_expired {
+        account.window_request_count = 0;
+        account.window_started_at = Some(now);
+        account.window_reset_at =
+            next_window_reset_at(account.window_reset_at, account.limit_window_seconds, now);
+    }
+
+    if account.quota_limit_reached && (cooldown_expired || window_expired) {
+        account.quota_limit_reached = false;
+        account.quota_cooldown_until = None;
+    }
+}
+
+fn next_window_reset_at(
+    reset_at: Option<DateTime<Utc>>,
+    limit_window_seconds: Option<u64>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let reset_at = reset_at?;
+    let window_seconds = limit_window_seconds?;
+    if window_seconds == 0 {
+        return None;
+    }
+
+    let elapsed_seconds = now.signed_duration_since(reset_at).num_seconds().max(0) as u64;
+    let windows_to_advance = elapsed_seconds / window_seconds + 1;
+    let advance_seconds = window_seconds
+        .saturating_mul(windows_to_advance)
+        .min(i64::MAX as u64);
+    Some(reset_at + Duration::seconds(advance_seconds as i64))
+}
+
+fn refresh_cloudflare_cooldown(account: &mut Account, now: DateTime<Utc>) {
+    if account
+        .cloudflare_cooldown_until
+        .is_some_and(|cooldown_until| now >= cooldown_until)
+    {
+        account.cloudflare_cooldown_until = None;
     }
 }
 

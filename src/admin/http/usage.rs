@@ -33,6 +33,7 @@ pub struct AdminUsageStatsData {
     pub label: Option<String>,
     pub plan_type: Option<String>,
     pub request_count: i64,
+    pub empty_response_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -47,6 +48,7 @@ impl From<AccountUsageListRecord> for AdminUsageStatsData {
             label: usage.label,
             plan_type: usage.plan_type,
             request_count: usage.request_count,
+            empty_response_count: usage.empty_response_count,
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cached_tokens: usage.cached_tokens,
@@ -60,6 +62,7 @@ impl From<AccountUsageListRecord> for AdminUsageStatsData {
 pub struct AdminUsageStatsSummaryData {
     pub account_count: i64,
     pub request_count: i64,
+    pub empty_response_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -70,6 +73,7 @@ impl From<AccountUsageSummary> for AdminUsageStatsSummaryData {
         Self {
             account_count: summary.account_count,
             request_count: summary.request_count,
+            empty_response_count: summary.empty_response_count,
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_tokens: summary.cached_tokens,

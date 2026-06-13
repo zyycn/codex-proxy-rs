@@ -168,6 +168,26 @@ impl ResponsesService {
                 Ok(response) => {
                     // 检测空响应
                     if let Ok(CollectedResponse::Empty) = completed_response_json(&response.body) {
+                        if self
+                            .upstream
+                            .record_empty_response(&account.id)
+                            .await
+                            .is_err()
+                        {
+                            self.upstream
+                                .log_response(
+                                    &log_context,
+                                    StatusCode::OK,
+                                    EventLevel::Warn,
+                                    "v1 responses 记录空响应计数失败",
+                                    json!({
+                                        "stream": false,
+                                        "emptyResponse": true,
+                                        "emptyResponseStoreError": true,
+                                    }),
+                                )
+                                .await;
+                        }
                         empty_response_retries += 1;
                         if empty_response_retries <= MAX_EMPTY_RETRIES {
                             self.upstream
@@ -338,6 +358,26 @@ impl ResponsesService {
                 (StatusCode::OK, Json(body)).into_response()
             }
             Ok(CollectedResponse::Empty) => {
+                if self
+                    .upstream
+                    .record_empty_response(&account.id)
+                    .await
+                    .is_err()
+                {
+                    self.upstream
+                        .log_response(
+                            &log_context,
+                            StatusCode::OK,
+                            EventLevel::Warn,
+                            "v1 responses 记录空响应计数失败",
+                            json!({
+                                "stream": false,
+                                "emptyResponse": true,
+                                "emptyResponseStoreError": true,
+                            }),
+                        )
+                        .await;
+                }
                 self.upstream
                     .log_response(
                         &log_context,

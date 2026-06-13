@@ -167,6 +167,7 @@ pub async fn build_imported_app_with_accounts(
                 "accountId": account.account_id,
                 "token": account.token,
                 "refreshToken": account.refresh_token,
+                "accessTokenExpiresAt": "2999-01-01T00:00:00Z",
                 "status": "active"
             })
         })
@@ -267,6 +268,7 @@ where
                 "accountId": account.account_id,
                 "token": account.token,
                 "refreshToken": account.refresh_token,
+                "accessTokenExpiresAt": "2999-01-01T00:00:00Z",
                 "status": "active"
             })
         })
