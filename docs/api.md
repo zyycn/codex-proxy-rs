@@ -166,6 +166,33 @@ Admin JSON uses lower camelCase field names. Every admin response includes an `X
 
 Use real HTTP status codes and body-level frontend codes together. Do not return HTTP `200` for failed requests. The body `code` exists for frontend branching; the HTTP status remains the transport truth.
 
+### `GET /admin/diagnostics`
+
+Returns the same non-secret runtime diagnostics summary as `/debug/diagnostics`, wrapped in the admin envelope and gated by the admin session cookie.
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "status": "ok",
+    "runtime": {
+      "packageName": "codex-proxy-rs",
+      "packageVersion": "0.1.0"
+    },
+    "transport": {
+      "backendBaseUrl": "https://chatgpt.com/backend-api"
+    },
+    "accounts": {
+      "authenticatedState": true
+    }
+  },
+  "requestId": "req_01"
+}
+```
+
 ### `POST /admin/login`
 
 Authenticates only with the configured admin password stored in `admin_users`. Client API keys (`Bearer cpr_...`) are ignored by the admin login flow and cannot create admin sessions.

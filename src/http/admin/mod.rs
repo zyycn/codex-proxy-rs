@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod api_keys;
 pub mod auth;
+pub mod diagnostics;
 pub mod logs;
 pub mod models;
 pub mod response;
