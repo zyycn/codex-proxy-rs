@@ -238,6 +238,92 @@ fn account_pool_should_rotate_tied_least_used_accounts() {
     assert_ne!(first.id, second.id);
 }
 
+#[test]
+fn least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled() {
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        skip_quota_limited: false,
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut limited = Account::test("limited", AccountStatus::Active);
+    limited.quota_limit_reached = true;
+    let mut usable = Account::test("usable", AccountStatus::Active);
+    usable.request_count = 100;
+    pool.insert(limited);
+    pool.insert(usable);
+
+    let acquired = pool.acquire("gpt-5.5").unwrap();
+
+    assert_eq!(acquired.id, "usable");
+}
+
+#[test]
+fn least_used_should_prefer_earlier_rate_limit_window_reset() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut soon = Account::test("soon", AccountStatus::Active);
+    soon.window_reset_at = Some(now + Duration::seconds(30));
+    let mut later = Account::test("later", AccountStatus::Active);
+    later.window_reset_at = Some(now + Duration::seconds(300));
+    pool.insert(later);
+    pool.insert(soon);
+
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "soon");
+}
+
+#[test]
+fn least_used_should_prefer_lower_runtime_request_count() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut busy = Account::test("busy", AccountStatus::Active);
+    busy.request_count = 10;
+    let mut quiet = Account::test("quiet", AccountStatus::Active);
+    quiet.request_count = 2;
+    pool.insert(busy);
+    pool.insert(quiet);
+
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "quiet");
+}
+
+#[test]
+fn acquire_should_mark_runtime_usage_window() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    let mut account = Account::test("acct_a", AccountStatus::Active);
+    account.limit_window_seconds = Some(60);
+    pool.insert(account);
+
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.request_count, 1);
+    assert_eq!(acquired.account.window_request_count, 1);
+    assert_eq!(acquired.account.window_started_at, Some(now));
+    assert_eq!(
+        acquired.account.window_reset_at,
+        Some(now + Duration::seconds(60))
+    );
+    assert_eq!(
+        acquired.account.last_used_at.as_deref(),
+        Some(now.to_rfc3339().as_str())
+    );
+}
+
 fn fixed_time() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 6, 11, 8, 0, 0).unwrap()
 }

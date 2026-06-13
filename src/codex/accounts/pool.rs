@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, VecDeque},
+};
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -86,6 +89,7 @@ pub struct AccountPool {
     slots: BTreeMap<String, VecDeque<DateTime<Utc>>>,
     options: AccountPoolOptions,
     round_robin_cursor: usize,
+    least_used_cursor: usize,
 }
 
 impl Default for AccountPool {
@@ -101,6 +105,7 @@ impl AccountPool {
             slots: BTreeMap::new(),
             options,
             round_robin_cursor: 0,
+            least_used_cursor: 0,
         }
     }
 
@@ -118,6 +123,7 @@ impl AccountPool {
         self.accounts.clear();
         self.slots.clear();
         self.round_robin_cursor = 0;
+        self.least_used_cursor = 0;
     }
 
     pub fn set_model_plan_allowlist(&mut self, allowlist: BTreeMap<String, Vec<String>>) {
@@ -148,6 +154,10 @@ impl AccountPool {
             return false;
         };
         account.last_used_at = None;
+        account.request_count = 0;
+        account.window_request_count = 0;
+        account.window_started_at = None;
+        account.window_reset_at = None;
         true
     }
 
@@ -161,6 +171,13 @@ impl AccountPool {
         };
         account.quota_limit_reached = true;
         account.quota_cooldown_until = Some(cooldown_until);
+        account.window_reset_at = Some(cooldown_until);
+        if let Ok(seconds) = (cooldown_until - Utc::now())
+            .to_std()
+            .map(|duration| duration.as_secs())
+        {
+            account.limit_window_seconds = Some(seconds);
+        }
         self.slots.remove(account_id);
         true
     }
@@ -199,8 +216,12 @@ impl AccountPool {
             RotationStrategy::RoundRobin => self.select_round_robin(&candidates),
             RotationStrategy::Sticky => self.select_sticky(&candidates),
         })?;
-        let previous_slot_at = self.previous_slot_at(&selected.id);
-        self.push_slot(&selected.id, request.now);
+        let selected_id = selected.id.clone();
+        let previous_slot_at = self.previous_slot_at(&selected_id);
+        self.push_slot(&selected_id, request.now);
+        let selected = self
+            .mark_usage(&selected_id, request.now)
+            .unwrap_or(selected);
         Some(AcquiredAccount {
             account: selected,
             previous_slot_at,
@@ -258,16 +279,17 @@ impl AccountPool {
     }
 
     fn select_least_used(&mut self, candidates: &[Account]) -> Option<Account> {
-        let best_last_used = candidates
+        let best_key = candidates
             .iter()
-            .map(|account| account.last_used_at.as_deref())
-            .min()?;
-        let tied = candidates
+            .map(LeastUsedGroupKey::from_account)
+            .min_by(compare_least_used_group)?;
+        let mut tied = candidates
             .iter()
-            .filter(|account| account.last_used_at.as_deref() == best_last_used)
+            .filter(|account| LeastUsedGroupKey::from_account(account) == best_key)
             .collect::<Vec<_>>();
-        let index = self.round_robin_cursor % tied.len();
-        self.round_robin_cursor = (self.round_robin_cursor + 1) % tied.len();
+        tied.sort_by(compare_lru_then_id);
+        let index = self.least_used_cursor % tied.len();
+        self.least_used_cursor = self.least_used_cursor.wrapping_add(1);
         Some((*tied[index]).clone())
     }
 
@@ -340,6 +362,21 @@ impl AccountPool {
             .push_back(now);
     }
 
+    fn mark_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
+        let account = self.accounts.get_mut(account_id)?;
+        account.last_used_at = Some(now.to_rfc3339());
+        account.request_count = account.request_count.saturating_add(1);
+        account.window_request_count = account.window_request_count.saturating_add(1);
+        if account.window_started_at.is_none() {
+            if let Some(seconds) = account.limit_window_seconds {
+                account.window_started_at = Some(now);
+                account.window_reset_at =
+                    Some(now + Duration::seconds(seconds.min(i64::MAX as u64) as i64));
+            }
+        }
+        Some(account.clone())
+    }
+
     fn cleanup_stale_slots(&mut self, now: DateTime<Utc>) {
         let ttl = self.options.stale_slot_ttl;
         self.slots.retain(|_, slots| {
@@ -366,4 +403,43 @@ impl AccountPool {
                 .and_then(|account| account.plan_type.clone())
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LeastUsedGroupKey {
+    quota_limited: bool,
+    window_reset_at: Option<DateTime<Utc>>,
+    request_count: u64,
+}
+
+impl LeastUsedGroupKey {
+    fn from_account(account: &Account) -> Self {
+        Self {
+            quota_limited: account.quota_limit_reached,
+            window_reset_at: account.window_reset_at,
+            request_count: account.request_count,
+        }
+    }
+}
+
+fn compare_least_used_group(a: &LeastUsedGroupKey, b: &LeastUsedGroupKey) -> Ordering {
+    a.quota_limited
+        .cmp(&b.quota_limited)
+        .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
+        .then_with(|| a.request_count.cmp(&b.request_count))
+}
+
+fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn compare_lru_then_id(a: &&Account, b: &&Account) -> Ordering {
+    a.last_used_at
+        .cmp(&b.last_used_at)
+        .then_with(|| a.id.cmp(&b.id))
 }

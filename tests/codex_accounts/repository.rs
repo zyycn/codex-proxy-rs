@@ -191,6 +191,87 @@ async fn account_repository_should_accumulate_usage_counters() {
 }
 
 #[tokio::test]
+async fn account_repository_should_load_usage_count_into_runtime_pool_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let repo = AccountRepository::new(pool.clone(), SecretBox::new([17u8; 32]));
+
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: None,
+        account_id: None,
+        user_id: None,
+        label: None,
+        plan_type: None,
+        access_token: SecretString::new("access-secret".to_string().into()),
+        refresh_token: None,
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+    repo.record_usage(
+        "acct_a",
+        UsageDelta {
+            input_tokens: 1,
+            output_tokens: 2,
+            cached_tokens: 3,
+        },
+    )
+    .await
+    .unwrap();
+
+    let account = repo.list_pool_accounts().await.unwrap().remove(0);
+
+    assert_eq!(account.request_count, 1);
+}
+
+#[tokio::test]
+async fn account_repository_should_exclude_refresh_lease_until_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let repo = AccountRepository::new(pool.clone(), SecretBox::new([18u8; 32]));
+    let now = Utc::now();
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: None,
+        account_id: None,
+        user_id: None,
+        label: None,
+        plan_type: None,
+        access_token: SecretString::new("access-secret".to_string().into()),
+        refresh_token: None,
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+
+    assert!(repo
+        .try_acquire_refresh_lease("acct_a", "owner-a", now + Duration::minutes(5))
+        .await
+        .unwrap());
+    assert!(!repo
+        .try_acquire_refresh_lease("acct_a", "owner-b", now + Duration::minutes(5))
+        .await
+        .unwrap());
+    sqlx::query("update account_refresh_leases set expires_at = ? where account_id = ?")
+        .bind((now - Duration::seconds(1)).to_rfc3339())
+        .bind("acct_a")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(repo
+        .try_acquire_refresh_lease("acct_a", "owner-b", now + Duration::minutes(5))
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
 async fn account_repository_should_preserve_refresh_token_when_update_omits_one() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("accounts.sqlite");

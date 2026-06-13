@@ -322,7 +322,7 @@ impl AccountRepository {
 
     pub async fn list_pool_accounts(&self) -> AccountRepositoryResult<Vec<Account>> {
         let rows = sqlx::query(
-            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, quota_limit_reached, quota_cooldown_until, cloudflare_cooldown_until, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
+            "select accounts.id, email, accounts.account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher, access_token_expires_at, status, added_at, updated_at, quota_limit_reached, quota_cooldown_until, cloudflare_cooldown_until, coalesce(account_usage.request_count, 0) as usage_request_count, account_usage.last_used_at as usage_last_used_at from accounts left join account_usage on account_usage.account_id = accounts.id order by added_at desc, accounts.id desc",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -352,6 +352,11 @@ impl AccountRepository {
                 cloudflare_cooldown_until: parse_optional_rfc3339(
                     row.get::<Option<String>, _>("cloudflare_cooldown_until"),
                 )?,
+                request_count: row.get::<i64, _>("usage_request_count").max(0) as u64,
+                window_request_count: 0,
+                window_started_at: None,
+                window_reset_at: None,
+                limit_window_seconds: None,
                 added_at: stored.added_at.to_rfc3339(),
                 last_used_at: row.get("usage_last_used_at"),
             });
@@ -578,6 +583,40 @@ impl AccountRepository {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn try_acquire_refresh_lease(
+        &self,
+        account_id: &str,
+        owner: &str,
+        lease_until: DateTime<Utc>,
+    ) -> AccountRepositoryResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "insert into account_refresh_leases (account_id, owner, expires_at, updated_at) values (?, ?, ?, ?) on conflict(account_id) do update set owner = excluded.owner, expires_at = excluded.expires_at, updated_at = excluded.updated_at where account_refresh_leases.expires_at <= ? or account_refresh_leases.owner = excluded.owner",
+        )
+        .bind(account_id)
+        .bind(owner)
+        .bind(lease_until.to_rfc3339())
+        .bind(&now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn release_refresh_lease(
+        &self,
+        account_id: &str,
+        owner: &str,
+    ) -> AccountRepositoryResult<bool> {
+        let result =
+            sqlx::query("delete from account_refresh_leases where account_id = ? and owner = ?")
+                .bind(account_id)
+                .bind(owner)
+                .execute(&self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 

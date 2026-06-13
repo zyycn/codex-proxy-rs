@@ -295,7 +295,11 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
         .acquire_runtime_account("gpt-5.5")
         .await
         .unwrap();
-    assert_eq!(acquired.last_used_at, None);
+    assert_eq!(acquired.request_count, 1);
+    assert_ne!(
+        acquired.last_used_at.as_deref(),
+        Some("2026-06-12T12:00:00Z")
+    );
 }
 
 #[tokio::test]

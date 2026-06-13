@@ -65,6 +65,18 @@ create index if not exists idx_accounts_status on accounts(status);
 create index if not exists idx_accounts_identity on accounts(account_id, user_id) where account_id is not null;
 
 -- ============================================
+-- Account Refresh Leases
+-- ============================================
+create table if not exists account_refresh_leases (
+  account_id text primary key references accounts(id) on delete cascade,
+  owner text not null,
+  expires_at text not null,
+  updated_at text not null
+);
+
+create index if not exists idx_account_refresh_leases_expires on account_refresh_leases(expires_at);
+
+-- ============================================
 -- Account Usage Statistics
 -- ============================================
 create table if not exists account_usage (

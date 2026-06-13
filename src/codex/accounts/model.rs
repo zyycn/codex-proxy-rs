@@ -26,6 +26,11 @@ pub struct Account {
     pub quota_limit_reached: bool,
     pub quota_cooldown_until: Option<DateTime<Utc>>,
     pub cloudflare_cooldown_until: Option<DateTime<Utc>>,
+    pub request_count: u64,
+    pub window_request_count: u64,
+    pub window_started_at: Option<DateTime<Utc>>,
+    pub window_reset_at: Option<DateTime<Utc>>,
+    pub limit_window_seconds: Option<u64>,
     pub added_at: String,
     pub last_used_at: Option<String>,
 }
@@ -46,6 +51,11 @@ impl Account {
             quota_limit_reached: false,
             quota_cooldown_until: None,
             cloudflare_cooldown_until: None,
+            request_count: 0,
+            window_request_count: 0,
+            window_started_at: None,
+            window_reset_at: None,
+            limit_window_seconds: None,
             added_at: Utc::now().to_rfc3339(),
             last_used_at: None,
         }

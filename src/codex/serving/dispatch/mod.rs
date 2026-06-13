@@ -60,7 +60,7 @@ pub(crate) use self::{
     stream::{completed_response_json, CollectedResponse},
 };
 
-use self::affinity::SessionAffinityMap;
+use self::affinity::{compute_variant_hash, SessionAffinityMap};
 use self::{
     refresh::refresh_account_after_unauthorized,
     routing::request_domain,
@@ -680,6 +680,7 @@ async fn record_response_affinity_with_deps(
         }
     };
 
+    let variant_hash = compute_variant_hash(request);
     deps.session_affinity
         .record(
             metadata.response_id,
@@ -692,7 +693,7 @@ async fn record_response_affinity_with_deps(
             Some(&request.instructions),
             usage.map(|usage| usage.input_tokens),
             Some(metadata.function_call_ids),
-            None,
+            variant_hash,
         )
         .await;
 }

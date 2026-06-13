@@ -7,4 +7,5 @@ mod codex_accounts {
     mod refresh;
     mod refresh_scheduler;
     mod repository;
+    mod service_refresh;
 }
