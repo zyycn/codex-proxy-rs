@@ -21,7 +21,11 @@ use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
 use reqwest::{header::HeaderMap, StatusCode};
 use serde_json::{json, Value};
 
-use crate::codex::gateway::transport::{sse::encode_sse_event, types::CodexResponsesRequest};
+use crate::codex::gateway::transport::{
+    rate_limits::{parse_rate_limits_event_raw, rate_limits_to_header_pairs, ParsedRateLimits},
+    sse::encode_sse_event,
+    types::CodexResponsesRequest,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexTransport {
@@ -66,12 +70,14 @@ pub struct CodexWebSocketResponse {
 
 pub type CodexWebSocketSseStream =
     Pin<Box<dyn Stream<Item = Result<String, CodexWebSocketError>> + Send>>;
+pub type SharedRateLimitUpdates = Arc<Mutex<Vec<ParsedRateLimits>>>;
 
 pub struct CodexWebSocketStreamResponse {
     pub body_stream: CodexWebSocketSseStream,
     pub turn_state: Option<String>,
     pub set_cookie_headers: Vec<String>,
     pub rate_limit_headers: Vec<(String, String)>,
+    pub rate_limit_updates: SharedRateLimitUpdates,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -637,7 +643,8 @@ pub async fn create_response_via_websocket(
         mut body_stream,
         turn_state,
         set_cookie_headers,
-        rate_limit_headers,
+        mut rate_limit_headers,
+        rate_limit_updates,
     } = create_response_via_websocket_stream(base_url, request, headers).await?;
 
     let mut body = String::new();
@@ -647,6 +654,7 @@ pub async fn create_response_via_websocket(
     if body.is_empty() {
         return Err(CodexWebSocketError::EmptyResponse);
     }
+    append_rate_limit_updates(&mut rate_limit_headers, &rate_limit_updates).await;
 
     Ok(CodexWebSocketResponse {
         body,
@@ -697,6 +705,7 @@ async fn create_response_via_websocket_stream_inner(
 ) -> Result<CodexWebSocketStreamResponse, CodexWebSocketError> {
     let mut pool_context = pool;
     let mut retry_stale_reuse = pool_context.is_some();
+    let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
     loop {
         let mut active = acquire_websocket(base_url, headers.clone(), pool_context.clone()).await?;
         if let Err(error) = active
@@ -746,6 +755,7 @@ async fn create_response_via_websocket_stream_inner(
                 continue;
             };
             if is_internal_websocket_event(&raw) {
+                capture_internal_rate_limit_event(&raw, &rate_limit_updates).await;
                 continue;
             }
             if let Some(classified) = classify_ws_error_frame(&raw) {
@@ -774,8 +784,9 @@ async fn create_response_via_websocket_stream_inner(
             if terminal {
                 active.finish().await;
             } else {
+                let rate_limit_updates = rate_limit_updates.clone();
                 tokio::spawn(async move {
-                    forward_websocket_as_sse(active, tx).await;
+                    forward_websocket_as_sse(active, tx, rate_limit_updates).await;
                 });
             }
             return Ok(CodexWebSocketStreamResponse {
@@ -783,6 +794,7 @@ async fn create_response_via_websocket_stream_inner(
                 turn_state: metadata.turn_state,
                 set_cookie_headers: metadata.set_cookie_headers,
                 rate_limit_headers: metadata.rate_limit_headers,
+                rate_limit_updates,
             });
         }
     }
@@ -982,6 +994,7 @@ fn is_terminal_websocket_event(event: &str) -> bool {
 async fn forward_websocket_as_sse(
     mut active: ActiveWebSocket,
     tx: mpsc::UnboundedSender<Result<String, CodexWebSocketError>>,
+    rate_limit_updates: SharedRateLimitUpdates,
 ) {
     while let Some(message) = active.websocket.next().await {
         match message {
@@ -991,6 +1004,7 @@ async fn forward_websocket_as_sse(
                     continue;
                 };
                 if is_internal_websocket_event(&raw) {
+                    capture_internal_rate_limit_event(&raw, &rate_limit_updates).await;
                     continue;
                 }
                 let event = websocket_event_type(&raw);
@@ -1014,6 +1028,22 @@ async fn forward_websocket_as_sse(
     }
     let _ = tx.unbounded_send(Err(CodexWebSocketError::ClosedBeforeTerminal));
     active.discard().await;
+}
+
+async fn capture_internal_rate_limit_event(raw: &str, updates: &SharedRateLimitUpdates) {
+    if let Some(parsed) = parse_rate_limits_event_raw(raw) {
+        updates.lock().await.push(parsed);
+    }
+}
+
+pub async fn append_rate_limit_updates(
+    headers: &mut Vec<(String, String)>,
+    updates: &SharedRateLimitUpdates,
+) {
+    let updates = updates.lock().await;
+    for update in updates.iter() {
+        headers.extend(rate_limits_to_header_pairs(update));
+    }
 }
 
 struct ClassifiedWebSocketError {
@@ -1105,7 +1135,14 @@ fn rate_limit_headers(headers: &WsHeaderMap) -> Vec<(String, String)> {
 
 fn is_rate_limit_header(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name == "retry-after" || name.contains("ratelimit") || name.contains("rate-limit")
+    name == "retry-after"
+        || name.contains("ratelimit")
+        || name.contains("rate-limit")
+        || name.starts_with("x-codex-primary-")
+        || name.starts_with("x-codex-secondary-")
+        || name.starts_with("x-codex-code-review-")
+        || name.starts_with("x-codex-review-")
+        || name.starts_with("x-code-review-")
 }
 
 fn retry_after_seconds(headers: &WsHeaderMap) -> Option<u64> {

@@ -2,6 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use wiremock::{
@@ -142,6 +143,66 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
     assert_eq!(event.3, 200);
     assert_eq!(event.4["stream"], false);
     assert_eq!(event.4["usage"]["inputTokens"], 7);
+}
+
+#[tokio::test]
+async fn v1_responses_should_passively_cache_rate_limit_headers() {
+    let server = MockServer::start().await;
+    let reset_at = Utc::now().timestamp() + 300;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .insert_header("x-codex-primary-used-percent", "100")
+                .insert_header("x-codex-primary-window-minutes", "5")
+                .insert_header("x-codex-primary-reset-at", reset_at.to_string())
+                .set_body_string(COMPLETED_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+    sqlx::query(
+        r#"update accounts set quota_json = '{"credits":{"has_credits":true,"unlimited":false,"balance":12}}' where id = ?"#,
+    )
+    .bind("acct_imported")
+    .execute(&imported.pool)
+    .await
+    .unwrap();
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let stored: (String, i64, Option<String>) = sqlx::query_as(
+        "select quota_json, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_imported")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    let quota: Value = serde_json::from_str(&stored.0).unwrap();
+    assert_eq!(quota["rate_limit"]["limit_reached"], true);
+    assert_eq!(quota["rate_limit"]["reset_at"], reset_at);
+    assert_eq!(quota["credits"]["balance"], 12);
+    assert_eq!(stored.1, 1);
+    assert!(stored.2.is_some());
 }
 
 #[tokio::test]

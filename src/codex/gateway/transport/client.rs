@@ -19,10 +19,11 @@ use crate::{
         types::CodexResponsesRequest,
         usage::{extract_sse_usage, TokenUsage},
         websocket::{
-            create_response_via_websocket, create_response_via_websocket_stream,
-            create_response_via_websocket_stream_with_pool, transport_for_request, CodexTransport,
-            CodexWebSocketError, CodexWebSocketPool, CodexWebSocketPoolKey,
-            CodexWebSocketSseStream, CodexWebSocketStreamResponse, WebSocketSupportError,
+            append_rate_limit_updates, create_response_via_websocket,
+            create_response_via_websocket_stream, create_response_via_websocket_stream_with_pool,
+            transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
+            CodexWebSocketPoolKey, CodexWebSocketSseStream, CodexWebSocketStreamResponse,
+            SharedRateLimitUpdates, WebSocketSupportError,
         },
     },
 };
@@ -97,6 +98,7 @@ pub struct CodexBackendWebSocketStream {
     pub turn_state: Option<String>,
     pub set_cookie_headers: Vec<String>,
     pub rate_limit_headers: Vec<(String, String)>,
+    pub rate_limit_updates: SharedRateLimitUpdates,
 }
 
 #[derive(Clone)]
@@ -273,6 +275,7 @@ impl CodexBackendClient {
             turn_state: response.turn_state,
             set_cookie_headers: response.set_cookie_headers,
             rate_limit_headers: response.rate_limit_headers,
+            rate_limit_updates: response.rate_limit_updates,
         })
     }
 
@@ -537,7 +540,8 @@ async fn collect_websocket_stream_response(
         mut body_stream,
         turn_state,
         set_cookie_headers,
-        rate_limit_headers,
+        mut rate_limit_headers,
+        rate_limit_updates,
     } = response;
     let mut body = String::new();
     while let Some(chunk) = body_stream.next().await {
@@ -546,6 +550,7 @@ async fn collect_websocket_stream_response(
     if body.is_empty() {
         return Err(CodexWebSocketError::EmptyResponse);
     }
+    append_rate_limit_updates(&mut rate_limit_headers, &rate_limit_updates).await;
     Ok(
         crate::codex::gateway::transport::websocket::CodexWebSocketResponse {
             body,
@@ -704,7 +709,14 @@ fn rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
 
 fn is_rate_limit_header(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name == "retry-after" || name.contains("ratelimit") || name.contains("rate-limit")
+    name == "retry-after"
+        || name.contains("ratelimit")
+        || name.contains("rate-limit")
+        || name.starts_with("x-codex-primary-")
+        || name.starts_with("x-codex-secondary-")
+        || name.starts_with("x-codex-code-review-")
+        || name.starts_with("x-codex-review-")
+        || name.starts_with("x-code-review-")
 }
 
 fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {

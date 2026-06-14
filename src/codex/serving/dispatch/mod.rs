@@ -39,10 +39,12 @@ use crate::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream,
             CodexBackendWebSocketStream, CodexClientError, CodexRequestContext,
         },
+        rate_limits::{cooldown_with_jitter, parse_rate_limit_headers, rate_limit_quota},
         types::CodexResponsesRequest,
         usage::{extract_sse_usage, TokenUsage},
         websocket::{
-            transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
+            append_rate_limit_updates, transport_for_request, CodexTransport, CodexWebSocketError,
+            CodexWebSocketPool, SharedRateLimitUpdates,
         },
     },
     codex::logs::event::{EventLevel, EventLog},
@@ -354,8 +356,15 @@ async fn responses_http_sse_stream(
             .into_response();
     }
 
+    let rate_limit_headers = stream_response.rate_limit_headers.clone();
     let upstream = Box::pin(stream_response.response.bytes_stream());
-    let audit = StreamAudit::new(deps, log_context, account.id);
+    let audit = StreamAudit::new(
+        deps,
+        log_context,
+        account.id,
+        account.plan_type,
+        rate_limit_headers,
+    );
 
     use tokio::time::{interval, Duration};
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -432,7 +441,7 @@ async fn send_codex_request_with_refresh_retry_deps(
     account: &Account,
     request_id: &str,
 ) -> Result<crate::codex::gateway::transport::client::CodexBackendResponse, CodexClientError> {
-    match send_codex_request(deps, request, account, request_id).await {
+    let result = match send_codex_request(deps, request, account, request_id).await {
         Err(CodexClientError::Upstream {
             status,
             body,
@@ -450,7 +459,17 @@ async fn send_codex_request_with_refresh_retry_deps(
             send_codex_request(deps, request, &refreshed, request_id).await
         }
         result => result,
+    };
+    if let Ok(response) = &result {
+        apply_rate_limit_headers_with_deps(
+            deps,
+            &account.id,
+            account.plan_type.as_deref(),
+            &response.rate_limit_headers,
+        )
+        .await;
     }
+    result
 }
 
 async fn send_codex_request(
@@ -702,6 +721,63 @@ async fn record_response_affinity_with_deps(
         .await;
 }
 
+async fn apply_rate_limit_headers_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account_id: &str,
+    plan_type: Option<&str>,
+    rate_limit_headers: &[(String, String)],
+) {
+    let Some(rate_limits) = parse_rate_limit_headers(rate_limit_headers) else {
+        return;
+    };
+
+    let existing_quota = existing_quota_json(deps, account_id).await;
+    let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
+    if let Some(repo) = deps.account_repository.as_ref() {
+        if let Err(error) = repo.update_quota_json(account_id, &quota.to_string()).await {
+            tracing::warn!(
+                error = %error,
+                account_id = %account_id,
+                "被动同步 quota 缓存失败"
+            );
+        }
+    }
+
+    let Some(reset_at) = rate_limits.primary_reset_at() else {
+        return;
+    };
+    deps.account_pool.lock().await.sync_rate_limit_window(
+        account_id,
+        reset_at,
+        rate_limits.primary_limit_window_seconds(),
+    );
+    if !rate_limits.primary_limit_reached() || reset_at <= Utc::now() {
+        return;
+    }
+
+    if let Some(repo) = deps.account_repository.as_ref() {
+        if let Err(error) = repo.set_quota_cooldown_until(account_id, reset_at).await {
+            tracing::warn!(
+                error = %error,
+                account_id = %account_id,
+                cooldown_until = %reset_at,
+                "持久化被动 quota cooldown 失败"
+            );
+        }
+    }
+    deps.account_pool
+        .lock()
+        .await
+        .mark_quota_limited_until(account_id, reset_at);
+    deps.websocket_pool.evict_account(account_id).await;
+}
+
+async fn existing_quota_json(deps: &CodexUpstreamDependencies, account_id: &str) -> Option<Value> {
+    let repo = deps.account_repository.as_ref()?;
+    let raw = repo.get_quota_json(account_id).await.ok().flatten()?;
+    serde_json::from_str(&raw).ok()
+}
+
 async fn apply_upstream_retry_and_acquire_fallback_with_deps(
     deps: &CodexUpstreamDependencies,
     account: &Account,
@@ -730,7 +806,7 @@ async fn apply_upstream_account_retry_with_deps(
         UpstreamAccountRetry::RateLimited {
             retry_after_seconds,
         } => {
-            let cooldown_until = Utc::now() + Duration::seconds(retry_after_seconds as i64);
+            let cooldown_until = Utc::now() + cooldown_with_jitter(retry_after_seconds, 2_000);
             if let Some(repo) = deps.account_repository.as_ref() {
                 if let Err(error) = repo
                     .set_quota_cooldown_until(&account.id, cooldown_until)
@@ -918,14 +994,17 @@ async fn responses_websocket_stream(
             .into_response();
     }
 
-    let audit = WebSocketStreamAudit::new(
+    let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account.id);
+    let audit = WebSocketStreamAudit {
         deps,
-        log_context,
-        account.id,
+        context: log_context,
+        account_slot,
+        account_plan_type: account.plan_type,
         request,
-        stream_response.turn_state,
-        stream_response.rate_limit_headers,
-    );
+        turn_state: stream_response.turn_state,
+        rate_limit_headers: stream_response.rate_limit_headers,
+        rate_limit_updates: stream_response.rate_limit_updates,
+    };
     let upstream = stream_response.body_stream;
 
     use tokio::time::{interval, Duration};
@@ -1046,6 +1125,8 @@ struct StreamAudit {
     deps: CodexUpstreamDependencies,
     context: CodexRequestLogContext,
     account_slot: AccountSlotGuard,
+    account_plan_type: Option<String>,
+    rate_limit_headers: Vec<(String, String)>,
 }
 
 impl StreamAudit {
@@ -1053,16 +1134,27 @@ impl StreamAudit {
         deps: CodexUpstreamDependencies,
         context: CodexRequestLogContext,
         account_id: String,
+        account_plan_type: Option<String>,
+        rate_limit_headers: Vec<(String, String)>,
     ) -> Self {
         let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account_id);
         Self {
             deps,
             context,
             account_slot,
+            account_plan_type,
+            rate_limit_headers,
         }
     }
 
     async fn complete(&mut self, body: &[u8]) {
+        apply_rate_limit_headers_with_deps(
+            &self.deps,
+            &self.context.account_id,
+            self.account_plan_type.as_deref(),
+            &self.rate_limit_headers,
+        )
+        .await;
         let body = String::from_utf8_lossy(body);
         let mut status = StatusCode::OK;
         let mut level = EventLevel::Info;
@@ -1136,32 +1228,24 @@ struct WebSocketStreamAudit {
     deps: CodexUpstreamDependencies,
     context: CodexRequestLogContext,
     account_slot: AccountSlotGuard,
+    account_plan_type: Option<String>,
     request: CodexResponsesRequest,
     turn_state: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
+    rate_limit_updates: SharedRateLimitUpdates,
 }
 
 impl WebSocketStreamAudit {
-    fn new(
-        deps: CodexUpstreamDependencies,
-        context: CodexRequestLogContext,
-        account_id: String,
-        request: CodexResponsesRequest,
-        turn_state: Option<String>,
-        rate_limit_headers: Vec<(String, String)>,
-    ) -> Self {
-        let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account_id);
-        Self {
-            deps,
-            context,
-            account_slot,
-            request,
-            turn_state,
-            rate_limit_headers,
-        }
-    }
-
     async fn complete(&mut self, body: &[u8]) {
+        let mut rate_limit_headers = self.rate_limit_headers.clone();
+        append_rate_limit_updates(&mut rate_limit_headers, &self.rate_limit_updates).await;
+        apply_rate_limit_headers_with_deps(
+            &self.deps,
+            &self.context.account_id,
+            self.account_plan_type.as_deref(),
+            &rate_limit_headers,
+        )
+        .await;
         let body = String::from_utf8_lossy(body).into_owned();
         let usage_result = extract_sse_usage(&body);
         let response_usage = match &usage_result {
