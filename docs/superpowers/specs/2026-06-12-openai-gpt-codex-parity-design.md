@@ -31,7 +31,7 @@ Current progress: Tasks 1-7 are implemented for the OpenAI GPT/Codex scope. Comm
 - `src/http/v1/{chat,responses,models,router}.rs` plus `src/service/{chat,responses}.rs`: separate `/v1/responses` and `/v1/chat/completions` handlers delegating orchestration to services.
 - `src/codex/accounts/pool.rs` and repositories: fallback selection, quota/rate-limit updates, durable usage release, and account state mutation hooks.
 - `src/codex/models/catalog.rs`: static catalog plus persisted backend snapshots, plan allowlist derivation, and admin refresh trigger.
-- `src/http/admin/*.rs`, `src/service/{api_key,settings,usage,log,diagnostics}.rs`, and `src/codex/accounts/service/*`: scoped account/API-key/account-health/quota/cookie/admin model operations needed to operate Codex-backed GPT compatibility, including Sub2API account import normalization without proxy-pool support.
+- `src/http/admin/*.rs`, `src/service/{api_key,settings,usage,log,diagnostics}.rs`, and `src/codex/accounts/service/*`: scoped account/API-key/account-health/quota/cookie/admin model operations needed to operate Codex-backed GPT compatibility. Account import/export now uses only the native Rust format; Sub2API and proxy-pool payloads are intentionally removed.
 
 ## Data Flow
 

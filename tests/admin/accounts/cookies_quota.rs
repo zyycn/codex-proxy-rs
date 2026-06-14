@@ -552,3 +552,26 @@ async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accou
         .unwrap();
     assert_eq!(status.0, "expired");
 }
+
+#[tokio::test]
+async fn admin_accounts_health_check_should_reject_removed_stagger_ms_field() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-health-removed-field.sqlite", 32).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/health-check")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(r#"{"stagger_ms":1000}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["code"], 40001);
+}

@@ -1,8 +1,9 @@
 use axum::{
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension, Json,
+    Extension,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,10 +17,9 @@ use super::super::{require_admin_session, AdminEnvelope, AdminError, AdminRespon
 use super::account_status_value;
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthCheckRequest {
     pub ids: Option<Vec<String>>,
-    #[serde(alias = "stagger_ms")]
     pub stagger_ms: Option<u64>,
     pub concurrency: Option<u8>,
 }
@@ -56,10 +56,10 @@ pub async fn health_check_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
-    payload: Option<Json<HealthCheckRequest>>,
+    body: Bytes,
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
-    let payload = payload.map(|Json(payload)| payload).unwrap_or_default();
+    let payload = parse_health_check_request(&body, &request_id)?;
     if payload.ids.as_ref().is_some_and(Vec::is_empty) {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,
@@ -123,6 +123,23 @@ pub async fn health_check_accounts(
         StatusCode::OK,
         AdminEnvelope::ok(HealthCheckData { summary, results }, request_id),
     ))
+}
+
+fn parse_health_check_request(
+    body: &Bytes,
+    request_id: &str,
+) -> Result<HealthCheckRequest, AdminError> {
+    if body.is_empty() {
+        return Ok(HealthCheckRequest::default());
+    }
+    serde_json::from_slice(body).map_err(|_| {
+        AdminError::new(
+            StatusCode::BAD_REQUEST,
+            40001,
+            "Invalid health check request",
+            request_id,
+        )
+    })
 }
 
 pub(super) fn health_check_error(error: HealthCheckError, request_id: &str) -> AdminError {

@@ -22,10 +22,10 @@ This audit is the correction point against the TypeScript reference at `/home/zy
 
 | Area / commit | TypeScript reference behavior | Rust current behavior | Classification | Action |
 | --- | --- | --- | --- | --- |
-| Sub2API OpenAI OAuth import / `0b6cc7e` | Account import accepts token/refresh-token account exports and Sub2API-shaped OpenAI OAuth data through `AccountImportService`; proxy fields can exist in source data. | `/admin/accounts/import` accepts native and Sub2API OpenAI OAuth payloads, returns `sourceFormat`, and ignores proxy-only fields. | Original parity, scoped. | Keep. Use the real Sub2API export only for private smoke verification; never print or commit secrets. |
+| Sub2API OpenAI OAuth import / `0b6cc7e` | Account import accepts token/refresh-token account exports and Sub2API-shaped OpenAI OAuth data through `AccountImportService`; proxy fields can exist in source data. | Removed. `/admin/accounts/import` now accepts only the native Rust `accounts[]` format and rejects Sub2API/proxy/runtime payloads by producing no importable accounts. | Old-project compatibility, out of scope. | Do not restore unless a new product requirement explicitly names Sub2API as a first-class import target. |
 | Account label/status/delete, health, refresh, reset, quota, and batch mutations / `db6cb98`, `16eb4ed`, current Task 7 pass | `/auth/accounts/:id/label`, `/status`, delete, batch-delete, batch-status, health-check, refresh/probe, reset-usage, and quota mutate or inspect the account pool. | `/admin/accounts/*` mutates SQLite and synchronizes the runtime account pool with the admin envelope contract. Health/quota call the Codex backend through imported account tokens, refresh uses the existing OAuth token refresher, reset-usage clears local counters and pool last-used state, and quota stores normalized quota JSON. | Partial parity, adapted. | Keep. Finish login/import variants separately. |
 | Account Cookie get/set/delete / `203270f` | Account routes can store browser Cookie headers for account-scoped replay. | `/admin/accounts/{id}/cookies` stores, reads, and clears encrypted per-account Cookies. | Original parity, adapted. | Keep; preserve account-scoped replay and encryption invariants. |
-| Account export / `72438c6` | `/auth/accounts/export` supports `full`, `minimal`, `cockpit_tools`, `sub2api`, and `cpa`. | `/admin/accounts/export` supports native/full Rust export and Sub2API OpenAI OAuth export only, without proxy fields. | Partial parity, scoped. | Keep native and Sub2API. Treat `minimal`, `cockpit_tools`, and `cpa` as omitted unless an OpenAI/Codex operation needs them. |
+| Account export / `72438c6` | `/auth/accounts/export` supports `full`, `minimal`, `cockpit_tools`, `sub2api`, and `cpa`. | `/admin/accounts/export` supports only the native Rust export format. `full`, `sub2api`, and the other TypeScript export variants return `400`. | Native Rust contract. | Keep only native export while the project has no old deployment or external-format compatibility requirement. |
 | Manual account creation / `16938e6` + current correction | `POST /auth/accounts` accepts only `token` and/or `refreshToken`, runs `AccountImportService.importOne`, exchanges refresh-token-only imports, derives account identity/profile from JWT claims, updates an existing `chatgpt_account_id` + `chatgpt_user_id` entry, and never returns tokens. | `POST /admin/accounts` accepts only `token` and/or `refreshToken`, rejects missing/invalid/expired JWTs and tokens without `https://api.openai.com/auth.chatgpt_account_id`, derives email/accountId/userId/planType/expiresAt from JWT claims, ignores caller metadata/status/label, exchanges refresh-token-only imports with `AppState`'s OpenAI refresher, preserves or rotates refresh tokens, encrypts secrets, and synchronizes the runtime account pool. It does not yet cache quota from a verification probe. | Corrected scoped parity. | Keep. Finish quota fetch/health/login variants separately without adding proxy pools or non-OpenAI provider support. |
 | Local client API key status/delete / `8af350d` | `/auth/api-keys` manages third-party provider key pools such as OpenAI, Anthropic, Gemini, OpenRouter/custom, plus model bindings and capabilities. | `/admin/api-keys/*` manages local `cpr_` client auth keys used only for this Rust service's `/v1/*` authorization. | Rust local extension, not TS parity. | Keep only as local admin utility if accepted. Do not count as provider API-key parity and do not add non-OpenAI provider pools. |
 | Local client API key label/batch-delete / `960bbb2` | TS label/batch-delete applies to third-party provider key pool entries. | Rust label/batch-delete applies to local HMAC-hashed `cpr_` client keys. | Rust local extension, possible drift if strict parity is required. | Reclassify in docs as local admin utility. Remove only if strict original parity excludes local client-key management beyond create/list/status/delete. |
@@ -163,9 +163,9 @@ Immediate priority after this audit:
 - Test: `tests/admin_accounts_cookies_quota_test.rs`
 - Test: `tests/admin_api_keys_route_test.rs`
 
-- [x] Write failing tests for Sub2API OpenAI OAuth import payloads and native exports that carry proxy/runtime metadata.
+- [x] Write failing tests for removed Sub2API OpenAI OAuth import payloads and native payloads that carry proxy/runtime metadata.
 - [x] Run: `cargo test --test admin_accounts_route_test`
-- [x] Implement Sub2API import normalization, `sourceFormat` response marking, and proxy-field ignoring.
+- [x] Remove Sub2API import normalization and keep `sourceFormat` response marking for the native format.
 - [x] Write failing tests for account label/status/delete mutations and runtime pool synchronization.
 - [x] Implement account label/status/delete mutations without adding proxy-pool support.
 - [x] Run: `cargo test --test admin_accounts_route_test`
@@ -184,8 +184,8 @@ Immediate priority after this audit:
 - [x] Write failing tests for account Cookie get/set/delete routes.
 - [x] Implement encrypted account Cookie get/set/delete routes.
 - [x] Run: `cargo test --test admin_accounts_route_test`
-- [x] Write failing tests for native and Sub2API account export.
-- [x] Implement native and Sub2API account export without proxy fields.
+- [x] Write failing tests for native account export and removed Sub2API/full export formats.
+- [x] Implement native account export without Sub2API/full format compatibility.
 - [x] Run: `cargo test --test admin_accounts_route_test`
 - [x] Write failing tests for manual account creation.
 - [x] Implement manual account creation without proxy/provider compatibility.

@@ -1,3 +1,7 @@
+use std::str::FromStr;
+
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+
 use codex_proxy_rs::platform::storage::db::connect_sqlite;
 
 #[tokio::test]
@@ -59,6 +63,61 @@ async fn sqlite_schema_should_persist_session_affinity_function_call_ids() {
     .unwrap();
 
     assert_eq!(row, Some(("function_call_ids_json".to_string(),)));
+}
+
+#[tokio::test]
+async fn connect_sqlite_should_not_patch_legacy_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("legacy.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let legacy_options = SqliteConnectOptions::from_str(&url)
+        .unwrap()
+        .create_if_missing(true);
+    let legacy_pool = SqlitePool::connect_with(legacy_options).await.unwrap();
+    sqlx::raw_sql(
+        "
+        create table account_usage (
+          account_id text primary key,
+          request_count integer not null default 0,
+          input_tokens integer not null default 0,
+          output_tokens integer not null default 0,
+          cached_tokens integer not null default 0,
+          last_used_at text
+        );
+        create table session_affinities (
+          response_id text primary key,
+          account_id text not null,
+          conversation_id text not null,
+          turn_state text,
+          instructions_hash text,
+          input_tokens integer,
+          variant_hash text,
+          expires_at text not null,
+          created_at text not null
+        );
+        ",
+    )
+    .execute(&legacy_pool)
+    .await
+    .unwrap();
+    legacy_pool.close().await;
+
+    let pool = connect_sqlite(&url).await.unwrap();
+    let window_column: Option<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('account_usage') where name = 'window_request_count'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    let affinity_column: Option<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('session_affinities') where name = 'function_call_ids_json'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(window_column, None);
+    assert_eq!(affinity_column, None);
 }
 
 #[tokio::test]

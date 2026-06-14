@@ -607,3 +607,23 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
         .unwrap();
     assert_eq!(stored.email.as_deref(), Some("callback@example.com"));
 }
+
+#[tokio::test]
+async fn admin_auth_callback_should_not_expose_removed_admin_callback_alias() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-callback-removed-alias.sqlite", 45).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/auth/callback?code=callback-code&state=removed")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

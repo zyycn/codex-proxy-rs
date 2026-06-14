@@ -15,7 +15,7 @@ use crate::{
     },
     platform::http::request_id::RequestId,
     runtime::state::AppState,
-    utils::json::{first_string, string_at},
+    utils::json::first_string,
 };
 
 use super::super::{require_admin_session, AdminEnvelope, AdminError, AdminResponse};
@@ -24,7 +24,6 @@ use super::validated_account_import_error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountImportFormat {
     Native,
-    Sub2Api,
     CodexCli,
 }
 
@@ -32,7 +31,6 @@ impl AccountImportFormat {
     fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
-            Self::Sub2Api => "sub2api",
             Self::CodexCli => "codex_cli",
         }
     }
@@ -208,225 +206,86 @@ fn store_import_account_error(error: StoreImportAccountError, request_id: &str) 
 }
 
 fn parse_account_import_payload(payload: &Value) -> ParsedAccountImportPayload {
-    if let Some(accounts) = parse_sub2api_oauth_payload(payload) {
-        return ParsedAccountImportPayload {
-            accounts,
-            source_format: AccountImportFormat::Sub2Api,
-        };
-    }
-
-    parse_native_account_payload(payload)
-}
-
-fn parse_sub2api_oauth_payload(payload: &Value) -> Option<Vec<AccountImportEntry>> {
-    let accounts = payload.get("accounts")?.as_array()?;
-    let looks_like_sub2api = string_at(payload, &["type"]).as_deref() == Some("sub2api-data")
-        || payload.get("proxies").is_some()
-        || accounts
-            .iter()
-            .any(|account| account.get("credentials").is_some());
-    if !looks_like_sub2api {
-        return None;
-    }
-
-    Some(
-        accounts
-            .iter()
-            .filter_map(sub2api_oauth_account_entry)
-            .collect(),
-    )
-}
-
-fn sub2api_oauth_account_entry(account: &Value) -> Option<AccountImportEntry> {
-    let platform = string_at(account, &["platform"])?.to_ascii_lowercase();
-    let account_type = string_at(account, &["type"])?.to_ascii_lowercase();
-    if platform != "openai" || account_type != "oauth" {
-        return None;
-    }
-    let credentials = account.get("credentials")?;
-    let fallback_label = normalized_label(string_at(account, &["name"]));
-    let mut entry = account_entry_from_value(credentials, fallback_label);
-    if entry.token.is_none() && entry.refresh_token.is_none() {
-        return None;
-    }
-    if entry.email.is_none() {
-        entry.email = string_at(credentials, &["email"]);
-    }
-    if entry.account_id.is_none() {
-        entry.account_id = first_string(
-            credentials,
-            &[&["chatgpt_account_id"], &["account_id"], &["accountId"]],
-        );
-    }
-    if entry.user_id.is_none() {
-        entry.user_id = first_string(
-            credentials,
-            &[&["chatgpt_user_id"], &["user_id"], &["userId"]],
-        );
-    }
-    if entry.plan_type.is_none() {
-        entry.plan_type = first_string(credentials, &[&["plan_type"], &["planType"]]);
-    }
-    Some(entry)
-}
-
-fn parse_native_account_payload(payload: &Value) -> ParsedAccountImportPayload {
-    if let Some(accounts) = payload.as_array() {
-        return ParsedAccountImportPayload {
-            accounts: accounts
-                .iter()
-                .filter_map(|account| {
-                    let entry = account_entry_from_value(account, None);
-                    (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
-                })
-                .collect(),
-            source_format: AccountImportFormat::Native,
-        };
-    }
-
-    if let Some(accounts) = payload.get("accounts").and_then(Value::as_array) {
-        let source_format = if looks_like_sub2api_native_export(accounts) {
-            AccountImportFormat::Sub2Api
-        } else {
-            AccountImportFormat::Native
-        };
-        return ParsedAccountImportPayload {
-            accounts: accounts
-                .iter()
-                .filter_map(|account| {
-                    let entry = account_entry_from_value(account, None);
-                    (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
-                })
-                .collect(),
-            source_format,
-        };
-    }
-
-    let entry = account_entry_from_value(payload, None);
-    let accounts = if entry.token.is_some() || entry.refresh_token.is_some() {
-        vec![entry]
-    } else {
-        Vec::new()
-    };
     ParsedAccountImportPayload {
-        accounts,
+        accounts: parse_native_account_payload(payload),
         source_format: AccountImportFormat::Native,
     }
 }
 
-fn looks_like_sub2api_native_export(accounts: &[Value]) -> bool {
-    accounts.iter().any(|account| {
-        // sub2api 兼容导出会携带代理/配额运行态字段；这里只用于格式识别，代理数据不进入 Rust 服务。
-        account.get("proxyApiKey").is_some()
-            || account.get("cachedQuota").is_some()
-            || account.get("quotaVerifyRequired").is_some()
-    })
+fn parse_native_account_payload(payload: &Value) -> Vec<AccountImportEntry> {
+    if has_removed_import_container_field(payload) {
+        return Vec::new();
+    }
+    let Some(accounts) = payload.get("accounts").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    accounts
+        .iter()
+        .filter_map(account_entry_from_value)
+        .collect()
 }
 
-fn account_entry_from_value(value: &Value, fallback_label: Option<String>) -> AccountImportEntry {
-    let token = first_string(
-        value,
-        &[
-            &["token"],
-            &["accessToken"],
-            &["access_token"],
-            &["tokens", "accessToken"],
-            &["tokens", "access_token"],
-            &["credentials", "token"],
-            &["credentials", "accessToken"],
-            &["credentials", "access_token"],
-        ],
-    )
-    .map(normalize_bearer_token);
-    let refresh_token = first_string(
-        value,
-        &[
-            &["refreshToken"],
-            &["refresh_token"],
-            &["tokens", "refreshToken"],
-            &["tokens", "refresh_token"],
-            &["credentials", "refreshToken"],
-            &["credentials", "refresh_token"],
-        ],
-    );
-
-    AccountImportEntry {
-        id: first_string(value, &[&["id"]]),
-        email: first_string(value, &[&["email"], &["credentials", "email"]]),
-        account_id: first_string(
-            value,
-            &[
-                &["accountId"],
-                &["account_id"],
-                &["chatgpt_account_id"],
-                &["credentials", "accountId"],
-                &["credentials", "account_id"],
-                &["credentials", "chatgpt_account_id"],
-            ],
-        ),
-        user_id: first_string(
-            value,
-            &[
-                &["userId"],
-                &["user_id"],
-                &["chatgpt_user_id"],
-                &["credentials", "userId"],
-                &["credentials", "user_id"],
-                &["credentials", "chatgpt_user_id"],
-            ],
-        ),
-        label: label_from_value(value).or(fallback_label),
-        plan_type: first_string(
-            value,
-            &[
-                &["planType"],
-                &["plan_type"],
-                &["credentials", "planType"],
-                &["credentials", "plan_type"],
-            ],
-        ),
-        token,
-        refresh_token,
-        access_token_expires_at: first_string(
-            value,
-            &[
-                &["accessTokenExpiresAt"],
-                &["access_token_expires_at"],
-                &["credentials", "accessTokenExpiresAt"],
-                &["credentials", "access_token_expires_at"],
-            ],
-        ),
-        status: first_string(value, &[&["status"]]),
+fn account_entry_from_value(value: &Value) -> Option<AccountImportEntry> {
+    if has_removed_import_account_field(value) {
+        return None;
     }
+
+    let entry = AccountImportEntry {
+        id: first_string(value, &[&["id"]]),
+        email: first_string(value, &[&["email"]]),
+        account_id: first_string(value, &[&["accountId"]]),
+        user_id: first_string(value, &[&["userId"]]),
+        label: label_from_value(value),
+        plan_type: first_string(value, &[&["planType"]]),
+        token: first_string(value, &[&["token"]]),
+        refresh_token: first_string(value, &[&["refreshToken"]]),
+        access_token_expires_at: first_string(value, &[&["accessTokenExpiresAt"]]),
+        status: first_string(value, &[&["status"]]),
+    };
+    (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
+}
+
+fn has_removed_import_container_field(value: &Value) -> bool {
+    ["proxies", "type", "exported_at"]
+        .iter()
+        .any(|field| value.get(*field).is_some())
+}
+
+fn has_removed_import_account_field(value: &Value) -> bool {
+    [
+        "accessToken",
+        "access_token",
+        "refresh_token",
+        "tokens",
+        "credentials",
+        "account_id",
+        "user_id",
+        "chatgpt_account_id",
+        "chatgpt_user_id",
+        "plan_type",
+        "access_token_expires_at",
+        "expires_at",
+        "name",
+        "account_name",
+        "accountName",
+        "account_note",
+        "accountNote",
+        "note",
+        "proxyApiKey",
+        "cachedQuota",
+        "quotaVerifyRequired",
+        "usage",
+    ]
+    .iter()
+    .any(|field| value.get(*field).is_some())
 }
 
 fn label_from_value(value: &Value) -> Option<String> {
-    normalized_label(first_string(
-        value,
-        &[
-            &["label"],
-            &["name"],
-            &["account_name"],
-            &["accountName"],
-            &["account_note"],
-            &["accountNote"],
-            &["note"],
-        ],
-    ))
+    normalized_label(first_string(value, &[&["label"]]))
 }
 
 fn normalized_label(value: Option<String>) -> Option<String> {
     value.map(|label| label.chars().take(64).collect())
-}
-
-fn normalize_bearer_token(value: String) -> String {
-    let trimmed = value.trim();
-    trimmed
-        .strip_prefix("Bearer ")
-        .or_else(|| trimmed.strip_prefix("bearer "))
-        .unwrap_or(trimmed)
-        .trim()
-        .to_string()
 }
 
 fn empty_to_none(value: Option<String>) -> Option<String> {
