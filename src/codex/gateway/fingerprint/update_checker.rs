@@ -81,18 +81,18 @@ impl UpdateChecker {
 
             info!(
                 interval_secs = POLL_INTERVAL.as_secs(),
-                "UpdateChecker 后台 fingerprint 版本检查器已启动"
+                "fingerprint 后台版本检查器已启动"
             );
 
             // 立即执行首次检查
             if let Err(e) = self.check_and_apply_update().await {
-                warn!(error = %e, "UpdateChecker 首次检查失败");
+                warn!(error = %e, "fingerprint 首次版本检查失败");
             }
 
             loop {
                 ticker.tick().await;
                 if let Err(e) = self.check_and_apply_update().await {
-                    warn!(error = %e, "UpdateChecker 定期检查失败");
+                    warn!(error = %e, "fingerprint 定期版本检查失败");
                 }
             }
         })
@@ -119,7 +119,7 @@ impl UpdateChecker {
                 build = %build,
                 current_version = %current_version,
                 current_build = %current_build,
-                "UpdateChecker 发现新的 fingerprint 版本"
+                "发现新的 fingerprint 版本"
             );
 
             self.apply_version_update(version, build).await?;
@@ -131,7 +131,7 @@ impl UpdateChecker {
             info!(
                 version = %version,
                 build = %build,
-                "UpdateChecker 已自动应用 fingerprint 版本"
+                "已自动应用 fingerprint 版本"
             );
         }
 
