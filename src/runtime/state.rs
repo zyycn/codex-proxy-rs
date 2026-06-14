@@ -4,12 +4,11 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
 use crate::admin::{
-    auth::{api_key::ApiKeyService, repository::AdminAuthRepository, service::AdminAuthService},
+    client_keys::service::ApiKeyService,
+    session::{repository::AdminAuthRepository, service::AdminAuthService},
     settings::SettingsService,
 };
 use crate::codex::accounts::cookies::repository::CookieRepository;
-use crate::codex::accounts::models::repository::ModelSnapshotRepository;
-use crate::codex::accounts::models::service::ModelService;
 use crate::codex::accounts::{
     pool::{AccountPool, AccountPoolOptions, RotationStrategy},
     repository::{AccountRepository, AccountRepositoryResult, AccountUsageRepository},
@@ -17,6 +16,8 @@ use crate::codex::accounts::{
 };
 use crate::codex::gateway::fingerprint::model::Fingerprint;
 use crate::codex::gateway::oauth::{OAuthClient, PkceSessionStore, TokenRefresher};
+use crate::codex::models::repository::ModelSnapshotRepository;
+use crate::codex::models::service::ModelService;
 use crate::codex::serving::dispatch::affinity::{
     SessionAffinityRepository, SessionAffinityRepositoryResult,
 };
@@ -25,11 +26,11 @@ use crate::codex::serving::{
     chat::ChatService, diagnostics::DiagnosticsService, responses::ResponsesService,
 };
 use crate::codex::usage::service::UsageService;
-use crate::codex::{logs::repository::EventLogRepository, logs::service::LogService};
+use crate::codex::{events::repository::EventLogRepository, events::service::LogService};
 use crate::config::AppConfig;
 use crate::platform::crypto::SecretBox;
 use crate::platform::identity::{
-    api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository,
+    client_key::ApiKeyHasher, client_key_repository::ClientApiKeyRepository,
 };
 
 #[derive(Clone)]

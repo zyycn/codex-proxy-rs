@@ -101,7 +101,7 @@ async fn admin_settings_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("x-request-id", "req_settings")
                 .body(Body::empty())
                 .unwrap(),
@@ -127,7 +127,7 @@ async fn admin_settings_patch_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_settings_patch_auth")
                 .body(Body::from(r#"{"defaultModel":"gpt-5.5"}"#))
@@ -162,7 +162,7 @@ async fn admin_settings_patch_should_persist_retained_fields_to_local_yaml() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_settings_patch")
@@ -227,7 +227,7 @@ async fn admin_settings_patch_should_persist_retained_fields_to_local_yaml() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -258,7 +258,7 @@ async fn admin_settings_patch_should_reject_removed_or_invalid_fields() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_settings_patch_invalid")
@@ -294,7 +294,7 @@ async fn admin_settings_should_return_only_in_scope_runtime_fields() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/settings")
+                .uri("/api/admin/settings")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_settings")
                 .body(Body::empty())

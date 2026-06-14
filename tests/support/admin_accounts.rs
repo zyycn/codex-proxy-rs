@@ -22,7 +22,7 @@ use codex_proxy_rs::{
         UsageStatsConfig,
     },
     platform::crypto::SecretBox,
-    platform::identity::api_key::ApiKeyHasher,
+    platform::identity::client_key::ApiKeyHasher,
     platform::storage::db::connect_sqlite,
     runtime::build_router,
     runtime::state::AppState,
@@ -255,7 +255,7 @@ pub async fn post_admin_account(app: &Router, payload: Value) -> axum::response:
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(payload.to_string()))
@@ -282,7 +282,7 @@ pub async fn import_test_account(app: &Router, session_id: &str, account_id: &st
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", format!("cpr_admin_session={session_id}"))
                 .body(Body::from(import_body.to_string()))

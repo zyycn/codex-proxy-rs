@@ -2,13 +2,16 @@ use sqlx::SqlitePool;
 
 use crate::{
     admin::{
-        auth::repository::AdminAuthRepository, tasks::session_cleanup::SessionCleanupScheduler,
+        session::repository::AdminAuthRepository, tasks::session_cleanup::SessionCleanupScheduler,
     },
     codex::{
         gateway::fingerprint::{
             model::Fingerprint, repository::FingerprintRepository, update_checker::UpdateChecker,
         },
-        tasks::{model::ModelRefresher, quota::QuotaRefresher, refresh::RefreshScheduler},
+        tasks::{
+            model_refresh::ModelRefresher, quota_refresh::QuotaRefresher,
+            token_refresh::RefreshScheduler,
+        },
     },
     config::AppConfig,
     runtime::state::AppState,

@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::{codex::accounts::models::catalog::ModelCatalog, runtime::state::AppState};
+use crate::{codex::models::catalog::ModelCatalog, runtime::state::AppState};
 
 use super::{
     auth::authorize_client_api_key,

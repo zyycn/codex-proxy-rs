@@ -13,7 +13,7 @@ use axum::{
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
-use codex_proxy_rs::{platform::http::middleware::attach_request_id, runtime::http_trace_layer};
+use codex_proxy_rs::{platform::http::request_id::attach_request_id, runtime::http_trace_layer};
 
 #[derive(Clone, Default)]
 struct SharedLogBuffer {

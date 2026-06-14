@@ -1,8 +1,6 @@
 use codex_proxy_rs::admin::{
-    auth::{api_key::ApiKeyService, service::AdminAuthService},
-    http::router::router,
-    settings::SettingsService,
-    tasks::session_cleanup::SessionCleanupScheduler,
+    api::router::router, client_keys::service::ApiKeyService, session::service::AdminAuthService,
+    settings::SettingsService, tasks::session_cleanup::SessionCleanupScheduler,
 };
 
 #[test]

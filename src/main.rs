@@ -1,6 +1,6 @@
 use codex_proxy_rs::{
-    codex::logs::rotation::{init_tracing, RotationConfig},
     config::AppConfig,
+    platform::logging::rotation::{init_tracing, RotationConfig},
     runtime::{bootstrap::build_state, build_router, tasks::start_background_tasks},
 };
 use tokio::signal;

@@ -12,7 +12,7 @@ use wiremock::{
 
 use codex_proxy_rs::{
     codex::accounts::cookies::repository::CookieRepository,
-    codex::gateway::identity::build_conversation_identity,
+    codex::gateway::conversation_identity::build_conversation_identity,
 };
 
 use crate::support::{

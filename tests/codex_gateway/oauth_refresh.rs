@@ -84,7 +84,7 @@ async fn openai_oauth_client_should_exchange_authorization_code_with_pkce_verifi
         .exchange_code(
             "oauth-code",
             "pkce-verifier",
-            "http://localhost:1455/auth/callback",
+            "http://localhost:1455/auth/openai/callback",
         )
         .await
         .unwrap();
@@ -96,7 +96,7 @@ async fn openai_oauth_client_should_exchange_authorization_code_with_pkce_verifi
     assert!(body.contains("grant_type=authorization_code"));
     assert!(body.contains("client_id=codex-client"));
     assert!(body.contains("code=oauth-code"));
-    assert!(body.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    assert!(body.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fopenai%2Fcallback"));
     assert!(body.contains("code_verifier=pkce-verifier"));
 }
 

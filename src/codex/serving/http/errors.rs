@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{
     codex::gateway::protocol::codex_to_openai::openai_error,
-    codex::gateway::transport::client::CodexClientError,
+    codex::gateway::transport::http_client::CodexClientError,
 };
 
 pub(crate) fn codex_client_error_response(error: CodexClientError) -> (StatusCode, Json<Value>) {

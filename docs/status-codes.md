@@ -12,9 +12,9 @@ HTTP status codes are not replaced by body codes. Admin/frontend APIs return bot
 
 | HTTP status | Body code range | Meaning |
 | --- | --- | --- |
-| `200` | `200` | Successful read, login, or mutation with response body. |
+| `200` | `200` | Successful read, login, or lifecycle with response body. |
 | `201` | `201` | Resource created. |
-| `204` | `204` | Successful mutation with no response body. No JSON envelope is sent. |
+| `204` | `204` | Successful lifecycle with no response body. No JSON envelope is sent. |
 | `400` | `40000`-`40099` | Malformed JSON, invalid parameters, or invalid cursor. |
 | `401` | `40100`-`40199` | Missing/expired admin session or bad admin password. |
 | `403` | `40300`-`40399` | Authenticated admin lacks permission for a local-only/bootstrap action. |

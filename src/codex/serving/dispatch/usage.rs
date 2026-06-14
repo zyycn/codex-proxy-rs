@@ -1,5 +1,5 @@
 use crate::{
-    codex::accounts::repository::UsageDelta, codex::gateway::transport::usage::TokenUsage,
+    codex::accounts::repository::UsageDelta, codex::gateway::transport::usage_events::TokenUsage,
 };
 
 use super::CodexUpstreamDependencies;

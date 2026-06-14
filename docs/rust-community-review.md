@@ -37,7 +37,7 @@
 
 **问题：**
 ```
-1697 行 - src/http/admin/accounts.rs  ⚠️ 太大！
+1697 行 - src/http/api/admin/accounts.rs  ⚠️ 太大！
  895 行 - src/codex/upstream/mod.rs
  784 行 - src/codex/accounts/repository.rs
 ```
@@ -46,9 +46,9 @@
 
 **改进方案：**
 ```rust
-// 当前：src/http/admin/accounts.rs (1697 行)
+// 当前：src/http/api/admin/accounts.rs (1697 行)
 // 建议拆分为：
-src/http/admin/accounts/
+src/http/api/admin/accounts/
   ├── mod.rs              // 路由注册
   ├── list.rs             // GET /accounts
   ├── create.rs           // POST /accounts
@@ -138,7 +138,7 @@ src/codex/accounts/service/
 ├── cookies.rs       // Cookie 操作
 ├── health.rs        // 健康检查
 ├── import.rs        // 导入逻辑
-├── mutation.rs      // CRUD
+├── lifecycle.rs      // CRUD
 ├── quota.rs         // 配额
 ├── refresh.rs       // 刷新
 └── runtime_pool.rs  // 池同步
@@ -397,7 +397,7 @@ pub account_pool: Arc<RwLock<AccountPool>>,
    - 风险：低
 
 2. **🟡 拆分大文件**
-   - 先拆 `http/admin/accounts.rs` (1697 行)
+   - 先拆 `http/api/admin/accounts.rs` (1697 行)
    - 按功能模块拆分（list/create/update/delete/oauth）
    - 成本：中等
    - 收益：提升可维护性

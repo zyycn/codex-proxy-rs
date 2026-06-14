@@ -1,10 +1,12 @@
 # API Contract
 
-`codex-proxy-rs` exposes two API families.
+`codex-proxy-rs` exposes two API families. The `/admin/*` path is reserved for
+the future human Web console; machine-readable management endpoints live under
+`/api/admin/*`.
 
 ## `/v1/*`
 
-These endpoints are OpenAI-compatible and are authenticated only by enabled local client API keys created through `/admin/api-keys` and sent as `Authorization: Bearer cpr_...`.
+These endpoints are OpenAI-compatible and are authenticated only by enabled local client API keys created through `/api/admin/api-keys` and sent as `Authorization: Bearer cpr_...`.
 Responses include an `X-Request-Id` header for tracing, but the body stays OpenAI-compatible and does not include a custom `requestId` field.
 
 Error body:
@@ -159,14 +161,14 @@ Refresh failures are recorded as non-secret `account.refresh` event logs with th
 
 `previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
 
-## `/admin/*`
+## `/api/admin/*`
 
 Admin endpoints are authenticated only by HttpOnly admin session cookies.
 Admin JSON uses lower camelCase field names. Every admin response includes an `X-Request-Id` header, and every JSON body includes `requestId`.
 
 Use real HTTP status codes and body-level frontend codes together. Do not return HTTP `200` for failed requests. The body `code` exists for frontend branching; the HTTP status remains the transport truth.
 
-### `GET /admin/diagnostics`
+### `GET /api/admin/diagnostics`
 
 Returns the same non-secret runtime diagnostics summary as `/debug/diagnostics`, wrapped in the admin envelope and gated by the admin session cookie.
 
@@ -193,7 +195,7 @@ Success response:
 }
 ```
 
-### `POST /admin/login`
+### `POST /api/admin/login`
 
 Authenticates only with the configured admin password stored in `admin_users`. Client API keys (`Bearer cpr_...`) are ignored by the admin login flow and cannot create admin sessions.
 
@@ -226,7 +228,7 @@ Set-Cookie: cpr_admin_session=...; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600
 
 Invalid password response uses HTTP `401` and body code `40102`.
 
-### `GET /admin/settings`
+### `GET /api/admin/settings`
 
 Returns the in-scope runtime settings visible to the admin UI. This endpoint uses admin sessions, not client API keys.
 
@@ -263,7 +265,7 @@ Success response:
 }
 ```
 
-### `PATCH /admin/settings`
+### `PATCH /api/admin/settings`
 
 Updates retained settings and writes them to root `local.yaml` as a config overlay. The route requires the admin session cookie. Client API keys and removed TypeScript-era fields are not accepted.
 
@@ -297,7 +299,7 @@ Request:
 }
 ```
 
-Success response uses the same `data` shape as `GET /admin/settings`.
+Success response uses the same `data` shape as `GET /api/admin/settings`.
 
 Validation:
 
@@ -306,7 +308,7 @@ Validation:
 - Quota warning thresholds must be between `0` and `100`.
 - Removed settings such as `proxyUrl`, `openaiApiKey`, `ollama`, provider settings, proxy API key settings, and Electron/self-update settings return HTTP `400` with body code `40001`.
 
-### `GET /admin/logs`
+### `GET /api/admin/logs`
 
 Returns cursor-paginated event logs for admin troubleshooting. The list uses the standard admin page envelope and lower camelCase fields.
 
@@ -348,7 +350,7 @@ Example item:
 }
 ```
 
-### `GET /admin/logs/state`
+### `GET /api/admin/logs/state`
 
 Returns the current retained logging configuration plus the number of stored SQLite event logs.
 
@@ -368,9 +370,9 @@ Success response:
 }
 ```
 
-### `PATCH /admin/logs/state`
+### `PATCH /api/admin/logs/state`
 
-Updates the in-process logging state used by admin log controls. This is runtime-only; persistent configuration changes still go through `PATCH /admin/settings`.
+Updates the in-process logging state used by admin log controls. This is runtime-only; persistent configuration changes still go through `PATCH /api/admin/settings`.
 
 Request:
 
@@ -382,13 +384,13 @@ Request:
 }
 ```
 
-Success response uses the same data shape as `GET /admin/logs/state`.
+Success response uses the same data shape as `GET /api/admin/logs/state`.
 
-### `GET /admin/logs/{id}`
+### `GET /api/admin/logs/{id}`
 
 Returns a single stored event log by id using the same event shape as list items. Missing ids return HTTP `404` with body code `40401`.
 
-### `DELETE /admin/logs`
+### `DELETE /api/admin/logs`
 
 Clears stored SQLite event logs.
 
@@ -405,7 +407,7 @@ Success response:
 }
 ```
 
-### `GET /admin/usage-stats`
+### `GET /api/admin/usage-stats`
 
 Returns cursor-paginated account usage counters recorded after `/v1/*` calls. The endpoint never returns account access tokens, refresh tokens, Cookie values, or client API keys.
 
@@ -425,7 +427,7 @@ Example item:
 }
 ```
 
-### `GET /admin/usage-stats/summary`
+### `GET /api/admin/usage-stats/summary`
 
 Returns global usage totals across accounts.
 
@@ -446,11 +448,11 @@ Success response:
 }
 ```
 
-### `GET /admin/api-keys`
+### `GET /api/admin/api-keys`
 
 Returns local client API keys with cursor pagination. The plaintext key and hash are never returned by list endpoints.
 
-### `POST /admin/api-keys`
+### `POST /api/admin/api-keys`
 
 Creates a local client API key for `/v1/*`. The plaintext value is returned only in this response; store it client-side and use it as `Authorization: Bearer <plaintext>`.
 
@@ -481,14 +483,14 @@ Success response:
 }
 ```
 
-### `GET /admin/api-keys/export`
+### `GET /api/admin/api-keys/export`
 
 Exports Rust-local client API key metadata for backup or migration. The export never includes plaintext keys, key hashes, or the raw auth pepper. Because `cpr_` keys are stored only as peppered HMAC hashes, imports rotate keys instead of preserving the original plaintext.
 
 Optional query:
 
 ```http
-GET /admin/api-keys/export?ids=key_01,key_02
+GET /api/admin/api-keys/export?ids=key_01,key_02
 ```
 
 Success response:
@@ -516,7 +518,7 @@ Success response:
 }
 ```
 
-### `POST /admin/api-keys/import`
+### `POST /api/admin/api-keys/import`
 
 Imports Rust-local client API key metadata exported by this service. Import creates new local `cpr_` keys using the target instance's pepper and returns the new plaintext values only in this response. Clients must replace the old keys with these rotated plaintext values.
 
@@ -567,11 +569,11 @@ Success response:
 }
 ```
 
-### `GET /admin/accounts`
+### `GET /api/admin/accounts`
 
 Returns stored Codex accounts with cursor pagination. Access tokens and refresh tokens are never decrypted or returned.
 
-### `GET /admin/accounts/quota-warnings`
+### `GET /api/admin/accounts/quota-warnings`
 
 Returns active quota warnings computed from cached account quota snapshots in SQLite. The route requires an admin session cookie and does not call the upstream Codex backend.
 
@@ -598,7 +600,7 @@ Success response:
 }
 ```
 
-### `POST /admin/accounts/import`
+### `POST /api/admin/accounts/import`
 
 Imports accounts into encrypted SQLite storage. The request body uses the Rust import format, which accepts the exported account object fields needed by this service and ignores unrelated fields.
 

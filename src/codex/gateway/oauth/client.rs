@@ -19,7 +19,7 @@ const OPENAI_OAUTH_AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/aut
 const OPENAI_OAUTH_DEVICE_CODE_ENDPOINT: &str = "https://auth.openai.com/oauth/device/code";
 const OPENAI_OAUTH_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const OAUTH_CALLBACK_PORT: u16 = 1455;
-const OAUTH_CALLBACK_PATH: &str = "/auth/callback";
+const OAUTH_CALLBACK_PATH: &str = "/auth/openai/callback";
 
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {

@@ -2,7 +2,7 @@ use chrono::Utc;
 use tokio::time::{interval, Duration};
 use tracing::{error, info};
 
-use crate::admin::auth::repository::AdminAuthRepository;
+use crate::admin::session::repository::AdminAuthRepository;
 use crate::runtime::tasks::types::SchedulerHandle;
 
 /// 会话清理调度器 - 定期删除过期的管理员会话

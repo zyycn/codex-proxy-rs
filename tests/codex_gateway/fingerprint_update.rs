@@ -3,7 +3,7 @@ use codex_proxy_rs::{
         repository::FingerprintRepository,
         updater::{FingerprintUpdater, CODEX_DESKTOP_UPDATE_SOURCE},
     },
-    codex::gateway::transport::client::build_reqwest_client,
+    codex::gateway::transport::http_client::build_reqwest_client,
     platform::storage::db::connect_sqlite,
 };
 use wiremock::{

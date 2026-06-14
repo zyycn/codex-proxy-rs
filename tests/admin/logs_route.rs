@@ -7,7 +7,7 @@ use axum::{
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
-    codex::logs::{
+    codex::events::{
         event::{EventLevel, EventLog},
         repository::EventLogRepository,
     },
@@ -102,7 +102,7 @@ async fn admin_logs_are_cursor_paginated_and_include_request_id() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs?limit=1")
+                .uri("/api/admin/logs?limit=1")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_admin")
                 .body(Body::empty())
@@ -152,7 +152,7 @@ async fn admin_logs_should_filter_by_kind_level_and_search_text() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs?kind=request&level=error&search=timeout")
+                .uri("/api/admin/logs?kind=request&level=error&search=timeout")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_logs_filter")
                 .body(Body::empty())
@@ -182,7 +182,7 @@ async fn admin_logs_reject_missing_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs")
+                .uri("/api/admin/logs")
                 .header("x-request-id", "req_admin")
                 .body(Body::empty())
                 .unwrap(),
@@ -216,7 +216,7 @@ async fn admin_logs_state_should_return_runtime_logging_state_and_stored_count()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs/state")
+                .uri("/api/admin/logs/state")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_logs_state")
                 .body(Body::empty())
@@ -247,7 +247,7 @@ async fn admin_logs_state_patch_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/logs/state")
+                .uri("/api/admin/logs/state")
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_logs_state_patch")
                 .body(Body::from(
@@ -278,7 +278,7 @@ async fn admin_logs_state_patch_should_update_runtime_logging_state() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/logs/state")
+                .uri("/api/admin/logs/state")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_logs_state_patch")
@@ -307,7 +307,7 @@ async fn admin_logs_state_patch_should_update_runtime_logging_state() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs/state")
+                .uri("/api/admin/logs/state")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -339,7 +339,7 @@ async fn admin_logs_detail_should_return_one_event_by_id() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs/log_detail")
+                .uri("/api/admin/logs/log_detail")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_logs_detail")
                 .body(Body::empty())
@@ -379,7 +379,7 @@ async fn admin_logs_clear_should_delete_stored_events() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/admin/logs")
+                .uri("/api/admin/logs")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_logs_clear")
                 .body(Body::empty())
@@ -398,7 +398,7 @@ async fn admin_logs_clear_should_delete_stored_events() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/logs?limit=50")
+                .uri("/api/admin/logs?limit=50")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),

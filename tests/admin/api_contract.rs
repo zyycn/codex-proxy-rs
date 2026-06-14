@@ -6,7 +6,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use codex_proxy_rs::{
-    admin::http::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
+    admin::api::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     utils::pagination::Page,
 };
 

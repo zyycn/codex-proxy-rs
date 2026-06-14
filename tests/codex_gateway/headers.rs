@@ -1,8 +1,8 @@
 use codex_proxy_rs::{
     codex::gateway::fingerprint::{model::Fingerprint, updater::parse_update_manifest},
     codex::gateway::transport::{
-        client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
         headers::build_codex_headers,
+        http_client::{build_reqwest_client, CodexBackendClient, CodexRequestContext},
         types::CodexResponsesRequest,
     },
 };

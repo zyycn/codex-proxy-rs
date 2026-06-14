@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::{
-    admin::auth::repository::AdminAuthRepository,
+    admin::session::repository::AdminAuthRepository,
     codex::accounts::repository::AccountRepositoryError,
     codex::gateway::fingerprint::{model::Fingerprint, repository::FingerprintRepository},
     codex::gateway::oauth::OpenAiOAuthRefresher,
@@ -9,7 +9,9 @@ use crate::{
     config::AppConfig,
     platform::{
         crypto::{CryptoError, SecretBox},
-        identity::{admin_session::hash_admin_password, api_key::ApiKeyHasher, error::AuthError},
+        identity::{
+            admin_session::hash_admin_password, client_key::ApiKeyHasher, error::AuthError,
+        },
         storage::db::connect_sqlite,
     },
 };

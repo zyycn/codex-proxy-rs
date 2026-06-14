@@ -13,7 +13,7 @@
 src/
 ├── codex/          # OpenAI/Codex 对接层（核心业务逻辑）
 ├── service/        # 业务服务层（Chat, Responses, Diagnostics）
-├── http/           # HTTP 路由层（/v1/* 和 /admin/*）
+├── http/           # HTTP 路由层（/v1/* 和 /api/admin/*）
 ├── auth/           # 认证模块（API keys, sessions）
 ├── scheduler/      # 后台调度器（refresh, quota, model）
 ├── storage/        # 数据持久化（SQLite）
@@ -30,7 +30,7 @@ src/
 
 **三层认证边界设计：**
 ```
-Admin Auth (密码 + Session)  →  /admin/*
+Admin Auth (密码 + Session)  →  /api/admin/*
 Client API Keys (cpr_ 前缀)  →  /v1/*
 Upstream Tokens (内部加密)   →  ChatGPT Backend
 ```
@@ -151,7 +151,7 @@ src/codex/accounts/service/
 ├── cookies.rs          # Cookie 操作
 ├── health.rs           # 健康检查
 ├── import.rs           # 导入逻辑
-├── mutation.rs         # CRUD 操作
+├── lifecycle.rs         # CRUD 操作
 ├── quota.rs            # 配额管理
 ├── refresh.rs          # 令牌刷新
 └── runtime_pool.rs     # 运行时池同步
@@ -224,7 +224,7 @@ pub enum AccountServiceError {
 ### 5. 🟢 配置热重载未完全实现
 
 **当前状态：**
-- `/admin/settings PATCH` 写入 `local.yaml`
+- `/api/admin/settings PATCH` 写入 `local.yaml`
 - 更新 `AppState` 中的 config
 - ⚠️ 但已构造的服务（如调度器）仍使用旧配置
 

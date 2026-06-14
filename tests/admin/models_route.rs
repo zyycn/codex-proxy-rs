@@ -13,18 +13,18 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
-    codex::accounts::models::repository::ModelSnapshotRepository,
     codex::accounts::{
         model::{Account, AccountStatus},
         repository::{AccountRepository, NewAccount},
     },
+    codex::models::repository::ModelSnapshotRepository,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig,
     },
     platform::crypto::SecretBox,
-    platform::identity::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    platform::identity::{client_key::ApiKeyHasher, client_key_repository::ClientApiKeyRepository},
     platform::storage::db::connect_sqlite,
     runtime::build_router,
     runtime::state::AppState,
@@ -106,7 +106,7 @@ async fn admin_refresh_models_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/refresh-models")
+                .uri("/api/admin/refresh-models")
                 .header("x-request-id", "req_refresh_models")
                 .body(Body::empty())
                 .unwrap(),
@@ -185,7 +185,7 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/refresh-models")
+                .uri("/api/admin/refresh-models")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_refresh_models")
                 .body(Body::empty())

@@ -17,7 +17,7 @@
 
 Rust 状态：
 - 到位：`src/codex/gateway/transport/headers.rs` 构造账号、residency、request id、UA、sec-ch、默认 header 和顺序。
-- 到位：`src/codex/gateway/transport/client.rs` 将 installation/window/turn/parent/subagent 同步到 header 和 `client_metadata`。
+- 到位：`src/codex/gateway/transport/http_client.rs` 将 installation/window/turn/parent/subagent 同步到 header 和 `client_metadata`。
 - 到位：`src/codex/gateway/installation.rs` 兼容读取 `~/.codex/installation_id`，否则落库生成。
 - 到位：`src/runtime/bootstrap.rs` 从数据库加载自动更新指纹，避免实际请求继续使用硬编码默认值。
 - 边界：Rust 使用 `reqwest + rustls` 传输，未声称复制原版 native transport 的完整 Chrome TLS 指纹。IP 代理/VPN 相关能力不属于移植范围。

@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
-    codex::accounts::models::{
+    codex::models::{
         catalog::{BackendModelEntry, ModelPlanSnapshot},
         repository::ModelSnapshotRepository,
     },
@@ -19,7 +19,7 @@ use codex_proxy_rs::{
         UsageStatsConfig,
     },
     platform::crypto::SecretBox,
-    platform::identity::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    platform::identity::{client_key::ApiKeyHasher, client_key_repository::ClientApiKeyRepository},
     platform::storage::db::connect_sqlite,
     runtime::build_router,
     runtime::state::AppState,

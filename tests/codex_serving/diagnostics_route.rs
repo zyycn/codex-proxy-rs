@@ -209,7 +209,7 @@ async fn admin_diagnostics_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/diagnostics")
+                .uri("/api/admin/diagnostics")
                 .header("x-request-id", "req_admin_diagnostics")
                 .body(Body::empty())
                 .unwrap(),
@@ -233,7 +233,7 @@ async fn admin_diagnostics_should_return_admin_enveloped_runtime_summary_without
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/diagnostics")
+                .uri("/api/admin/diagnostics")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_admin_diagnostics")
                 .body(Body::empty())

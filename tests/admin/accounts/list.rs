@@ -42,7 +42,7 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts?limit=10")
+                .uri("/api/admin/accounts?limit=10")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts_list")
                 .body(Body::empty())
