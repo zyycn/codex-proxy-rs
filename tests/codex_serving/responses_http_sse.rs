@@ -1,9 +1,19 @@
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    sync::{oneshot, Mutex},
+};
 use tower::ServiceExt;
 use wiremock::{
     matchers::{header, method, path},
@@ -17,7 +27,10 @@ use codex_proxy_rs::{
 
 use crate::support::{
     response_json, response_text,
-    upstream::{build_imported_app, enable_runtime_logging, fetch_v1_event_log},
+    upstream::{
+        build_imported_app, build_imported_app_with_accounts_and_config, enable_runtime_logging,
+        fetch_v1_event_log, ImportAccount,
+    },
 };
 
 const COMPLETED_USAGE_SSE: &str =
@@ -121,6 +134,77 @@ async fn v1_responses_should_honor_explicit_http_sse_transport() {
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert!(upstream_body.get("use_websocket").is_none());
+}
+
+#[tokio::test]
+async fn v1_responses_should_stagger_same_account_requests_before_sending_upstream() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let request_times = Arc::new(Mutex::new(Vec::new()));
+    let request_times_for_server = Arc::clone(&request_times);
+    let (first_seen_tx, first_seen_rx) = oneshot::channel();
+    let (release_first_tx, release_first_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut first_stream, _) = listener.accept().await.unwrap();
+        request_times_for_server.lock().await.push(Instant::now());
+        first_seen_tx.send(()).unwrap();
+        let _first_request = read_http_request(&mut first_stream).await;
+
+        let (mut second_stream, _) = listener.accept().await.unwrap();
+        request_times_for_server.lock().await.push(Instant::now());
+        let _second_request = read_http_request(&mut second_stream).await;
+        write_http_sse_response(&mut second_stream, COMPLETED_USAGE_SSE).await;
+
+        release_first_rx.await.unwrap();
+        write_http_sse_response(&mut first_stream, COMPLETED_USAGE_SSE).await;
+    });
+    let imported = build_imported_app_with_accounts_and_config(
+        format!("http://{addr}"),
+        &[ImportAccount {
+            id: "acct_stagger",
+            account_id: "chatgpt-stagger",
+            token: "access-stagger",
+            refresh_token: "refresh-stagger",
+        }],
+        |config| {
+            config.auth.max_concurrent_per_account = 2;
+            config.auth.request_interval_ms = 300;
+        },
+    )
+    .await;
+
+    let first_app = imported.app.clone();
+    let first_api_key = imported.client_api_key.clone();
+    let first_response = tokio::spawn(async move {
+        first_app
+            .oneshot(v1_response_request(&first_api_key, "req_stagger_first"))
+            .await
+            .unwrap()
+    });
+    first_seen_rx.await.unwrap();
+
+    let second = imported
+        .app
+        .clone()
+        .oneshot(v1_response_request(
+            &imported.client_api_key,
+            "req_stagger_second",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    release_first_tx.send(()).unwrap();
+    let first = first_response.await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    server.await.unwrap();
+
+    let times = request_times.lock().await;
+    assert_eq!(times.len(), 2);
+    let elapsed = times[1].duration_since(times[0]);
+    assert!(
+        elapsed >= Duration::from_millis(220),
+        "second upstream request was sent too early: {elapsed:?}"
+    );
 }
 
 #[tokio::test]
@@ -667,4 +751,41 @@ async fn v1_responses_should_default_to_streaming_when_stream_is_omitted() {
     let body = response_text(response).await;
     assert!(body.contains("event: response.output_text.delta"));
     assert!(body.contains("event: response.completed"));
+}
+
+fn v1_response_request(api_key: &str, request_id: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .header("x-request-id", request_id)
+        .body(Body::from(
+            r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+        ))
+        .unwrap()
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(request).unwrap()
+}
+
+async fn write_http_sse_response(stream: &mut TcpStream, body: &str) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).await.unwrap();
 }

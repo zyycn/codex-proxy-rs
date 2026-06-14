@@ -371,6 +371,28 @@ fn least_used_should_prefer_earlier_rate_limit_window_reset() {
 }
 
 #[test]
+fn least_used_should_compare_request_count_when_only_one_account_has_window_reset() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut reset_known = Account::test("reset_known", AccountStatus::Active);
+    reset_known.window_reset_at = Some(now + Duration::seconds(30));
+    reset_known.request_count = 10;
+    let mut reset_unknown = Account::test("reset_unknown", AccountStatus::Active);
+    reset_unknown.request_count = 2;
+    pool.insert(reset_known);
+    pool.insert(reset_unknown);
+
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "reset_unknown");
+}
+
+#[test]
 fn least_used_should_prefer_lower_runtime_request_count() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {

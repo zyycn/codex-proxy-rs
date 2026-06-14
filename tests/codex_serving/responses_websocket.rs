@@ -359,6 +359,120 @@ async fn v1_responses_websocket_should_reuse_connection_for_recorded_conversatio
 }
 
 #[tokio::test]
+async fn v1_responses_websocket_pool_should_be_evicted_after_admin_account_status_cycle() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let _first_message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_pool_status_first", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        loop {
+            tokio::select! {
+                message = websocket.next() => {
+                    match message {
+                        Some(Ok(message)) if message.is_text() => {
+                            websocket
+                                .send(Message::Text(
+                                    websocket_completed_response("resp_pool_status_second", 3, 1).into(),
+                                ))
+                                .await
+                                .unwrap();
+                            websocket.close(None).await.unwrap();
+                            break true;
+                        }
+                        Some(_) => continue,
+                        None => {
+                            accept_successful_websocket_response(
+                                &listener,
+                                "Bearer access-secret",
+                                "resp_pool_status_second",
+                            )
+                            .await;
+                            break false;
+                        }
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted.unwrap();
+                    let mut second_websocket = accept_async(stream).await.unwrap();
+                    let _second_message = second_websocket.next().await.unwrap().unwrap();
+                    second_websocket
+                        .send(Message::Text(
+                            websocket_completed_response("resp_pool_status_second", 3, 1).into(),
+                        ))
+                        .await
+                        .unwrap();
+                    second_websocket.close(None).await.unwrap();
+                    break false;
+                }
+            }
+        }
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"prompt_cache_key":"status-cycle"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_text(first_response).await;
+    assert!(first_body.contains("\"id\":\"resp_pool_status_first\""));
+
+    update_admin_account_status(&imported.app, "acct_imported", "disabled").await;
+    update_admin_account_status(&imported.app, "acct_imported", "active").await;
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"previous_response_id":"resp_pool_status_first"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_text(second_response).await;
+    assert!(second_body.contains("\"id\":\"resp_pool_status_second\""));
+
+    let reused_connection = server.await.unwrap();
+    assert!(
+        !reused_connection,
+        "admin status lifecycle should evict the old pooled websocket"
+    );
+}
+
+#[tokio::test]
 async fn v1_responses_should_route_previous_response_id_to_recorded_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -933,4 +1047,21 @@ async fn read_http_upgrade_request(stream: &mut TcpStream) -> String {
         }
     }
     String::from_utf8(request).unwrap()
+}
+
+async fn update_admin_account_status(app: &axum::Router, account_id: &str, status: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/admin/accounts/{account_id}/status"))
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({ "status": status }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

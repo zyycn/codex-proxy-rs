@@ -62,6 +62,7 @@ async fn persist_refreshed_account(
     }
     refreshed.status = AccountStatus::Active;
     deps.account_pool.lock().await.insert(refreshed.clone());
+    deps.websocket_pool.evict_account(&account.id).await;
     Some(refreshed)
 }
 
@@ -80,6 +81,7 @@ async fn mark_refresh_failure(
         let mut updated = account.clone();
         updated.status = status;
         deps.account_pool.lock().await.insert(updated);
+        deps.websocket_pool.evict_account(&account.id).await;
     }
     log_account_refresh_failure(deps, account, failure, status, request_id, model).await;
 }

@@ -18,7 +18,10 @@ use codex_proxy_rs::{
             repository::{AccountRepository, AccountUsageRepository, NewAccount, TokenUpdate},
             service::AccountService,
         },
-        gateway::oauth::{RefreshFailure, TokenPair, TokenRefresher},
+        gateway::{
+            oauth::{RefreshFailure, TokenPair, TokenRefresher},
+            transport::websocket::CodexWebSocketPool,
+        },
     },
     platform::{crypto::SecretBox, storage::db::connect_sqlite},
 };
@@ -59,6 +62,7 @@ async fn account_service_refresh_should_retry_with_latest_disk_refresh_token_aft
         None,
         Some(Arc::new(refresher)),
         Arc::new(Mutex::new(AccountPool::default())),
+        Arc::new(CodexWebSocketPool::with_default_max_age()),
     );
 
     let result = service.refresh_account("acct_stale").await.unwrap();

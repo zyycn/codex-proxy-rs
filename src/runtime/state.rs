@@ -16,6 +16,7 @@ use crate::codex::accounts::{
 };
 use crate::codex::gateway::fingerprint::model::Fingerprint;
 use crate::codex::gateway::oauth::{OAuthClient, PkceSessionStore, TokenRefresher};
+use crate::codex::gateway::transport::websocket::CodexWebSocketPool;
 use crate::codex::models::repository::ModelSnapshotRepository;
 use crate::codex::models::service::ModelService;
 use crate::codex::serving::dispatch::affinity::{
@@ -245,6 +246,7 @@ impl AppState {
         let pool_ref = pool.as_ref();
         let secret_box_ref = secret_box.as_ref();
         let account_pool = account_pool_from_config(&config);
+        let websocket_pool = Arc::new(CodexWebSocketPool::with_default_max_age());
         let oauth_sessions = Arc::new(Mutex::new(PkceSessionStore::default()));
         let api_keys = api_key_service(pool_ref, api_key_hasher.as_ref());
         let config = Arc::new(config);
@@ -255,6 +257,13 @@ impl AppState {
             local_config_path.unwrap_or_else(|| PathBuf::from("local.yaml")),
         );
         let diagnostics = DiagnosticsService::new(config.clone());
+        let service_context = ServiceBuildContext {
+            config: config.clone(),
+            pool: pool_ref,
+            secret_box: secret_box_ref,
+            account_pool: account_pool.clone(),
+            websocket_pool: websocket_pool.clone(),
+        };
         let accounts = account_service(
             config.clone(),
             account_repository(pool_ref, secret_box_ref),
@@ -262,12 +271,13 @@ impl AppState {
             secret_box_ref,
             token_refresher.clone(),
             account_pool.clone(),
+            websocket_pool,
         );
         let admin_auth = admin_auth_service(
             config.clone(),
             pool_ref,
             secret_box_ref,
-            account_pool.clone(),
+            account_pool,
             oauth_client,
             oauth_sessions,
             accounts.clone(),
@@ -277,15 +287,7 @@ impl AppState {
             chat,
             responses,
             models,
-        } = v1_services(
-            config.clone(),
-            pool_ref,
-            secret_box_ref,
-            logs.clone(),
-            token_refresher,
-            account_pool,
-            fingerprint,
-        );
+        } = v1_services(service_context, logs.clone(), token_refresher, fingerprint);
         Self {
             services: Arc::new(AppServices {
                 config,
@@ -325,26 +327,29 @@ struct V1Services {
     models: ModelService,
 }
 
-fn v1_services(
+#[derive(Clone)]
+struct ServiceBuildContext<'a> {
     config: Arc<AppConfig>,
-    pool: Option<&SqlitePool>,
-    secret_box: Option<&SecretBox>,
+    pool: Option<&'a SqlitePool>,
+    secret_box: Option<&'a SecretBox>,
+    account_pool: Arc<Mutex<AccountPool>>,
+    websocket_pool: Arc<CodexWebSocketPool>,
+}
+
+fn v1_services(
+    context: ServiceBuildContext<'_>,
     logs: LogService,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
-    account_pool: Arc<Mutex<AccountPool>>,
     fingerprint: Fingerprint,
 ) -> V1Services {
-    let upstream = codex_upstream_service(
-        config.clone(),
-        pool,
-        secret_box,
-        logs,
-        token_refresher,
-        account_pool.clone(),
-        fingerprint,
+    let upstream = codex_upstream_service(&context, logs, token_refresher, fingerprint);
+    let models = model_service(
+        context.config.clone(),
+        context.pool,
+        context.secret_box,
+        context.account_pool,
     );
-    let models = model_service(config.clone(), pool, secret_box, account_pool);
-    let model_config = config.model.clone();
+    let model_config = context.config.model.clone();
     V1Services {
         chat: ChatService::new(model_config.clone(), models.clone(), upstream.clone()),
         responses: ResponsesService::new(model_config, models.clone(), upstream),
@@ -393,6 +398,7 @@ fn account_service(
     secret_box: Option<&SecretBox>,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     account_pool: Arc<Mutex<AccountPool>>,
+    websocket_pool: Arc<CodexWebSocketPool>,
 ) -> AccountService {
     AccountService::new(
         config,
@@ -401,29 +407,28 @@ fn account_service(
         cookie_repository(pool, secret_box),
         token_refresher,
         account_pool,
+        websocket_pool,
     )
 }
 
 fn codex_upstream_service(
-    config: Arc<AppConfig>,
-    pool: Option<&SqlitePool>,
-    secret_box: Option<&SecretBox>,
+    context: &ServiceBuildContext<'_>,
     logs: LogService,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
-    account_pool: Arc<Mutex<AccountPool>>,
     fingerprint: Fingerprint,
 ) -> CodexUpstreamService {
     CodexUpstreamService::new(
-        config,
-        account_pool,
+        context.config.clone(),
+        context.account_pool.clone(),
         CodexUpstreamRepositories {
-            account: account_repository(pool, secret_box),
-            cookie: cookie_repository(pool, secret_box),
-            session_affinity: pool.cloned().map(SessionAffinityRepository::new),
+            account: account_repository(context.pool, context.secret_box),
+            cookie: cookie_repository(context.pool, context.secret_box),
+            session_affinity: context.pool.cloned().map(SessionAffinityRepository::new),
         },
         logs,
         token_refresher,
         fingerprint,
+        context.websocket_pool.clone(),
     )
 }
 

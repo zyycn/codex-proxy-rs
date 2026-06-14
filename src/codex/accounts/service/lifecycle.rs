@@ -70,6 +70,7 @@ impl AccountService {
         match self.repository()?.delete(account_id).await {
             Ok(true) => {
                 self.account_pool.lock().await.remove(account_id);
+                self.websocket_pool.evict_account(account_id).await;
                 Ok(true)
             }
             Ok(false) => Ok(false),
@@ -91,6 +92,7 @@ impl AccountService {
             match repo.delete(&account_id).await {
                 Ok(true) => {
                     self.account_pool.lock().await.remove(&account_id);
+                    self.websocket_pool.evict_account(&account_id).await;
                     deleted += 1;
                 }
                 Ok(false) => not_found.push(account_id),
@@ -145,9 +147,11 @@ impl AccountService {
                 }
                 Err(_) => return Err(AccountServiceError::SyncStatus),
             }
+            self.websocket_pool.evict_account(account_id).await;
             return Ok(());
         }
         self.account_pool.lock().await.remove(account_id);
+        self.websocket_pool.evict_account(account_id).await;
         Ok(())
     }
 }

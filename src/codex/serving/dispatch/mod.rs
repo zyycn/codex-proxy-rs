@@ -8,7 +8,10 @@ pub mod stream;
 mod stream_audit;
 pub mod usage;
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration as StdDuration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -19,7 +22,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::{stream as futures_stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -28,7 +31,7 @@ use crate::{
     codex::accounts::cookies::repository::CookieRepository,
     codex::accounts::{
         model::Account,
-        pool::{AccountAcquireRequest, AccountPool},
+        pool::{AccountAcquireRequest, AccountPool, AcquiredAccount},
         repository::AccountRepository,
     },
     codex::events::{
@@ -110,6 +113,7 @@ impl CodexUpstreamService {
         logs: LogService,
         token_refresher: Option<Arc<dyn TokenRefresher>>,
         fingerprint: Fingerprint,
+        websocket_pool: Arc<CodexWebSocketPool>,
     ) -> Self {
         Self {
             deps: CodexUpstreamDependencies {
@@ -122,18 +126,17 @@ impl CodexUpstreamService {
                 fingerprint,
                 session_affinity: Arc::new(SessionAffinityMap::with_default_ttl()),
                 session_affinity_repository: repositories.session_affinity,
-                websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
+                websocket_pool,
             },
         }
     }
 
-    pub(crate) async fn acquire_account(&self, model: &str) -> Option<Account> {
+    pub(crate) async fn acquire_account(&self, model: &str) -> Option<AcquiredAccount> {
         self.deps
             .account_pool
             .lock()
             .await
             .acquire_with(AccountAcquireRequest::new(model, Utc::now()))
-            .map(|acquired| acquired.account)
     }
 
     pub(crate) async fn prepare_response_session(&self, request: &mut CodexResponsesRequest) {
@@ -164,7 +167,7 @@ impl CodexUpstreamService {
     pub(crate) async fn acquire_account_for_request(
         &self,
         request: &CodexResponsesRequest,
-    ) -> Option<Account> {
+    ) -> Option<AcquiredAccount> {
         let preferred_account_id = match request.previous_response_id.as_deref() {
             Some(previous_response_id) => {
                 self.deps
@@ -183,11 +186,14 @@ impl CodexUpstreamService {
             .lock()
             .await
             .acquire_with(acquire_request)
-            .map(|acquired| acquired.account)
     }
 
     pub(crate) async fn release_account(&self, account_id: &str) {
         self.deps.account_pool.lock().await.release(account_id);
+    }
+
+    pub(crate) async fn stagger_request(&self, previous_slot_at: Option<DateTime<Utc>>) {
+        stagger_request_with_deps(&self.deps, previous_slot_at).await;
     }
 
     /// 获取当前使用的指纹（用于诊断）
@@ -211,7 +217,7 @@ impl CodexUpstreamService {
         retry: UpstreamAccountRetry,
         model: &str,
         excluded_account_ids: &mut Vec<String>,
-    ) -> Option<Account> {
+    ) -> Option<AcquiredAccount> {
         apply_upstream_retry_and_acquire_fallback_with_deps(
             &self.deps,
             account,
@@ -229,7 +235,7 @@ impl CodexUpstreamService {
     pub(crate) async fn responses_stream(
         &self,
         request: CodexResponsesRequest,
-        account: Account,
+        acquired: AcquiredAccount,
         log_context: CodexRequestLogContext,
     ) -> Response {
         let deps = self.deps.clone();
@@ -237,10 +243,10 @@ impl CodexUpstreamService {
             transport_for_request(&request),
             CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired
         ) {
-            return responses_websocket_stream(deps, request, account, log_context).await;
+            return responses_websocket_stream(deps, request, acquired, log_context).await;
         }
 
-        responses_http_sse_stream(deps, request, account, log_context).await
+        responses_http_sse_stream(deps, request, acquired, log_context).await
     }
 
     pub(crate) async fn persist_cookies(
@@ -300,29 +306,59 @@ impl CodexUpstreamService {
     }
 }
 
+async fn stagger_request_with_deps(
+    deps: &CodexUpstreamDependencies,
+    previous_slot_at: Option<DateTime<Utc>>,
+) {
+    let Some(previous_slot_at) = previous_slot_at else {
+        return;
+    };
+    let interval_ms = deps.config.auth.request_interval_ms;
+    if interval_ms == 0 {
+        return;
+    }
+    let elapsed_ms = Utc::now()
+        .signed_duration_since(previous_slot_at)
+        .num_milliseconds()
+        .max(0) as u64;
+    let Some(wait_ms) = interval_ms.checked_sub(elapsed_ms) else {
+        return;
+    };
+    if wait_ms == 0 {
+        return;
+    }
+    tracing::debug!(
+        wait_ms,
+        request_interval_ms = interval_ms,
+        "按账户请求间隔等待后发送上游请求"
+    );
+    tokio::time::sleep(StdDuration::from_millis(wait_ms)).await;
+}
+
 async fn responses_http_sse_stream(
     deps: CodexUpstreamDependencies,
     request: CodexResponsesRequest,
-    mut account: Account,
+    mut acquired: AcquiredAccount,
     mut log_context: CodexRequestLogContext,
 ) -> Response {
     let mut excluded_account_ids = Vec::new();
     let stream_response = loop {
+        stagger_request_with_deps(&deps, acquired.previous_slot_at).await;
         let stream_response = send_codex_stream_request_with_refresh_retry(
             &deps,
             &request,
-            &account,
+            &acquired.account,
             log_context.request_id.as_str(),
         )
         .await;
         match stream_response {
             Ok(response) => break response,
             Err(error) => {
-                deps.account_pool.lock().await.release(&account.id);
+                deps.account_pool.lock().await.release(&acquired.account.id);
                 if let Some(retry) = classify_upstream_account_retry(&error) {
                     let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
                         &deps,
-                        &account,
+                        &acquired.account,
                         retry,
                         &request.model,
                         &mut excluded_account_ids,
@@ -338,8 +374,8 @@ async fn responses_http_sse_stream(
                     )
                     .await;
                     if let Some(fallback) = fallback {
-                        account = fallback;
-                        log_context = log_context.with_account(&account.id);
+                        log_context = log_context.with_account(&fallback.account.id);
+                        acquired = fallback;
                         continue;
                     }
                 }
@@ -358,11 +394,15 @@ async fn responses_http_sse_stream(
         }
     };
 
-    if persist_upstream_cookies_with_deps(&deps, &account.id, &stream_response.set_cookie_headers)
-        .await
-        .is_err()
+    if persist_upstream_cookies_with_deps(
+        &deps,
+        &acquired.account.id,
+        &stream_response.set_cookie_headers,
+    )
+    .await
+    .is_err()
     {
-        deps.account_pool.lock().await.release(&account.id);
+        deps.account_pool.lock().await.release(&acquired.account.id);
         log_codex_upstream_response_with_deps(
             &deps,
             &log_context,
@@ -387,8 +427,8 @@ async fn responses_http_sse_stream(
     let audit = StreamAudit::new(
         deps,
         log_context,
-        account.id,
-        account.plan_type,
+        acquired.account.id,
+        acquired.account.plan_type,
         rate_limit_headers,
     );
 
@@ -765,15 +805,16 @@ async fn record_response_affinity_with_deps(
 async fn responses_websocket_stream(
     deps: CodexUpstreamDependencies,
     request: CodexResponsesRequest,
-    mut account: Account,
+    mut acquired: AcquiredAccount,
     mut log_context: CodexRequestLogContext,
 ) -> Response {
     let mut excluded_account_ids = Vec::new();
     let stream_response = loop {
+        stagger_request_with_deps(&deps, acquired.previous_slot_at).await;
         let response = send_codex_websocket_stream_request_with_refresh_retry(
             &deps,
             &request,
-            &account,
+            &acquired.account,
             log_context.request_id.as_str(),
         )
         .await;
@@ -784,13 +825,15 @@ async fn responses_websocket_stream(
                 if transport_for_request(&request) == CodexTransport::WebSocketPreferred
                     && websocket_stream_error_allows_http_sse_fallback(&error)
                 {
-                    return responses_http_sse_stream(deps, request, account, log_context).await;
+                    acquired.previous_slot_at = None;
+                    return responses_http_sse_stream(deps, request, acquired, log_context).await;
                 }
-                deps.account_pool.lock().await.release(&account.id);
+                deps.account_pool.lock().await.release(&acquired.account.id);
                 if let Some(retry) = classify_upstream_account_retry(&error) {
                     if request.previous_response_id.is_some() {
                         // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
-                        apply_upstream_account_retry_with_deps(&deps, &account, retry).await;
+                        apply_upstream_account_retry_with_deps(&deps, &acquired.account, retry)
+                            .await;
                         log_codex_upstream_response_with_deps(
                             &deps,
                             &log_context,
@@ -803,7 +846,7 @@ async fn responses_websocket_stream(
                     } else {
                         let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
                             &deps,
-                            &account,
+                            &acquired.account,
                             retry,
                             &request.model,
                             &mut excluded_account_ids,
@@ -819,8 +862,8 @@ async fn responses_websocket_stream(
                         )
                         .await;
                         if let Some(fallback) = fallback {
-                            account = fallback;
-                            log_context = log_context.with_account(&account.id);
+                            log_context = log_context.with_account(&fallback.account.id);
+                            acquired = fallback;
                             continue;
                         }
                     }
@@ -840,11 +883,15 @@ async fn responses_websocket_stream(
         }
     };
 
-    if persist_upstream_cookies_with_deps(&deps, &account.id, &stream_response.set_cookie_headers)
-        .await
-        .is_err()
+    if persist_upstream_cookies_with_deps(
+        &deps,
+        &acquired.account.id,
+        &stream_response.set_cookie_headers,
+    )
+    .await
+    .is_err()
     {
-        deps.account_pool.lock().await.release(&account.id);
+        deps.account_pool.lock().await.release(&acquired.account.id);
         log_codex_upstream_response_with_deps(
             &deps,
             &log_context,
@@ -867,8 +914,8 @@ async fn responses_websocket_stream(
     let audit = WebSocketStreamAudit::new(
         deps,
         log_context,
-        account.id,
-        account.plan_type,
+        acquired.account.id,
+        acquired.account.plan_type,
         request,
         stream_response.turn_state,
         stream_response.rate_limit_headers,

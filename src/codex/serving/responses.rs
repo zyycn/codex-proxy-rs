@@ -140,7 +140,7 @@ impl ResponsesService {
         self.upstream
             .prepare_response_session(&mut codex_request)
             .await;
-        let Some(mut account) = self
+        let Some(mut acquired) = self
             .upstream
             .acquire_account_for_request(&codex_request)
             .await
@@ -149,7 +149,7 @@ impl ResponsesService {
         };
         let mut log_context = CodexRequestLogContext::new(
             request_id,
-            &account.id,
+            &acquired.account.id,
             &codex_request.model,
             client_stream,
             started_at,
@@ -158,7 +158,7 @@ impl ResponsesService {
         if client_stream {
             return self
                 .upstream
-                .responses_stream(codex_request, account, log_context)
+                .responses_stream(codex_request, acquired, log_context)
                 .await;
         }
 
@@ -167,11 +167,18 @@ impl ResponsesService {
         const MAX_EMPTY_RETRIES: u8 = 2;
 
         let response = loop {
+            self.upstream
+                .stagger_request(acquired.previous_slot_at)
+                .await;
             let response = self
                 .upstream
-                .send_codex_request_with_refresh_retry(&codex_request, &account, request_id)
+                .send_codex_request_with_refresh_retry(
+                    &codex_request,
+                    &acquired.account,
+                    request_id,
+                )
                 .await;
-            self.upstream.release_account(&account.id).await;
+            self.upstream.release_account(&acquired.account.id).await;
 
             match response {
                 Ok(response) => {
@@ -179,7 +186,7 @@ impl ResponsesService {
                     if let Ok(CollectedResponse::Empty) = completed_response_json(&response.body) {
                         if self
                             .upstream
-                            .record_empty_response(&account.id)
+                            .record_empty_response(&acquired.account.id)
                             .await
                             .is_err()
                         {
@@ -243,7 +250,9 @@ impl ResponsesService {
                     if let Some(retry) = classify_upstream_account_retry(&error) {
                         if codex_request.previous_response_id.is_some() {
                             // previous_response_id history is account-affine upstream.
-                            self.upstream.apply_account_retry(&account, retry).await;
+                            self.upstream
+                                .apply_account_retry(&acquired.account, retry)
+                                .await;
                             self.upstream
                                 .log_response(
                                     &log_context,
@@ -257,7 +266,7 @@ impl ResponsesService {
                             let fallback = self
                                 .upstream
                                 .apply_retry_and_acquire_fallback(
-                                    &account,
+                                    &acquired.account,
                                     retry,
                                     &codex_request.model,
                                     &mut excluded_account_ids,
@@ -273,8 +282,8 @@ impl ResponsesService {
                                 )
                                 .await;
                             if let Some(fallback) = fallback {
-                                account = fallback;
-                                log_context = log_context.with_account(&account.id);
+                                log_context = log_context.with_account(&fallback.account.id);
+                                acquired = fallback;
                                 continue;
                             }
                         }
@@ -295,7 +304,7 @@ impl ResponsesService {
         };
         if self
             .upstream
-            .persist_cookies(&account.id, &response.set_cookie_headers)
+            .persist_cookies(&acquired.account.id, &response.set_cookie_headers)
             .await
             .is_err()
         {
@@ -320,7 +329,7 @@ impl ResponsesService {
         if let Some(usage) = response.usage {
             if self
                 .upstream
-                .record_usage(&account.id, usage)
+                .record_usage(&acquired.account.id, usage)
                 .await
                 .is_err()
             {
@@ -349,7 +358,7 @@ impl ResponsesService {
                 self.upstream
                     .record_response_affinity(
                         &codex_request,
-                        &account.id,
+                        &acquired.account.id,
                         &response.body,
                         response.turn_state.as_deref(),
                         response.usage,
@@ -369,7 +378,7 @@ impl ResponsesService {
             Ok(CollectedResponse::Empty) => {
                 if self
                     .upstream
-                    .record_empty_response(&account.id)
+                    .record_empty_response(&acquired.account.id)
                     .await
                     .is_err()
                 {

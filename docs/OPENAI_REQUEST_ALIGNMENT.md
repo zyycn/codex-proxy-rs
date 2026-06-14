@@ -5,9 +5,63 @@
 ## 审查日期
 2026-06-13
 
-## 关键差异总结
+## 当前结论
 
-### ✅ 已修复的问题
+Rust 版已经补齐 OpenAI/Codex 主请求链路的核心路径：默认 WebSocket 上游、`previous_response_id` 账号亲和性、稳定 `prompt_cache_key`、关键安全 header、`client_metadata`、WS frame 到 SSE 的响应转换、usage/rate-limit 记录和 HTTP SSE fallback。
+
+本轮改造后，直接影响 OpenAI 交互语义和请求发送行为的差异已补齐：自动 Cookie 捕获白名单、`Max-Age` 优先级、账号生命周期后的 WS pool 驱逐、`request_interval_ms` 发送前 stagger、`least_used` reset 缺失排序。
+
+仍不能宣称与 Node.js 原版 100% 一致，因为 Responses implicit resume、strip-and-retry、reasoning replay 这类更细的状态机尚未完整迁移。
+
+## 本轮已对齐项
+
+### 自动捕获 Cookie 策略
+
+原版只允许自动捕获 `cf_clearance`，避免重放 `__cf_bm` 这类与 IP、UA、TLS 指纹和时序强绑定的 Bot Management session cookie。Rust 此前会自动持久化所有 `Set-Cookie`，包括 `__cf_bm`。
+
+已完成：
+- 自动 `Set-Cookie` 捕获只允许 `cf_clearance`
+- 管理端手动注入 Cookie 不受白名单限制
+- `Max-Age` 优先级高于 `Expires`
+
+### WebSocket Pool 生命周期驱逐
+
+原版在账号 refreshed、banned、disabled、rate-limited 等状态变化后会按账号驱逐 WS pool，避免旧 token、旧风控状态或旧后端粘滞连接继续复用。Rust 此前只有被动 rate-limit 和部分 fallback 状态会驱逐，账号刷新、管理端禁用/删除、批量状态更新等生命周期路径没有统一驱逐同一个共享 pool。
+
+已完成：
+- `AccountService` 和 `CodexUpstreamService` 共享同一个 `CodexWebSocketPool`
+- refresh 成功后驱逐旧连接
+- refresh 失败导致 Expired/QuotaExhausted/Banned/Disabled 后驱逐
+- 管理端 disable/delete/batch lifecycle 后驱逐
+
+### 请求间隔发送节流
+
+原版在账号池返回 `prevSlotMs` 后，发送上游请求前会按 `request_interval_ms` 做 stagger。Rust 的 `AccountPool` 已返回 `previous_slot_at`，但此前服务层丢弃了该字段，实际发送上游请求前没有等待。
+
+已完成：
+- acquire 返回值保留 `previous_slot_at`
+- 普通请求、stream 请求、fallback 账号请求在发 OpenAI/Codex 上游前统一执行 stagger
+- 只延迟同账号连续请求，不影响账号选择
+
+### `least_used` 中 `window_reset_at` 的比较语义
+
+原版只有当两个账号都有 `window_reset_at` 且值不同时才比较 reset 时间；否则继续比较 `request_count` 和 LRU。Rust 此前把 `Some(window_reset_at)` 永远排在 `None` 前面，会让缺少 reset 数据但请求更少的账号被不合理降权。
+
+已完成：
+- `(Some(a), Some(b))` 且不相等时比较 reset
+- 任一侧缺失 reset 时继续比较 `request_count`
+
+## 仍未完全对齐项
+
+### Responses 隐式续接和 reasoning replay 状态机
+
+原版 shared handler 还包含 implicit resume、strip-and-retry、reasoning replay 等更细的 Responses 状态机。Rust 当前主请求链路已对齐默认 WS 和显式 `previous_response_id`，但这些边缘续接状态机尚未完整迁移。
+
+对齐要求：
+- 单独设计并测试 implicit resume/reasoning replay
+- 不在完成前把 OpenAI/Codex 链路标记为 100% 一致
+
+## 已修复的问题
 
 #### 1. 缺失的关键 HTTP Headers
 
@@ -164,7 +218,8 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 - ✅ 402 → 标记配额耗尽 + 备用账号
 
 ### 4. Cookie 管理
-- ✅ 捕获 `Set-Cookie` headers
+- ✅ 自动捕获 `Set-Cookie` 时只持久化 `cf_clearance`
+- ✅ `Max-Age` 优先于 `Expires`
 - ✅ 持久化到数据库
 - ✅ 构建 `Cookie` header
 
@@ -172,11 +227,9 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 - ✅ `previous_response_id` 时自动使用 WebSocket
 - ✅ 相同的 header 传递逻辑
 
-## 结论
+## 修复进度
 
-✅ **OpenAI 请求链路现已与 Node.js 参考实现完全一致**
-
-所有关键差异已修复：
+已完成：
 1. ✅ 添加 `x-codex-installation-id` header
 2. ✅ 添加 `session_id` header
 3. ✅ 实现 conversation identity 派生逻辑
@@ -184,12 +237,16 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 5. ✅ 所有测试通过
 6. ✅ 编译无错误
 
+仍需完成：
+1. implicit resume/reasoning replay 状态机
+
 ## 下一步建议
 
 1. **集成测试**：使用真实账号进行端到端测试，验证会话关联是否正常工作
 2. **监控**：观察 `session_id` 和 `installation_id` 在日志中的出现，确保正确传递
 3. **性能验证**：确认 prompt cache 命中率是否提升（session affinity 的主要效果）
 4. **兼容性测试**：验证与真实 Codex Desktop 的 `~/.codex/installation_id` 共享是否正常
+5. **状态机补齐**：单独迁移 implicit resume/reasoning replay，并补充原版行为级测试
 
 ## 参考
 

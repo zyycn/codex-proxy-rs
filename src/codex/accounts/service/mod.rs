@@ -20,7 +20,7 @@ use crate::{
             AccountRepository, AccountUsageRepository, StoredAccount, StoredAccountMetadata,
         },
     },
-    codex::gateway::oauth::TokenRefresher,
+    codex::gateway::{oauth::TokenRefresher, transport::websocket::CodexWebSocketPool},
     config::AppConfig,
     utils::pagination::Page,
 };
@@ -33,6 +33,7 @@ pub struct AccountService {
     cookie_repository: Option<CookieRepository>,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     account_pool: Arc<Mutex<AccountPool>>,
+    websocket_pool: Arc<CodexWebSocketPool>,
 }
 
 #[derive(Debug)]
@@ -247,6 +248,7 @@ impl AccountService {
         cookie_repository: Option<CookieRepository>,
         token_refresher: Option<Arc<dyn TokenRefresher>>,
         account_pool: Arc<Mutex<AccountPool>>,
+        websocket_pool: Arc<CodexWebSocketPool>,
     ) -> Self {
         Self {
             config,
@@ -255,6 +257,7 @@ impl AccountService {
             cookie_repository,
             token_refresher,
             account_pool,
+            websocket_pool,
         }
     }
 
