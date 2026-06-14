@@ -79,6 +79,42 @@ fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
 }
 
 #[test]
+fn account_pool_should_not_shorten_existing_quota_cooldown() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(Account::test("limited", AccountStatus::Active));
+
+    pool.mark_quota_limited_until("limited", now + Duration::seconds(180));
+    pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
+
+    assert!(pool
+        .acquire_with(AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(90)
+        ))
+        .is_none());
+}
+
+#[test]
+fn account_pool_should_not_replace_known_window_length_with_cooldown_seconds() {
+    let now = Utc::now();
+    let mut account = Account::test("limited", AccountStatus::Active);
+    account.limit_window_seconds = Some(300);
+    let mut pool = AccountPool::default();
+    pool.insert(account);
+
+    pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(61),
+        ))
+        .unwrap();
+
+    assert_eq!(acquired.account.limit_window_seconds, Some(300));
+}
+
+#[test]
 fn acquire_should_skip_accounts_with_expired_token_metadata() {
     let now = fixed_time();
     let mut expired = Account::test("expired", AccountStatus::Active);
@@ -378,6 +414,50 @@ fn acquire_should_mark_runtime_usage_window() {
         acquired.account.last_used_at.as_deref(),
         Some(now.to_rfc3339().as_str())
     );
+}
+
+#[test]
+fn sync_rate_limit_window_should_reset_window_counters_when_drift_crosses_threshold() {
+    let now = fixed_time();
+    let mut account = Account::test("acct_a", AccountStatus::Active);
+    account.window_request_count = 5;
+    account.window_input_tokens = 100;
+    account.window_output_tokens = 40;
+    account.window_cached_tokens = 20;
+    account.window_reset_at = Some(now + Duration::seconds(60));
+    account.limit_window_seconds = Some(60);
+    let mut pool = AccountPool::default();
+    pool.insert(account);
+
+    pool.sync_rate_limit_window("acct_a", now + Duration::seconds(121), Some(60));
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.window_request_count, 1);
+    assert_eq!(acquired.account.window_input_tokens, 0);
+    assert_eq!(acquired.account.window_output_tokens, 0);
+    assert_eq!(acquired.account.window_cached_tokens, 0);
+    assert_eq!(
+        acquired.account.window_reset_at,
+        Some(now + Duration::seconds(121))
+    );
+}
+
+#[test]
+fn record_window_token_usage_should_accumulate_runtime_window_tokens() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(Account::test("acct_a", AccountStatus::Active));
+
+    pool.record_window_token_usage("acct_a", 7, 4, 2);
+    let acquired = pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.window_input_tokens, 7);
+    assert_eq!(acquired.account.window_output_tokens, 4);
+    assert_eq!(acquired.account.window_cached_tokens, 2);
 }
 
 fn fixed_time() -> chrono::DateTime<Utc> {

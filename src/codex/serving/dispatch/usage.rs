@@ -9,6 +9,12 @@ pub(super) async fn record_usage_with_deps(
     account_id: &str,
     usage: TokenUsage,
 ) -> Result<(), ()> {
+    deps.account_pool.lock().await.record_window_token_usage(
+        account_id,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cached_tokens,
+    );
     let Some(repo) = deps.account_repository.as_ref() else {
         return Ok(());
     };

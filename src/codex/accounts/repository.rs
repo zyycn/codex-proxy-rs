@@ -359,6 +359,9 @@ impl AccountRepository {
                 request_count: row.get::<i64, _>("usage_request_count").max(0) as u64,
                 empty_response_count: row.get::<i64, _>("usage_empty_response_count").max(0) as u64,
                 window_request_count: 0,
+                window_input_tokens: 0,
+                window_output_tokens: 0,
+                window_cached_tokens: 0,
                 window_started_at: None,
                 window_reset_at: None,
                 limit_window_seconds: None,
@@ -560,15 +563,28 @@ impl AccountRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn get_quota_json(
+        &self,
+        account_id: &str,
+    ) -> AccountRepositoryResult<Option<String>> {
+        let row = sqlx::query("select quota_json from accounts where id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|row| row.get("quota_json")))
+    }
+
     pub async fn set_quota_cooldown_until(
         &self,
         id: &str,
         cooldown_until: DateTime<Utc>,
     ) -> AccountRepositoryResult<bool> {
+        let cooldown_until = cooldown_until.to_rfc3339();
         let result = sqlx::query(
-            "update accounts set quota_limit_reached = 1, quota_cooldown_until = ?, updated_at = ? where id = ?",
+            "update accounts set quota_limit_reached = 1, quota_cooldown_until = case when quota_cooldown_until is not null and quota_cooldown_until > ? then quota_cooldown_until else ? end, updated_at = ? where id = ?",
         )
-        .bind(cooldown_until.to_rfc3339())
+        .bind(&cooldown_until)
+        .bind(cooldown_until)
         .bind(Utc::now().to_rfc3339())
         .bind(id)
         .execute(&self.pool)

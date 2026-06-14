@@ -160,6 +160,9 @@ impl AccountPool {
         account.request_count = 0;
         account.empty_response_count = 0;
         account.window_request_count = 0;
+        account.window_input_tokens = 0;
+        account.window_output_tokens = 0;
+        account.window_cached_tokens = 0;
         account.window_started_at = None;
         account.window_reset_at = None;
         true
@@ -173,16 +176,48 @@ impl AccountPool {
         let Some(account) = self.accounts.get_mut(account_id) else {
             return false;
         };
+        let final_cooldown_until = account
+            .quota_cooldown_until
+            .filter(|existing| *existing > cooldown_until)
+            .unwrap_or(cooldown_until);
         account.quota_limit_reached = true;
-        account.quota_cooldown_until = Some(cooldown_until);
-        account.window_reset_at = Some(cooldown_until);
-        if let Ok(seconds) = (cooldown_until - Utc::now())
+        account.quota_cooldown_until = Some(final_cooldown_until);
+        account.window_reset_at = account
+            .window_reset_at
+            .filter(|existing| *existing > final_cooldown_until)
+            .or(Some(final_cooldown_until));
+        if let Ok(seconds) = (final_cooldown_until - Utc::now())
             .to_std()
             .map(|duration| duration.as_secs())
         {
-            account.limit_window_seconds = Some(seconds);
+            account.limit_window_seconds.get_or_insert(seconds);
         }
         self.slots.remove(account_id);
+        true
+    }
+
+    pub fn sync_rate_limit_window(
+        &mut self,
+        account_id: &str,
+        new_reset_at: DateTime<Utc>,
+        limit_window_seconds: Option<u64>,
+    ) -> bool {
+        self.sync_rate_limit_window_at(account_id, new_reset_at, limit_window_seconds, Utc::now())
+    }
+
+    pub fn record_window_token_usage(
+        &mut self,
+        account_id: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cached_tokens: u64,
+    ) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.window_input_tokens = account.window_input_tokens.saturating_add(input_tokens);
+        account.window_output_tokens = account.window_output_tokens.saturating_add(output_tokens);
+        account.window_cached_tokens = account.window_cached_tokens.saturating_add(cached_tokens);
         true
     }
 
@@ -383,6 +418,27 @@ impl AccountPool {
         Some(account.clone())
     }
 
+    fn sync_rate_limit_window_at(
+        &mut self,
+        account_id: &str,
+        new_reset_at: DateTime<Utc>,
+        limit_window_seconds: Option<u64>,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        if should_reset_window_counters(account, new_reset_at, limit_window_seconds) {
+            reset_window_counters(account);
+            account.window_started_at = Some(now);
+        }
+        account.window_reset_at = Some(new_reset_at);
+        if let Some(limit_window_seconds) = limit_window_seconds {
+            account.limit_window_seconds = Some(limit_window_seconds);
+        }
+        true
+    }
+
     fn cleanup_stale_slots(&mut self, now: DateTime<Utc>) {
         let ttl = self.options.stale_slot_ttl;
         self.slots.retain(|_, slots| {
@@ -458,7 +514,7 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
         .is_some_and(|cooldown_until| now >= cooldown_until);
 
     if window_expired {
-        account.window_request_count = 0;
+        reset_window_counters(account);
         account.window_started_at = Some(now);
         account.window_reset_at =
             next_window_reset_at(account.window_reset_at, account.limit_window_seconds, now);
@@ -468,6 +524,39 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
         account.quota_limit_reached = false;
         account.quota_cooldown_until = None;
     }
+}
+
+fn should_reset_window_counters(
+    account: &Account,
+    new_reset_at: DateTime<Utc>,
+    limit_window_seconds: Option<u64>,
+) -> bool {
+    let Some(old_reset_at) = account.window_reset_at else {
+        return false;
+    };
+    if old_reset_at == new_reset_at {
+        return false;
+    }
+    let drift = old_reset_at
+        .signed_duration_since(new_reset_at)
+        .num_seconds()
+        .unsigned_abs();
+    let window_seconds = limit_window_seconds
+        .or(account.limit_window_seconds)
+        .unwrap_or(0);
+    let threshold = if window_seconds > 0 {
+        window_seconds / 2
+    } else {
+        3_600
+    };
+    drift >= threshold
+}
+
+fn reset_window_counters(account: &mut Account) {
+    account.window_request_count = 0;
+    account.window_input_tokens = 0;
+    account.window_output_tokens = 0;
+    account.window_cached_tokens = 0;
 }
 
 fn next_window_reset_at(

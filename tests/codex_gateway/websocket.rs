@@ -670,6 +670,88 @@ async fn websocket_success_should_capture_handshake_headers_and_rate_limit_heade
     clippy::result_large_err,
     reason = "tokio-tungstenite handshake callbacks use a large error response type"
 )]
+async fn websocket_success_should_capture_internal_rate_limit_events_without_forwarding_them() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_hdr_async(stream, |_request: &WsRequest, response| Ok(response))
+            .await
+            .unwrap();
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "codex.rate_limits",
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 100,
+                            "window_minutes": 5,
+                            "reset_at": 1893456300
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_ws_rate_limits", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+
+    let mut request = base_request();
+    request.use_websocket = true;
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::codex::gateway::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+
+    let response = client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                access_token: "access-token",
+                account_id: Some("chatgpt-account"),
+                request_id: "req_ws_rate_limits",
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+                installation_id: None,
+                session_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    server.await.unwrap();
+    assert!(!response.body.contains("codex.rate_limits"));
+    assert!(response
+        .rate_limit_headers
+        .iter()
+        .any(|(name, value)| { name == "x-codex-primary-used-percent" && value == "100" }));
+    assert!(response
+        .rate_limit_headers
+        .iter()
+        .any(|(name, value)| { name == "x-codex-primary-reset-at" && value == "1893456300" }));
+}
+
+#[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "tokio-tungstenite handshake callbacks use a large error response type"
+)]
 async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
