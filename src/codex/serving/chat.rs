@@ -97,12 +97,12 @@ impl ChatService {
             .map(normalize_service_tier_for_upstream);
         let include_reasoning = codex_request.reasoning.is_some();
 
-        let Some(mut account) = self.upstream.acquire_account(&codex_request.model).await else {
+        let Some(mut acquired) = self.upstream.acquire_account(&codex_request.model).await else {
             return no_available_accounts_response().into_response();
         };
         let mut log_context = CodexRequestLogContext::new(
             request_id,
-            &account.id,
+            &acquired.account.id,
             &codex_request.model,
             client_stream,
             started_at,
@@ -110,11 +110,18 @@ impl ChatService {
 
         let mut excluded_account_ids = Vec::new();
         let response = loop {
+            self.upstream
+                .stagger_request(acquired.previous_slot_at)
+                .await;
             let response = self
                 .upstream
-                .send_codex_request_with_refresh_retry(&codex_request, &account, request_id)
+                .send_codex_request_with_refresh_retry(
+                    &codex_request,
+                    &acquired.account,
+                    request_id,
+                )
                 .await;
-            self.upstream.release_account(&account.id).await;
+            self.upstream.release_account(&acquired.account.id).await;
 
             match response {
                 Ok(response) => break response,
@@ -123,7 +130,7 @@ impl ChatService {
                         let fallback = self
                             .upstream
                             .apply_retry_and_acquire_fallback(
-                                &account,
+                                &acquired.account,
                                 retry,
                                 &codex_request.model,
                                 &mut excluded_account_ids,
@@ -139,8 +146,8 @@ impl ChatService {
                             )
                             .await;
                         if let Some(fallback) = fallback {
-                            account = fallback;
-                            log_context = log_context.with_account(&account.id);
+                            log_context = log_context.with_account(&fallback.account.id);
+                            acquired = fallback;
                             continue;
                         }
                     }
@@ -160,7 +167,7 @@ impl ChatService {
         };
         if self
             .upstream
-            .persist_cookies(&account.id, &response.set_cookie_headers)
+            .persist_cookies(&acquired.account.id, &response.set_cookie_headers)
             .await
             .is_err()
         {
@@ -176,7 +183,7 @@ impl ChatService {
         if let Some(usage) = response.usage {
             if self
                 .upstream
-                .record_usage(&account.id, usage)
+                .record_usage(&acquired.account.id, usage)
                 .await
                 .is_err()
             {

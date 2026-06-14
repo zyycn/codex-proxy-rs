@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::codex::{
     accounts::{
         model::{Account, AccountStatus},
-        pool::AccountAcquireRequest,
+        pool::{AccountAcquireRequest, AcquiredAccount},
     },
     gateway::transport::{http_client::CodexClientError, rate_limits::cooldown_with_jitter},
 };
@@ -146,17 +146,13 @@ pub(super) async fn apply_upstream_retry_and_acquire_fallback_with_deps(
     retry: UpstreamAccountRetry,
     model: &str,
     excluded_account_ids: &mut Vec<String>,
-) -> Option<Account> {
+) -> Option<AcquiredAccount> {
     apply_upstream_account_retry_with_deps(deps, account, retry).await;
     excluded_account_ids.push(account.id.clone());
-    deps.account_pool
-        .lock()
-        .await
-        .acquire_with(
-            AccountAcquireRequest::new(model, Utc::now())
-                .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
-        )
-        .map(|fallback| fallback.account)
+    deps.account_pool.lock().await.acquire_with(
+        AccountAcquireRequest::new(model, Utc::now())
+            .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
+    )
 }
 
 pub(super) async fn apply_upstream_account_retry_with_deps(
@@ -230,6 +226,7 @@ pub(super) async fn apply_upstream_account_retry_with_deps(
             set_account_status(deps, account, AccountStatus::Banned).await;
         }
     }
+    deps.websocket_pool.evict_account(&account.id).await;
 }
 
 async fn set_account_status(
@@ -251,5 +248,4 @@ async fn set_account_status(
         .lock()
         .await
         .set_status(&account.id, status);
-    deps.websocket_pool.evict_account(&account.id).await;
 }

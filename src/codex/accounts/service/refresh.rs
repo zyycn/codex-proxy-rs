@@ -146,6 +146,7 @@ impl AccountService {
         let account = repo.get(account_id).await.map_err(|_| ())?.ok_or(())?;
         let account = pool_account_from_stored(account);
         self.account_pool.lock().await.insert(account.clone());
+        self.websocket_pool.evict_account(account_id).await;
         Ok(account)
     }
 
@@ -161,6 +162,7 @@ impl AccountService {
             .lock()
             .await
             .set_status(&account.id, status);
+        self.websocket_pool.evict_account(&account.id).await;
         Some(status)
     }
 }

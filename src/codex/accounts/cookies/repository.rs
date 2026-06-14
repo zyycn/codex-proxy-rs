@@ -1,10 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::platform::crypto::{CryptoError, SecretBox};
+
+const CAPTURABLE_COOKIES: &[&str] = &["cf_clearance"];
 
 #[derive(Debug, Error)]
 pub enum CookieError {
@@ -31,6 +33,9 @@ impl CookieRepository {
         let Some(parsed) = parse_set_cookie(raw) else {
             return Ok(());
         };
+        if !CAPTURABLE_COOKIES.contains(&parsed.name.as_str()) {
+            return Ok(());
+        }
         self.upsert_cookie(account_id, parsed).await
     }
 
@@ -121,12 +126,20 @@ fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
     let mut path = "/".to_string();
     let mut expires_at = None;
     for part in parts {
-        if let Some(value) = part.strip_prefix("Domain=") {
-            domain = value.trim_start_matches('.').to_string();
-        } else if let Some(value) = part.strip_prefix("Path=") {
-            path = value.to_string();
-        } else if let Some(value) = part.strip_prefix("Expires=") {
-            expires_at = Some(value.to_string());
+        let Some((attribute, value)) = part.split_once('=') else {
+            continue;
+        };
+        match attribute.trim().to_ascii_lowercase().as_str() {
+            "domain" => domain = value.trim_start_matches('.').to_string(),
+            "path" => path = value.to_string(),
+            "max-age" => {
+                if let Ok(seconds) = value.parse::<i64>() {
+                    expires_at = Some(max_age_expires_at(seconds));
+                }
+                break;
+            }
+            "expires" => expires_at = Some(value.to_string()),
+            _ => {}
         }
     }
     Some(ParsedCookie {
@@ -136,6 +149,14 @@ fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
         path,
         expires_at,
     })
+}
+
+fn max_age_expires_at(seconds: i64) -> String {
+    let now = Utc::now();
+    if seconds <= 0 {
+        return (now - Duration::seconds(1)).to_rfc3339();
+    }
+    (now + Duration::seconds(seconds.min(i32::MAX as i64))).to_rfc3339()
 }
 
 fn parse_cookie_header(raw: &str) -> Vec<ParsedCookie> {

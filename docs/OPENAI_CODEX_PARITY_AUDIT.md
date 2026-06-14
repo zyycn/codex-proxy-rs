@@ -8,6 +8,8 @@
 
 当前 Rust 版已补齐关键安全模拟字段、默认 WebSocket 上游请求、稳定 `prompt_cache_key`、`previous_response_id` 账号亲和性、WS 首帧错误分类、WS 实时边收边转发、账号 + conversation 维度的 WS 连接复用。IP 代理/VPN 能力明确不移植。
 
+本轮已补齐请求发送细节和账号生命周期差异：自动 Cookie 捕获白名单、`Max-Age` 优先级、账号刷新/管理状态变化后的 WS pool 驱逐、`request_interval_ms` 发送前 stagger、`least_used` 的 reset 缺失排序。仍未达到 100% 对齐的项目是 Responses implicit resume/reasoning replay 状态机。
+
 ## 1. 安全链路和指纹
 
 原版证据：
@@ -61,9 +63,49 @@ Rust 状态：
 - 到位：池 key 由 base URL、本地账号和派生后的 conversation/prompt cache key 组成；同 key busy、账号连接数达到上限或 pool disabled/shutdown 时旁路 one-shot，避免排队和死锁。
 - 到位：复用连接如果在首帧前发现已被对端关闭，会丢弃后用 fresh one-shot WS 重试一次；mid-stream 提前关闭会向客户端 stream 报错，不做重试。
 - 到位：空闲连接支持 keepalive ping/pong 和 liveness timeout，周期 sweep 会关闭过期、无响应或被 shutdown/evict 的连接；`websocket_connection_limit_reached` 会按连接级 fatal 错误剔除。
-- 到位：账号状态被标记限流/封禁/额度耗尽时会驱逐该账号的空闲 WS，忙碌中的连接完成后不会再放回池中。
+- 到位：被动 rate-limit、上游 fallback 状态变更、refresh 成功/失败、管理端 disable/delete/batch lifecycle 都会驱逐该账号的 WS；`AccountService` 和 `CodexUpstreamService` 使用同一个应用级共享 pool。
 
-## 5. 非目标：IP 代理/VPN
+## 5. Cookie 捕获语义
+
+原版证据：
+- `src/proxy/cookie-jar.ts` 的 `CAPTURABLE_COOKIE_NAMES` 只包含 `cf_clearance`。
+- 自动捕获 `Set-Cookie` 会跳过 `__cf_bm`；管理端手动 `set()` 不受白名单限制。
+- `Max-Age` 会优先于 `Expires`，`Max-Age<=0` 代表立即过期。
+
+Rust 状态：
+- 到位：`CookieRepository::capture_set_cookie()` 自动捕获只允许 `cf_clearance`。
+- 到位：`parse_set_cookie()` 支持 `Max-Age`，并让它优先于 `Expires`。
+- 到位：手动 `set_cookie_header()` 可以持久化任意 Cookie，这一点已保留。
+
+## 6. 请求发送节流
+
+原版证据：
+- `routes/shared/proxy-handler.ts` 获取账号后调用 `staggerIfNeeded(acquired.prevSlotMs)`。
+- fallback 到备用账号后同样会在发送上游请求前 stagger。
+
+Rust 状态：
+- 到位：`AccountPool::acquire_with()` 返回 `previous_slot_at`。
+- 到位：`CodexUpstreamService::acquire_account*()` 保留完整 `AcquiredAccount`，普通请求、stream 请求和 fallback 账号请求在发送上游前按 `auth.request_interval_ms` sleep。
+
+## 7. 账号调度排序
+
+原版证据：
+- `least_used` 的优先级是 quota-exhausted 降权、两侧都有 `window_reset_at` 时比较 reset、`request_count`、LRU。
+
+Rust 状态：
+- 到位：quota 降权、两侧都有 `window_reset_at` 时比较 reset、`request_count` 和 LRU 已实现。
+- 到位：任一侧缺少 reset 时继续比较 `request_count`，不再把 `Some(window_reset_at)` 永远排在 `None` 前面。
+
+## 8. Responses 续接状态机
+
+原版证据：
+- shared handler 包含 implicit resume、strip-and-retry、reasoning replay 的状态机。
+
+Rust 状态：
+- 到位：显式 `previous_response_id` 会强制 WebSocket 并优先回到原账号。
+- 未对齐：implicit resume、strip-and-retry、reasoning replay 尚未完整迁移，应单独设计和测试。
+
+## 9. 非目标：IP 代理/VPN
 
 原版包含本地代理探测、`proxy_url`、`HttpsProxyAgent`、账号代理池等能力。Rust 版不移植这些 IP 代理/VPN 功能，也不新增 `proxy_url` 配置。安全链路只关注 Codex/OpenAI 请求自身的身份、指纹、Cookie、header、body metadata 和 WS 语义。
 

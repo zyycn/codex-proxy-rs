@@ -614,9 +614,7 @@ fn compare_least_used_group(a: &LeastUsedGroupKey, b: &LeastUsedGroupKey) -> Ord
 fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
+        (Some(_), None) | (None, Some(_)) | (None, None) => Ordering::Equal,
     }
 }
 

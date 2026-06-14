@@ -141,6 +141,14 @@ pub async fn build_imported_app_with_accounts(
     base_url: String,
     accounts: &[ImportAccount],
 ) -> ImportedApp {
+    build_imported_app_with_accounts_and_config(base_url, accounts, |_| {}).await
+}
+
+pub async fn build_imported_app_with_accounts_and_config(
+    base_url: String,
+    accounts: &[ImportAccount],
+    configure: impl FnOnce(&mut AppConfig),
+) -> ImportedApp {
     let tempdir = tempfile::tempdir().unwrap();
     let db = tempdir.path().join("v1-upstream.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -153,8 +161,10 @@ pub async fn build_imported_app_with_accounts(
         .insert_generated("test", &generated)
         .await
         .unwrap();
+    let mut config = test_config(url, base_url);
+    configure(&mut config);
     let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
-        test_config(url, base_url),
+        config,
         pool.clone(),
         secret_box.clone(),
         hasher,
