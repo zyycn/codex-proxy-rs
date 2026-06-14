@@ -45,19 +45,19 @@ impl Granularity {
             Granularity::Raw => ts,
             Granularity::FiveMin => {
                 let minutes = (ts.minute() / 5) * 5;
-                ts.date_naive()
-                    .and_hms_opt(ts.hour(), minutes, 0)
-                    .unwrap()
-                    .and_utc()
+                align_utc_time(ts, ts.hour(), minutes, 0)
             }
-            Granularity::Hourly => ts
-                .date_naive()
-                .and_hms_opt(ts.hour(), 0, 0)
-                .unwrap()
-                .and_utc(),
-            Granularity::Daily => ts.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            Granularity::Hourly => align_utc_time(ts, ts.hour(), 0, 0),
+            Granularity::Daily => align_utc_time(ts, 0, 0, 0),
         }
     }
+}
+
+fn align_utc_time(ts: DateTime<Utc>, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
+    ts.date_naive()
+        .and_hms_opt(hour, minute, second)
+        .map(|value| value.and_utc())
+        .unwrap_or(ts)
 }
 
 #[derive(Debug, Clone)]

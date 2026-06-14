@@ -4,7 +4,7 @@ use secrecy::{ExposeSecret, SecretString};
 use codex_proxy_rs::{
     codex::accounts::{
         model::AccountStatus,
-        repository::{AccountRepository, NewAccount, TokenUpdate, UsageDelta},
+        repository::{AccountClaimsUpdate, AccountRepository, NewAccount, TokenUpdate, UsageDelta},
     },
     platform::crypto::SecretBox,
     platform::storage::db::connect_sqlite,
@@ -404,6 +404,56 @@ async fn account_repository_should_preserve_refresh_token_when_update_omits_one(
     assert_eq!(loaded.access_token.expose_secret(), "new-access");
     assert_eq!(loaded.refresh_token.unwrap().expose_secret(), "old-refresh");
     assert_eq!(loaded.status, AccountStatus::Active);
+    assert!(loaded.access_token_expires_at.is_some());
+}
+
+#[tokio::test]
+async fn account_repository_should_preserve_refresh_token_when_claims_update_omits_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let repo = AccountRepository::new(pool, SecretBox::new([34u8; 32]));
+
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: Some("old@example.com".to_string()),
+        account_id: Some("old-account".to_string()),
+        user_id: Some("old-user".to_string()),
+        label: Some("old-label".to_string()),
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("old-access".to_string().into()),
+        refresh_token: Some(SecretString::new("old-refresh".to_string().into())),
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+
+    assert!(repo
+        .update_from_claims(
+            "acct_a",
+            AccountClaimsUpdate {
+                email: Some("new@example.com".to_string()),
+                account_id: Some("new-account".to_string()),
+                user_id: Some("new-user".to_string()),
+                plan_type: Some("pro".to_string()),
+                access_token: SecretString::new("new-access".to_string().into()),
+                refresh_token: None,
+                access_token_expires_at: Some(Utc::now() + Duration::hours(2)),
+                status: AccountStatus::Active,
+            },
+        )
+        .await
+        .unwrap());
+
+    let loaded = repo.get("acct_a").await.unwrap().unwrap();
+    assert_eq!(loaded.access_token.expose_secret(), "new-access");
+    assert_eq!(loaded.refresh_token.unwrap().expose_secret(), "old-refresh");
+    assert_eq!(loaded.email.as_deref(), Some("new@example.com"));
+    assert_eq!(loaded.account_id.as_deref(), Some("new-account"));
+    assert_eq!(loaded.user_id.as_deref(), Some("new-user"));
+    assert_eq!(loaded.plan_type.as_deref(), Some("pro"));
     assert!(loaded.access_token_expires_at.is_some());
 }
 

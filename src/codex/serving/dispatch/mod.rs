@@ -1,5 +1,7 @@
 pub mod affinity;
+mod audit;
 pub mod fallback;
+mod limits;
 pub mod refresh;
 // 上游调度辅助命名为 routing，避免出现 dispatch::dispatch 的模块套娃。
 pub mod routing;
@@ -17,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use futures::{stream as futures_stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -25,7 +27,7 @@ use tokio::sync::Mutex;
 use crate::{
     codex::accounts::cookies::repository::CookieRepository,
     codex::accounts::{
-        model::{Account, AccountStatus},
+        model::Account,
         pool::{AccountAcquireRequest, AccountPool},
         repository::AccountRepository,
     },
@@ -39,12 +41,10 @@ use crate::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream,
             CodexBackendWebSocketStream, CodexClientError, CodexRequestContext,
         },
-        rate_limits::{cooldown_with_jitter, parse_rate_limit_headers, rate_limit_quota},
         types::CodexResponsesRequest,
-        usage::{extract_sse_usage, TokenUsage},
+        usage::TokenUsage,
         websocket::{
-            append_rate_limit_updates, transport_for_request, CodexTransport, CodexWebSocketError,
-            CodexWebSocketPool, SharedRateLimitUpdates,
+            transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
         },
     },
     codex::logs::{
@@ -65,11 +65,16 @@ pub(crate) use self::{
 };
 
 use self::affinity::{compute_variant_hash, SessionAffinityMap, SessionAffinityRepository};
+use self::audit::{StreamAudit, WebSocketStreamAudit};
+use self::fallback::{
+    apply_upstream_account_retry_with_deps, apply_upstream_retry_and_acquire_fallback_with_deps,
+};
 use self::{
+    limits::apply_rate_limit_headers_with_deps,
     refresh::refresh_account_after_unauthorized,
     routing::request_domain,
-    stream::{completed_response_metadata, ensure_stream_metadata, responses_sse_failure},
-    usage::{record_empty_response_with_deps, record_request_attempt, record_usage_with_deps},
+    stream::{completed_response_metadata, ensure_stream_metadata},
+    usage::{record_empty_response_with_deps, record_usage_with_deps},
 };
 
 #[derive(Clone)]
@@ -757,194 +762,6 @@ async fn record_response_affinity_with_deps(
     }
 }
 
-async fn apply_rate_limit_headers_with_deps(
-    deps: &CodexUpstreamDependencies,
-    account_id: &str,
-    plan_type: Option<&str>,
-    rate_limit_headers: &[(String, String)],
-) {
-    let Some(rate_limits) = parse_rate_limit_headers(rate_limit_headers) else {
-        return;
-    };
-
-    let existing_quota = existing_quota_json(deps, account_id).await;
-    let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
-    if let Some(repo) = deps.account_repository.as_ref() {
-        if let Err(error) = repo.update_quota_json(account_id, &quota.to_string()).await {
-            tracing::warn!(
-                error = %error,
-                account_id = %account_id,
-                "被动同步 quota 缓存失败"
-            );
-        }
-    }
-
-    let Some(reset_at) = rate_limits.primary_reset_at() else {
-        return;
-    };
-    deps.account_pool.lock().await.sync_rate_limit_window(
-        account_id,
-        reset_at,
-        rate_limits.primary_limit_window_seconds(),
-    );
-    if let Some(repo) = deps.account_repository.as_ref() {
-        if let Err(error) = repo
-            .sync_rate_limit_window(
-                account_id,
-                reset_at,
-                rate_limits.primary_limit_window_seconds(),
-            )
-            .await
-        {
-            tracing::warn!(
-                error = %error,
-                account_id = %account_id,
-                window_reset_at = %reset_at,
-                "持久化 rate-limit window 失败"
-            );
-        }
-    }
-    if !rate_limits.primary_limit_reached() || reset_at <= Utc::now() {
-        return;
-    }
-
-    if let Some(repo) = deps.account_repository.as_ref() {
-        if let Err(error) = repo.set_quota_cooldown_until(account_id, reset_at).await {
-            tracing::warn!(
-                error = %error,
-                account_id = %account_id,
-                cooldown_until = %reset_at,
-                "持久化被动 quota cooldown 失败"
-            );
-        }
-    }
-    deps.account_pool
-        .lock()
-        .await
-        .mark_quota_limited_until(account_id, reset_at);
-    deps.websocket_pool.evict_account(account_id).await;
-}
-
-async fn existing_quota_json(deps: &CodexUpstreamDependencies, account_id: &str) -> Option<Value> {
-    let repo = deps.account_repository.as_ref()?;
-    let raw = repo.get_quota_json(account_id).await.ok().flatten()?;
-    serde_json::from_str(&raw).ok()
-}
-
-async fn apply_upstream_retry_and_acquire_fallback_with_deps(
-    deps: &CodexUpstreamDependencies,
-    account: &Account,
-    retry: UpstreamAccountRetry,
-    model: &str,
-    excluded_account_ids: &mut Vec<String>,
-) -> Option<Account> {
-    apply_upstream_account_retry_with_deps(deps, account, retry).await;
-    excluded_account_ids.push(account.id.clone());
-    deps.account_pool
-        .lock()
-        .await
-        .acquire_with(
-            AccountAcquireRequest::new(model, Utc::now())
-                .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
-        )
-        .map(|fallback| fallback.account)
-}
-
-async fn apply_upstream_account_retry_with_deps(
-    deps: &CodexUpstreamDependencies,
-    account: &Account,
-    retry: UpstreamAccountRetry,
-) {
-    match retry {
-        UpstreamAccountRetry::RateLimited {
-            retry_after_seconds,
-        } => {
-            let cooldown_until = Utc::now() + cooldown_with_jitter(retry_after_seconds, 2_000);
-            if let Some(repo) = deps.account_repository.as_ref() {
-                if let Err(error) = repo
-                    .set_quota_cooldown_until(&account.id, cooldown_until)
-                    .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        account_id = %account.id,
-                        cooldown_until = %cooldown_until,
-                        "持久化 quota cooldown 失败"
-                    );
-                }
-            }
-            deps.account_pool
-                .lock()
-                .await
-                .mark_quota_limited_until(&account.id, cooldown_until);
-            if let Err(error) = record_request_attempt(deps, &account.id).await {
-                tracing::warn!(
-                    error = ?error,
-                    account_id = %account.id,
-                    "记录被 rate limit 的账户请求尝试失败"
-                );
-            }
-        }
-        UpstreamAccountRetry::QuotaExhausted => {
-            set_account_status(deps, account, AccountStatus::QuotaExhausted).await;
-        }
-        UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => {
-            let cooldown_until = Utc::now() + Duration::seconds(cooldown_seconds as i64);
-            if let Some(cookie_repo) = deps.cookie_repository.as_ref() {
-                if let Err(error) = cookie_repo.delete_account_cookies(&account.id).await {
-                    tracing::warn!(
-                        error = %error,
-                        account_id = %account.id,
-                        "清理 Cloudflare 阻断账户 cookies 失败"
-                    );
-                }
-            }
-            if let Some(repo) = deps.account_repository.as_ref() {
-                if let Err(error) = repo
-                    .set_cloudflare_cooldown_until(&account.id, cooldown_until)
-                    .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        account_id = %account.id,
-                        cooldown_until = %cooldown_until,
-                        "持久化 Cloudflare cooldown 失败"
-                    );
-                }
-            }
-            deps.account_pool
-                .lock()
-                .await
-                .set_cloudflare_cooldown_until(&account.id, cooldown_until);
-        }
-        UpstreamAccountRetry::Banned => {
-            set_account_status(deps, account, AccountStatus::Banned).await;
-        }
-    }
-}
-
-async fn set_account_status(
-    deps: &CodexUpstreamDependencies,
-    account: &Account,
-    status: AccountStatus,
-) {
-    if let Some(repo) = deps.account_repository.as_ref() {
-        if let Err(error) = repo.set_status(&account.id, status).await {
-            tracing::warn!(
-                error = %error,
-                account_id = %account.id,
-                status = ?status,
-                "持久化上游账户状态失败"
-            );
-        }
-    }
-    deps.account_pool
-        .lock()
-        .await
-        .set_status(&account.id, status);
-    deps.websocket_pool.evict_account(&account.id).await;
-}
-
 async fn responses_websocket_stream(
     deps: CodexUpstreamDependencies,
     request: CodexResponsesRequest,
@@ -1047,17 +864,16 @@ async fn responses_websocket_stream(
             .into_response();
     }
 
-    let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account.id);
-    let audit = WebSocketStreamAudit {
+    let audit = WebSocketStreamAudit::new(
         deps,
-        context: log_context,
-        account_slot,
-        account_plan_type: account.plan_type,
+        log_context,
+        account.id,
+        account.plan_type,
         request,
-        turn_state: stream_response.turn_state,
-        rate_limit_headers: stream_response.rate_limit_headers,
-        rate_limit_updates: stream_response.rate_limit_updates,
-    };
+        stream_response.turn_state,
+        stream_response.rate_limit_headers,
+        stream_response.rate_limit_updates,
+    );
     let upstream = stream_response.body_stream;
 
     use tokio::time::{interval, Duration};
@@ -1171,283 +987,6 @@ impl CodexRequestLogContext {
             stream: self.stream,
             started_at: self.started_at,
         }
-    }
-}
-
-struct StreamAudit {
-    deps: CodexUpstreamDependencies,
-    context: CodexRequestLogContext,
-    account_slot: AccountSlotGuard,
-    account_plan_type: Option<String>,
-    rate_limit_headers: Vec<(String, String)>,
-}
-
-impl StreamAudit {
-    fn new(
-        deps: CodexUpstreamDependencies,
-        context: CodexRequestLogContext,
-        account_id: String,
-        account_plan_type: Option<String>,
-        rate_limit_headers: Vec<(String, String)>,
-    ) -> Self {
-        let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account_id);
-        Self {
-            deps,
-            context,
-            account_slot,
-            account_plan_type,
-            rate_limit_headers,
-        }
-    }
-
-    async fn complete(&mut self, body: &[u8]) {
-        apply_rate_limit_headers_with_deps(
-            &self.deps,
-            &self.context.account_id,
-            self.account_plan_type.as_deref(),
-            &self.rate_limit_headers,
-        )
-        .await;
-        let body = String::from_utf8_lossy(body);
-        let mut status = StatusCode::OK;
-        let mut level = EventLevel::Info;
-        let mut message = "v1 responses stream 已完成";
-        let mut metadata = match extract_sse_usage(&body) {
-            Ok(usage) => {
-                if let Some(usage) = usage {
-                    if record_usage_with_deps(&self.deps, &self.context.account_id, usage)
-                        .await
-                        .is_err()
-                    {
-                        level = EventLevel::Warn;
-                        message = "v1 responses stream 已完成但 usage 存储失败";
-                        json!({"stream": true, "usage": usage, "usageStoreError": true})
-                    } else {
-                        json!({"stream": true, "usage": usage})
-                    }
-                } else {
-                    json!({"stream": true, "usage": null})
-                }
-            }
-            Err(error) => {
-                level = EventLevel::Warn;
-                message = "v1 responses stream 已完成但 SSE usage 无效";
-                json!({"stream": true, "sseParseError": error.to_string()})
-            }
-        };
-        match responses_sse_failure(&body) {
-            Ok(Some(failure)) => {
-                // SSE 响应头已发出，HTTP 状态不能回滚；用终止事件透传给客户端，并在审计里标记上游失败。
-                status = StatusCode::BAD_GATEWAY;
-                level = EventLevel::Error;
-                message = "v1 responses stream 上游 SSE 失败";
-                failure.extend_metadata(&mut metadata);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                level = EventLevel::Warn;
-                message = "v1 responses stream 已完成但 SSE 失败 metadata 无效";
-                metadata = json!({"stream": true, "sseParseError": error.to_string()});
-            }
-        }
-        ensure_stream_metadata(&mut metadata, true);
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            status,
-            level,
-            message,
-            metadata,
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-
-    async fn log_transport_error(&mut self, error: &reqwest::Error) {
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            StatusCode::BAD_GATEWAY,
-            EventLevel::Error,
-            "v1 responses stream transport 失败",
-            json!({"stream": true, "transportError": error.to_string()}),
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-}
-
-struct WebSocketStreamAudit {
-    deps: CodexUpstreamDependencies,
-    context: CodexRequestLogContext,
-    account_slot: AccountSlotGuard,
-    account_plan_type: Option<String>,
-    request: CodexResponsesRequest,
-    turn_state: Option<String>,
-    rate_limit_headers: Vec<(String, String)>,
-    rate_limit_updates: SharedRateLimitUpdates,
-}
-
-impl WebSocketStreamAudit {
-    async fn complete(&mut self, body: &[u8]) {
-        let mut rate_limit_headers = self.rate_limit_headers.clone();
-        append_rate_limit_updates(&mut rate_limit_headers, &self.rate_limit_updates).await;
-        apply_rate_limit_headers_with_deps(
-            &self.deps,
-            &self.context.account_id,
-            self.account_plan_type.as_deref(),
-            &rate_limit_headers,
-        )
-        .await;
-        let body = String::from_utf8_lossy(body).into_owned();
-        let usage_result = extract_sse_usage(&body);
-        let response_usage = match &usage_result {
-            Ok(usage) => *usage,
-            Err(_) => None,
-        };
-        record_response_affinity_with_deps(
-            &self.deps,
-            &self.request,
-            &self.context.account_id,
-            &body,
-            self.turn_state.as_deref(),
-            response_usage,
-        )
-        .await;
-
-        let mut status = StatusCode::OK;
-        let mut level = EventLevel::Info;
-        let mut message = "v1 responses WebSocket stream 已完成";
-        let mut metadata = match usage_result {
-            Ok(Some(usage)) => {
-                if record_usage_with_deps(&self.deps, &self.context.account_id, usage)
-                    .await
-                    .is_err()
-                {
-                    level = EventLevel::Warn;
-                    message = "v1 responses WebSocket stream 已完成但 usage 存储失败";
-                    json!({
-                        "stream": true,
-                        "transport": "websocket",
-                        "usage": usage,
-                        "rateLimitHeaders": self.rate_limit_headers.clone(),
-                        "usageStoreError": true,
-                    })
-                } else {
-                    json!({
-                        "stream": true,
-                        "transport": "websocket",
-                        "usage": usage,
-                        "rateLimitHeaders": self.rate_limit_headers.clone(),
-                    })
-                }
-            }
-            Ok(None) => json!({
-                "stream": true,
-                "transport": "websocket",
-                "usage": null,
-                "rateLimitHeaders": self.rate_limit_headers.clone(),
-            }),
-            Err(error) => {
-                level = EventLevel::Warn;
-                message = "v1 responses WebSocket stream 已完成但 SSE usage 无效";
-                json!({
-                    "stream": true,
-                    "transport": "websocket",
-                    "rateLimitHeaders": self.rate_limit_headers.clone(),
-                    "sseParseError": error.to_string(),
-                })
-            }
-        };
-        match responses_sse_failure(&body) {
-            Ok(Some(failure)) => {
-                // SSE 响应头已经发给客户端，HTTP 状态不能回滚，只能在审计中标记上游失败。
-                status = StatusCode::BAD_GATEWAY;
-                level = EventLevel::Error;
-                message = "v1 responses WebSocket stream 上游 SSE 失败";
-                failure.extend_metadata(&mut metadata);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                level = EventLevel::Warn;
-                message = "v1 responses WebSocket stream 已完成但 SSE 失败 metadata 无效";
-                metadata = json!({
-                    "stream": true,
-                    "transport": "websocket",
-                    "rateLimitHeaders": self.rate_limit_headers.clone(),
-                    "sseParseError": error.to_string(),
-                });
-            }
-        }
-        ensure_stream_metadata(&mut metadata, true);
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            status,
-            level,
-            message,
-            metadata,
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-
-    async fn log_transport_error(&mut self, error: &CodexWebSocketError) {
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            StatusCode::BAD_GATEWAY,
-            EventLevel::Error,
-            "v1 responses WebSocket stream transport 失败",
-            json!({
-                "stream": true,
-                "transport": "websocket",
-                "rateLimitHeaders": self.rate_limit_headers.clone(),
-                "transportError": error.to_string(),
-            }),
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-}
-
-struct AccountSlotGuard {
-    pool: Arc<Mutex<AccountPool>>,
-    account_id: String,
-    released: bool,
-}
-
-impl AccountSlotGuard {
-    fn new(pool: Arc<Mutex<AccountPool>>, account_id: String) -> Self {
-        Self {
-            pool,
-            account_id,
-            released: false,
-        }
-    }
-
-    async fn release(&mut self) {
-        if self.released {
-            return;
-        }
-        self.pool.lock().await.release(&self.account_id);
-        self.released = true;
-    }
-}
-
-impl Drop for AccountSlotGuard {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        let pool = self.pool.clone();
-        let account_id = self.account_id.clone();
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
-            pool.lock().await.release(&account_id);
-        });
     }
 }
 
