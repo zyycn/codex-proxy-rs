@@ -125,7 +125,7 @@ async fn ensure_default_admin_exists(
 ### 1. 管理员登录
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/login \
+curl -X POST http://127.0.0.1:8080/api/admin/login \
   -H "Content-Type: application/json" \
   -d '{"password":"admin"}'
 ```
@@ -151,7 +151,7 @@ cpr_admin_session=sess_a27875537483420ab7ba6ce4d1f91b5e; Path=/; HttpOnly; SameS
 ### 2. 导入测试账号
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/accounts/import \
+curl -X POST http://127.0.0.1:8080/api/admin/accounts/import \
   -H "Content-Type: application/json" \
   -H "Cookie: cpr_admin_session=sess_a27875537483420ab7ba6ce4d1f91b5e" \
   -d @accounts-export.json
@@ -177,7 +177,7 @@ curl -X POST http://127.0.0.1:8080/admin/accounts/import \
 #### 3.1 创建 API 密钥
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/api-keys \
+curl -X POST http://127.0.0.1:8080/api/admin/api-keys \
   -H "Content-Type: application/json" \
   -H "Cookie: cpr_admin_session=sess_..." \
   -d '{"name":"test-key","label":"测试密钥"}'
@@ -197,7 +197,7 @@ curl -X POST http://127.0.0.1:8080/admin/api-keys \
 #### 3.2 刷新模型列表
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/refresh-models \
+curl -X POST http://127.0.0.1:8080/api/admin/refresh-models \
   -H "Cookie: cpr_admin_session=sess_..."
 ```
 
@@ -262,7 +262,7 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 由于 `AdminConfig` 添加了新字段，需要修复所有测试文件中的初始化代码。
 
 **影响的测试文件：**
-- `tests/admin/*.rs` (6 个文件)
+- `tests/api/admin/*.rs` (6 个文件)
 - `tests/codex_serving/*.rs` (2 个文件)
 - `tests/runtime/startup.rs`
 - `tests/support/*.rs` (2 个文件)
@@ -325,7 +325,7 @@ test result: ok. 49 passed; 0 failed
 - `tests/**/*.rs` - 修复测试中的 AdminConfig 初始化
 
 ### 不变的模块
-- `src/admin/auth/service.rs` - 认证逻辑无需变更
+- `src/api/admin/auth/service.rs` - 认证逻辑无需变更
 - `src/platform/identity/admin_session.rs` - 密码哈希逻辑无需变更
 - `src/platform/storage/schema.sql` - 数据库表结构无需变更
 

@@ -1,7 +1,7 @@
 use codex_proxy_rs::platform::{
     crypto::SecretBox,
     http::auth::{admin_session_id, client_api_key},
-    identity::{admin_session::hash_admin_password, api_key::ApiKeyHasher},
+    identity::{admin_session::hash_admin_password, client_key::ApiKeyHasher},
     storage::db::connect_sqlite,
 };
 

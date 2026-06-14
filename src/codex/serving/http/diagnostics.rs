@@ -10,10 +10,10 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    admin::auth::service::AdminAuthPoolSummary,
+    admin::session::service::AdminAuthPoolSummary,
     codex::{accounts::pool::AccountCapacitySummary, gateway::fingerprint::model::Fingerprint},
     config::AppConfig,
-    platform::http::middleware::RequestId,
+    platform::http::request_id::RequestId,
     runtime::state::AppState,
 };
 

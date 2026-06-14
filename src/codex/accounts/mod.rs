@@ -1,9 +1,8 @@
-pub mod cf_path_block;
+pub mod cloudflare_challenge;
 pub mod cookies;
 pub mod jwt;
 pub mod lifecycle;
 pub mod model;
-pub mod models;
 pub mod pool;
 pub mod repository;
 pub mod service;

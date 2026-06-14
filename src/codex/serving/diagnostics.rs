@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::{
     codex::gateway::{
         fingerprint::model::Fingerprint,
-        transport::client::{
+        transport::http_client::{
             build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
         },
     },

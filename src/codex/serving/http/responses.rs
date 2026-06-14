@@ -8,7 +8,7 @@ use axum::{
     Extension,
 };
 
-use crate::{platform::http::middleware::RequestId, runtime::state::AppState};
+use crate::{platform::http::request_id::RequestId, runtime::state::AppState};
 
 use super::{auth::authorize_client_api_key, errors::missing_client_api_key_response};
 

@@ -36,7 +36,7 @@ The cleanup started from these pressure points:
 | `tests/admin_accounts_route_test.rs` | 2588 | Admin account scenarios are too large to scan or move safely. |
 | `tests/v1_upstream_route_test.rs` | 2115 | Responses HTTP SSE, WebSocket, fallback, error mapping, usage, and logging side effects are mixed. |
 | `tests/chat_completions_route_test.rs` | 710 | Manageable, but should eventually align with the v1 split. |
-| `tests/admin_api_keys_route_test.rs` | 659 | Manageable, but can share common admin test setup. |
+| `tests/admin_client_keys_route_test.rs` | 659 | Manageable, but can share common admin test setup. |
 
 The main coupling pattern is:
 
@@ -51,8 +51,8 @@ touch fallback, account state, usage logs, and protocol conversion at the same t
 
 As of this cleanup pass:
 
-- `src/http/admin/mod.rs` is the admin module entry, backed by resource-specific files
-  under `src/http/admin/` and a dedicated admin router.
+- `src/http/api/admin/mod.rs` is the admin module entry, backed by resource-specific files
+  under `src/http/api/admin/` and a dedicated admin router.
 - `src/http/v1/mod.rs` is the v1 module entry, backed by thin route handlers for auth,
   chat, responses, models, errors, and router mounting under `src/http/v1/`.
 - `src/service/` now contains backend-facing HTTP use-case services:
@@ -78,7 +78,7 @@ As of this cleanup pass:
 - admin model catalog refresh orchestration lives in `codex::models::service::ModelService`.
 - `tests/common/` now contains shared integration-test helpers, including generic
   response/session helpers plus admin account and v1 upstream route fixtures.
-- `tests/admin_accounts_route_test.rs` has been split into list, mutation,
+- `tests/admin_accounts_route_test.rs` has been split into list, lifecycle,
   import/export, OAuth/auth, and cookies/quota/refresh/health scenario files.
 - `tests/v1_upstream_route_test.rs` has been split into Responses HTTP/SSE,
   Responses WebSocket, upstream fallback/refresh, and upstream error scenario files.
@@ -100,8 +100,8 @@ As of this cleanup pass:
 - `codex/upstream/dispatch.rs`, `fallback.rs`, `refresh.rs`, `stream.rs`, and
   `usage.rs` now own the obvious helper groups for dispatch response helpers, retry
   classification, token refresh retry, SSE response collection, and usage recording.
-- `codex/accounts/service/import.rs`, `mutation.rs`, `cookies.rs`, `quota.rs`, `health.rs`,
-  `refresh.rs`, and `runtime_pool.rs` now own account import, mutation, cookie, quota,
+- `codex/accounts/service/import.rs`, `lifecycle.rs`, `cookies.rs`, `quota.rs`, `health.rs`,
+  `refresh.rs`, and `runtime_pool.rs` now own account import, lifecycle, cookie, quota,
   health-check, single-account refresh, and runtime-pool workflows instead of leaving
   them in `service/account/mod.rs`.
 - `ChatService` and `ResponsesService` own a cloned `CodexUpstreamService` instance injected from
@@ -128,7 +128,7 @@ As of this cleanup pass:
   moved out of route tests into `tests/fixtures/*.sse`.
 - v1 Responses WebSocket mocked response payloads have been moved into
   `tests/fixtures/*.json`.
-- `http/admin/response.rs` now provides `AdminError`, and the admin route modules use
+- `http/api/admin/response.rs` now provides `AdminError`, and the admin route modules use
   `Result<impl IntoResponse, AdminError>` for standard admin-envelope failures.
 - admin auth handlers now propagate session, login, OAuth, and PKCE failures through
   `AdminError`; success paths that must set cookies or redirect still build explicit
@@ -210,7 +210,7 @@ and the Rust best-practice rules below.
 ### Async, Sharing, And Trait Objects
 
 - Shared runtime state should use `Arc` and explicit synchronization primitives such as
-  `tokio::sync::Mutex` only where mutation is required.
+  `tokio::sync::Mutex` only where lifecycle is required.
 - Keep lock scopes short. Do not hold account-pool or session locks while performing
   network requests, database calls, or expensive serialization.
 - Prefer generics/static dispatch for local helper abstractions. Use `Arc<dyn Trait>`
@@ -336,7 +336,7 @@ src/
       service/
         mod.rs
         import.rs
-        mutation.rs
+        lifecycle.rs
         cookies.rs
         quota.rs
         health.rs
@@ -505,7 +505,7 @@ This phase should be mostly mechanical:
 Create:
 
 ```text
-src/http/admin/
+src/http/api/admin/
   mod.rs
   router.rs
   response.rs
@@ -526,10 +526,10 @@ Suggested ownership:
 | `auth.rs` | `login`, `auth_status`, `auth_logout`, OAuth PKCE/device routes, admin session cookie helpers. |
 | `accounts.rs` | account list/create/import/export/delete/status/label, health check, refresh, reset usage, quota, cookies, account import parsing helpers. |
 | `api_keys.rs` | local client key list/create/import/export/delete/status/label/batch helpers. |
-| `logs.rs` | `/admin/logs` handler and log DTOs. |
-| `models.rs` | `/admin/refresh-models` handler and model refresh DTOs. |
-| `settings.rs` | `/admin/settings` handler and settings DTOs. |
-| `usage.rs` | `/admin/usage-stats` and `/admin/usage-stats/summary`. |
+| `logs.rs` | `/api/admin/logs` handler and log DTOs. |
+| `models.rs` | `/api/admin/refresh-models` handler and model refresh DTOs. |
+| `settings.rs` | `/api/admin/settings` handler and settings DTOs. |
+| `usage.rs` | `/api/admin/usage-stats` and `/api/admin/usage-stats/summary`. |
 | `router.rs` | admin route mounting only. |
 
 Keep cross-resource helpers private when possible. If a helper is needed by multiple
@@ -540,10 +540,10 @@ The admin router should own admin paths:
 ```rust
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/admin/login", post(auth::login))
-        .route("/admin/auth/status", get(auth::auth_status))
-        .route("/admin/accounts", get(accounts::accounts).post(accounts::create_account))
-        .route("/admin/api-keys", get(api_keys::api_keys).post(api_keys::create_api_key))
+        .route("/api/admin/login", post(auth::login))
+        .route("/api/admin/auth/status", get(auth::auth_status))
+        .route("/api/admin/accounts", get(accounts::accounts).post(accounts::create_account))
+        .route("/api/admin/api-keys", get(api_keys::api_keys).post(api_keys::create_api_key))
 }
 ```
 
@@ -600,7 +600,7 @@ cargo test --test admin_accounts_mutation_test
 cargo test --test admin_accounts_import_export_test
 cargo test --test admin_accounts_oauth_test
 cargo test --test admin_accounts_cookies_quota_test
-cargo test --test admin_api_keys_route_test
+cargo test --test admin_client_keys_route_test
 cargo test --test v1_responses_http_sse_test
 cargo test --test v1_responses_websocket_test
 cargo test --test v1_upstream_fallback_test
@@ -758,7 +758,7 @@ Targets:
 ```text
 src/codex/protocol/error.rs
 src/http/response.rs
-src/http/admin/response.rs
+src/http/api/admin/response.rs
 src/http/v1/errors.rs
 ```
 
@@ -990,7 +990,7 @@ cargo test --test v1_upstream_errors_test
 
 ### Step 4: Split Former `src/http/admin.rs`
 
-Move admin code into `src/http/admin/*.rs`, with `src/http/admin/mod.rs` as the module
+Move admin code into `src/http/api/admin/*.rs`, with `src/http/api/admin/mod.rs` as the module
 entry. Preserve behavior.
 
 Verification:
@@ -1002,7 +1002,7 @@ cargo test --test admin_accounts_mutation_test
 cargo test --test admin_accounts_import_export_test
 cargo test --test admin_accounts_oauth_test
 cargo test --test admin_accounts_cookies_quota_test
-cargo test --test admin_api_keys_route_test
+cargo test --test admin_client_keys_route_test
 cargo test --test admin_logs_route_test
 cargo test --test admin_models_route_test
 cargo test --test admin_settings_route_test
@@ -1090,7 +1090,7 @@ cargo test --test admin_accounts_mutation_test
 cargo test --test admin_accounts_import_export_test
 cargo test --test admin_accounts_oauth_test
 cargo test --test admin_accounts_cookies_quota_test
-cargo test --test admin_api_keys_route_test
+cargo test --test admin_client_keys_route_test
 cargo test --test v1_responses_http_sse_test
 cargo test --test v1_responses_websocket_test
 cargo test --test v1_upstream_fallback_test

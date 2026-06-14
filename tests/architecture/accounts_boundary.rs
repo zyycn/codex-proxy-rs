@@ -1,4 +1,4 @@
-use codex_proxy_rs::codex::accounts::{cookies::jar::CookieJar, models::catalog::ModelCatalog};
+use codex_proxy_rs::codex::{accounts::cookies::jar::CookieJar, models::catalog::ModelCatalog};
 
 #[test]
 fn accounts_exports_account_scoped_assets() {

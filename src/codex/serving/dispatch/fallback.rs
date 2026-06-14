@@ -7,7 +7,7 @@ use crate::codex::{
         model::{Account, AccountStatus},
         pool::AccountAcquireRequest,
     },
-    gateway::transport::{client::CodexClientError, rate_limits::cooldown_with_jitter},
+    gateway::transport::{http_client::CodexClientError, rate_limits::cooldown_with_jitter},
 };
 
 use super::{usage::record_request_attempt, CodexUpstreamDependencies};

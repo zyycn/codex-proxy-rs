@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    runtime_pool::pool_account_from_stored, AccountImportCounts, AccountImportEntry,
-    AccountService, StoreImportAccountError, ValidatedAccountImportError,
+    pool_sync::pool_account_from_stored, AccountImportCounts, AccountImportEntry, AccountService,
+    StoreImportAccountError, ValidatedAccountImportError,
 };
 
 enum StoredImportAccount {

@@ -32,7 +32,7 @@ async fn admin_auth_status_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/auth/status")
+                .uri("/api/admin/auth/status")
                 .header("x-request-id", "req_auth_status_no_session")
                 .body(Body::empty())
                 .unwrap(),
@@ -55,7 +55,7 @@ async fn admin_auth_status_should_report_empty_account_pool() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/auth/status")
+                .uri("/api/admin/auth/status")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_auth_status_empty")
                 .body(Body::empty())
@@ -88,7 +88,7 @@ async fn admin_auth_status_should_report_user_and_pool_summary_without_secrets()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/auth/status")
+                .uri("/api/admin/auth/status")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_auth_status_summary")
                 .body(Body::empty())
@@ -124,7 +124,7 @@ async fn admin_auth_logout_should_clear_accounts_and_runtime_pool() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_auth_logout/cookies")
+                .uri("/api/admin/accounts/acct_auth_logout/cookies")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(r#"{"cookies":"cf_clearance=secret"}"#))
@@ -138,7 +138,7 @@ async fn admin_auth_logout_should_clear_accounts_and_runtime_pool() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/logout")
+                .uri("/api/admin/auth/logout")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_auth_logout")
                 .body(Body::empty())
@@ -183,7 +183,7 @@ async fn admin_auth_device_login_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/device-login")
+                .uri("/api/admin/auth/device-login")
                 .header("x-request-id", "req_device_login_no_session")
                 .body(Body::empty())
                 .unwrap(),
@@ -222,7 +222,7 @@ async fn admin_auth_device_login_should_return_openai_device_code() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/device-login")
+                .uri("/api/admin/auth/device-login")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_device_login")
                 .body(Body::empty())
@@ -261,7 +261,7 @@ async fn admin_auth_device_poll_should_return_pending_without_importing_account(
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/auth/device-poll/device-secret")
+                .uri("/api/admin/auth/device-poll/device-secret")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_device_pending")
                 .body(Body::empty())
@@ -311,7 +311,7 @@ async fn admin_auth_device_poll_should_import_tokens_without_returning_secrets()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/auth/device-poll/device-success")
+                .uri("/api/admin/auth/device-poll/device-success")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_device_success")
                 .body(Body::empty())
@@ -367,7 +367,7 @@ async fn admin_auth_login_start_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/login-start")
+                .uri("/api/admin/auth/login-start")
                 .header("x-request-id", "req_login_start_no_session")
                 .body(Body::empty())
                 .unwrap(),
@@ -390,7 +390,7 @@ async fn admin_auth_login_start_should_return_pkce_auth_url_and_state() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/login-start")
+                .uri("/api/admin/auth/login-start")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("host", "127.0.0.1:8080")
                 .header("x-request-id", "req_login_start")
@@ -408,7 +408,9 @@ async fn admin_auth_login_start_should_return_pkce_auth_url_and_state() {
     assert!(auth_url.starts_with("https://auth.openai.com/oauth/authorize?"));
     assert!(auth_url.contains("response_type=code"));
     assert!(auth_url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
-    assert!(auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    assert!(
+        auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fopenai%2Fcallback")
+    );
     assert!(auth_url.contains("scope=openid%20profile%20email%20offline_access"));
     assert!(auth_url.contains("code_challenge_method=S256"));
     assert!(auth_url.contains("originator=codex_cli_rs"));
@@ -442,7 +444,7 @@ async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/login-start")
+                .uri("/api/admin/auth/login-start")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("host", "127.0.0.1:8080")
                 .body(Body::empty())
@@ -453,13 +455,13 @@ async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
     let start_body = response_json(start).await;
     let state_value = start_body["data"]["state"].as_str().unwrap();
     let callback_url =
-        format!("http://localhost:1455/auth/callback?code=oauth-code&state={state_value}");
+        format!("http://localhost:1455/auth/openai/callback?code=oauth-code&state={state_value}");
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/code-relay")
+                .uri("/api/admin/auth/code-relay")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_code_relay")
@@ -480,7 +482,10 @@ async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].code, "oauth-code");
     assert!(!calls[0].code_verifier.is_empty());
-    assert_eq!(calls[0].redirect_uri, "http://localhost:1455/auth/callback");
+    assert_eq!(
+        calls[0].redirect_uri,
+        "http://localhost:1455/auth/openai/callback"
+    );
     drop(calls);
     let stored = AccountRepository::new(pool.clone(), SecretBox::new([43; 32]))
         .find_by_chatgpt_identity("pkce-account", Some("pkce-user"))
@@ -521,7 +526,7 @@ async fn admin_auth_code_relay_should_reject_invalid_callback_url() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/code-relay")
+                .uri("/api/admin/auth/code-relay")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_code_relay_invalid")
@@ -565,7 +570,7 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/auth/login-start")
+                .uri("/api/admin/auth/login-start")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("host", "codex.local:1455")
                 .body(Body::empty())
@@ -575,7 +580,7 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
         .unwrap();
     let start_body = response_json(start).await;
     let state_value = start_body["data"]["state"].as_str().unwrap();
-    let callback_path = format!("/auth/callback?code=callback-code&state={state_value}");
+    let callback_path = format!("/auth/openai/callback?code=callback-code&state={state_value}");
 
     let response = app
         .oneshot(

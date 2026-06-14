@@ -18,7 +18,7 @@ use codex_proxy_rs::{
         UsageStatsConfig,
     },
     platform::crypto::SecretBox,
-    platform::identity::{api_key::ApiKeyHasher, api_key_repository::ClientApiKeyRepository},
+    platform::identity::{client_key::ApiKeyHasher, client_key_repository::ClientApiKeyRepository},
     platform::storage::db::connect_sqlite,
     runtime::build_router,
     runtime::state::AppState,
@@ -159,7 +159,7 @@ async fn build_imported_app_with_accounts(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(json!({ "accounts": accounts }).to_string()))

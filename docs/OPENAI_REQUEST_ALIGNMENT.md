@@ -28,7 +28,7 @@
   - 使用 SHA256 哈希生成确定性标识符
   - 格式：`cp_{hash[..32]}` (conversation) 或 `cw_{hash[..32]}` (window)
 
-- 更新 `src/codex/gateway/transport/client.rs`
+- 更新 `src/codex/gateway/transport/http_client.rs`
   - 在 `CodexRequestContext` 添加 `installation_id` 和 `session_id` 字段
   - 在 `request_headers()` 方法中添加这两个 header
 
@@ -132,10 +132,10 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 
 ### 修改文件
 1. `src/codex/gateway/mod.rs` - 导出新模块
-2. `src/codex/gateway/transport/client.rs` - 添加新 header 字段
+2. `src/codex/gateway/transport/http_client.rs` - 添加新 header 字段
 3. `src/codex/serving/dispatch/mod.rs` - 集成身份派生逻辑
 4. `src/codex/accounts/service/health.rs` - 更新 context 构造
-5. `src/codex/accounts/models/service.rs` - 更新 context 构造
+5. `src/codex/models/service.rs` - 更新 context 构造
 6. `src/codex/serving/diagnostics.rs` - 更新 context 构造
 7. `Cargo.toml` - 添加 `dirs = "5.0.1"` 依赖
 

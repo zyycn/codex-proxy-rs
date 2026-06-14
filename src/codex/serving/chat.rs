@@ -12,15 +12,15 @@ use axum::{
 use serde_json::json;
 
 use crate::{
-    codex::accounts::models::catalog::ModelCatalog,
-    codex::accounts::models::service::ModelService,
+    codex::events::event::EventLevel,
     codex::gateway::protocol::{
         codex_to_openai::{
             chat_completion_from_codex_sse, chat_completion_stream_from_codex_sse, openai_error,
         },
         openai_to_codex::{translate_chat_to_codex, ChatCompletionRequest},
     },
-    codex::logs::event::EventLevel,
+    codex::models::catalog::ModelCatalog,
+    codex::models::service::ModelService,
     codex::serving::dispatch::{
         classify_upstream_account_retry, no_available_accounts_response,
         normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,

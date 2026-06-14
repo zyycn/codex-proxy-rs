@@ -24,7 +24,7 @@
 
 ### 2. 核心传输层更新
 
-#### `src/codex/gateway/transport/client.rs`
+#### `src/codex/gateway/transport/http_client.rs`
 - `CodexRequestContext` 添加两个新字段：
   - `installation_id: Option<&'a str>`
   - `session_id: Option<&'a str>`
@@ -209,10 +209,10 @@ Dispatch Service (src/codex/serving/dispatch/mod.rs)
 
 ### 修改文件 (9)
 - `src/codex/gateway/mod.rs` (+2 行)
-- `src/codex/gateway/transport/client.rs` (+4 行)
+- `src/codex/gateway/transport/http_client.rs` (+4 行)
 - `src/codex/serving/dispatch/mod.rs` (+15 行)
 - `src/codex/accounts/service/health.rs` (+2 行)
-- `src/codex/accounts/models/service.rs` (+2 行)
+- `src/codex/models/service.rs` (+2 行)
 - `src/codex/serving/diagnostics.rs` (+2 行)
 - `Cargo.toml` (+1 行)
 - `tests/codex_gateway/client.rs` (+2 行)

@@ -34,7 +34,7 @@ async fn admin_account_cookies_should_set_get_and_delete_encrypted_cookie_header
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_cookies/cookies")
+                .uri("/api/admin/accounts/acct_cookies/cookies")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
@@ -69,7 +69,7 @@ async fn admin_account_cookies_should_set_get_and_delete_encrypted_cookie_header
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/acct_cookies/cookies")
+                .uri("/api/admin/accounts/acct_cookies/cookies")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -88,7 +88,7 @@ async fn admin_account_cookies_should_set_get_and_delete_encrypted_cookie_header
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/admin/accounts/acct_cookies/cookies")
+                .uri("/api/admin/accounts/acct_cookies/cookies")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -101,7 +101,7 @@ async fn admin_account_cookies_should_set_get_and_delete_encrypted_cookie_header
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/acct_cookies/cookies")
+                .uri("/api/admin/accounts/acct_cookies/cookies")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -123,7 +123,7 @@ async fn admin_account_cookies_should_require_existing_account_and_non_empty_coo
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/missing/cookies")
+                .uri("/api/admin/accounts/missing/cookies")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -137,7 +137,7 @@ async fn admin_account_cookies_should_require_existing_account_and_non_empty_coo
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_cookie_invalid/cookies")
+                .uri("/api/admin/accounts/acct_cookie_invalid/cookies")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(r#"{"cookies":""}"#))
@@ -175,7 +175,7 @@ async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_ret
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_refresh/refresh")
+                .uri("/api/admin/accounts/acct_refresh/refresh")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_refresh_account")
                 .body(Body::empty())
@@ -229,7 +229,7 @@ async fn admin_account_refresh_should_mark_invalid_refresh_token_as_expired() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_refresh_invalid/refresh")
+                .uri("/api/admin/accounts/acct_refresh_invalid/refresh")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_refresh_invalid")
                 .body(Body::empty())
@@ -275,7 +275,7 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/acct_reset_usage/reset-usage")
+                .uri("/api/admin/accounts/acct_reset_usage/reset-usage")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_reset_usage")
                 .body(Body::empty())
@@ -348,7 +348,7 @@ async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secre
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/acct_quota/quota")
+                .uri("/api/admin/accounts/acct_quota/quota")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_quota")
                 .body(Body::empty())
@@ -386,7 +386,7 @@ async fn admin_account_quota_warnings_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/quota-warnings")
+                .uri("/api/admin/accounts/quota-warnings")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -449,7 +449,7 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/quota-warnings")
+                .uri("/api/admin/accounts/quota-warnings")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -520,7 +520,7 @@ async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accou
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/health-check")
+                .uri("/api/admin/accounts/health-check")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_health")

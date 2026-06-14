@@ -94,7 +94,7 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/usage-stats?limit=1")
+                .uri("/api/admin/usage-stats?limit=1")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_usage")
                 .body(Body::empty())
@@ -119,7 +119,7 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/admin/usage-stats?limit=1&cursor={cursor}"))
+                .uri(format!("/api/admin/usage-stats?limit=1&cursor={cursor}"))
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -147,7 +147,7 @@ async fn admin_usage_stats_summary_should_return_usage_totals() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/usage-stats/summary")
+                .uri("/api/admin/usage-stats/summary")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_usage_summary")
                 .body(Body::empty())
@@ -179,7 +179,7 @@ async fn admin_usage_stats_should_reject_missing_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/usage-stats")
+                .uri("/api/admin/usage-stats")
                 .header("x-request-id", "req_usage")
                 .body(Body::empty())
                 .unwrap(),

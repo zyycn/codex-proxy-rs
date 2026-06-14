@@ -75,7 +75,7 @@ src/
 │   │   │   ├── cookies.rs
 │   │   │   ├── health.rs
 │   │   │   ├── import.rs             #       手动/CLI/OAuth 导入
-│   │   │   ├── mutation.rs
+│   │   │   ├── lifecycle.rs
 │   │   │   ├── quota.rs
 │   │   │   ├── refresh.rs
 │   │   │   └── runtime_pool.rs
@@ -136,18 +136,18 @@ src/
 │
 ├── admin/                            # 🔵 后台管理域（控制面）
 │   ├── mod.rs
-│   ├── http/                         #   /admin/* ← http/admin/
-│   │   ├── mod.rs                    #     ← http/admin/mod.rs
-│   │   ├── router.rs                 #     ← http/admin/router.rs
-│   │   ├── response.rs               #     ← http/admin/response.rs（AdminError envelope）
-│   │   ├── auth.rs                   #     ← http/admin/auth.rs（login/status/logout）
-│   │   ├── api_keys.rs               #     ← http/admin/api_keys.rs
-│   │   ├── logs.rs                   #     ← http/admin/logs.rs
-│   │   ├── models.rs                 #     ← http/admin/models.rs（refresh-models）
-│   │   ├── settings.rs               #     ← http/admin/settings.rs
-│   │   ├── usage.rs                  #     ← http/admin/usage.rs
-│   │   ├── diagnostics.rs            #     ← http/admin/diagnostics.rs
-│   │   └── accounts/                 #     ⭐ 拆分 http/admin/accounts.rs（1697 行）
+│   ├── http/                         #   /api/admin/* ← http/api/admin/
+│   │   ├── mod.rs                    #     ← http/api/admin/mod.rs
+│   │   ├── router.rs                 #     ← http/api/admin/router.rs
+│   │   ├── response.rs               #     ← http/api/admin/response.rs（AdminError envelope）
+│   │   ├── auth.rs                   #     ← http/api/admin/auth.rs（login/status/logout）
+│   │   ├── api_keys.rs               #     ← http/api/admin/api_keys.rs
+│   │   ├── logs.rs                   #     ← http/api/admin/logs.rs
+│   │   ├── models.rs                 #     ← http/api/admin/models.rs（refresh-models）
+│   │   ├── settings.rs               #     ← http/api/admin/settings.rs
+│   │   ├── usage.rs                  #     ← http/api/admin/usage.rs
+│   │   ├── diagnostics.rs            #     ← http/api/admin/diagnostics.rs
+│   │   └── accounts/                 #     ⭐ 拆分 http/api/admin/accounts.rs（1697 行）
 │   │       ├── mod.rs                #       路由注册 + 共享 DTO
 │   │       ├── list.rs               #       accounts / export_accounts
 │   │       ├── create.rs             #       create_account / import_accounts / import_cli_auth
@@ -156,7 +156,7 @@ src/
 │   │       ├── health.rs             #       health_check_accounts
 │   │       ├── quota.rs              #       quota_warnings / account_quota
 │   │       ├── cookies.rs            #       get / set / delete cookies
-│   │       └── oauth.rs              #       ← http/admin/auth.rs 中 OAuth 流程
+│   │       └── oauth.rs              #       ← http/api/admin/auth.rs 中 OAuth 流程
 │   │                                 #         device-login / poll / login-start / code-relay / callback
 │   ├── auth/                         #   管理员认证 + key 管理策略
 │   │   ├── mod.rs
@@ -200,7 +200,7 @@ src/
 
 大部分是目录搬迁，但有 3 个文件需要真正动刀：
 
-1. **`http/admin/accounts.rs`（1697 行）→ `admin/http/accounts/` 9 文件**。按上面 16 个 handler 归类（list/create/mutate/delete/health/quota/cookies/oauth + mod 路由）。
+1. **`http/api/admin/accounts.rs`（1697 行）→ `admin/http/accounts/` 9 文件**。按上面 16 个 handler 归类（list/create/mutate/delete/health/quota/cookies/oauth + mod 路由）。
 
 2. **`service/admin_auth.rs` 拆责**。密码登录/会话校验留 `admin/auth/service.rs`；OAuth token 交换 + 账号导入的编排移到 `admin/http/accounts/oauth.rs`，由它调用 `codex::gateway::oauth`（换 token）+ `codex::accounts::service::import`（落库）。
 

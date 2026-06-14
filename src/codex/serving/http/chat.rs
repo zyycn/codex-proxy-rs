@@ -11,7 +11,7 @@ use crate::{
     codex::gateway::protocol::{
         codex_to_openai::openai_error, openai_to_codex::ChatCompletionRequest,
     },
-    platform::http::middleware::RequestId,
+    platform::http::request_id::RequestId,
     runtime::state::AppState,
 };
 

@@ -13,7 +13,7 @@ use crate::{
         repository::{AccountRepository, StoredAccount},
     },
     codex::gateway::fingerprint::model::Fingerprint,
-    codex::gateway::transport::client::{
+    codex::gateway::transport::http_client::{
         build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
     },
 };

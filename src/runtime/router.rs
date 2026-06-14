@@ -13,14 +13,14 @@ use tower_http::{
 use tracing::Span;
 
 use crate::{
-    admin::http as admin_http,
+    admin::api as admin_api,
     codex::serving::http::{
         diagnostics::{debug_fingerprint, debug_upstream, diagnostics},
         router as serving_http,
     },
     platform::http::{
         health::health,
-        middleware::{attach_request_id, RequestId},
+        request_id::{attach_request_id, RequestId},
     },
 };
 
@@ -55,7 +55,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/debug/fingerprint", get(debug_fingerprint))
         .route("/debug/upstream", get(debug_upstream))
         .merge(serving_http::router())
-        .merge(admin_http::router())
+        .merge(admin_api::router())
         .with_state(state)
         .layer(http_trace_layer())
         .layer(from_fn(attach_request_id))

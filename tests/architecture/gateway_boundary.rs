@@ -1,6 +1,6 @@
 use codex_proxy_rs::codex::gateway::{
     fingerprint::model::Fingerprint, oauth::TokenPair, protocol::schema::ResponseFormat,
-    transport::client::CodexBackendClient,
+    transport::http_client::CodexBackendClient,
 };
 
 #[test]

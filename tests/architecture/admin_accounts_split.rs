@@ -1,13 +1,15 @@
-use codex_proxy_rs::admin::http::accounts::{
+use codex_proxy_rs::admin::api::accounts::{
     cookies::{AccountCookiesData, SetAccountCookiesRequest},
-    create::{AccountImportData, CreateAccountRequest, ImportCliAuthRequest},
+    create::CreateAccountRequest,
     delete::{BatchDeleteAccountsRequest, DeleteAccountData},
+    export::AccountExportQuery,
     health::{HealthCheckData, HealthCheckRequest},
-    list::{AccountExportQuery, AccountsQuery},
-    mutate::{
+    import::{AccountImportData, ImportCliAuthRequest},
+    lifecycle::{
         BatchUpdateAccountStatusRequest, ResetAccountUsageData, UpdateAccountLabelRequest,
         UpdateAccountStatusRequest,
     },
+    list::AccountsQuery,
     oauth::{
         auth_callback, auth_code_relay, auth_device_login, auth_device_poll, auth_login_start,
         AdminAuthCallbackQuery, AdminAuthCodeRelayData, AdminAuthCodeRelayRequest,

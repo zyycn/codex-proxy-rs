@@ -1,6 +1,6 @@
+pub mod conversation_identity;
 pub mod fingerprint;
-pub mod identity;
-pub mod installation;
+pub mod installation_id;
 pub mod oauth;
 pub mod protocol;
 pub mod transport;

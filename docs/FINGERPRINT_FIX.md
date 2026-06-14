@@ -203,7 +203,7 @@ pub fn capture_set_cookie(&mut self, account_id: &str, raw: &str) {
    - 添加所有浏览器特征头
    - 修正 `x-openai-internal-codex-residency` 为 `"us"`
 
-4. **src/codex/gateway/transport/client.rs**
+4. **src/codex/gateway/transport/http_client.rs**
    - 更新导入：`build_codex_headers` → `build_ordered_codex_headers`
    - 重构 `request_headers()` 使用排序后的头
 

@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::{
-    health::skipped_probe_result, runtime_pool::pool_account_from_stored, AccountProbeOutcome,
+    health::skipped_probe_result, pool_sync::pool_account_from_stored, AccountProbeOutcome,
     AccountProbeResult, AccountService, RefreshAccountError,
 };
 

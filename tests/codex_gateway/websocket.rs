@@ -17,7 +17,9 @@ use tokio_tungstenite::{
 };
 
 use codex_proxy_rs::codex::gateway::transport::{
-    client::{build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext},
+    http_client::{
+        build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
+    },
     types::CodexResponsesRequest,
     websocket::{
         http_sse_fallback_allowed, transport_for_request, CodexTransport, CodexWebSocketPool,

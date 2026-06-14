@@ -10,11 +10,11 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    codex::accounts::models::service::ModelService,
+    codex::events::event::EventLevel,
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::protocol::codex_to_openai::openai_error,
     codex::gateway::transport::types::CodexResponsesRequest,
-    codex::logs::event::EventLevel,
+    codex::models::service::ModelService,
     codex::serving::dispatch::{
         affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
         completed_response_json, no_available_accounts_response,

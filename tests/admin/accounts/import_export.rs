@@ -40,7 +40,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_accounts")
                 .body(Body::from(r#"{"accounts":[]}"#))
@@ -86,7 +86,7 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts")
@@ -116,7 +116,7 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts?limit=10")
+                .uri("/api/admin/accounts?limit=10")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts_list")
                 .body(Body::empty())
@@ -181,7 +181,7 @@ async fn admin_accounts_import_should_accept_sub2api_oauth_export_and_mark_forma
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_sub2api")
@@ -248,7 +248,7 @@ async fn admin_accounts_import_should_accept_sub2api_native_account_export_witho
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import")
+                .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_sub2api_native")
@@ -267,7 +267,7 @@ async fn admin_accounts_import_should_accept_sub2api_native_account_export_witho
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts?limit=10")
+                .uri("/api/admin/accounts?limit=10")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_sub2api_native_list")
                 .body(Body::empty())
@@ -294,7 +294,7 @@ async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_fil
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/export?ids=acct_export_a")
+                .uri("/api/admin/accounts/export?ids=acct_export_a")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -317,7 +317,7 @@ async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_fil
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/export?format=proxy")
+                .uri("/api/admin/accounts/export?format=proxy")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -338,7 +338,7 @@ async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_withou
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/admin/accounts/acct_export_sub2api/label")
+                .uri("/api/admin/accounts/acct_export_sub2api/label")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(r#"{"label":"Sub2API Export"}"#))
@@ -352,7 +352,7 @@ async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_withou
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/admin/accounts/export?format=sub2api")
+                .uri("/api/admin/accounts/export?format=sub2api")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -405,7 +405,7 @@ async fn manual_add_should_derive_claims_ignore_metadata_and_sync_pool() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
@@ -494,7 +494,7 @@ async fn admin_account_manual_add_should_reject_missing_invalid_expired_or_unbou
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(r#"{}"#))
@@ -509,7 +509,7 @@ async fn admin_account_manual_add_should_reject_missing_invalid_expired_or_unbou
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
@@ -529,7 +529,7 @@ async fn admin_account_manual_add_should_reject_missing_invalid_expired_or_unbou
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
@@ -554,7 +554,7 @@ async fn admin_account_manual_add_should_reject_missing_invalid_expired_or_unbou
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts")
+                .uri("/api/admin/accounts")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
@@ -822,7 +822,7 @@ async fn admin_accounts_import_cli_should_read_codex_auth_file_store_encrypted_a
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/admin/accounts/import-cli")
+                .uri("/api/admin/accounts/import-cli")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_import_cli")

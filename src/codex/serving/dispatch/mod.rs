@@ -1,11 +1,11 @@
+mod account_refresh;
 pub mod affinity;
-mod audit;
 pub mod fallback;
 mod limits;
-pub mod refresh;
 // 上游调度辅助命名为 routing，避免出现 dispatch::dispatch 的模块套娃。
 pub mod routing;
 pub mod stream;
+mod stream_audit;
 pub mod usage;
 
 use std::{sync::Arc, time::Instant};
@@ -31,25 +31,25 @@ use crate::{
         pool::{AccountAcquireRequest, AccountPool},
         repository::AccountRepository,
     },
+    codex::events::{
+        event::{EventLevel, EventLog},
+        service::LogService,
+    },
+    codex::gateway::conversation_identity::{build_conversation_identity, ensure_prompt_cache_key},
     codex::gateway::fingerprint::model::Fingerprint,
-    codex::gateway::identity::{build_conversation_identity, ensure_prompt_cache_key},
-    codex::gateway::installation::get_installation_id,
+    codex::gateway::installation_id::get_installation_id,
     codex::gateway::oauth::TokenRefresher,
     codex::gateway::protocol::codex_to_openai::openai_error,
     codex::gateway::transport::{
-        client::{
+        http_client::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream,
             CodexBackendWebSocketStream, CodexClientError, CodexRequestContext,
         },
         types::CodexResponsesRequest,
-        usage::TokenUsage,
+        usage_events::TokenUsage,
         websocket::{
             transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
         },
-    },
-    codex::logs::{
-        event::{EventLevel, EventLog},
-        service::LogService,
     },
     config::AppConfig,
 };
@@ -65,13 +65,13 @@ pub(crate) use self::{
 };
 
 use self::affinity::{compute_variant_hash, SessionAffinityMap, SessionAffinityRepository};
-use self::audit::{StreamAudit, WebSocketStreamAudit};
 use self::fallback::{
     apply_upstream_account_retry_with_deps, apply_upstream_retry_and_acquire_fallback_with_deps,
 };
+use self::stream_audit::{StreamAudit, WebSocketStreamAudit};
 use self::{
+    account_refresh::refresh_account_after_unauthorized,
     limits::apply_rate_limit_headers_with_deps,
-    refresh::refresh_account_after_unauthorized,
     routing::request_domain,
     stream::{completed_response_metadata, ensure_stream_metadata},
     usage::{record_empty_response_with_deps, record_usage_with_deps},
@@ -200,7 +200,7 @@ impl CodexUpstreamService {
         request: &CodexResponsesRequest,
         account: &Account,
         request_id: &str,
-    ) -> Result<crate::codex::gateway::transport::client::CodexBackendResponse, CodexClientError>
+    ) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError>
     {
         send_codex_request_with_refresh_retry_deps(&self.deps, request, account, request_id).await
     }
@@ -466,7 +466,7 @@ async fn send_codex_request_with_refresh_retry_deps(
     request: &CodexResponsesRequest,
     account: &Account,
     request_id: &str,
-) -> Result<crate::codex::gateway::transport::client::CodexBackendResponse, CodexClientError> {
+) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError> {
     let result = match send_codex_request(deps, request, account, request_id).await {
         Err(CodexClientError::Upstream {
             status,
@@ -503,7 +503,7 @@ async fn send_codex_request(
     request: &CodexResponsesRequest,
     account: &Account,
     request_id: &str,
-) -> Result<crate::codex::gateway::transport::client::CodexBackendResponse, CodexClientError> {
+) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError> {
     let request_domain = request_domain(&deps.config.api.base_url);
     let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
         (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
