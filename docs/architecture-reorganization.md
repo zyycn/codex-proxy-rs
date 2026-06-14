@@ -654,7 +654,7 @@ Then move admin orchestration:
 | Service | Responsibility |
 | --- | --- |
 | `AdminAuthService` | admin login, session lifecycle, OAuth PKCE/device flows, logout/status. |
-| `AccountService` | manual import, CLI import, native/Sub2API import/export, status/label/delete, refresh, quota, cookies, runtime pool synchronization. |
+| `AccountService` | manual import, CLI import, native import/export, status/label/delete, refresh, quota, cookies, runtime pool synchronization. |
 | `ApiKeyService` | local client key create/list/update/delete/import/export. |
 | `UsageService` | usage list and summary queries. |
 | `LogService` | admin log queries and v1 lifecycle log writes if useful. |
@@ -874,7 +874,7 @@ Split `tests/admin_accounts_route_test.rs` first:
 | --- | --- |
 | `admin_accounts_list_test.rs` | list, status read, labels in list, reset usage visibility. |
 | `admin_accounts_mutation_test.rs` | create, delete, batch delete, batch status, label/status updates. |
-| `admin_accounts_import_export_test.rs` | manual import, native import/export, Sub2API import/export, CLI import. |
+| `admin_accounts_import_export_test.rs` | manual import, native import/export, CLI import. |
 | `admin_accounts_oauth_test.rs` | device login, device poll, PKCE login start, callback/code relay. |
 | `admin_accounts_cookies_quota_test.rs` | cookies, health check, refresh, quota, reset usage side effects. |
 

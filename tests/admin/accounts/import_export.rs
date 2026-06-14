@@ -135,7 +135,7 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
 }
 
 #[tokio::test]
-async fn admin_accounts_import_should_accept_sub2api_oauth_export_and_mark_format() {
+async fn admin_accounts_import_should_reject_sub2api_oauth_export() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-sub2api.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -191,25 +191,18 @@ async fn admin_accounts_import_should_accept_sub2api_oauth_export_and_mark_forma
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["sourceFormat"], "sub2api");
-    assert_eq!(body["data"]["imported"], 1);
-    assert_eq!(body["data"]["skipped"], 0);
-    let stored: (String, String, String, String, String) =
-        sqlx::query_as("select email, account_id, user_id, label, plan_type from accounts")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(stored.0, "team@example.com");
-    assert_eq!(stored.1, "chatgpt-account");
-    assert_eq!(stored.2, "chatgpt-user");
-    assert_eq!(stored.3, "Sub2API Team");
-    assert_eq!(stored.4, "team");
+    assert_eq!(body["message"], "No importable accounts found");
+    let stored: (i64,) = sqlx::query_as("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored.0, 0);
 }
 
 #[tokio::test]
-async fn admin_accounts_import_should_accept_sub2api_native_account_export_without_proxy_data() {
+async fn admin_accounts_import_should_reject_native_payload_with_removed_proxy_fields() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-sub2api-native.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -244,7 +237,6 @@ async fn admin_accounts_import_should_accept_sub2api_native_account_export_witho
     });
 
     let import_response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -258,28 +250,9 @@ async fn admin_accounts_import_should_accept_sub2api_native_account_export_witho
         .await
         .unwrap();
 
-    assert_eq!(import_response.status(), StatusCode::OK);
+    assert_eq!(import_response.status(), StatusCode::BAD_REQUEST);
     let body = response_json(import_response).await;
-    assert_eq!(body["data"]["sourceFormat"], "sub2api");
-    assert_eq!(body["data"]["imported"], 1);
-
-    let list_response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/admin/accounts?limit=10")
-                .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_sub2api_native_list")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list = response_json(list_response).await;
-    assert_eq!(list["data"][0]["id"], "acct_sub2api_native");
-    assert_eq!(list["data"][0]["planType"], "plus");
-    assert!(list["data"][0].get("proxyApiKey").is_none());
-    assert!(list["data"][0].get("usage").is_none());
+    assert_eq!(body["message"], "No importable accounts found");
 }
 
 #[tokio::test]
@@ -328,25 +301,9 @@ async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_fil
 }
 
 #[tokio::test]
-async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_without_proxy_fields() {
+async fn admin_accounts_export_should_reject_removed_sub2api_format() {
     let (app, _state, _pool, _dir) =
         admin_accounts_test_app("admin-account-export-sub2api.sqlite", 25).await;
-    import_test_account(&app, "session_1", "acct_export_sub2api").await;
-
-    let label_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("PATCH")
-                .uri("/api/admin/accounts/acct_export_sub2api/label")
-                .header("content-type", "application/json")
-                .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(r#"{"label":"Sub2API Export"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(label_response.status(), StatusCode::OK);
 
     let response = app
         .oneshot(
@@ -359,33 +316,26 @@ async fn admin_accounts_export_should_return_sub2api_openai_oauth_payload_withou
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["data"]["type"], "sub2api-data");
-    assert_eq!(body["data"]["version"], 1);
-    assert_eq!(body["data"]["proxies"], json!([]));
-    assert_eq!(body["data"]["accounts"].as_array().unwrap().len(), 1);
-    assert_eq!(body["data"]["accounts"][0]["name"], "Sub2API Export");
-    assert_eq!(body["data"]["accounts"][0]["platform"], "openai");
-    assert_eq!(body["data"]["accounts"][0]["type"], "oauth");
-    assert_eq!(
-        body["data"]["accounts"][0]["credentials"]["access_token"],
-        "access-acct_export_sub2api"
-    );
-    assert_eq!(
-        body["data"]["accounts"][0]["credentials"]["refresh_token"],
-        "refresh-acct_export_sub2api"
-    );
-    assert_eq!(
-        body["data"]["accounts"][0]["credentials"]["email"],
-        "acct_export_sub2api@example.com"
-    );
-    assert_eq!(
-        body["data"]["accounts"][0]["credentials"]["plan_type"],
-        "plus"
-    );
-    assert!(body["data"]["accounts"][0].get("proxy").is_none());
-    assert!(body["data"]["accounts"][0].get("proxyUrl").is_none());
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_accounts_export_should_reject_removed_full_format_alias() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-account-export-full-alias.sqlite", 25).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/export?format=full")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

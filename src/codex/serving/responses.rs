@@ -494,7 +494,6 @@ struct ResponsesBody {
     codex_window_id: Option<String>,
     #[serde(rename = "parentThreadId")]
     parent_thread_id: Option<String>,
-    #[serde(alias = "useWebSocket")]
     use_websocket: Option<bool>,
 }
 

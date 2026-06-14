@@ -107,6 +107,53 @@ async fn v1_responses_should_use_websocket_upstream_by_default_while_serving_sse
 }
 
 #[tokio::test]
+async fn v1_responses_should_ignore_removed_use_websocket_alias() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let message = websocket.next().await.unwrap().unwrap();
+        let request = serde_json::from_str::<Value>(&message.into_text().unwrap()).unwrap();
+        request_tx.send(request).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_route_ws_removed_alias", 6, 2).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"useWebSocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let request = request_rx.await.unwrap();
+    assert_eq!(request["type"], "response.create");
+    assert!(request.get("useWebSocket").is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn v1_responses_websocket_should_stream_first_frame_before_terminal_event() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -159,7 +159,7 @@ For non-streaming clients, upstream HTTP SSE `event: error` and `event: response
 If Codex returns `401` and the account has a stored refresh token, the route refreshes the account through the OpenAI OAuth token endpoint once, persists the rotated access token, preserves the old refresh token when the server omits a new one, updates the in-process account pool, and retries the same request once.
 Refresh failures are recorded as non-secret `account.refresh` event logs with the request id, account id, model, `trigger`, `failure`, and resulting `accountStatus`.
 
-`previous_response_id` and explicit WebSocket-only requests are rejected until the WebSocket transport is implemented and verified.
+Responses use the Codex WebSocket upstream by default while keeping the client-facing response as SSE. `previous_response_id` always uses WebSocket so upstream conversation history is preserved. The local extension field `use_websocket: false` forces HTTP SSE for requests that do not require upstream history; the removed camelCase `useWebSocket` alias is ignored and no longer toggles transport.
 
 ## `/api/admin/*`
 
@@ -602,7 +602,7 @@ Success response:
 
 ### `POST /api/admin/accounts/import`
 
-Imports accounts into encrypted SQLite storage. The request body uses the Rust import format, which accepts the exported account object fields needed by this service and ignores unrelated fields.
+Imports accounts into encrypted SQLite storage. The request body uses the native Rust import format. The only supported shape is an object with `accounts`; Sub2API payloads, proxy/runtime fields, `credentials`/`tokens` wrappers, snake_case token fields, and other removed old-project aliases are rejected by producing no importable accounts.
 
 Request:
 
@@ -632,7 +632,47 @@ Success response:
   "message": "OK",
   "data": {
     "imported": 1,
-    "skipped": 0
+    "skipped": 0,
+    "sourceFormat": "native"
+  },
+  "requestId": "req_01"
+}
+```
+
+### `GET /api/admin/accounts/export`
+
+Exports native Rust account backups. The default format is native; `format=native` is the only explicit format accepted. Removed aliases such as `format=full` and removed external formats such as `format=sub2api` return HTTP `400`.
+
+Optional query:
+
+```http
+GET /api/admin/accounts/export?ids=acct_01,acct_02&format=native
+```
+
+Success response:
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "sourceFormat": "native",
+    "accounts": [
+      {
+        "id": "acct_01",
+        "email": "user@example.com",
+        "accountId": "chatgpt-account",
+        "userId": "chatgpt-user",
+        "label": "primary",
+        "planType": "plus",
+        "token": "access-token",
+        "refreshToken": "refresh-token",
+        "status": "active",
+        "accessTokenExpiresAt": null,
+        "addedAt": "2026-06-11T12:00:00Z",
+        "updatedAt": "2026-06-11T12:00:00Z"
+      }
+    ]
   },
   "requestId": "req_01"
 }

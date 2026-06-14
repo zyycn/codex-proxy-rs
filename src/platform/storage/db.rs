@@ -1,6 +1,6 @@
 use std::{fs, path::Path, str::FromStr, time::Duration};
 
-use sqlx::{sqlite::SqliteConnectOptions, Row, SqlitePool};
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 
 pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     ensure_sqlite_parent_dir(database_url)?;
@@ -20,76 +20,8 @@ pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Erro
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let schema = include_str!("schema.sql");
     sqlx::raw_sql(schema).execute(pool).await?;
-    ensure_account_usage_schema(pool).await?;
-    ensure_session_affinity_schema(pool).await?;
     Ok(())
 }
-
-async fn ensure_account_usage_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let rows = sqlx::query("pragma table_info(account_usage)")
-        .fetch_all(pool)
-        .await?;
-    for (name, sql) in ACCOUNT_USAGE_ADDED_COLUMNS {
-        let exists = rows.iter().any(|row| row.get::<String, _>("name") == *name);
-        if !exists {
-            sqlx::query(*sql).execute(pool).await?;
-        }
-    }
-    Ok(())
-}
-
-const ACCOUNT_USAGE_ADDED_COLUMNS: &[(&str, &str)] = &[
-    (
-        "empty_response_count",
-        "alter table account_usage add column empty_response_count integer not null default 0",
-    ),
-    (
-        "window_request_count",
-        "alter table account_usage add column window_request_count integer not null default 0",
-    ),
-    (
-        "window_input_tokens",
-        "alter table account_usage add column window_input_tokens integer not null default 0",
-    ),
-    (
-        "window_output_tokens",
-        "alter table account_usage add column window_output_tokens integer not null default 0",
-    ),
-    (
-        "window_cached_tokens",
-        "alter table account_usage add column window_cached_tokens integer not null default 0",
-    ),
-    (
-        "window_started_at",
-        "alter table account_usage add column window_started_at text",
-    ),
-    (
-        "window_reset_at",
-        "alter table account_usage add column window_reset_at text",
-    ),
-    (
-        "limit_window_seconds",
-        "alter table account_usage add column limit_window_seconds integer",
-    ),
-];
-
-async fn ensure_session_affinity_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let rows = sqlx::query("pragma table_info(session_affinities)")
-        .fetch_all(pool)
-        .await?;
-    for (name, sql) in SESSION_AFFINITY_ADDED_COLUMNS {
-        let exists = rows.iter().any(|row| row.get::<String, _>("name") == *name);
-        if !exists {
-            sqlx::query(*sql).execute(pool).await?;
-        }
-    }
-    Ok(())
-}
-
-const SESSION_AFFINITY_ADDED_COLUMNS: &[(&str, &str)] = &[(
-    "function_call_ids_json",
-    "alter table session_affinities add column function_call_ids_json text not null default '[]'",
-)];
 
 fn ensure_sqlite_parent_dir(database_url: &str) -> Result<(), sqlx::Error> {
     let Some(path) = sqlite_file_path(database_url) else {
