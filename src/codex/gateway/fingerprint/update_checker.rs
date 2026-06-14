@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tokio::time::interval;
 use tracing::{info, warn};
 
+use crate::codex::gateway::fingerprint::repository::FingerprintRepository;
 use crate::platform::storage::paths;
 
 const APPCAST_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
@@ -27,7 +28,7 @@ pub struct UpdateState {
 
 #[derive(Clone)]
 pub struct UpdateChecker {
-    db: Option<SqlitePool>,
+    repository: Option<FingerprintRepository>,
     state: Arc<Mutex<InternalState>>,
 }
 
@@ -39,7 +40,7 @@ struct InternalState {
 impl UpdateChecker {
     pub fn new(db: Option<SqlitePool>, current_version: String, current_build: String) -> Self {
         Self {
-            db,
+            repository: db.map(FingerprintRepository::new),
             state: Arc::new(Mutex::new(InternalState {
                 current_version,
                 current_build,
@@ -140,8 +141,10 @@ impl UpdateChecker {
     async fn apply_version_update(&self, version: &str, build: &str) -> Result<(), UpdateError> {
         let chromium_version = load_matching_chromium_version(version, build);
 
-        if let Some(db) = &self.db {
-            update_fingerprint_in_db(db, version, build, chromium_version.as_deref()).await?;
+        if let Some(repository) = &self.repository {
+            repository
+                .upsert_auto_update(version, build, chromium_version.as_deref())
+                .await?;
         }
 
         Ok(())
@@ -224,36 +227,6 @@ fn load_matching_chromium_version(version: &str, build: &str) -> Option<String> 
     } else {
         None
     }
-}
-
-async fn update_fingerprint_in_db(
-    db: &SqlitePool,
-    version: &str,
-    build: &str,
-    chromium_version: Option<&str>,
-) -> Result<(), UpdateError> {
-    sqlx::query(
-        r#"
-        insert into fingerprints (
-            id, app_version, build_number, platform, arch,
-            chromium_version, user_agent_template, source, created_at
-        ) values (?, ?, ?, 'darwin', 'arm64', ?, ?, 'auto_update', ?)
-        on conflict(id) do update set
-            app_version = excluded.app_version,
-            build_number = excluded.build_number,
-            chromium_version = excluded.chromium_version
-        "#,
-    )
-    .bind("auto_updated")
-    .bind(version)
-    .bind(build)
-    .bind(chromium_version.unwrap_or("146"))
-    .bind("Codex Desktop/{app_version} ({platform}; {arch})")
-    .bind(Utc::now().to_rfc3339())
-    .execute(db)
-    .await?;
-
-    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

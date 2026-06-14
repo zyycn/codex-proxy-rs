@@ -31,7 +31,7 @@ create table if not exists client_api_keys (
   prefix text not null,
   key_hash text not null,
   label text,
-  enabled integer not null default 1,
+  enabled integer not null default 1 check (enabled in (0, 1)),
   created_at text not null,
   last_used_at text
 );
@@ -51,10 +51,10 @@ create table if not exists accounts (
   access_token_cipher text not null,
   refresh_token_cipher text,
   access_token_expires_at text,
-  status text not null,
+  status text not null check (status in ('active', 'expired', 'quota_exhausted', 'refreshing', 'disabled', 'banned')),
   quota_json text,
   quota_fetched_at text,
-  quota_limit_reached integer not null default 0,
+  quota_limit_reached integer not null default 0 check (quota_limit_reached in (0, 1)),
   quota_cooldown_until text,
   cloudflare_cooldown_until text,
   added_at text not null,
@@ -81,11 +81,18 @@ create index if not exists idx_account_refresh_leases_expires on account_refresh
 -- ============================================
 create table if not exists account_usage (
   account_id text primary key references accounts(id) on delete cascade,
-  request_count integer not null default 0,
-  empty_response_count integer not null default 0,
-  input_tokens integer not null default 0,
-  output_tokens integer not null default 0,
-  cached_tokens integer not null default 0,
+  request_count integer not null default 0 check (request_count >= 0),
+  empty_response_count integer not null default 0 check (empty_response_count >= 0),
+  input_tokens integer not null default 0 check (input_tokens >= 0),
+  output_tokens integer not null default 0 check (output_tokens >= 0),
+  cached_tokens integer not null default 0 check (cached_tokens >= 0),
+  window_request_count integer not null default 0 check (window_request_count >= 0),
+  window_input_tokens integer not null default 0 check (window_input_tokens >= 0),
+  window_output_tokens integer not null default 0 check (window_output_tokens >= 0),
+  window_cached_tokens integer not null default 0 check (window_cached_tokens >= 0),
+  window_started_at text,
+  window_reset_at text,
+  limit_window_seconds integer check (limit_window_seconds is null or limit_window_seconds > 0),
   last_used_at text
 );
 
@@ -129,12 +136,12 @@ create table if not exists event_logs (
   id text primary key,
   request_id text,
   kind text not null,
-  level text not null,
+  level text not null check (level in ('debug', 'info', 'warn', 'error')),
   account_id text,
   route text,
   model text,
-  status_code integer,
-  latency_ms integer,
+  status_code integer check (status_code is null or (status_code >= 100 and status_code <= 599)),
+  latency_ms integer check (latency_ms is null or latency_ms >= 0),
   message text not null,
   metadata_json text not null,
   created_at text not null
@@ -163,7 +170,8 @@ create table if not exists session_affinities (
   conversation_id text not null,
   turn_state text,
   instructions_hash text,
-  input_tokens integer,
+  input_tokens integer check (input_tokens is null or input_tokens >= 0),
+  function_call_ids_json text not null default '[]',
   variant_hash text,
   expires_at text not null,
   created_at text not null

@@ -47,8 +47,10 @@ use crate::{
             CodexWebSocketPool, SharedRateLimitUpdates,
         },
     },
-    codex::logs::event::{EventLevel, EventLog},
-    codex::logs::repository::EventLogRepository,
+    codex::logs::{
+        event::{EventLevel, EventLog},
+        service::LogService,
+    },
     config::AppConfig,
 };
 
@@ -62,7 +64,7 @@ pub(crate) use self::{
     stream::{completed_response_json, CollectedResponse},
 };
 
-use self::affinity::{compute_variant_hash, SessionAffinityMap};
+use self::affinity::{compute_variant_hash, SessionAffinityMap, SessionAffinityRepository};
 use self::{
     refresh::refresh_account_after_unauthorized,
     routing::request_domain,
@@ -76,10 +78,11 @@ struct CodexUpstreamDependencies {
     account_pool: Arc<Mutex<AccountPool>>,
     account_repository: Option<AccountRepository>,
     cookie_repository: Option<CookieRepository>,
-    event_logs: Option<EventLogRepository>,
+    logs: LogService,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     fingerprint: Fingerprint, // 用于实际请求的指纹
     session_affinity: Arc<SessionAffinityMap>,
+    session_affinity_repository: Option<SessionAffinityRepository>,
     websocket_pool: Arc<CodexWebSocketPool>,
 }
 
@@ -88,13 +91,18 @@ pub(crate) struct CodexUpstreamService {
     deps: CodexUpstreamDependencies,
 }
 
+pub(crate) struct CodexUpstreamRepositories {
+    pub(crate) account: Option<AccountRepository>,
+    pub(crate) cookie: Option<CookieRepository>,
+    pub(crate) session_affinity: Option<SessionAffinityRepository>,
+}
+
 impl CodexUpstreamService {
     pub(crate) fn new(
         config: Arc<AppConfig>,
         account_pool: Arc<Mutex<AccountPool>>,
-        account_repository: Option<AccountRepository>,
-        cookie_repository: Option<CookieRepository>,
-        event_logs: Option<EventLogRepository>,
+        repositories: CodexUpstreamRepositories,
+        logs: LogService,
         token_refresher: Option<Arc<dyn TokenRefresher>>,
         fingerprint: Fingerprint,
     ) -> Self {
@@ -102,12 +110,13 @@ impl CodexUpstreamService {
             deps: CodexUpstreamDependencies {
                 config,
                 account_pool,
-                account_repository,
-                cookie_repository,
-                event_logs,
+                account_repository: repositories.account,
+                cookie_repository: repositories.cookie,
+                logs,
                 token_refresher,
                 fingerprint,
                 session_affinity: Arc::new(SessionAffinityMap::with_default_ttl()),
+                session_affinity_repository: repositories.session_affinity,
                 websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
             },
         }
@@ -271,6 +280,18 @@ impl CodexUpstreamService {
             &self.deps, context, status, level, message, metadata,
         )
         .await;
+    }
+
+    pub(crate) async fn reload_session_affinity_from_repository(
+        &self,
+    ) -> self::affinity::SessionAffinityRepositoryResult<usize> {
+        let Some(repository) = self.deps.session_affinity_repository.as_ref() else {
+            return Ok(0);
+        };
+        let now = Utc::now();
+        repository.delete_expired(now).await?;
+        let records = repository.list_active(now).await?;
+        Ok(self.deps.session_affinity.restore(records).await)
     }
 }
 
@@ -704,9 +725,11 @@ async fn record_response_affinity_with_deps(
     };
 
     let variant_hash = compute_variant_hash(request);
-    deps.session_affinity
+    let response_id = metadata.response_id;
+    let entry = deps
+        .session_affinity
         .record(
-            metadata.response_id,
+            response_id.clone(),
             account_id.to_string(),
             conversation_id.to_string(),
             turn_state
@@ -719,6 +742,19 @@ async fn record_response_affinity_with_deps(
             variant_hash,
         )
         .await;
+    if let Some(repository) = deps.session_affinity_repository.as_ref() {
+        if let Err(error) = repository
+            .upsert(&response_id, &entry, deps.session_affinity.ttl())
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                response_id = %response_id,
+                account_id = %account_id,
+                "持久化 session affinity 失败"
+            );
+        }
+    }
 }
 
 async fn apply_rate_limit_headers_with_deps(
@@ -751,6 +787,23 @@ async fn apply_rate_limit_headers_with_deps(
         reset_at,
         rate_limits.primary_limit_window_seconds(),
     );
+    if let Some(repo) = deps.account_repository.as_ref() {
+        if let Err(error) = repo
+            .sync_rate_limit_window(
+                account_id,
+                reset_at,
+                rate_limits.primary_limit_window_seconds(),
+            )
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                account_id = %account_id,
+                window_reset_at = %reset_at,
+                "持久化 rate-limit window 失败"
+            );
+        }
+    }
     if !rate_limits.primary_limit_reached() || reset_at <= Utc::now() {
         return;
     }
@@ -1406,9 +1459,6 @@ async fn log_codex_upstream_response_with_deps(
     message: &str,
     mut metadata: Value,
 ) {
-    let Some(repo) = deps.event_logs.as_ref() else {
-        return;
-    };
     ensure_stream_metadata(&mut metadata, context.stream);
     let mut event = EventLog::new("v1.response", level, message);
     event.request_id = Some(context.request_id.clone());
@@ -1418,7 +1468,7 @@ async fn log_codex_upstream_response_with_deps(
     event.status_code = Some(i64::from(status.as_u16()));
     event.latency_ms = Some(context.latency_ms());
     event.metadata = metadata;
-    if let Err(error) = repo.insert(event).await {
+    if let Err(error) = deps.logs.record(event).await {
         tracing::warn!(error = %error, "写入 v1 response 事件日志失败");
     }
 }

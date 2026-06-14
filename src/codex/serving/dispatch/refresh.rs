@@ -102,9 +102,6 @@ async fn log_account_refresh_failure(
     request_id: &str,
     model: &str,
 ) {
-    let Some(repo) = deps.event_logs.as_ref() else {
-        return;
-    };
     let mut event = EventLog::new(
         "account.refresh",
         EventLevel::Warn,
@@ -120,7 +117,7 @@ async fn log_account_refresh_failure(
         "failure": refresh_failure_value(failure),
         "accountStatus": status.map(account_status_value),
     });
-    if let Err(error) = repo.insert(event).await {
+    if let Err(error) = deps.logs.record(event).await {
         tracing::warn!(error = %error, "写入账户刷新事件日志失败");
     }
 }

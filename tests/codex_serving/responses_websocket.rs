@@ -379,6 +379,18 @@ async fn v1_responses_should_route_previous_response_id_to_recorded_account() {
     assert_eq!(first_response.status(), StatusCode::OK);
     let first_body = response_text(first_response).await;
     assert!(first_body.contains("\"id\":\"resp_affinity_first\""));
+    let stored_affinity: (String, String, String, Option<i64>, String) = sqlx::query_as(
+        "select account_id, conversation_id, function_call_ids_json, input_tokens, expires_at from session_affinities where response_id = ?",
+    )
+    .bind("resp_affinity_first")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_affinity.0, "acct_a");
+    assert!(!stored_affinity.1.is_empty());
+    assert_eq!(stored_affinity.2, "[]");
+    assert_eq!(stored_affinity.3, Some(3));
+    assert!(!stored_affinity.4.is_empty());
 
     let second_response = imported
         .app

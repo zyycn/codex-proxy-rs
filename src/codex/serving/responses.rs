@@ -16,7 +16,8 @@ use crate::{
     codex::gateway::transport::types::CodexResponsesRequest,
     codex::logs::event::EventLevel,
     codex::serving::dispatch::{
-        classify_upstream_account_retry, completed_response_json, no_available_accounts_response,
+        affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
+        completed_response_json, no_available_accounts_response,
         normalize_service_tier_for_upstream, websocket_history_retry_metadata,
         CodexRequestLogContext, CodexUpstreamService, CollectedResponse,
     },
@@ -49,6 +50,14 @@ impl ResponsesService {
     /// 获取上游使用的指纹（用于诊断）
     pub fn upstream_fingerprint(&self) -> &Fingerprint {
         self.upstream.fingerprint()
+    }
+
+    pub async fn reload_session_affinity_from_repository(
+        &self,
+    ) -> SessionAffinityRepositoryResult<usize> {
+        self.upstream
+            .reload_session_affinity_from_repository()
+            .await
     }
 
     pub async fn handle(

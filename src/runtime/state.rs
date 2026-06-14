@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
 use crate::admin::{
-    auth::{api_key::ApiKeyService, service::AdminAuthService},
+    auth::{api_key::ApiKeyService, repository::AdminAuthRepository, service::AdminAuthService},
     settings::SettingsService,
 };
 use crate::codex::accounts::cookies::repository::CookieRepository;
@@ -17,7 +17,10 @@ use crate::codex::accounts::{
 };
 use crate::codex::gateway::fingerprint::model::Fingerprint;
 use crate::codex::gateway::oauth::{OAuthClient, PkceSessionStore, TokenRefresher};
-use crate::codex::serving::dispatch::CodexUpstreamService;
+use crate::codex::serving::dispatch::affinity::{
+    SessionAffinityRepository, SessionAffinityRepositoryResult,
+};
+use crate::codex::serving::dispatch::{CodexUpstreamRepositories, CodexUpstreamService};
 use crate::codex::serving::{
     chat::ChatService, diagnostics::DiagnosticsService, responses::ResponsesService,
 };
@@ -209,6 +212,15 @@ impl AppState {
             .await
     }
 
+    pub async fn reload_session_affinity_from_repository(
+        &self,
+    ) -> SessionAffinityRepositoryResult<usize> {
+        self.services
+            .responses
+            .reload_session_affinity_from_repository()
+            .await
+    }
+
     /// 获取 AccountService 的引用（用于调度器）
     pub fn account_service(&self) -> Arc<AccountService> {
         Arc::new(self.services.accounts.clone())
@@ -268,6 +280,7 @@ impl AppState {
             config.clone(),
             pool_ref,
             secret_box_ref,
+            logs.clone(),
             token_refresher,
             account_pool,
             fingerprint,
@@ -315,6 +328,7 @@ fn v1_services(
     config: Arc<AppConfig>,
     pool: Option<&SqlitePool>,
     secret_box: Option<&SecretBox>,
+    logs: LogService,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     account_pool: Arc<Mutex<AccountPool>>,
     fingerprint: Fingerprint,
@@ -323,6 +337,7 @@ fn v1_services(
         config.clone(),
         pool,
         secret_box,
+        logs,
         token_refresher,
         account_pool.clone(),
         fingerprint,
@@ -361,7 +376,7 @@ fn admin_auth_service(
 ) -> AdminAuthService {
     AdminAuthService::new(
         config,
-        pool.cloned(),
+        pool.cloned().map(AdminAuthRepository::new),
         account_repository(pool, secret_box),
         account_pool,
         oauth_client,
@@ -392,6 +407,7 @@ fn codex_upstream_service(
     config: Arc<AppConfig>,
     pool: Option<&SqlitePool>,
     secret_box: Option<&SecretBox>,
+    logs: LogService,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     account_pool: Arc<Mutex<AccountPool>>,
     fingerprint: Fingerprint,
@@ -399,9 +415,12 @@ fn codex_upstream_service(
     CodexUpstreamService::new(
         config,
         account_pool,
-        account_repository(pool, secret_box),
-        cookie_repository(pool, secret_box),
-        pool.cloned().map(EventLogRepository::new),
+        CodexUpstreamRepositories {
+            account: account_repository(pool, secret_box),
+            cookie: cookie_repository(pool, secret_box),
+            session_affinity: pool.cloned().map(SessionAffinityRepository::new),
+        },
+        logs,
         token_refresher,
         fingerprint,
     )

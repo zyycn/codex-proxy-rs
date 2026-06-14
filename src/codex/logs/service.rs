@@ -17,13 +17,21 @@ pub struct LogService {
     repository: Option<EventLogRepository>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LogServiceError {
+    #[error("事件日志仓储未初始化")]
     RepositoryUnavailable,
+    #[error("查询事件日志失败")]
     List,
+    #[error("读取事件日志失败")]
     Get,
+    #[error("统计事件日志失败")]
     Count,
+    #[error("清空事件日志失败")]
     Clear,
+    #[error("写入事件日志失败")]
+    Write,
+    #[error("日志容量必须大于 0")]
     InvalidCapacity,
 }
 
@@ -111,8 +119,32 @@ impl LogService {
                 config.capture_body = capture_body;
             }
         }
+        if let Some(capacity) = update.capacity {
+            self.repository()?
+                .trim_to_capacity(capacity)
+                .await
+                .map_err(|_| LogServiceError::Write)?;
+        }
 
         self.state().await
+    }
+
+    pub async fn record(&self, mut event: EventLog) -> Result<bool, LogServiceError> {
+        let config = self.config.read().await.clone();
+        if !config.enabled {
+            return Ok(false);
+        }
+        apply_capture_body_policy(&mut event, config.capture_body);
+        let repository = self.repository()?;
+        repository
+            .insert(event)
+            .await
+            .map_err(|_| LogServiceError::Write)?;
+        repository
+            .trim_to_capacity(config.capacity)
+            .await
+            .map_err(|_| LogServiceError::Write)?;
+        Ok(true)
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<EventLog>, LogServiceError> {
@@ -134,6 +166,24 @@ impl LogService {
         self.repository
             .as_ref()
             .ok_or(LogServiceError::RepositoryUnavailable)
+    }
+}
+
+fn apply_capture_body_policy(event: &mut EventLog, capture_body: bool) {
+    if capture_body {
+        return;
+    }
+    let Some(metadata) = event.metadata.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "body",
+        "rawBody",
+        "requestBody",
+        "responseBody",
+        "upstreamBody",
+    ] {
+        metadata.remove(key);
     }
 }
 

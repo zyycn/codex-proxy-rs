@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
@@ -70,15 +70,19 @@ impl CookieRepository {
         request_domain: &str,
     ) -> CookieResult<Option<String>> {
         let rows = sqlx::query(
-            "select domain, name, value_cipher from account_cookies where account_id = ? order by name asc",
+            "select domain, name, value_cipher, expires_at from account_cookies where account_id = ? order by name asc",
         )
         .bind(account_id)
         .fetch_all(&self.pool)
         .await?;
         let mut pairs = Vec::new();
+        let now = Utc::now();
         for row in rows {
             let domain = row.get::<String, _>("domain");
             if !domain_matches(request_domain, &domain) {
+                continue;
+            }
+            if cookie_is_expired(row.get::<Option<String>, _>("expires_at").as_deref(), now) {
                 continue;
             }
             let name = row.get::<String, _>("name");
@@ -160,4 +164,17 @@ fn domain_matches(request_domain: &str, cookie_domain: &str) -> bool {
         || request_domain
             .strip_suffix(cookie_domain)
             .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn cookie_is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> bool {
+    expires_at
+        .and_then(parse_cookie_expires_at)
+        .is_some_and(|expires_at| expires_at <= now)
+}
+
+fn parse_cookie_expires_at(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc2822(value)
+        .or_else(|_| DateTime::parse_from_rfc3339(value))
+        .map(|expires_at| expires_at.with_timezone(&Utc))
+        .ok()
 }

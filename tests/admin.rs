@@ -4,6 +4,7 @@ mod admin {
     mod api_contract;
     mod api_keys_route;
     mod auth;
+    mod auth_repository;
     mod login_route;
     mod logs_route;
     mod models_route;

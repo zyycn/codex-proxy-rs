@@ -1,17 +1,22 @@
+use chrono::Utc;
 use tokio::time::{interval, Duration};
 use tracing::{error, info};
 
+use crate::admin::auth::repository::AdminAuthRepository;
 use crate::runtime::tasks::types::SchedulerHandle;
 
 /// 会话清理调度器 - 定期删除过期的管理员会话
 pub struct SessionCleanupScheduler {
-    db: sqlx::SqlitePool,
+    repository: AdminAuthRepository,
     interval_secs: u64,
 }
 
 impl SessionCleanupScheduler {
-    pub fn new(db: sqlx::SqlitePool, interval_secs: u64) -> Self {
-        Self { db, interval_secs }
+    pub fn new(repository: AdminAuthRepository, interval_secs: u64) -> Self {
+        Self {
+            repository,
+            interval_secs,
+        }
     }
 
     /// 启动会话清理调度器
@@ -49,11 +54,6 @@ impl SessionCleanupScheduler {
     }
 
     async fn cleanup_expired_sessions(&self) -> Result<u64, sqlx::Error> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let result = sqlx::query("DELETE FROM admin_sessions WHERE expires_at < ?")
-            .bind(&now)
-            .execute(&self.db)
-            .await?;
-        Ok(result.rows_affected())
+        self.repository.cleanup_expired_sessions(Utc::now()).await
     }
 }

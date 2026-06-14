@@ -10,7 +10,7 @@ use wiremock::{
 
 use crate::support::{
     response_json, response_text,
-    upstream::{build_imported_app, fetch_v1_event_log},
+    upstream::{build_imported_app, enable_runtime_logging, fetch_v1_event_log},
 };
 
 const ERROR_EVENT_SSE: &str = include_str!("../fixtures/responses/http_sse/error_event.sse");
@@ -118,6 +118,7 @@ async fn v1_responses_stream_should_passthrough_error_event_and_log_failure() {
         .mount(&server)
         .await;
     let imported = build_imported_app(server.uri()).await;
+    enable_runtime_logging(&imported.app).await;
 
     let response = imported
         .app
@@ -161,6 +162,7 @@ async fn v1_responses_stream_should_passthrough_response_failed_and_log_failure(
         .mount(&server)
         .await;
     let imported = build_imported_app(server.uri()).await;
+    enable_runtime_logging(&imported.app).await;
 
     let response = imported
         .app

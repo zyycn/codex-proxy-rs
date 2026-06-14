@@ -7,6 +7,13 @@ use crate::codex::gateway::fingerprint::{
     updater::{FingerprintUpdate, CODEX_DESKTOP_UPDATE_SOURCE},
 };
 
+const AUTO_UPDATED_FINGERPRINT_ID: &str = "auto_updated";
+const AUTO_UPDATE_SOURCE: &str = "auto_update";
+const AUTO_UPDATE_PLATFORM: &str = "darwin";
+const AUTO_UPDATE_ARCH: &str = "arm64";
+const AUTO_UPDATE_USER_AGENT_TEMPLATE: &str = "Codex Desktop/{app_version} ({platform}; {arch})";
+const DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION: &str = "146";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFingerprint {
     pub app_version: String,
@@ -45,6 +52,30 @@ impl FingerprintRepository {
         Ok(())
     }
 
+    pub async fn upsert_auto_update(
+        &self,
+        app_version: &str,
+        build_number: &str,
+        chromium_version: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "insert into fingerprints (id, app_version, build_number, platform, arch, chromium_version, user_agent_template, source, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             on conflict(id) do update set app_version = excluded.app_version, build_number = excluded.build_number, platform = excluded.platform, arch = excluded.arch, chromium_version = excluded.chromium_version, user_agent_template = excluded.user_agent_template, source = excluded.source, created_at = excluded.created_at",
+        )
+        .bind(AUTO_UPDATED_FINGERPRINT_ID)
+        .bind(app_version)
+        .bind(build_number)
+        .bind(AUTO_UPDATE_PLATFORM)
+        .bind(AUTO_UPDATE_ARCH)
+        .bind(chromium_version.unwrap_or(DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION))
+        .bind(AUTO_UPDATE_USER_AGENT_TEMPLATE)
+        .bind(AUTO_UPDATE_SOURCE)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn latest(&self) -> Result<Option<StoredFingerprint>, sqlx::Error> {
         let row = sqlx::query(
             "select app_version, build_number, source from fingerprints order by created_at desc, id desc limit 1",
@@ -63,11 +94,12 @@ impl FingerprintRepository {
             r#"
             select app_version, build_number, platform, arch, chromium_version, user_agent_template
             from fingerprints
-            where source = 'auto_update'
+            where source = ?
             order by created_at desc
             limit 1
             "#,
         )
+        .bind(AUTO_UPDATE_SOURCE)
         .fetch_optional(&self.pool)
         .await?;
 

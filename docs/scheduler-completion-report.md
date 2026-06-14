@@ -1,228 +1,130 @@
-# 🎉 后台调度器实现总结报告
-
-## 任务完成状态
-
-✅ **完成** - 已成功实现 TypeScript 原版 `codex-proxy` 项目的后台调度器核心功能
-
-## 实现的功能
-
-### 1. RefreshScheduler - OAuth 令牌刷新调度器
-
-**文件**: `src/scheduler/refresh.rs` (458 行)
-
-**核心功能**:
-- ✅ JWT 令牌过期时间解析
-- ✅ 在 `exp - margin` 时刻自动调度刷新
-- ✅ 指数退避重试策略：5s → 15s → 45s → 135s → 300s（最多5次）
-- ✅ 永久失败检测（识别 `invalid_grant`、`invalid_token`、`account has been deactivated`、`refresh_token_reused` 等错误）
-- ✅ 临时失败恢复调度（10分钟后重试）
-- ✅ 崩溃恢复机制：
-  - `refreshing` 状态账户 → 立即重试
-  - `expired` + 有 refreshToken 的账户 → 延迟重试（30秒起，间隔2秒）
-- ✅ 并发控制（`in_flight` 标记防止重复刷新）
-- ✅ 优雅关闭支持（通过 `SchedulerHandle`）
-
-**技术亮点**:
-```rust
-// 避免异步递归的设计
-- schedule_one() - 初始调度
-- schedule_next_refresh() - 刷新后调度，避免递归
-
-// 并发控制
-in_flight: Arc<RwLock<HashMap<String, Instant>>>
-
-// 永久错误分类
-const BAN_ERRORS: &[&str] = &["account has been deactivated", "refresh_token_reused"];
-const EXPIRED_ERRORS: &[&str] = &["invalid_grant", "invalid_token", "access_denied", ...];
-```
-
-### 2. SessionCleanupScheduler - 会话清理调度器
-
-**文件**: `src/scheduler/session_cleanup.rs` (62 行)
-
-**核心功能**:
-- ✅ 定期删除过期的管理员会话
-- ✅ 可配置的清理间隔
-- ✅ 直接 SQL 操作（高效、轻量级）
-- ✅ 优雅关闭支持
-
-**实现**:
-```rust
-DELETE FROM admin_sessions WHERE expires_at < ?
-```
-
-### 3. 调度器基础设施
-
-**文件**: `src/scheduler/types.rs` (27 行)
-
-**提供**:
-- ✅ `SchedulerHandle` - 统一的调度器句柄
-- ✅ `SchedulerError` - 类型化错误处理
-- ✅ `SchedulerResult<T>` - 统一的结果类型
-
-## 统计数据
-
-### 代码量
-- **新增 Rust 代码**: 553 行
-- **总计新增（含注释和空行）**: 574 行
-- **新增文件**: 4 个 Rust 源文件
-  - `src/scheduler/mod.rs`
-  - `src/scheduler/types.rs`
-  - `src/scheduler/refresh.rs`
-  - `src/scheduler/session_cleanup.rs`
-
-### 文档
-- `SCHEDULER_IMPLEMENTATION.md` - 详细实现说明（200+ 行）
-- `docs/scheduler-usage.md` - 使用指南和示例（220+ 行）
-
-### 测试状态
-- ✅ 所有 152 个现有测试保持通过
-- ✅ `cargo check --lib` 通过
-- ✅ `cargo clippy --all-targets --all-features --locked -- -D warnings` 通过
-- ✅ `cargo fmt --check` 通过
-
-## 提交记录
-
-```
-ce93de6 - feat: add background refresh and session cleanup schedulers
-2025594 - docs: add scheduler implementation and usage documentation
-```
-
-## 与 TypeScript 原版的对比
-
-| 特性 | TypeScript 版本 | Rust 版本 |
-|------|----------------|----------|
-| 异步处理 | 回调风格 | `async/await` |
-| 定时器 | `setTimeout`/`setInterval` | `tokio::spawn` + `tokio::time` |
-| 并发控制 | 文件锁 | `RwLock<HashMap>` |
-| 错误处理 | 字符串/Error | 类型化 `thiserror` |
-| 类型安全 | 弱类型 | 强类型 |
-
-## 架构设计亮点
-
-### 1. 避免异步递归
-问题：`schedule_one` → `do_refresh` → `schedule_one` 会导致无限递归
-
-解决：拆分为两个方法
-- `schedule_one()` - 初始调度，直接执行刷新
-- `schedule_next_refresh()` - 刷新后调度，避免递归
-
-### 2. 并发安全
-使用 `Arc<RwLock<HashMap>>` 实现线程安全的状态管理：
-```rust
-in_flight: Arc<RwLock<HashMap<String, Instant>>>
-timers: Arc<RwLock<HashMap<String, JoinHandle<()>>>>
-destroyed: Arc<RwLock<bool>>
-```
-
-### 3. 优雅关闭
-所有调度器通过 `mpsc::channel` 实现优雅关闭：
-```rust
-tokio::select! {
-    _ = ticker.tick() => { /* 执行任务 */ }
-    _ = shutdown_rx.recv() => {
-        info!("Scheduler shutting down");
-        break;
-    }
-}
-```
-
-## 集成到现有系统
-
-### 新增的 AccountService 方法
-
-```rust
-impl AccountService {
-    /// 列出所有账户用于刷新调度器
-    pub async fn list_all_for_refresh(&self) -> Result<Vec<StoredAccount>, AccountServiceError> {
-        self.repository()?.list_all().await.map_err(|_| AccountServiceError::List)
-    }
-}
-
-impl std::fmt::Display for RefreshAccountError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 实现 Display trait，用于调度器日志
-    }
-}
-```
-
-## 使用示例
-
-```rust
-// 1. 创建调度器
-let refresh_scheduler = RefreshScheduler::new(account_service, config);
-let refresh_handle = refresh_scheduler.start().await;
-
-let session_cleanup = SessionCleanupScheduler::new(db, 3600);
-let cleanup_handle = session_cleanup.start();
-
-// 2. 运行应用
-// ...
-
-// 3. 优雅关闭
-refresh_handle.shutdown().await;
-cleanup_handle.shutdown().await;
-```
-
-## 下一步建议
-
-### 必要的集成工作
-1. **在 main.rs 中集成调度器**
-   - 启动时初始化调度器
-   - 优雅关闭时停止调度器
-
-2. **配置文件更新**
-   - 添加 `session_cleanup_interval_secs` 配置项
-
-### 可选的增强功能
-3. **监控和可观测性**
-   - 添加调度器健康检查端点
-   - 暴露刷新成功/失败指标
-   - 活跃定时器数量监控
-
-4. **高级功能**
-   - 跨进程刷新锁（用于多实例部署）
-   - 磁盘刷新令牌同步（防止一次性 RT 被多次消费）
-   - 配额刷新调度器
-   - 模型刷新调度器
-   - 指纹更新调度器
-
-## 对应计划文档的完成情况
-
-根据 `/home/zyy/桌面/Codes/codex-proxy-rs/docs/superpowers/plans/2026-06-11-codex-proxy-rs.md`:
-
-**Line 3002 - Refresh scheduler parity**:
-- ✅ 长期运行的刷新定时器在 `exp - margin`
-- ✅ 崩溃恢复处理 `refreshing`/`expired` 账户
-- ✅ 指数退避
-- ✅ 恢复调度
-- ✅ 永久失败阈值检测
-- ✅ per-account in-flight 抑制
-- ⏳ 跨进程刷新锁（可选）
-- ⏳ 磁盘刷新令牌同步（可选）
-
-**Line 3005 - Background service lifecycle**:
-- ✅ 账户刷新调度器实现
-- ✅ 会话清理调度器实现
-- ⏳ 启动时初始化（需集成到 main.rs）
-- ⏳ 优雅关闭（需集成到 main.rs）
-- ❌ 模型刷新（未实现，可选）
-- ❌ 配额刷新（未实现，可选）
-- ❌ 指纹轮询（未实现，可选）
+# 账号调度与数据库审计落地报告
 
 ## 结论
 
-✅ **核心功能已完成** - RefreshScheduler 和 SessionCleanupScheduler 的实现符合 TypeScript 原版的功能要求
+本轮把账号调度审计和数据库存储审计合并落地。当前实现已经覆盖审计中需要立即修复的调度、刷新、窗口统计、session affinity、日志入口、schema 约束、cookie 过期语义和直接 SQL 边界问题。
 
-🎯 **质量保证** - 所有测试通过，代码符合 Rust 最佳实践，完整文档
+不在本报告范围内的事项：IP 代理/VPN、旧项目数据迁移、真实 Codex Desktop TLS 指纹完全复刻。这些不是当前 Rust 服务要移植的能力。
 
-🚀 **可立即使用** - 提供了完整的使用示例和集成指南
+## 账号调度审计项
 
-📈 **下一步清晰** - 需要在 main.rs 中集成启动逻辑，其他功能为可选增强
+### least_used 策略
 
----
+已实现完整优先级：
 
-**实现时间**: 2026-06-13
-**实现者**: Claude Opus 4.8
-**代码审查**: ✅ 通过 clippy 和 rustfmt
-**测试状态**: ✅ 所有测试通过
+1. quota-limited 账号降权。
+2. `window_reset_at` 更早的账号优先。
+3. `request_count` 更少的账号优先。
+4. 并列时轮换，避免固定账号长期被选中。
+
+对应测试：
+
+- `least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled`
+- `least_used_should_prefer_earlier_rate_limit_window_reset`
+- `least_used_should_prefer_lower_runtime_request_count`
+- `account_pool_should_rotate_tied_least_used_accounts`
+
+### refresh_concurrency
+
+已通过 `tokio::sync::Semaphore` 增加全局刷新并发限制。配置来源为 `auth.refresh_concurrency`，并对 0 做最小值保护。
+
+对应测试：
+
+- `refresh_scheduler_limits_refresh_concurrency`
+- `refresh_concurrency_limit_should_never_be_zero`
+
+### 请求计数和窗口统计
+
+`Account`、`AccountPool`、`AccountRepository` 和 `account_usage` 现在共同维护：
+
+- 累计 `request_count`
+- 窗口内请求数
+- 窗口内 input/output/cached token 计数
+- `window_started_at`
+- `window_reset_at`
+- `limit_window_seconds`
+
+这些字段会在请求完成时累加，在收到 rate-limit header 时同步窗口边界，并在启动恢复账号池时重新加载。
+
+对应测试：
+
+- `account_repository_should_accumulate_usage_window_counters`
+- `account_repository_should_restore_window_usage_into_runtime_pool_accounts`
+- `v1_responses_should_passively_cache_rate_limit_headers`
+- `sqlite_schema_should_persist_account_usage_window_columns`
+
+## 数据库存储审计项
+
+### account_usage 窗口状态
+
+已落地到 `account_usage`，并为旧库启动补列。窗口统计属于 usage 域，不放入 `accounts`。
+
+### session affinity
+
+已增加 `SessionAffinityRepository`，完成响应后写入 SQLite，启动时删除过期记录并恢复未过期映射。`function_call_ids_json` 已持久化，避免工具调用分支信息只存在于内存。
+
+对应测试：
+
+- `app_state_should_restore_session_affinity_from_sqlite`
+- `v1_responses_should_route_previous_response_id_to_recorded_account`
+- `v1_responses_websocket_should_reuse_connection_for_recorded_conversation`
+
+### 事件日志入口
+
+请求链路和管理端共享 `LogService`。写入事件日志时统一执行：
+
+- `enabled`
+- `capacity`
+- `capture_body`
+- metadata 清理
+
+对应测试：
+
+- `v1_responses_should_skip_event_log_when_logging_disabled`
+- `log_service_should_trim_to_capacity_after_record`
+- `log_service_should_remove_body_metadata_when_capture_body_disabled`
+
+### schema 约束
+
+SQLite schema 已补充状态枚举、日志级别、布尔字段、非负计数、HTTP 状态码和 `limit_window_seconds` 约束。
+
+对应测试：
+
+- `sqlite_schema_should_reject_invalid_account_status`
+- `sqlite_schema_should_reject_invalid_event_log_level`
+- `sqlite_schema_should_reject_non_boolean_flags`
+- `sqlite_schema_should_reject_negative_account_usage_counts`
+
+### cookie 过期语义
+
+`CookieRepository::cookie_header` 读取时过滤已过期 cookie，支持标准 `Expires` 时间和 RFC3339。无法解析的历史值会保守保留，避免误删仍可能有效的 cookie。
+
+对应测试：
+
+- `cookie_repository_should_not_replay_expired_cookies`
+
+### 直接 SQL 边界
+
+直接访问业务表的 SQL 已收敛到 repository：
+
+- `admin_users` / `admin_sessions`：`AdminAuthRepository`
+- `fingerprints`：`FingerprintRepository`
+- `session_affinities`：`SessionAffinityRepository`
+- `event_logs`：`EventLogRepository`，由 `LogService` 统一入口调用
+
+对应测试：
+
+- `admin_auth_repository_should_create_and_load_default_admin_once`
+- `admin_auth_repository_should_create_validate_and_cleanup_sessions`
+- `fingerprint_repository_should_upsert_auto_update_record`
+
+## 当前验证
+
+最后一次完整验证命令：
+
+- `cargo fmt --check`
+- `git diff --check`
+- `cargo test`
+- `cargo clippy --all-targets --all-features --locked -- -D warnings`
+
+以上命令均已通过。
