@@ -194,6 +194,63 @@ async fn account_repository_should_accumulate_usage_counters() {
 }
 
 #[tokio::test]
+async fn account_repository_should_accumulate_usage_window_counters() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let repo = AccountRepository::new(pool.clone(), SecretBox::new([32u8; 32]));
+
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: None,
+        account_id: None,
+        user_id: None,
+        label: None,
+        plan_type: None,
+        access_token: SecretString::new("access-secret".to_string().into()),
+        refresh_token: None,
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+
+    repo.record_usage(
+        "acct_a",
+        UsageDelta {
+            input_tokens: 10,
+            output_tokens: 4,
+            cached_tokens: 3,
+            empty_response_count: 0,
+        },
+    )
+    .await
+    .unwrap();
+    repo.record_usage(
+        "acct_a",
+        UsageDelta {
+            input_tokens: 8,
+            output_tokens: 2,
+            cached_tokens: 1,
+            empty_response_count: 0,
+        },
+    )
+    .await
+    .unwrap();
+
+    let usage: (i64, i64, i64, i64) = sqlx::query_as(
+        "select window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens from account_usage where account_id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(usage, (2, 18, 6, 4));
+}
+
+#[tokio::test]
 async fn account_repository_should_load_usage_count_into_runtime_pool_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("accounts.sqlite");
@@ -230,6 +287,39 @@ async fn account_repository_should_load_usage_count_into_runtime_pool_accounts()
     let account = repo.list_pool_accounts().await.unwrap().remove(0);
 
     assert_eq!(account.request_count, 1);
+}
+
+#[tokio::test]
+async fn account_repository_should_restore_window_usage_into_runtime_pool_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let secret_box = SecretBox::new([33u8; 32]);
+    let repo = AccountRepository::new(pool.clone(), secret_box.clone());
+    let window_started_at = Utc::now() - Duration::minutes(2);
+    let window_reset_at = Utc::now() + Duration::minutes(3);
+
+    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds) values (?, 9, 7, 11, 13, 17, ?, ?, 300)",
+    )
+    .bind("acct_a")
+    .bind(window_started_at.to_rfc3339())
+    .bind(window_reset_at.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let account = repo.list_pool_accounts().await.unwrap().remove(0);
+
+    assert_eq!(account.window_request_count, 7);
+    assert_eq!(account.window_input_tokens, 11);
+    assert_eq!(account.window_output_tokens, 13);
+    assert_eq!(account.window_cached_tokens, 17);
+    assert_eq!(account.window_started_at, Some(window_started_at));
+    assert_eq!(account.window_reset_at, Some(window_reset_at));
+    assert_eq!(account.limit_window_seconds, Some(300));
 }
 
 #[tokio::test]

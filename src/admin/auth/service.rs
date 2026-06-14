@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
+    admin::auth::repository::AdminAuthRepository,
     codex::accounts::service::{AccountService, ValidatedAccountImportError},
     codex::accounts::{
         model::AccountStatus,
@@ -22,7 +22,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AdminAuthService {
     config: Arc<AppConfig>,
-    db: Option<SqlitePool>,
+    auth_repository: Option<AdminAuthRepository>,
     account_repository: Option<AccountRepository>,
     account_pool: Arc<Mutex<AccountPool>>,
     oauth_client: Option<Arc<dyn OAuthClient>>,
@@ -122,16 +122,10 @@ pub enum AdminAuthPkceExchange {
     AlreadyCompleted,
 }
 
-#[derive(Debug)]
-struct AdminUserRow {
-    id: String,
-    password_hash: String,
-}
-
 impl AdminAuthService {
     pub fn new(
         config: Arc<AppConfig>,
-        db: Option<SqlitePool>,
+        auth_repository: Option<AdminAuthRepository>,
         account_repository: Option<AccountRepository>,
         account_pool: Arc<Mutex<AccountPool>>,
         oauth_client: Option<Arc<dyn OAuthClient>>,
@@ -140,7 +134,7 @@ impl AdminAuthService {
     ) -> Self {
         Self {
             config,
-            db,
+            auth_repository,
             account_repository,
             account_pool,
             oauth_client,
@@ -150,8 +144,9 @@ impl AdminAuthService {
     }
 
     pub async fn login(&self, password: &str) -> Result<AdminLogin, AdminAuthServiceError> {
-        let pool = self.pool()?;
-        let admin = load_first_admin(pool)
+        let auth_repository = self.auth_repository()?;
+        let admin = auth_repository
+            .load_first_admin()
             .await
             .map_err(|_| AdminAuthServiceError::LoadAdminUser)?
             .ok_or(AdminAuthServiceError::AdminPasswordInvalid)?;
@@ -167,7 +162,8 @@ impl AdminAuthService {
             i64::try_from(ttl_minutes).map_err(|_| AdminAuthServiceError::InvalidSessionTtl)?;
         let expires_at = Utc::now() + Duration::minutes(ttl_minutes_i64);
         let session_id = format!("sess_{}", Uuid::new_v4().simple());
-        create_admin_session(pool, &session_id, &admin.id, expires_at)
+        auth_repository
+            .create_session(&session_id, &admin.id, expires_at)
             .await
             .map_err(|_| AdminAuthServiceError::CreateSession)?;
 
@@ -185,10 +181,11 @@ impl AdminAuthService {
         let Some(session_id) = session_id else {
             return Ok(false);
         };
-        let pool = self
-            .pool()
+        let auth_repository = self
+            .auth_repository()
             .map_err(|_| AdminSessionValidationError::DatabaseUnavailable)?;
-        validate_admin_session(pool, session_id)
+        auth_repository
+            .validate_session(session_id)
             .await
             .map_err(|_| AdminSessionValidationError::ValidateSession)
     }
@@ -291,8 +288,8 @@ impl AdminAuthService {
             .await
     }
 
-    fn pool(&self) -> Result<&SqlitePool, AdminAuthServiceError> {
-        self.db
+    fn auth_repository(&self) -> Result<&AdminAuthRepository, AdminAuthServiceError> {
+        self.auth_repository
             .as_ref()
             .ok_or(AdminAuthServiceError::DatabaseUnavailable)
     }
@@ -357,47 +354,6 @@ impl AdminAuthService {
             }
         }
     }
-}
-
-async fn load_first_admin(pool: &SqlitePool) -> Result<Option<AdminUserRow>, sqlx::Error> {
-    let row =
-        sqlx::query("select id, password_hash from admin_users order by created_at asc limit 1")
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|row| AdminUserRow {
-        id: row.get("id"),
-        password_hash: row.get("password_hash"),
-    }))
-}
-
-async fn validate_admin_session(pool: &SqlitePool, session_id: &str) -> Result<bool, sqlx::Error> {
-    let now = Utc::now().to_rfc3339();
-    let count: (i64,) =
-        sqlx::query_as("select count(*) from admin_sessions where id = ? and expires_at > ?")
-            .bind(session_id)
-            .bind(now)
-            .fetch_one(pool)
-            .await?;
-    Ok(count.0 > 0)
-}
-
-async fn create_admin_session(
-    pool: &SqlitePool,
-    session_id: &str,
-    user_id: &str,
-    expires_at: DateTime<Utc>,
-) -> Result<(), sqlx::Error> {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .bind(expires_at.to_rfc3339())
-    .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 fn account_auth_user(account: &StoredAccountMetadata) -> AdminAuthUser {

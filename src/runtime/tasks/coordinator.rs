@@ -1,7 +1,9 @@
 use sqlx::SqlitePool;
 
 use crate::{
-    admin::tasks::session_cleanup::SessionCleanupScheduler,
+    admin::{
+        auth::repository::AdminAuthRepository, tasks::session_cleanup::SessionCleanupScheduler,
+    },
     codex::{
         gateway::fingerprint::{
             model::Fingerprint, repository::FingerprintRepository, update_checker::UpdateChecker,
@@ -84,8 +86,10 @@ pub async fn start_background_tasks(
     coordinator.push("refresh", refresh_scheduler.start().await);
     tracing::info!("token 刷新调度器已启动");
 
-    let session_cleanup =
-        SessionCleanupScheduler::new(db_pool, config.admin.session_cleanup_interval_secs);
+    let session_cleanup = SessionCleanupScheduler::new(
+        AdminAuthRepository::new(db_pool),
+        config.admin.session_cleanup_interval_secs,
+    );
     coordinator.push("session_cleanup", session_cleanup.start());
     tracing::info!("会话清理调度器已启动");
 

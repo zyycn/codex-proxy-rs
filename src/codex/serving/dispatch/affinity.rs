@@ -1,7 +1,11 @@
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use sqlx::{Row, SqlitePool};
+use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::time::interval;
 
@@ -23,7 +27,38 @@ pub struct AffinityEntry {
     /// 变体哈希 - 用于区分并发对话分支
     pub variant_hash: Option<String>,
     /// 创建时间
-    pub created_at: Instant,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredSessionAffinity {
+    pub response_id: String,
+    pub account_id: String,
+    pub conversation_id: String,
+    pub turn_state: Option<String>,
+    pub instructions_hash: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub function_call_ids: Vec<String>,
+    pub variant_hash: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Error)]
+pub enum SessionAffinityRepositoryError {
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("invalid session affinity timestamp: {0}")]
+    InvalidTimestamp(#[from] chrono::ParseError),
+    #[error("invalid session affinity function call ids: {0}")]
+    InvalidFunctionCallIds(#[from] serde_json::Error),
+}
+
+pub type SessionAffinityRepositoryResult<T> = Result<T, SessionAffinityRepositoryError>;
+
+#[derive(Clone)]
+pub struct SessionAffinityRepository {
+    pool: SqlitePool,
 }
 
 /// 会话亲和性映射 - 将 previous_response_id 映射到创建它的账户
@@ -42,10 +77,101 @@ pub struct SessionAffinityMap {
 const DEFAULT_TTL: Duration = Duration::from_secs(4 * 60 * 60); // 4小时
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60); // 10分钟
 
+const UPSERT_SESSION_AFFINITY_SQL: &str = r"
+insert into session_affinities (
+  response_id,
+  account_id,
+  conversation_id,
+  turn_state,
+  instructions_hash,
+  input_tokens,
+  function_call_ids_json,
+  variant_hash,
+  expires_at,
+  created_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(response_id) do update set
+  account_id = excluded.account_id,
+  conversation_id = excluded.conversation_id,
+  turn_state = excluded.turn_state,
+  instructions_hash = excluded.instructions_hash,
+  input_tokens = excluded.input_tokens,
+  function_call_ids_json = excluded.function_call_ids_json,
+  variant_hash = excluded.variant_hash,
+  expires_at = excluded.expires_at,
+  created_at = excluded.created_at";
+
+const LIST_ACTIVE_SESSION_AFFINITIES_SQL: &str = r"
+select
+  response_id,
+  account_id,
+  conversation_id,
+  turn_state,
+  instructions_hash,
+  input_tokens,
+  function_call_ids_json,
+  variant_hash,
+  expires_at,
+  created_at
+from session_affinities
+where expires_at > ?
+order by created_at asc, response_id asc";
+
 pub(super) fn compute_variant_hash(value: &impl Serialize) -> Option<String> {
     serde_json::to_string(value)
         .ok()
         .filter(|serialized| !serialized.is_empty())
+}
+
+impl SessionAffinityRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn upsert(
+        &self,
+        response_id: &str,
+        entry: &AffinityEntry,
+        ttl: Duration,
+    ) -> SessionAffinityRepositoryResult<()> {
+        let function_call_ids_json = serde_json::to_string(&entry.function_call_ids)?;
+        let expires_at = entry.created_at + chrono_duration_from_std(ttl);
+        sqlx::query(UPSERT_SESSION_AFFINITY_SQL)
+            .bind(response_id)
+            .bind(&entry.account_id)
+            .bind(&entry.conversation_id)
+            .bind(&entry.turn_state)
+            .bind(&entry.instructions_hash)
+            .bind(entry.input_tokens.map(u64_to_i64_saturating))
+            .bind(function_call_ids_json)
+            .bind(&entry.variant_hash)
+            .bind(expires_at.to_rfc3339())
+            .bind(entry.created_at.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_active(
+        &self,
+        now: DateTime<Utc>,
+    ) -> SessionAffinityRepositoryResult<Vec<StoredSessionAffinity>> {
+        let rows = sqlx::query(LIST_ACTIVE_SESSION_AFFINITIES_SQL)
+            .bind(now.to_rfc3339())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| stored_session_affinity_from_row(&row))
+            .collect()
+    }
+
+    pub async fn delete_expired(&self, now: DateTime<Utc>) -> SessionAffinityRepositoryResult<u64> {
+        let result = sqlx::query("delete from session_affinities where expires_at <= ?")
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 impl SessionAffinityMap {
@@ -74,9 +200,9 @@ impl SessionAffinityMap {
             let mut ticker = interval(CLEANUP_INTERVAL);
             loop {
                 ticker.tick().await;
-                let now = Instant::now();
+                let now = Utc::now();
                 let mut map_lock = map.write().await;
-                map_lock.retain(|_, entry| now.duration_since(entry.created_at) < ttl);
+                map_lock.retain(|_, entry| !entry_expired(entry.created_at, ttl, now));
             }
         });
 
@@ -102,7 +228,7 @@ impl SessionAffinityMap {
         input_tokens: Option<u64>,
         function_call_ids: Option<Vec<String>>,
         variant_hash: Option<String>,
-    ) {
+    ) -> AffinityEntry {
         let instructions_hash = instructions.map(|s| {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
@@ -119,10 +245,41 @@ impl SessionAffinityMap {
             input_tokens,
             function_call_ids: function_call_ids.unwrap_or_default(),
             variant_hash,
-            created_at: Instant::now(),
+            created_at: Utc::now(),
         };
 
-        self.map.write().await.insert(response_id, entry);
+        self.map.write().await.insert(response_id, entry.clone());
+        entry
+    }
+
+    pub async fn restore(&self, records: Vec<StoredSessionAffinity>) -> usize {
+        let now = Utc::now();
+        let mut restored = 0usize;
+        let mut map = self.map.write().await;
+        for record in records {
+            if record.expires_at <= now || entry_expired(record.created_at, self.ttl, now) {
+                continue;
+            }
+            map.insert(
+                record.response_id,
+                AffinityEntry {
+                    account_id: record.account_id,
+                    conversation_id: record.conversation_id,
+                    turn_state: record.turn_state,
+                    instructions_hash: record.instructions_hash,
+                    input_tokens: record.input_tokens,
+                    function_call_ids: record.function_call_ids,
+                    variant_hash: record.variant_hash,
+                    created_at: record.created_at,
+                },
+            );
+            restored = restored.saturating_add(1);
+        }
+        restored
+    }
+
+    pub fn ttl(&self) -> Duration {
+        self.ttl
     }
 
     /// 查找响应ID对应的账户ID
@@ -148,10 +305,10 @@ impl SessionAffinityMap {
         variant_hash: Option<&str>,
     ) -> Option<String> {
         let map = self.map.read().await;
-        let now = Instant::now();
+        let now = Utc::now();
 
         let mut latest_response_id: Option<String> = None;
-        let mut latest_created_at = Instant::now() - Duration::from_secs(u64::MAX / 2);
+        let mut latest_created_at: Option<DateTime<Utc>> = None;
 
         for (response_id, entry) in map.iter() {
             // 过滤对话ID
@@ -167,20 +324,20 @@ impl SessionAffinityMap {
             }
 
             // 检查TTL
-            if now.duration_since(entry.created_at) >= self.ttl {
+            if entry_expired(entry.created_at, self.ttl, now) {
                 continue;
             }
 
             // 检查最大年龄
             if let Some(max) = max_age {
-                if now.duration_since(entry.created_at) > max {
+                if entry_age_exceeds(entry.created_at, now, max) {
                     continue;
                 }
             }
 
             // 保留最新的
-            if entry.created_at > latest_created_at {
-                latest_created_at = entry.created_at;
+            if latest_created_at.is_none_or(|latest| entry.created_at > latest) {
+                latest_created_at = Some(entry.created_at);
                 latest_response_id = Some(response_id.clone());
             }
         }
@@ -235,13 +392,59 @@ impl SessionAffinityMap {
         let map = self.map.read().await;
         let entry = map.get(response_id)?;
 
-        let now = Instant::now();
-        if now.duration_since(entry.created_at) >= self.ttl {
+        let now = Utc::now();
+        if entry_expired(entry.created_at, self.ttl, now) {
             return None;
         }
 
         Some(entry.clone())
     }
+}
+
+fn entry_expired(created_at: DateTime<Utc>, ttl: Duration, now: DateTime<Utc>) -> bool {
+    now.signed_duration_since(created_at)
+        .to_std()
+        .is_ok_and(|age| age >= ttl)
+}
+
+fn entry_age_exceeds(created_at: DateTime<Utc>, now: DateTime<Utc>, max_age: Duration) -> bool {
+    now.signed_duration_since(created_at)
+        .to_std()
+        .is_ok_and(|age| age > max_age)
+}
+
+fn chrono_duration_from_std(duration: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::seconds(i64::MAX))
+}
+
+fn u64_to_i64_saturating(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
+fn optional_nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
+fn parse_rfc3339(value: &str) -> SessionAffinityRepositoryResult<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
+}
+
+fn stored_session_affinity_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> SessionAffinityRepositoryResult<StoredSessionAffinity> {
+    let function_call_ids_json = row.get::<String, _>("function_call_ids_json");
+    Ok(StoredSessionAffinity {
+        response_id: row.get("response_id"),
+        account_id: row.get("account_id"),
+        conversation_id: row.get("conversation_id"),
+        turn_state: row.get("turn_state"),
+        instructions_hash: row.get("instructions_hash"),
+        input_tokens: optional_nonnegative_i64_to_u64(row.get("input_tokens")),
+        function_call_ids: serde_json::from_str(&function_call_ids_json)?,
+        variant_hash: row.get("variant_hash"),
+        expires_at: parse_rfc3339(&row.get::<String, _>("expires_at"))?,
+        created_at: parse_rfc3339(&row.get::<String, _>("created_at"))?,
+    })
 }
 
 impl Drop for SessionAffinityMap {

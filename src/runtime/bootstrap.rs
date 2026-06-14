@@ -1,9 +1,11 @@
 use thiserror::Error;
 
 use crate::{
+    admin::auth::repository::AdminAuthRepository,
     codex::accounts::repository::AccountRepositoryError,
     codex::gateway::fingerprint::{model::Fingerprint, repository::FingerprintRepository},
     codex::gateway::oauth::OpenAiOAuthRefresher,
+    codex::serving::dispatch::affinity::SessionAffinityRepositoryError,
     config::AppConfig,
     platform::{
         crypto::{CryptoError, SecretBox},
@@ -27,6 +29,8 @@ pub enum BootstrapError {
     Database(#[from] sqlx::Error),
     #[error("account repository error: {0}")]
     AccountRepository(#[from] AccountRepositoryError),
+    #[error("session affinity repository error: {0}")]
+    SessionAffinityRepository(#[from] SessionAffinityRepositoryError),
 }
 
 pub type BootstrapResult<T> = Result<T, BootstrapError>;
@@ -73,8 +77,8 @@ pub async fn build_state(config: AppConfig) -> BootstrapResult<(AppState, Sqlite
         }
     };
 
-    // 初始化默认管理员账号（如果不存在）
-    ensure_default_admin_exists(&pool, &config).await?;
+    let admin_auth_repo = AdminAuthRepository::new(pool.clone());
+    ensure_default_admin_exists(&admin_auth_repo, &config).await?;
 
     let state = AppState::with_pool_secret_api_key_hasher_oauth_client_and_fingerprint(
         config,
@@ -85,36 +89,23 @@ pub async fn build_state(config: AppConfig) -> BootstrapResult<(AppState, Sqlite
         fingerprint,
     );
     let restored_accounts = state.reload_account_pool_from_repository().await?;
+    let restored_affinities = state.reload_session_affinity_from_repository().await?;
+    tracing::info!(
+        account_count = restored_accounts,
+        session_affinity_count = restored_affinities,
+        "已从 SQLite 恢复运行时状态"
+    );
     Ok((state, pool, restored_accounts))
 }
 
 /// 确保默认管理员账号存在（首次启动时创建）
 async fn ensure_default_admin_exists(
-    pool: &SqlitePool,
+    repository: &AdminAuthRepository,
     config: &AppConfig,
 ) -> Result<(), sqlx::Error> {
-    // 检查是否已存在管理员
-    let count: (i64,) = sqlx::query_as("select count(*) from admin_users")
-        .fetch_one(pool)
-        .await?;
-
-    if count.0 == 0 {
-        // 创建默认管理员
-        let admin_id = format!("admin_{}", uuid::Uuid::new_v4().simple());
-        let password_hash = hash_admin_password(&config.admin.default_password)
-            .map_err(|e| sqlx::Error::Protocol(format!("failed to hash password: {}", e)))?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        sqlx::query(
-            "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
-        )
-        .bind(&admin_id)
-        .bind(&password_hash)
-        .bind(&now)
-        .bind(&now)
-        .execute(pool)
-        .await?;
-
+    let password_hash = hash_admin_password(&config.admin.default_password)
+        .map_err(|e| sqlx::Error::Protocol(format!("failed to hash password: {e}")))?;
+    if repository.ensure_default_admin(&password_hash).await? {
         tracing::info!(
             username = %config.admin.default_username,
             "已创建默认管理员用户"

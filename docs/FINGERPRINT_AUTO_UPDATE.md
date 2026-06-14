@@ -110,7 +110,7 @@ data/
 
 ### 4. 数据库持久化
 
-自动更新 `fingerprints` 表：
+自动更新通过 `FingerprintRepository::upsert_auto_update()` 写入 `fingerprints` 表的 `auto_updated` 当前记录：
 
 ```sql
 insert into fingerprints (
@@ -120,13 +120,14 @@ insert into fingerprints (
 on conflict(id) do update set
     app_version = excluded.app_version,
     build_number = excluded.build_number,
-    chromium_version = excluded.chromium_version
+    chromium_version = excluded.chromium_version,
+    created_at = excluded.created_at
 ```
 
 **好处：**
-- 记录历史版本变更
-- 支持多指纹配置
-- 审计和回滚能力
+- 启动时可以稳定加载最新 `auto_update` fingerprint
+- 自动更新逻辑不再直接持有业务表 SQL
+- 历史记录写入仍由 `FingerprintRepository::insert_update()` 支持
 
 ### 5. Chromium 版本匹配
 
@@ -260,19 +261,24 @@ pub enum UpdateError {
 
 ---
 
-## 新增文件
+## 相关文件
 
 1. **src/codex/gateway/fingerprint/update_checker.rs**
-   - 340 行核心实现
    - UpdateChecker 结构体
    - Appcast 解析逻辑
    - 状态持久化
+   - 通过 `FingerprintRepository` 写入数据库
 
-2. **src/platform/storage/paths.rs**
+2. **src/codex/gateway/fingerprint/repository.rs**
+   - fingerprint 历史记录写入
+   - `auto_updated` 当前记录 upsert
+   - 启动时加载 `auto_update` fingerprint
+
+3. **src/platform/storage/paths.rs**
    - 数据目录路径管理
    - `data_dir()` 和 `ensure_data_dir()`
 
-3. **修改文件：**
+4. **修改文件：**
    - `src/codex/gateway/fingerprint/mod.rs` - 添加模块导出
    - `src/platform/storage/mod.rs` - 添加 paths 模块
    - `src/runtime/tasks/coordinator.rs` - 启动 update checker

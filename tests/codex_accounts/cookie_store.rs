@@ -65,6 +65,28 @@ async fn cookie_repository_encrypts_and_replays_account_scoped_cookies() {
     );
 }
 
+#[tokio::test]
+async fn cookie_repository_should_not_replay_expired_cookies() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("expired-cookies.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_account(&pool, "acct_a").await;
+    let repo = CookieRepository::new(pool, SecretBox::new([19u8; 32]));
+
+    repo.capture_set_cookie(
+        "acct_a",
+        "cf_clearance=expired; Domain=.chatgpt.com; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        repo.cookie_header("acct_a", "chatgpt.com").await.unwrap(),
+        None
+    );
+}
+
 async fn seed_account(pool: &sqlx::SqlitePool, id: &str) {
     let now = Utc::now().to_rfc3339();
     sqlx::query(

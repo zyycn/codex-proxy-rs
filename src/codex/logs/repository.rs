@@ -49,6 +49,18 @@ impl EventLogRepository {
         Ok(())
     }
 
+    pub async fn trim_to_capacity(&self, capacity: u32) -> Result<u64, sqlx::Error> {
+        sqlx::query(
+            "delete from event_logs where id in (
+                select id from event_logs order by created_at desc, id desc limit -1 offset ?
+            )",
+        )
+        .bind(i64::from(capacity))
+        .execute(&self.pool)
+        .await
+        .map(|result| result.rows_affected())
+    }
+
     pub async fn list(
         &self,
         cursor: Option<String>,

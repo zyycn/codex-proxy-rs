@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use wiremock::{
@@ -17,7 +17,7 @@ use codex_proxy_rs::{
 
 use crate::support::{
     response_json, response_text,
-    upstream::{build_imported_app, fetch_v1_event_log},
+    upstream::{build_imported_app, enable_runtime_logging, fetch_v1_event_log},
 };
 
 const COMPLETED_USAGE_SSE: &str =
@@ -33,6 +33,51 @@ const DONE_ITEM_COMPLETED_SSE: &str =
 const STREAM_USAGE_SSE: &str = include_str!("../fixtures/responses/http_sse/stream_usage.sse");
 const DEFAULT_STREAM_SSE: &str = include_str!("../fixtures/responses/http_sse/default_stream.sse");
 const EMPTY_COMPLETED_SSE: &str = "event: response.completed\ndata: {\"response\":{\"id\":\"resp_empty\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+
+#[tokio::test]
+async fn v1_responses_should_skip_event_log_when_logging_disabled() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_logs_disabled")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let stored_count: (i64,) = sqlx::query_as(
+        "select count(*) from event_logs where request_id = ? and kind = 'v1.response'",
+    )
+    .bind("req_logs_disabled")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_count.0, 0);
+}
 
 #[tokio::test]
 async fn v1_responses_should_honor_explicit_http_sse_transport() {
@@ -97,6 +142,7 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
         .mount(&server)
         .await;
     let imported = build_imported_app(server.uri()).await;
+    enable_runtime_logging(&imported.app).await;
 
     let response = imported
         .app
@@ -203,6 +249,26 @@ async fn v1_responses_should_passively_cache_rate_limit_headers() {
     assert_eq!(quota["credits"]["balance"], 12);
     assert_eq!(stored.1, 1);
     assert!(stored.2.is_some());
+    let window: (i64, i64, i64, i64, Option<String>, Option<String>, Option<i64>) =
+        sqlx::query_as(
+            "select window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds from account_usage where account_id = ?",
+        )
+        .bind("acct_imported")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(window.0, 1);
+    assert_eq!(window.1, 7);
+    assert_eq!(window.2, 4);
+    assert_eq!(window.3, 2);
+    assert!(window.4.is_some());
+    assert_eq!(
+        DateTime::parse_from_rfc3339(window.5.as_deref().unwrap())
+            .unwrap()
+            .timestamp(),
+        reset_at
+    );
+    assert_eq!(window.6, Some(300));
 }
 
 #[tokio::test]
@@ -509,6 +575,7 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
         .mount(&server)
         .await;
     let imported = build_imported_app(server.uri()).await;
+    enable_runtime_logging(&imported.app).await;
 
     let response = imported
         .app

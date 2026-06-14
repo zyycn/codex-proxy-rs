@@ -317,3 +317,20 @@ pub async fn fetch_v1_event_log(
         serde_json::from_str(&row.4).unwrap(),
     )
 }
+
+pub async fn enable_runtime_logging(app: &axum::Router) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/admin/logs/state")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({ "enabled": true }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}

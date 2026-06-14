@@ -1,5 +1,21 @@
+use std::time::Instant;
+
+use axum::{
+    body::Bytes,
+    http::{HeaderMap, StatusCode},
+};
 use chrono::{Duration, Utc};
+use futures::{SinkExt, StreamExt};
 use secrecy::SecretString;
+use serde_json::{json, Value};
+use tokio::net::TcpListener;
+use tokio_tungstenite::{
+    accept_hdr_async,
+    tungstenite::{
+        handshake::server::{Request as WsRequest, Response as WsResponse},
+        Message,
+    },
+};
 
 use codex_proxy_rs::{
     codex::accounts::{
@@ -15,6 +31,8 @@ use codex_proxy_rs::{
     platform::storage::db::connect_sqlite,
     runtime::state::AppState,
 };
+
+use crate::support::response_text;
 
 fn test_config(database_url: String) -> AppConfig {
     AppConfig {
@@ -173,4 +191,177 @@ async fn app_state_should_restore_persisted_cooldowns_into_runtime_pool() {
         .acquire_runtime_account("gpt-5.5")
         .await
         .is_none());
+}
+
+#[tokio::test]
+async fn app_state_should_restore_session_affinity_from_sqlite() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        accept_successful_websocket_response(
+            &listener,
+            "Bearer access-a",
+            Some("turn_restore"),
+            "resp_restore_second",
+        )
+        .await
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("startup-affinity.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let secret_box = SecretBox::new([33u8; 32]);
+    let repo = codex_proxy_rs::codex::accounts::repository::AccountRepository::new(
+        pool.clone(),
+        secret_box.clone(),
+    );
+    repo.insert(NewAccount {
+        id: "acct_a".to_string(),
+        email: Some("a@example.com".to_string()),
+        account_id: Some("chatgpt-a".to_string()),
+        user_id: None,
+        label: None,
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("access-a".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-a".to_string().into())),
+        access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+    repo.insert(NewAccount {
+        id: "acct_b".to_string(),
+        email: Some("b@example.com".to_string()),
+        account_id: Some("chatgpt-b".to_string()),
+        user_id: None,
+        label: None,
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("access-b".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-b".to_string().into())),
+        access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+    repo.record_usage(
+        "acct_a",
+        UsageDelta {
+            input_tokens: 1,
+            output_tokens: 0,
+            cached_tokens: 0,
+            empty_response_count: 0,
+        },
+    )
+    .await
+    .unwrap();
+    let now = Utc::now();
+    sqlx::query(
+        "insert into session_affinities (response_id, account_id, conversation_id, turn_state, instructions_hash, input_tokens, function_call_ids_json, variant_hash, expires_at, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("resp_restore_first")
+    .bind("acct_a")
+    .bind("conv_restore")
+    .bind("turn_restore")
+    .bind(Option::<String>::None)
+    .bind(3_i64)
+    .bind(r#"["call_restore"]"#)
+    .bind(Option::<String>::None)
+    .bind((now + Duration::hours(3)).to_rfc3339())
+    .bind(now.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut config = test_config(url);
+    config.api.base_url = format!("http://{addr}");
+    let state = AppState::with_pool_and_secret_box(config, pool, secret_box);
+    state.reload_account_pool_from_repository().await.unwrap();
+    assert_eq!(
+        state
+            .reload_session_affinity_from_repository()
+            .await
+            .unwrap(),
+        1
+    );
+
+    let response = state
+        .services
+        .responses
+        .handle(
+            "req_restore_affinity",
+            HeaderMap::new(),
+            Bytes::from(
+                r#"{"model":"gpt-5.5","input":[],"previous_response_id":"resp_restore_first"}"#,
+            ),
+            Instant::now(),
+        )
+        .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("\"id\":\"resp_restore_second\""));
+    let upstream_request = server.await.unwrap();
+    assert_eq!(
+        upstream_request["previous_response_id"],
+        "resp_restore_first"
+    );
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "tokio-tungstenite handshake callbacks use a large error response type"
+)]
+async fn accept_successful_websocket_response(
+    listener: &TcpListener,
+    expected_authorization: &str,
+    expected_turn_state: Option<&str>,
+    response_id: &str,
+) -> Value {
+    let (stream, _) = listener.accept().await.unwrap();
+    let expected_authorization = expected_authorization.to_string();
+    let expected_turn_state = expected_turn_state.map(ToString::to_string);
+    let mut websocket =
+        accept_hdr_async(stream, move |request: &WsRequest, response: WsResponse| {
+            assert_eq!(
+                request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some(expected_authorization.as_str())
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok()),
+                expected_turn_state.as_deref()
+            );
+            Ok(response)
+        })
+        .await
+        .unwrap();
+    let message = websocket.next().await.unwrap().unwrap();
+    let request = serde_json::from_str::<Value>(&message.into_text().unwrap()).unwrap();
+    websocket
+        .send(Message::Text(
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "input_tokens_details": {"cached_tokens": 0}
+                    }
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    websocket.close(None).await.unwrap();
+    request
 }

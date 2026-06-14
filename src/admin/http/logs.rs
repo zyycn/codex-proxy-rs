@@ -231,6 +231,12 @@ fn log_service_error(error: LogServiceError, request_id: String) -> AdminError {
             "Failed to clear event logs",
             request_id,
         ),
+        LogServiceError::Write => AdminError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            50001,
+            "Failed to write event log",
+            request_id,
+        ),
         LogServiceError::InvalidCapacity => AdminError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             42201,

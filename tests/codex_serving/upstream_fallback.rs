@@ -20,7 +20,8 @@ use crate::support::{
     response_json, response_text,
     upstream::{
         build_imported_app_with_accounts, build_imported_app_with_refresher,
-        build_imported_app_with_token_refresher, FailingTokenRefresher, ImportAccount,
+        build_imported_app_with_token_refresher, enable_runtime_logging, FailingTokenRefresher,
+        ImportAccount,
     },
 };
 
@@ -604,6 +605,7 @@ async fn v1_responses_should_log_refresh_failure_after_401() {
         },
     )
     .await;
+    enable_runtime_logging(&imported.app).await;
 
     let response = imported
         .app
