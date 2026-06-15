@@ -306,6 +306,64 @@ async fn v1_responses_should_retry_same_account_after_5xx_before_fallback() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_record_request_count_when_5xx_retries_are_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": {"message": "temporary upstream failure"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_5xx_exhausted",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let failed_usage: Option<(i64,)> =
+        sqlx::query_as("select request_count from account_usage where account_id = ?")
+            .bind("acct_5xx_exhausted")
+            .fetch_optional(&imported.pool)
+            .await
+            .unwrap();
+    assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
+
+    let requests = server.received_requests().await.unwrap();
+    let post_count = requests
+        .iter()
+        .filter(|request| request.method.as_str() == "POST")
+        .count();
+    assert_eq!(post_count, 3);
+}
+
+#[tokio::test]
 async fn v1_responses_stream_should_retry_same_account_after_5xx_before_fallback() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

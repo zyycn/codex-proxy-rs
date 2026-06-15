@@ -181,6 +181,22 @@ impl ChatService {
                             .await;
                         return error_response.into_response();
                     }
+                    if self
+                        .upstream
+                        .record_request_attempt(&acquired.account.id)
+                        .await
+                        .is_err()
+                    {
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                StatusCode::OK,
+                                EventLevel::Warn,
+                                "v1 chat completions 记录失败请求计数失败",
+                                json!({"stream": client_stream, "requestAttemptStoreError": true}),
+                            )
+                            .await;
+                    }
                     let error_response = codex_client_error_response(error);
                     self.upstream
                         .log_response(
