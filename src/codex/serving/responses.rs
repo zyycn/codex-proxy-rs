@@ -353,6 +353,22 @@ impl ResponsesService {
                                     return error_response.into_response();
                                 }
                             }
+                            if self
+                                .upstream
+                                .record_request_attempt(&acquired.account.id)
+                                .await
+                                .is_err()
+                            {
+                                self.upstream
+                                    .log_response(
+                                        &log_context,
+                                        StatusCode::OK,
+                                        EventLevel::Warn,
+                                        "v1 responses 记录失败请求计数失败",
+                                        json!({"stream": false, "requestAttemptStoreError": true}),
+                                    )
+                                    .await;
+                            }
                             let error_response = codex_client_error_response(error);
                             self.upstream
                                 .log_response(
@@ -452,6 +468,22 @@ impl ResponsesService {
                                 .await;
                             return error_response.into_response();
                         }
+                    }
+                    if self
+                        .upstream
+                        .record_request_attempt(&acquired.account.id)
+                        .await
+                        .is_err()
+                    {
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                StatusCode::OK,
+                                EventLevel::Warn,
+                                "v1 responses 记录失败请求计数失败",
+                                json!({"stream": false, "requestAttemptStoreError": true}),
+                            )
+                            .await;
                     }
                     let error_response = codex_client_error_response(error);
                     self.upstream
@@ -789,6 +821,26 @@ impl ResponsesService {
                                 .await;
                             return error_response.into_response();
                         }
+                    }
+                    if self
+                        .upstream
+                        .record_request_attempt(&acquired.account.id)
+                        .await
+                        .is_err()
+                    {
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                StatusCode::OK,
+                                EventLevel::Warn,
+                                "v1 responses compact 记录失败请求计数失败",
+                                json!({
+                                    "stream": false,
+                                    "compact": true,
+                                    "requestAttemptStoreError": true,
+                                }),
+                            )
+                            .await;
                     }
                     let error_response = codex_client_error_response(error);
                     self.upstream

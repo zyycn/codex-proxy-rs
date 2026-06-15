@@ -94,7 +94,7 @@ use self::{
         completed_response_metadata, ensure_stream_metadata, has_terminal_sse_event,
         premature_close_failed_event, TupleStreamReconverter,
     },
-    usage::{record_empty_response_with_deps, record_usage_with_deps},
+    usage::{record_empty_response_with_deps, record_request_attempt, record_usage_with_deps},
 };
 
 #[derive(Clone)]
@@ -320,6 +320,10 @@ impl CodexUpstreamService {
         record_empty_response_with_deps(&self.deps, account_id).await
     }
 
+    pub(crate) async fn record_request_attempt(&self, account_id: &str) -> Result<(), ()> {
+        record_request_attempt(&self.deps, account_id).await
+    }
+
     pub(crate) async fn record_response_affinity(
         &self,
         request: &CodexResponsesRequest,
@@ -377,6 +381,19 @@ async fn fallback_exhausted_message_with_deps(
 ) -> String {
     let summary = deps.account_pool.lock().await.status_summary(Utc::now());
     build_account_exhaustion_detail(summary, message)
+}
+
+async fn record_failed_request_attempt_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account_id: &str,
+) {
+    if let Err(error) = record_request_attempt(deps, account_id).await {
+        tracing::warn!(
+            error = ?error,
+            account_id = %account_id,
+            "记录上游最终失败请求尝试失败"
+        );
+    }
 }
 
 async fn apply_implicit_resume_with_deps(
@@ -616,6 +633,7 @@ async fn responses_http_sse_stream(
                     .await;
                     return error_response.into_response();
                 }
+                record_failed_request_attempt_with_deps(&deps, &acquired.account.id).await;
                 let error_response = codex_client_error_response(error);
                 log_codex_upstream_response_with_deps(
                     &deps,
@@ -1382,6 +1400,7 @@ async fn responses_websocket_stream(
                         return error_response.into_response();
                     }
                 }
+                record_failed_request_attempt_with_deps(&deps, &acquired.account.id).await;
                 let error_response = codex_client_error_response(error);
                 log_codex_upstream_response_with_deps(
                     &deps,
