@@ -1,9 +1,16 @@
 use serde_json::json;
 
 use codex_proxy_rs::codex::gateway::transport::{
-    sse::{encode_sse_event, parse_sse_events, MAX_SSE_EVENT_BUFFER_BYTES},
+    sse::{encode_sse_event, parse_sse_events, SseEvent, MAX_SSE_EVENT_BUFFER_BYTES},
     usage_events::{extract_sse_usage, extract_usage, TokenUsage},
 };
+
+const SSE_STANDARD_PARSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/sse_standard_events.json");
+const SSE_PRETTY_JSON_PARSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/sse_pretty_json_events.json");
+const NON_SSE_BODY_PARSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/non_sse_body_event.json");
 
 #[test]
 fn parse_sse_events_combines_multiline_data_and_metadata() {
@@ -27,6 +34,7 @@ fn parse_sse_events_combines_multiline_data_and_metadata() {
     );
     assert_eq!(events[0].data, "{\"delta\":\"hel\"}\n{\"delta\":\"lo\"}");
     assert_eq!(events[0].retry, Some(5000));
+    assert_eq!(sse_events_json(&events), SSE_STANDARD_PARSE_GOLDEN);
 }
 
 #[test]
@@ -48,6 +56,7 @@ fn parse_sse_events_should_keep_non_prefixed_json_continuation_lines() {
         events[0].data,
         "{\n  \"error\": {\n    \"message\": \"bad upstream\"\n  }\n}"
     );
+    assert_eq!(sse_events_json(&events), SSE_PRETTY_JSON_PARSE_GOLDEN);
 }
 
 #[test]
@@ -66,6 +75,7 @@ fn parse_sse_events_should_convert_non_sse_json_body_to_error_event() {
     let data: serde_json::Value = serde_json::from_str(&events[0].data).unwrap();
     assert_eq!(data["error"]["code"], "non_sse_response");
     assert_eq!(data["error"]["message"], "not an SSE stream");
+    assert_eq!(sse_events_json(&events), NON_SSE_BODY_PARSE_GOLDEN);
 }
 
 #[test]
@@ -214,4 +224,22 @@ fn extract_sse_usage_should_read_completed_image_generation_tool_usage() {
 
     assert_eq!(serialized["imageInputTokens"], 31);
     assert_eq!(serialized["imageOutputTokens"], 9);
+}
+
+fn sse_events_json(events: &[SseEvent]) -> String {
+    let value = serde_json::Value::Array(
+        events
+            .iter()
+            .map(|event| {
+                json!({
+                    "event": event.event,
+                    "data": event.data,
+                    "id": event.id,
+                    "retry": event.retry,
+                })
+            })
+            .collect(),
+    );
+
+    format!("{}\n", serde_json::to_string_pretty(&value).unwrap())
 }
