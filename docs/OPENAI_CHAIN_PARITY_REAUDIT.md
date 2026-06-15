@@ -23,11 +23,10 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 ## 总体结论
 
-本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“rate-limit、usage、quota、cookie 持久化”已对齐，其余链路仍为 `部分对齐`。
+本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“/v1/responses 请求构造与 prompt cache identity”和“rate-limit、usage、quota、cookie 持久化”已对齐，其余链路仍为 `部分对齐`。
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
-- `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
@@ -41,7 +40,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 | 1 | 代码证据索引与审计边界 | 已完成 | 已建立 |
 | 2 | 安全指纹与默认 headers | 已完成 | 部分对齐 |
 | 3 | OAuth/device/refresh 链路 | 已完成 | 部分对齐 |
-| 4 | `/v1/responses` 请求构造与 prompt cache identity | 已完成 | 部分对齐 |
+| 4 | `/v1/responses` 请求构造与 prompt cache identity | 已完成 | 已对齐 |
 | 5 | HTTP SSE 上游请求链路 | 已完成 | 部分对齐 |
 | 6 | WebSocket 上游链路与连接池 | 已完成 | 部分对齐 |
 | 7 | response/SSE/WS frame 转换链路 | 已完成 | 部分对齐 |
@@ -198,7 +197,7 @@ Rust 证据：
 - `tests/codex_serving/responses_http_sse.rs:403-562` 覆盖了字段转发、service tier 规范化、metadata/body 安全字段和默认 reasoning include。
 - `tests/codex_serving/responses_websocket.rs:47-110` 覆盖默认 WebSocket 上游、派生 `prompt_cache_key` 和安全 metadata；`tests/codex_gateway/websocket.rs:78-85` 覆盖本地 `use_websocket` 不序列化到上游。
 
-结论：部分对齐。
+结论：已对齐。
 
 已对齐：
 - `/v1/responses` 主路径字段覆盖基本完整：模型解析、instructions、input、reasoning、service tier、tools、tool choice、parallel tool calls、text format、prompt cache key、include、client metadata、previous response id、Codex context headers 均有对应实现。
@@ -211,14 +210,14 @@ Rust 证据：
 - OpenAI chat 的 `clientConversationId` 来源已由 `/v1/chat/completions` 的 `user` 字段接入；`/v1/responses` 原生入口没有该字段，原版 shared handler 中非 OpenAI 分支的额外来源属于非目标。
 - `/v1/responses/review` 已按原版强制 `x-openai-subagent=review` 进入上游 header 和 body `client_metadata`；`tests/codex_serving/responses_http_sse.rs::v1_responses_review_route_should_force_review_subagent_upstream` 覆盖客户端未显式传 subagent 时的上游请求。
 - `/v1/responses/compact` 已按原版走非 streaming JSON compact 链路：只转发 `model`、sanitized `input`、`instructions`、非空 `tools`、`parallel_tool_calls`、仅含 `effort/summary` 的 `reasoning` 和 `text.format`，不转发 `stream`、`store`、`prompt_cache_key`。`tests/codex_serving/responses_http_sse.rs::v1_responses_compact_should_post_json_to_codex_compact_upstream` 先以 404 失败，再修复通过。
+- 非 `/v1` alias route 已正式按边界标为非目标：这是原版兼容入口，不属于本项目 OpenAI 规范链路。
+- `use_websocket:false` 已正式按边界标为本地传输控制扩展；它只影响本服务到 OpenAI 的传输选择，不作为上游 OpenAI 字段发送，已有测试覆盖。
 
 未完全对齐：
-- 路由表面仍有差异。Rust 没有 `/responses`、`/responses/review` 非 `/v1` alias。非 `/v1` alias 属于旧入口兼容，按当前“只要 OpenAI 规范链路”的边界暂不移植。
-- 客户端传输开关不一致。原版 `/v1/responses` 总是内部设置 `useWebSocket = true`，不从 body 读取 `use_websocket:false`；Rust 支持 `use_websocket:false` 强制 HTTP SSE。这是本项目明确保留的本地传输控制扩展，不作为上游 OpenAI 字段发送。
+- 无。
 
 缺口/后续动作：
-- `use_websocket:false` 已明确作为本项目本地扩展保留；后续审计只需确保它不进入上游 OpenAI 请求体。
-- 非 `/v1` alias 若不需要公开，应正式标为非目标；非 OpenAI/Codex adapter 分支不进入本项目实现。
+- 无。
 
 ## 5. HTTP SSE 上游请求链路
 
