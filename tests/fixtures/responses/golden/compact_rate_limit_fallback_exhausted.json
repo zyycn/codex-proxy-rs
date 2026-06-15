@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded",
+    "message": "All accounts exhausted (1 rate-limited). Codex upstream error: {\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"compact quota reached\"}}"
+  }
+}

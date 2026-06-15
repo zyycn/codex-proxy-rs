@@ -58,6 +58,10 @@ const TUPLE_RECONVERT_STREAM_GOLDEN: &str = concat!(
     include_str!("../fixtures/responses/golden/tuple_reconvert_stream.sse"),
     "\n"
 );
+const COMPACT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/compact_rate_limit_fallback_exhausted.json");
+const COMPACT_NO_AVAILABLE_ACCOUNTS_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/compact_no_available_accounts.json");
 
 #[tokio::test]
 async fn v1_responses_should_reject_invalid_json_without_upstream_request() {
@@ -1212,13 +1216,9 @@ async fn v1_responses_compact_should_return_rate_limit_error_when_fallback_is_ex
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = response_json(response).await;
-    assert_eq!(body["type"], "error");
-    assert_eq!(body["error"]["type"], "rate_limit_error");
-    assert_eq!(body["error"]["code"], "rate_limit_exceeded");
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("compact quota reached"));
+    let expected: Value = serde_json::from_str(COMPACT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN)
+        .expect("compact rate-limit golden should parse");
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]
@@ -1251,9 +1251,9 @@ async fn v1_responses_compact_should_return_responses_error_when_no_accounts_are
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response_json(response).await;
-    assert_eq!(body["type"], "error");
-    assert_eq!(body["error"]["type"], "server_error");
-    assert_eq!(body["error"]["code"], "no_available_accounts");
+    let expected: Value = serde_json::from_str(COMPACT_NO_AVAILABLE_ACCOUNTS_GOLDEN)
+        .expect("compact no-accounts golden should parse");
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]

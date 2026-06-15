@@ -36,6 +36,12 @@ const CHAT_TOOL_REASONING_COMPLETE_SSE: &str =
     include_str!("../fixtures/chat/tool_reasoning_complete.sse");
 const CHAT_TOOL_STREAM_SSE: &str = include_str!("../fixtures/chat/tool_stream.sse");
 const CHAT_TUPLE_OBJECT_SSE: &str = include_str!("../fixtures/chat/tuple_object.sse");
+const CHAT_NO_AVAILABLE_ACCOUNTS_GOLDEN: &str =
+    include_str!("../fixtures/chat/golden/no_available_accounts.json");
+const CHAT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN: &str =
+    include_str!("../fixtures/chat/golden/rate_limit_fallback_exhausted.json");
+const CHAT_QUOTA_EXHAUSTED_FALLBACK_EXHAUSTED_GOLDEN: &str =
+    include_str!("../fixtures/chat/golden/quota_exhausted_fallback_exhausted.json");
 
 struct ImportedApp {
     app: axum::Router,
@@ -146,34 +152,36 @@ async fn build_imported_app_with_accounts(
         secret_box,
         hasher,
     ));
-    let accounts = accounts
-        .iter()
-        .map(|account| {
-            json!({
-                "id": account.id,
-                "accountId": account.account_id,
-                "token": account.token,
-                "refreshToken": account.refresh_token,
-                "accessTokenExpiresAt": "2999-01-01T00:00:00Z",
-                "status": "active"
+    if !accounts.is_empty() {
+        let accounts = accounts
+            .iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "accountId": account.account_id,
+                    "token": account.token,
+                    "refreshToken": account.refresh_token,
+                    "accessTokenExpiresAt": "2999-01-01T00:00:00Z",
+                    "status": "active"
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
-    let import_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/admin/accounts/import")
-                .header("content-type", "application/json")
-                .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(json!({ "accounts": accounts }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(import_response.status(), StatusCode::OK);
+        let import_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/accounts/import")
+                    .header("content-type", "application/json")
+                    .header("cookie", "cpr_admin_session=session_1")
+                    .body(Body::from(json!({ "accounts": accounts }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(import_response.status(), StatusCode::OK);
+    }
 
     ImportedApp {
         app,
@@ -191,6 +199,133 @@ async fn single_upstream_post_body(server: &MockServer) -> Value {
     assert_eq!(post_requests.len(), 1);
     assert_eq!(requests.len(), 1);
     serde_json::from_slice(&post_requests[0].body).unwrap()
+}
+
+#[tokio::test]
+async fn chat_completions_should_return_openai_error_when_no_accounts_are_available() {
+    let server = MockServer::start().await;
+    let imported = build_imported_app_with_accounts(server.uri(), &[]).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "messages": [
+                            {"role": "user", "content": "Say ok"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response_json(response).await;
+    let expected: Value = serde_json::from_str(CHAT_NO_AVAILABLE_ACCOUNTS_GOLDEN)
+        .expect("chat no-accounts golden should parse");
+    assert_eq!(body, expected);
+}
+
+#[tokio::test]
+async fn chat_completions_should_return_openai_error_when_429_fallback_is_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {"message": "rate limited"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "messages": [
+                            {"role": "user", "content": "Say ok"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response_json(response).await;
+    let expected: Value = serde_json::from_str(CHAT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN)
+        .expect("chat rate-limit golden should parse");
+    assert_eq!(body, expected);
+}
+
+#[tokio::test]
+async fn chat_completions_should_return_openai_error_when_402_fallback_is_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {"message": "quota reached"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "messages": [
+                            {"role": "user", "content": "Say ok"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    let body = response_json(response).await;
+    let expected: Value = serde_json::from_str(CHAT_QUOTA_EXHAUSTED_FALLBACK_EXHAUSTED_GOLDEN)
+        .expect("chat quota-exhausted golden should parse");
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]

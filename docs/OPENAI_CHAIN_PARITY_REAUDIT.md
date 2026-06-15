@@ -408,13 +408,14 @@ Rust 证据：
 - HTTP SSE premature close 已有 exact golden 覆盖，锁定先透传已收到 delta、再追加 `response.failed/stream_disconnected`、并以 SSE 双换行结束的完整输出格式。
 - 单个未解析 SSE event buffer 已按原版限制为 64 MiB，避免异常上游响应在解析阶段无界增长。
 - OpenAI Responses 与 OpenAI Chat 的 tuple schema request conversion/reconvert 已对齐原版，不涉及非 OpenAI translator；Responses non-streaming 与 HTTP SSE streaming tuple reconvert 已有 exact golden 覆盖。
-- Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳。
+- Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳，`compact_rate_limit_fallback_exhausted.json` 与 `compact_no_available_accounts.json` 已做 exact golden 覆盖。
+- OpenAI Chat 最终错误外壳继续保持 Chat/OpenAI 形状而不是 Responses passthrough 形状；`tests/fixtures/chat/golden/no_available_accounts.json`、`rate_limit_fallback_exhausted.json`、`quota_exhausted_fallback_exhausted.json` 精确锁定无账号、429 fallback exhausted、402 fallback exhausted 的 `openai_error` 输出。
 
 未完全对齐：
-- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close、WS completed、标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、Cloudflare challenge no-fallback、token invalid no-fallback streaming SSE 与 reasoning replay request exact golden，但还需要更系统的 golden tests 防止格式细节回退。
+- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close、WS completed、标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、Cloudflare challenge no-fallback、token invalid no-fallback streaming SSE、compact/chat 最终错误外壳与 reasoning replay request exact golden，但还需要更系统的 golden tests 防止格式细节回退。
 
 缺口/后续动作：
-- 继续补更系统的 response/SSE/WS golden tests：更多最终错误外壳与其它 fallback exhausted message 的格式细节，重点转向 compact/chat 的最终错误外壳和更少见的组合场景，而不是已覆盖的 streaming no-fallback 基础变体。
+- 继续补更系统的 response/SSE/WS golden tests：更多少见组合场景的格式细节，重点转向跨入口恢复链路和真实上游异常响应，而不是已覆盖的 streaming no-fallback、compact/chat 基础最终错误外壳。
 
 ## 8. fallback、retry、错误分类
 
@@ -462,7 +463,7 @@ Rust 证据：
 - model unsupported fallback 已对齐原版：账号 plan 不支持当前 model 时最多换一个备用账号重试一次，不改变账号状态；HTTP-time 错误与 non-streaming mid-SSE `response.failed` 均有测试覆盖。
 - 401 token invalid fallback 已对齐原版：request path 不再 refresh 同账号；普通 401 会标记当前账号 `expired` 并尝试备用账号，包含 `deactivated` 的 401 会标记 `banned`；HTTP SSE streaming/non-streaming 与 WebSocket fallback exhausted 均有测试覆盖。
 - `response.failed` auth recovery 已对齐原版 WebSocket rotatable error code 语义：mid-SSE `token_invalid` 会转换为 401，进入同一账号 fallback transition，并由 `response_failed_auth_recovery.json` golden 锁定最终 Responses JSON。
-- fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming SSE 响应体，`v1_responses_non_stream_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖非流式 JSON 响应体。
+- fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming SSE 响应体，`v1_responses_non_stream_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖非流式 JSON 响应体，compact/chat 的基础最终错误外壳已有 exact golden 覆盖。
 - Responses/compact fallback exhausted 的 JSON 外壳已对齐原版：429 使用 `rate_limit_error/rate_limit_exceeded`，其它账号级错误使用 `server_error/codex_api_error`，无可用账号使用 `server_error/no_available_accounts`。
 - Cloudflare challenge fallback exhausted status/message 已对齐原版：上游 403 challenge 会作为 retry decision 暴露 502 和 `Upstream blocked the request (Cloudflare challenge)`，无备用账号时返回该 502 语义；`cloudflare_challenge_no_fallback.json` golden 覆盖单账号无 fallback 的完整 Responses error shell。
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
@@ -474,7 +475,7 @@ Rust 证据：
 - response/SSE/WS 最终输出格式仍需要完整 golden fixture 矩阵防回归。当前 transition 已集中 request recovery 与 account fallback acquire/account exhaustion；各入口仍按自身协议生成最终 `Response`/SSE chunk，这是 Rust 侧保持 HTTP JSON、Chat 兼容、Responses passthrough 三类外壳差异的边界。
 
 缺口/后续动作：
-- 继续补 response/SSE/WS golden fixture：覆盖更多最终错误外壳与其它 fallback exhausted message 的格式细节。
+- 继续补 response/SSE/WS golden fixture：覆盖更多少见组合场景与真实上游异常响应的格式细节。
 
 ## 9. rate-limit、usage、quota、cookie 持久化
 
