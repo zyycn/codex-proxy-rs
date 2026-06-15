@@ -1,0 +1,2 @@
+event: response.completed
+data: {"response":{"id":"resp_ws_default","object":"response","usage":{"input_tokens":4,"output_tokens":2}},"type":"response.completed"}
