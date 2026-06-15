@@ -19,8 +19,8 @@ use crate::{
         affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
         classify_upstream_recovery_action, completed_response_json,
         normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,
-        CollectedResponse, ImplicitResumeSnapshot, UpstreamRecoveryAction, UpstreamRecoveryState,
-        UpstreamRequestRecovery,
+        CollectedResponse, UpstreamAccountRecoveryTransition, UpstreamRecoveryAction,
+        UpstreamRecoveryState,
     },
     codex::serving::http::errors::{
         codex_client_error_message, responses_codex_client_error_response,
@@ -279,28 +279,31 @@ impl ResponsesService {
                                 },
                             ) {
                                 UpstreamRecoveryAction::Request(recovery) => {
-                                    self.apply_request_recovery(
-                                        &mut codex_request,
-                                        &mut history_recovery_used,
-                                        &mut implicit_resume,
-                                        &log_context,
-                                        recovery,
-                                    )
-                                    .await;
+                                    self.upstream
+                                        .apply_request_recovery_transition(
+                                            &mut codex_request,
+                                            recovery,
+                                            false,
+                                            &log_context,
+                                            &mut history_recovery_used,
+                                            &mut implicit_resume,
+                                        )
+                                        .await;
                                     continue;
                                 }
                                 UpstreamRecoveryAction::Account(retry) => {
                                     if retry.is_model_unsupported() {
                                         model_unsupported_retry_used = true;
                                     }
-                                    let fallback = self
+                                    let transition = self
                                         .upstream
-                                        .apply_retry_and_acquire_fallback(
+                                        .apply_account_recovery_transition(
                                             &acquired.account,
                                             retry,
                                             &codex_request.model,
                                             &mut excluded_account_ids,
                                             codex_request.expects_image_generation(),
+                                            codex_client_error_message(&error),
                                         )
                                         .await;
                                     self.upstream
@@ -312,31 +315,31 @@ impl ResponsesService {
                                             retry.metadata(false),
                                         )
                                         .await;
-                                    if let Some(fallback) = fallback {
-                                        log_context =
-                                            log_context.with_account(&fallback.account.id);
-                                        acquired = fallback;
-                                        continue;
+                                    match transition {
+                                        UpstreamAccountRecoveryTransition::Retry(fallback) => {
+                                            log_context =
+                                                log_context.with_account(&fallback.account.id);
+                                            acquired = *fallback;
+                                            continue;
+                                        }
+                                        UpstreamAccountRecoveryTransition::Respond {
+                                            status,
+                                            message,
+                                        } => {
+                                            let error_response =
+                                                responses_error_response(status, &message);
+                                            self.upstream
+                                                .log_response(
+                                                    &log_context,
+                                                    error_response.0,
+                                                    EventLevel::Error,
+                                                    "v1 responses 上游 SSE fallback 已耗尽",
+                                                    failure.metadata(false),
+                                                )
+                                                .await;
+                                            return error_response.into_response();
+                                        }
                                     }
-                                    let retry_message = retry.fallback_response_message(
-                                        codex_client_error_message(&error),
-                                    );
-                                    let message = self
-                                        .upstream
-                                        .fallback_exhausted_message(&retry_message)
-                                        .await;
-                                    let error_response =
-                                        responses_error_response(retry.status(), &message);
-                                    self.upstream
-                                        .log_response(
-                                            &log_context,
-                                            error_response.0,
-                                            EventLevel::Error,
-                                            "v1 responses 上游 SSE fallback 已耗尽",
-                                            failure.metadata(false),
-                                        )
-                                        .await;
-                                    return error_response.into_response();
                                 }
                                 UpstreamRecoveryAction::RespondWithError => {}
                             }
@@ -384,28 +387,31 @@ impl ResponsesService {
                         },
                     ) {
                         UpstreamRecoveryAction::Request(recovery) => {
-                            self.apply_request_recovery(
-                                &mut codex_request,
-                                &mut history_recovery_used,
-                                &mut implicit_resume,
-                                &log_context,
-                                recovery,
-                            )
-                            .await;
+                            self.upstream
+                                .apply_request_recovery_transition(
+                                    &mut codex_request,
+                                    recovery,
+                                    false,
+                                    &log_context,
+                                    &mut history_recovery_used,
+                                    &mut implicit_resume,
+                                )
+                                .await;
                             continue;
                         }
                         UpstreamRecoveryAction::Account(retry) => {
                             if retry.is_model_unsupported() {
                                 model_unsupported_retry_used = true;
                             }
-                            let fallback = self
+                            let transition = self
                                 .upstream
-                                .apply_retry_and_acquire_fallback(
+                                .apply_account_recovery_transition(
                                     &acquired.account,
                                     retry,
                                     &codex_request.model,
                                     &mut excluded_account_ids,
                                     codex_request.expects_image_generation(),
+                                    codex_client_error_message(&error),
                                 )
                                 .await;
                             self.upstream
@@ -417,28 +423,26 @@ impl ResponsesService {
                                     retry.metadata(false),
                                 )
                                 .await;
-                            if let Some(fallback) = fallback {
-                                log_context = log_context.with_account(&fallback.account.id);
-                                acquired = fallback;
-                                continue;
+                            match transition {
+                                UpstreamAccountRecoveryTransition::Retry(fallback) => {
+                                    log_context = log_context.with_account(&fallback.account.id);
+                                    acquired = *fallback;
+                                    continue;
+                                }
+                                UpstreamAccountRecoveryTransition::Respond { status, message } => {
+                                    let error_response = responses_error_response(status, &message);
+                                    self.upstream
+                                        .log_response(
+                                            &log_context,
+                                            error_response.0,
+                                            EventLevel::Error,
+                                            "v1 responses 上游请求 fallback 已耗尽",
+                                            json!({"stream": false}),
+                                        )
+                                        .await;
+                                    return error_response.into_response();
+                                }
                             }
-                            let retry_message =
-                                retry.fallback_response_message(codex_client_error_message(&error));
-                            let message = self
-                                .upstream
-                                .fallback_exhausted_message(&retry_message)
-                                .await;
-                            let error_response = responses_error_response(retry.status(), &message);
-                            self.upstream
-                                .log_response(
-                                    &log_context,
-                                    error_response.0,
-                                    EventLevel::Error,
-                                    "v1 responses 上游请求 fallback 已耗尽",
-                                    json!({"stream": false}),
-                                )
-                                .await;
-                            return error_response.into_response();
                         }
                         UpstreamRecoveryAction::RespondWithError => {}
                     }
@@ -759,14 +763,15 @@ impl ResponsesService {
                             if retry.is_model_unsupported() {
                                 model_unsupported_retry_used = true;
                             }
-                            let fallback = self
+                            let transition = self
                                 .upstream
-                                .apply_retry_and_acquire_fallback(
+                                .apply_account_recovery_transition(
                                     &acquired.account,
                                     retry,
                                     &compact_request.model,
                                     &mut excluded_account_ids,
                                     false,
+                                    codex_client_error_message(&error),
                                 )
                                 .await;
                             self.upstream
@@ -778,28 +783,26 @@ impl ResponsesService {
                                     retry.metadata(false),
                                 )
                                 .await;
-                            if let Some(fallback) = fallback {
-                                log_context = log_context.with_account(&fallback.account.id);
-                                acquired = fallback;
-                                continue;
+                            match transition {
+                                UpstreamAccountRecoveryTransition::Retry(fallback) => {
+                                    log_context = log_context.with_account(&fallback.account.id);
+                                    acquired = *fallback;
+                                    continue;
+                                }
+                                UpstreamAccountRecoveryTransition::Respond { status, message } => {
+                                    let error_response = responses_error_response(status, &message);
+                                    self.upstream
+                                        .log_response(
+                                            &log_context,
+                                            error_response.0,
+                                            EventLevel::Error,
+                                            "v1 responses compact fallback 已耗尽",
+                                            json!({"stream": false, "compact": true}),
+                                        )
+                                        .await;
+                                    return error_response.into_response();
+                                }
                             }
-                            let retry_message =
-                                retry.fallback_response_message(codex_client_error_message(&error));
-                            let message = self
-                                .upstream
-                                .fallback_exhausted_message(&retry_message)
-                                .await;
-                            let error_response = responses_error_response(retry.status(), &message);
-                            self.upstream
-                                .log_response(
-                                    &log_context,
-                                    error_response.0,
-                                    EventLevel::Error,
-                                    "v1 responses compact fallback 已耗尽",
-                                    json!({"stream": false, "compact": true}),
-                                )
-                                .await;
-                            return error_response.into_response();
                         }
                     }
                     if self
@@ -836,35 +839,6 @@ impl ResponsesService {
                 }
             }
         }
-    }
-
-    async fn apply_request_recovery(
-        &self,
-        request: &mut CodexResponsesRequest,
-        history_recovery_used: &mut bool,
-        implicit_resume: &mut Option<ImplicitResumeSnapshot>,
-        log_context: &CodexRequestLogContext,
-        recovery: UpstreamRequestRecovery,
-    ) {
-        *history_recovery_used = true;
-        let stale_response_id = request.previous_response_id.clone();
-        if let Some(response_id) = stale_response_id.as_deref() {
-            self.upstream.forget_response_affinity(response_id).await;
-        }
-        if let Some(snapshot) = implicit_resume.take() {
-            snapshot.restore(request);
-        }
-        request.previous_response_id = None;
-        request.turn_state = None;
-        self.upstream
-            .log_response(
-                log_context,
-                StatusCode::BAD_REQUEST,
-                EventLevel::Warn,
-                "v1 responses 上游历史失效，去除 previous_response_id 后重试",
-                recovery.metadata(false, stale_response_id.as_deref()),
-            )
-            .await;
     }
 }
 
