@@ -249,7 +249,8 @@ Rust 证据：
 - 本轮修正后，`src/codex/serving/dispatch/mod.rs` 的 `stagger_request_with_deps()` 会在同账号 previous slot 存在时按 `request_interval_ms` 的 ±30% jitter 计算等待时间；`tests/codex_serving/responses_http_sse.rs` 覆盖同账号并发请求发送上游前会等待，`jitter_request_interval_ms_with_factor_should_match_original_bounds` 覆盖 0.7/1.3 边界。
 - 本轮修正后，`src/codex/gateway/transport/http_client.rs` 的 Rust reqwest client 按 `force_http11` 缓存复用，使用 `reqwest = 0.12.28`、`rustls = 0.23.36`，启用 rustls/native roots、`pool_max_idle_per_host(4)`、`tcp_keepalive(30s)`、gzip/brotli/zstd/deflate，并可选 `http1_only()`；同时显式 `.no_proxy()`。
 - `tests/codex_gateway/http_client.rs:13-78` 覆盖 HTTP SSE POST、desktop headers、Cookie 注入、`Set-Cookie` 捕获、turn state 捕获和 usage 提取。
-- `tests/codex_serving/responses_http_sse.rs:403-513` 覆盖 `/v1/responses` HTTP SSE 路径的 context headers、account-scoped prompt cache key、metadata 与 service tier。
+- 本轮修正后，`src/codex/serving/responses.rs` 会按原版从 body 读取 `version`，并以 body 优先、header 兜底的顺序写入上游 `version` header；本地字段仍不会进入上游 JSON body。
+- `tests/codex_serving/responses_http_sse.rs::v1_responses_should_forward_parity_fields_and_context_headers` 覆盖 `/v1/responses` HTTP SSE 路径的 context headers、body control 字段、account-scoped prompt cache key、metadata、subagent、service tier，以及 `turnState`/`turnMetadata`/`betaFeatures`/`includeTimingMetrics`/`version`/`codexWindowId`/`parentThreadId`/`use_websocket` 不泄漏到上游 body。
 
 结论：部分对齐。
 
@@ -262,6 +263,7 @@ Rust 证据：
 - Rust 与原版 native transport 使用同一 reqwest/rustls 主版本组合，且都支持 `force_http11`。
 - `/v1/responses/compact` 已对齐原版 JSON 上游链路：URL/method、核心 headers、Cookie/Set-Cookie、非 SSE Accept、body 字段白名单、reasoning/text 清洗和 JSON 响应透传均有实现；`v1_responses_compact_should_post_json_to_codex_compact_upstream` 覆盖该路径。
 - HTTP SSE 与 compact 请求的真实 wire header 相对顺序已由 raw TCP 测试覆盖，不再只是字段级断言。
+- HTTP SSE golden test 已覆盖 body control 字段转 header/metadata、账号作用域 identity，以及本地控制字段不进入上游 JSON body。
 - IP 代理/VPN/proxy config/HttpsProxyAgent 是用户明确排除的非目标。Rust `.no_proxy()` 与原版 proxy 支持的差异不计入本项目 100% 一致性缺口，但需要保留边界说明。
 
 未完全对齐：
@@ -269,8 +271,7 @@ Rust 证据：
 - 原版 native client builder 没有显式 `.no_proxy()`，而是通过 proxy 参数控制；Rust 显式 `.no_proxy()` 符合非代理目标，但也意味着环境代理不会生效。此项按非目标处理，不算 OpenAI 链路缺口。
 
 缺口/后续动作：
-- 增加 HTTP SSE golden test：断言上游 body 不包含本地控制字段，header/body 中 account-scoped identity、metadata、subagent、turn/context 字段与原版一致。
-- 若要宣称安全模拟 100%，还需要处理 WS handshake header order、header casing、TLS 指纹和客户端断开 abort 语义；当前 HTTP SSE/compact order 已有 wire-level 证据。
+- 若要宣称安全模拟 100%，还需要处理 TLS 指纹和客户端断开 abort 语义；当前 HTTP SSE/compact order 与 HTTP SSE body golden 已有 wire-level/端到端证据。
 
 ## 6. WebSocket 上游链路与连接池
 
