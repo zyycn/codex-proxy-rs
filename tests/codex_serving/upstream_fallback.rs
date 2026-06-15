@@ -33,6 +33,10 @@ const SSE_RESPONSE_FAILED_QUOTA: &str =
     include_str!("../fixtures/responses/http_sse/response_failed_quota.sse");
 const SSE_RESPONSE_FAILED_MODEL_UNSUPPORTED: &str =
     include_str!("../fixtures/responses/http_sse/response_failed_model_unsupported.sse");
+const SSE_PREVIOUS_RESPONSE_NOT_FOUND: &str =
+    include_str!("../fixtures/responses/http_sse/previous_response_not_found.sse");
+const SSE_UNANSWERED_FUNCTION_CALL: &str =
+    include_str!("../fixtures/responses/http_sse/unanswered_function_call.sse");
 const AFTER_5XX_RETRY_SSE: &str =
     include_str!("../fixtures/responses/http_sse/after_5xx_retry.sse");
 const STREAM_AFTER_5XX_RETRY_SSE: &str =
@@ -649,6 +653,172 @@ async fn v1_responses_should_classify_non_stream_sse_failure_and_retry_next_acco
         .await
         .unwrap();
     assert_eq!(first_status.0, "quota_exhausted");
+}
+
+#[tokio::test]
+async fn v1_responses_should_strip_history_after_http_sse_previous_response_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(SSE_PREVIOUS_RESPONSE_NOT_FOUND),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(AFTER_402_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_sse_previous_missing",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false,"turnState":"turn-stale"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_402");
+    let requests = server.received_requests().await.unwrap();
+    let access_a_posts = requests
+        .iter()
+        .filter(|request| {
+            request.method.as_str() == "POST"
+                && request
+                    .headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("Bearer access-a")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(access_a_posts.len(), 2);
+    assert_eq!(
+        access_a_posts[0]
+            .headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-stale")
+    );
+    assert!(access_a_posts[1]
+        .headers
+        .get("x-codex-turn-state")
+        .is_none());
+}
+
+#[tokio::test]
+async fn v1_responses_should_strip_history_after_http_sse_unanswered_function_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(SSE_UNANSWERED_FUNCTION_CALL),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(AFTER_402_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_sse_unanswered_call",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false,"turnState":"turn-stale"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_402");
+    let requests = server.received_requests().await.unwrap();
+    let access_a_posts = requests
+        .iter()
+        .filter(|request| {
+            request.method.as_str() == "POST"
+                && request
+                    .headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("Bearer access-a")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(access_a_posts.len(), 2);
+    assert_eq!(
+        access_a_posts[0]
+            .headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-stale")
+    );
+    assert!(access_a_posts[1]
+        .headers
+        .get("x-codex-turn-state")
+        .is_none());
 }
 
 #[tokio::test]

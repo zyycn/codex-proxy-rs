@@ -73,8 +73,8 @@ use crate::codex::serving::http::errors::{
 
 pub(crate) use self::{
     fallback::{
-        classify_upstream_account_retry, classify_upstream_request_recovery, UpstreamAccountRetry,
-        UpstreamRequestRecovery,
+        classify_upstream_account_retry, classify_upstream_recovery_action, UpstreamAccountRetry,
+        UpstreamRecoveryAction, UpstreamRecoveryState, UpstreamRequestRecovery,
     },
     routing::{no_available_accounts_response, normalize_service_tier_for_upstream},
     stream::{completed_response_json, CollectedResponse},
@@ -801,68 +801,74 @@ async fn responses_http_sse_stream(
             Ok(response) => break response,
             Err(error) => {
                 deps.account_pool.lock().await.release(&acquired.account.id);
-                if let Some(recovery) =
-                    classify_upstream_request_recovery(&error, history_recovery_used)
-                {
-                    apply_upstream_request_recovery_with_deps(
-                        &deps,
-                        &mut request,
-                        recovery,
-                        true,
-                        &log_context,
-                        &mut history_recovery_used,
-                        &mut implicit_resume,
-                    )
-                    .await;
-                    continue;
-                }
-                if let Some(retry) =
-                    classify_upstream_account_retry(&error, model_unsupported_retry_used)
-                {
-                    if retry.is_model_unsupported() {
-                        model_unsupported_retry_used = true;
-                    }
-                    let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
-                        &deps,
-                        &acquired.account,
-                        retry,
-                        &request.model,
-                        &mut excluded_account_ids,
-                        request.expects_image_generation(),
-                    )
-                    .await;
-                    log_codex_upstream_response_with_deps(
-                        &deps,
-                        &log_context,
-                        retry.status(),
-                        EventLevel::Warn,
-                        "v1 responses stream 上游请求将使用备用账户重试",
-                        retry.metadata(true),
-                    )
-                    .await;
-                    if let Some(fallback) = fallback {
-                        log_context = log_context.with_account(&fallback.account.id);
-                        acquired = fallback;
+                match classify_upstream_recovery_action(
+                    &error,
+                    UpstreamRecoveryState {
+                        request_recovery_used: history_recovery_used,
+                        model_unsupported_retry_used,
+                    },
+                ) {
+                    UpstreamRecoveryAction::Request(recovery) => {
+                        apply_upstream_request_recovery_with_deps(
+                            &deps,
+                            &mut request,
+                            recovery,
+                            true,
+                            &log_context,
+                            &mut history_recovery_used,
+                            &mut implicit_resume,
+                        )
+                        .await;
                         continue;
                     }
-                    let retry_message =
-                        retry.fallback_response_message(codex_client_error_message(&error));
-                    let message = fallback_exhausted_message_with_deps(&deps, &retry_message).await;
-                    let error_response = codex_client_error_response_with_status_and_message(
-                        error,
-                        retry.status(),
-                        &message,
-                    );
-                    log_codex_upstream_response_with_deps(
-                        &deps,
-                        &log_context,
-                        error_response.0,
-                        EventLevel::Error,
-                        "v1 responses stream fallback 已耗尽",
-                        json!({"stream": true}),
-                    )
-                    .await;
-                    return error_response.into_response();
+                    UpstreamRecoveryAction::Account(retry) => {
+                        if retry.is_model_unsupported() {
+                            model_unsupported_retry_used = true;
+                        }
+                        let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
+                            &deps,
+                            &acquired.account,
+                            retry,
+                            &request.model,
+                            &mut excluded_account_ids,
+                            request.expects_image_generation(),
+                        )
+                        .await;
+                        log_codex_upstream_response_with_deps(
+                            &deps,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses stream 上游请求将使用备用账户重试",
+                            retry.metadata(true),
+                        )
+                        .await;
+                        if let Some(fallback) = fallback {
+                            log_context = log_context.with_account(&fallback.account.id);
+                            acquired = fallback;
+                            continue;
+                        }
+                        let retry_message =
+                            retry.fallback_response_message(codex_client_error_message(&error));
+                        let message =
+                            fallback_exhausted_message_with_deps(&deps, &retry_message).await;
+                        let error_response = codex_client_error_response_with_status_and_message(
+                            error,
+                            retry.status(),
+                            &message,
+                        );
+                        log_codex_upstream_response_with_deps(
+                            &deps,
+                            &log_context,
+                            error_response.0,
+                            EventLevel::Error,
+                            "v1 responses stream fallback 已耗尽",
+                            json!({"stream": true}),
+                        )
+                        .await;
+                        return error_response.into_response();
+                    }
+                    UpstreamRecoveryAction::RespondWithError => {}
                 }
                 record_failed_request_attempt_with_deps(
                     &deps,
@@ -1544,68 +1550,74 @@ async fn responses_websocket_stream(
                     .await;
                 }
                 deps.account_pool.lock().await.release(&acquired.account.id);
-                if let Some(recovery) =
-                    classify_upstream_request_recovery(&error, history_recovery_used)
-                {
-                    apply_upstream_request_recovery_with_deps(
-                        &deps,
-                        &mut request,
-                        recovery,
-                        true,
-                        &log_context,
-                        &mut history_recovery_used,
-                        &mut implicit_resume,
-                    )
-                    .await;
-                    continue;
-                }
-                if let Some(retry) =
-                    classify_upstream_account_retry(&error, model_unsupported_retry_used)
-                {
-                    if retry.is_model_unsupported() {
-                        model_unsupported_retry_used = true;
-                    }
-                    let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
-                        &deps,
-                        &acquired.account,
-                        retry,
-                        &request.model,
-                        &mut excluded_account_ids,
-                        request.expects_image_generation(),
-                    )
-                    .await;
-                    log_codex_upstream_response_with_deps(
-                        &deps,
-                        &log_context,
-                        retry.status(),
-                        EventLevel::Warn,
-                        "v1 responses WebSocket 上游请求将使用备用账户重试",
-                        retry.metadata(true),
-                    )
-                    .await;
-                    if let Some(fallback) = fallback {
-                        log_context = log_context.with_account(&fallback.account.id);
-                        acquired = fallback;
+                match classify_upstream_recovery_action(
+                    &error,
+                    UpstreamRecoveryState {
+                        request_recovery_used: history_recovery_used,
+                        model_unsupported_retry_used,
+                    },
+                ) {
+                    UpstreamRecoveryAction::Request(recovery) => {
+                        apply_upstream_request_recovery_with_deps(
+                            &deps,
+                            &mut request,
+                            recovery,
+                            true,
+                            &log_context,
+                            &mut history_recovery_used,
+                            &mut implicit_resume,
+                        )
+                        .await;
                         continue;
                     }
-                    let retry_message =
-                        retry.fallback_response_message(codex_client_error_message(&error));
-                    let message = fallback_exhausted_message_with_deps(&deps, &retry_message).await;
-                    let error_response = codex_client_error_response_with_status_and_message(
-                        error,
-                        retry.status(),
-                        &message,
-                    );
-                    log_codex_upstream_response_with_deps(
-                        &deps,
-                        &log_context,
-                        error_response.0,
-                        EventLevel::Error,
-                        "v1 responses WebSocket stream fallback 已耗尽",
-                        json!({"stream": true, "transport": "websocket"}),
-                    )
-                    .await;
-                    return error_response.into_response();
+                    UpstreamRecoveryAction::Account(retry) => {
+                        if retry.is_model_unsupported() {
+                            model_unsupported_retry_used = true;
+                        }
+                        let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
+                            &deps,
+                            &acquired.account,
+                            retry,
+                            &request.model,
+                            &mut excluded_account_ids,
+                            request.expects_image_generation(),
+                        )
+                        .await;
+                        log_codex_upstream_response_with_deps(
+                            &deps,
+                            &log_context,
+                            retry.status(),
+                            EventLevel::Warn,
+                            "v1 responses WebSocket 上游请求将使用备用账户重试",
+                            retry.metadata(true),
+                        )
+                        .await;
+                        if let Some(fallback) = fallback {
+                            log_context = log_context.with_account(&fallback.account.id);
+                            acquired = fallback;
+                            continue;
+                        }
+                        let retry_message =
+                            retry.fallback_response_message(codex_client_error_message(&error));
+                        let message =
+                            fallback_exhausted_message_with_deps(&deps, &retry_message).await;
+                        let error_response = codex_client_error_response_with_status_and_message(
+                            error,
+                            retry.status(),
+                            &message,
+                        );
+                        log_codex_upstream_response_with_deps(
+                            &deps,
+                            &log_context,
+                            error_response.0,
+                            EventLevel::Error,
+                            "v1 responses WebSocket stream fallback 已耗尽",
+                            json!({"stream": true, "transport": "websocket"}),
+                        )
+                        .await;
+                        return error_response.into_response();
+                    }
+                    UpstreamRecoveryAction::RespondWithError => {}
                 }
                 record_failed_request_attempt_with_deps(
                     &deps,

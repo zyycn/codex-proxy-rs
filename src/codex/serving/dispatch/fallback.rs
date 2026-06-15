@@ -16,7 +16,7 @@ const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS: u64 = 60;
 const MAX_RATE_LIMIT_BACKOFF_SECONDS: u64 = 86_400 * 7;
 const CLOUDFLARE_CHALLENGE_COOLDOWN_SECONDS: u64 = 10;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpstreamAccountRetry {
     ModelUnsupported { status: StatusCode },
     RateLimited { retry_after_seconds: u64 },
@@ -30,6 +30,19 @@ pub(crate) enum UpstreamAccountRetry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpstreamRequestRecovery {
     StripPreviousResponse { reason: HistoryRecoveryReason },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpstreamRecoveryAction {
+    Request(UpstreamRequestRecovery),
+    Account(UpstreamAccountRetry),
+    RespondWithError,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UpstreamRecoveryState {
+    pub(crate) request_recovery_used: bool,
+    pub(crate) model_unsupported_retry_used: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +166,20 @@ pub(crate) fn classify_upstream_request_recovery(
         });
     }
     None
+}
+
+pub(crate) fn classify_upstream_recovery_action(
+    error: &CodexClientError,
+    state: UpstreamRecoveryState,
+) -> UpstreamRecoveryAction {
+    if let Some(recovery) = classify_upstream_request_recovery(error, state.request_recovery_used) {
+        return UpstreamRecoveryAction::Request(recovery);
+    }
+    if let Some(retry) = classify_upstream_account_retry(error, state.model_unsupported_retry_used)
+    {
+        return UpstreamRecoveryAction::Account(retry);
+    }
+    UpstreamRecoveryAction::RespondWithError
 }
 
 pub(crate) fn classify_upstream_account_retry(
@@ -475,4 +502,103 @@ async fn set_account_status(
         .lock()
         .await
         .set_status(&account.id, status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn upstream_error(status: StatusCode, code: &str, message: &str) -> CodexClientError {
+        CodexClientError::Upstream {
+            status,
+            retry_after_seconds: None,
+            body: json!({
+                "error": {
+                    "code": code,
+                    "message": message,
+                }
+            })
+            .to_string(),
+        }
+    }
+
+    #[test]
+    fn classify_upstream_recovery_action_should_prioritize_request_recovery() {
+        let error = upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "previous_response_not_found",
+            "Previous response with id resp_missing was not found",
+        );
+
+        let action = classify_upstream_recovery_action(
+            &error,
+            UpstreamRecoveryState {
+                request_recovery_used: false,
+                model_unsupported_retry_used: false,
+            },
+        );
+
+        assert_eq!(
+            action,
+            UpstreamRecoveryAction::Request(UpstreamRequestRecovery::StripPreviousResponse {
+                reason: HistoryRecoveryReason::PreviousResponseNotFound,
+            })
+        );
+    }
+
+    #[test]
+    fn classify_upstream_recovery_action_should_delegate_after_request_recovery_is_used() {
+        let error = upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "previous_response_not_found",
+            "Previous response with id resp_missing was not found",
+        );
+
+        let action = classify_upstream_recovery_action(
+            &error,
+            UpstreamRecoveryState {
+                request_recovery_used: true,
+                model_unsupported_retry_used: false,
+            },
+        );
+
+        assert_eq!(
+            action,
+            UpstreamRecoveryAction::Account(UpstreamAccountRetry::RateLimited {
+                retry_after_seconds: DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
+            })
+        );
+    }
+
+    #[test]
+    fn classify_upstream_recovery_action_should_limit_model_retry_to_once() {
+        let error = upstream_error(
+            StatusCode::BAD_REQUEST,
+            "model_not_supported",
+            "Model gpt-5.5 is not supported on this account plan",
+        );
+
+        let first_action = classify_upstream_recovery_action(
+            &error,
+            UpstreamRecoveryState {
+                request_recovery_used: false,
+                model_unsupported_retry_used: false,
+            },
+        );
+        let second_action = classify_upstream_recovery_action(
+            &error,
+            UpstreamRecoveryState {
+                request_recovery_used: false,
+                model_unsupported_retry_used: true,
+            },
+        );
+
+        assert_eq!(
+            first_action,
+            UpstreamRecoveryAction::Account(UpstreamAccountRetry::ModelUnsupported {
+                status: StatusCode::BAD_REQUEST,
+            })
+        );
+        assert_eq!(second_action, UpstreamRecoveryAction::RespondWithError);
+    }
 }
