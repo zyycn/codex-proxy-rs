@@ -1,0 +1,37 @@
+import tailwindcss from '@tailwindcss/vite'
+import vue from '@vitejs/plugin-vue'
+import { fileURLToPath, URL } from 'node:url'
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  base: '/admin/',
+  plugins: [vue(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': 'http://127.0.0.1:8080',
+      '/auth': 'http://127.0.0.1:8080',
+    },
+  },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'echarts',
+              test: /node_modules\/echarts|node_modules\/zrender/,
+            },
+          ],
+        },
+      },
+    },
+  },
+})

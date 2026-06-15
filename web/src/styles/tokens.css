@@ -1,0 +1,106 @@
+:root {
+  color-scheme: light;
+
+  --cp-bg-page: #f6f8fb;
+  --cp-bg-surface: #ffffff;
+  --cp-bg-subtle: #f8fafc;
+  --cp-bg-muted: #f1f5f9;
+  --cp-bg-nav-active: #e9eef5;
+  --cp-bg-dark: #111827;
+  --cp-white: #ffffff;
+  --cp-transparent: #ffffff00;
+  --cp-overlay-scrim: #0e17264d;
+
+  --cp-text-primary: #0e1726;
+  --cp-text-strong: #111827;
+  --cp-text-secondary: #64748b;
+  --cp-text-muted: #94a3b8;
+
+  --cp-default-bg: #f8fafc;
+  --cp-default-bg-hover: #f1f5f9;
+  --cp-default-bg-active: #e9eef5;
+  --cp-default-border: #e2e8f0;
+  --cp-default-border-hover: #cbd5e1;
+  --cp-default-text: #0e1726;
+  --cp-default-text-hover: #111827;
+  --cp-default-text-active: #0b1220;
+
+  --cp-disabled-bg: #f1f5f9;
+  --cp-disabled-border: #e2e8f0;
+  --cp-disabled-text: #94a3b8;
+  --cp-disabled-icon: #cbd5e1;
+
+  --cp-info: #2563eb;
+  --cp-info-hover: #1d4ed8;
+  --cp-info-pressed: #1e40af;
+  --cp-info-bg: #eef6ff;
+  --cp-info-bg-hover: #dbeafe;
+  --cp-info-bg-active: #bfdbfe;
+  --cp-info-border: #93c5fd;
+  --cp-info-text: #2563eb;
+  --cp-info-on: #ffffff;
+
+  --cp-normal: #0f9f9a;
+  --cp-normal-hover: #0d8d88;
+  --cp-normal-pressed: #0b7370;
+  --cp-normal-bg: #ecfdfd;
+  --cp-normal-bg-hover: #ddf7f6;
+  --cp-normal-bg-active: #c7efee;
+  --cp-normal-border: #a7dfdd;
+  --cp-normal-text: #0b7370;
+  --cp-normal-on: #0b1220;
+
+  --cp-success: #12b981;
+  --cp-success-hover: #0ea371;
+  --cp-success-pressed: #0b865f;
+  --cp-success-bg: #ecfdf5;
+  --cp-success-bg-hover: #ddfbea;
+  --cp-success-bg-active: #c8f5dc;
+  --cp-success-border: #b7ead0;
+  --cp-success-text: #047857;
+  --cp-success-on: #0b1220;
+
+  --cp-warning: #f59e0b;
+  --cp-warning-hover: #d97706;
+  --cp-warning-pressed: #b45309;
+  --cp-warning-bg: #fffbeb;
+  --cp-warning-bg-hover: #fef3c7;
+  --cp-warning-bg-active: #fde68a;
+  --cp-warning-border: #fcd34d;
+  --cp-warning-text: #b45309;
+  --cp-warning-on: #0b1220;
+
+  --cp-danger: #ef4444;
+  --cp-danger-hover: #dc2626;
+  --cp-danger-pressed: #b91c1c;
+  --cp-danger-bg: #fef2f2;
+  --cp-danger-bg-hover: #fee2e2;
+  --cp-danger-bg-active: #fecaca;
+  --cp-danger-border: #fca5a5;
+  --cp-danger-text: #b91c1c;
+  --cp-danger-on: #0b1220;
+
+  --cp-control-height-small: 24px;
+  --cp-control-height-default: 32px;
+  --cp-control-height-large: 40px;
+  --cp-control-padding-x: 12px;
+  --cp-control-radius-small: 2px;
+  --cp-control-radius-base: 4px;
+  --cp-button-radius-small: 4px;
+  --cp-button-radius-base: 6px;
+  --cp-icon-button-radius: 8px;
+  --cp-card-radius: 18px;
+  --cp-panel-radius: 16px;
+  --cp-tag-radius: 7px;
+  --cp-radius-circle: 999px;
+
+  --cp-shadow-card: 0 10px 22px -18px #0e172614;
+  --cp-shadow-control: 0 8px 18px -16px #0e172614;
+  --cp-shadow-popover: 0 16px 34px -18px #0e172622;
+  --cp-shadow-sidebar: 2px 0 12px -12px #0e172607;
+
+  --cp-space-page-x: 28px;
+  --cp-space-page-y: 32px;
+  --cp-gap-card: 24px;
+  --cp-sidebar-width: 280px;
+}

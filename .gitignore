@@ -14,4 +14,6 @@
 *.tmp
 *.swp
 *~
-.codegraph
+*.codegraph
+*/node_modules
+*/dist

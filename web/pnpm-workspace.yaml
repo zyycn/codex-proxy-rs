@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - axios@1.18.0
