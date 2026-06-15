@@ -378,6 +378,7 @@ Rust 证据：
 - 本轮新增 `tests/fixtures/responses/http_sse/previous_response_not_found.sse`、`tests/fixtures/responses/http_sse/unanswered_function_call.sse` 与 `tests/codex_serving/upstream_fallback.rs::v1_responses_should_strip_history_after_http_sse_previous_response_not_found`、`v1_responses_should_strip_history_after_http_sse_unanswered_function_call`，覆盖 HTTP SSE non-streaming collect 阶段收到 stale-history 类 `error` 事件后会走同账号 strip-and-retry。
 - 本轮新增 `tests/fixtures/responses/websocket/previous_response_not_found.json`、`tests/fixtures/responses/websocket/unanswered_function_call.json`，并用 `tests/codex_serving/responses_websocket.rs` 覆盖 non-streaming 与 streaming `previous_response_not_found`、non-streaming unanswered function call 的同账号 strip-and-retry。
 - `tests/codex_gateway/usage_events.rs` 覆盖 multiline data、非标准 JSON 续行、`[DONE]` 忽略和非 SSE JSON body 转 `non_sse_response`。
+- 本轮新增 `tests/fixtures/responses/golden/sse_standard_events.json`、`tests/fixtures/responses/golden/sse_pretty_json_events.json`、`tests/fixtures/responses/golden/non_sse_body_event.json`，并在 `tests/codex_gateway/usage_events.rs` 中对标准 SSE、漂亮打印 JSON 续行、非 SSE body 合成事件做 exact golden 断言。
 - `tests/codex_gateway/websocket.rs:376-760` 覆盖 WS 内部 rate-limit event 不转发、首个 rotatable error、mid-stream close error 和 fallback。
 - 本轮新增 `tests/fixtures/responses/golden/websocket_completed.sse`，并在 `tests/codex_gateway/websocket.rs::ordinary_response_should_use_websocket_transport_by_default` 中对 WebSocket `response.completed` JSON frame 转下游 SSE chunk 做 exact golden 断言，锁定 `event:`、`data:` 和 SSE 终止分隔符格式。
 - 本轮修正后，HTTP SSE streaming 在上游正常 EOF 但缺少 `response.completed`/`response.failed`/`error` 时，会给客户端追加原版格式的 `response.failed`，错误码为 `stream_disconnected`；`tests/codex_serving/upstream_errors.rs::v1_responses_stream_should_synthesize_response_failed_when_http_sse_closes_before_terminal` 覆盖该行为。
@@ -390,7 +391,7 @@ Rust 证据：
 已对齐：
 - 标准 SSE 事件解析、WS JSON frame 到 SSE chunk 的基本转换、terminal event 判断、`codex.rate_limits` 内部事件过滤、heartbeat 15 秒节奏、usage 提取、function call ids 提取、空响应重试等主路径已经具备。
 - WebSocket `response.completed` frame 到 SSE chunk 已有 exact golden 覆盖，确认 raw WS JSON 按原版对下游表现为 `event: response.completed` + 单个 `data:` JSON frame。
-- SSE parser 已对齐原版的三个容错点：漂亮打印 JSON 续行、`[DONE]` 忽略、非 SSE body 合成 `error/non_sse_response`。
+- SSE parser 已对齐原版的标准事件解析和三个容错点：漂亮打印 JSON 续行、`[DONE]` 忽略、非 SSE body 合成 `error/non_sse_response`；标准 SSE、漂亮打印 JSON 续行、非 SSE body 均已有 exact golden 覆盖。
 - streaming 路径对客户端保持 SSE 格式，HTTP SSE 与 WebSocket 两种上游传输都能以 SSE 返回给下游。
 - `response.failed`/`error` 在 streaming 路径会被透传并写入审计；non-streaming 路径也能识别为上游失败，并已对 429/402/403 进入账号状态机和 fallback。
 - request-level `previous_response_not_found` 与 unanswered function call 已按原版优先于账号 fallback 处理：忘记 stale affinity，清除 `previous_response_id`/`turn_state`，同账号重试一次。
@@ -403,10 +404,10 @@ Rust 证据：
 - Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳。
 
 未完全对齐：
-- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close 与 WS completed exact golden，但还需要更系统的 golden tests 防止格式细节回退。
+- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close、WS completed、标准 SSE、漂亮打印 JSON 续行与非 SSE body exact golden，但还需要更系统的 golden tests 防止格式细节回退。
 
 缺口/后续动作：
-- 增加 golden tests：标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、reasoning replay。
+- 增加 golden tests：`response.failed` auth recovery、reasoning replay。
 
 ## 8. fallback、retry、错误分类
 

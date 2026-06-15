@@ -1,0 +1,8 @@
+[
+  {
+    "data": "{\"delta\":\"hel\"}\n{\"delta\":\"lo\"}",
+    "event": "response.output_text.delta",
+    "id": "evt_1",
+    "retry": 5000
+  }
+]
