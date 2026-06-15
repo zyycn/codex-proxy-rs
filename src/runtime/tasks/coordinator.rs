@@ -9,8 +9,8 @@ use crate::{
             model::Fingerprint, repository::FingerprintRepository, update_checker::UpdateChecker,
         },
         tasks::{
-            model_refresh::ModelRefresher, quota_refresh::QuotaRefresher,
-            token_refresh::RefreshScheduler,
+            cookie_cleanup::CookieCleanupScheduler, model_refresh::ModelRefresher,
+            quota_refresh::QuotaRefresher, token_refresh::RefreshScheduler,
         },
     },
     config::AppConfig,
@@ -95,6 +95,14 @@ pub async fn start_background_tasks(
     );
     coordinator.push("session_cleanup", session_cleanup.start());
     tracing::info!("会话清理调度器已启动");
+
+    if let Some(cookie_repository) = state.account_service().cookie_cleanup_repository() {
+        let cookie_cleanup = CookieCleanupScheduler::new(cookie_repository);
+        coordinator.push("cookie_cleanup", cookie_cleanup.start());
+        tracing::info!("cookie 清理调度器已启动");
+    } else {
+        tracing::warn!("cookie repository 不可用，cookie 清理调度器未启动");
+    }
 
     let quota_refresher = QuotaRefresher::new(state.account_service());
     coordinator.push("quota", quota_refresher.start());

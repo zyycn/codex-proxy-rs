@@ -109,6 +109,26 @@ impl CookieRepository {
             .await?;
         Ok(result.rows_affected())
     }
+
+    pub async fn cleanup_expired(&self, now: DateTime<Utc>) -> CookieResult<u64> {
+        let rows =
+            sqlx::query("select id, expires_at from account_cookies where expires_at is not null")
+                .fetch_all(&self.pool)
+                .await?;
+        let mut deleted = 0;
+        for row in rows {
+            let expires_at = row.get::<String, _>("expires_at");
+            if !cookie_is_expired(Some(&expires_at), now) {
+                continue;
+            }
+            let result = sqlx::query("delete from account_cookies where id = ?")
+                .bind(row.get::<String, _>("id"))
+                .execute(&self.pool)
+                .await?;
+            deleted += result.rows_affected();
+        }
+        Ok(deleted)
+    }
 }
 
 struct ParsedCookie {
