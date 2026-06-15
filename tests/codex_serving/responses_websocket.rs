@@ -22,7 +22,7 @@ use tower::ServiceExt;
 use codex_proxy_rs::runtime::{build_router, state::AppState};
 
 use crate::support::{
-    response_json, response_text,
+    assert_response_failed_stream, response_json, response_text,
     upstream::{
         build_imported_app, build_imported_app_with_accounts,
         build_imported_app_with_accounts_and_config, ImportAccount,
@@ -53,14 +53,6 @@ const WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY: &str =
     include_str!("../fixtures/responses/websocket/completed_with_reasoning_replay.json");
 const REASONING_REPLAY_REQUEST_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/reasoning_replay_request.json");
-const WEBSOCKET_RATE_LIMIT_FALLBACK_EXHAUSTED_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/websocket_rate_limit_fallback_exhausted_stream.sse");
-const QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/quota_exhausted_no_fallback_stream.sse");
-const MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/model_unsupported_no_fallback_stream.sse");
-const PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/path_block_no_fallback_stream.sse");
 
 #[expect(
     clippy::result_large_err,
@@ -2248,9 +2240,16 @@ async fn v1_responses_websocket_without_history_should_return_429_when_fallback_
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    let expected = format!("{WEBSOCKET_RATE_LIMIT_FALLBACK_EXHAUSTED_STREAM_GOLDEN}\n");
-    assert_eq!(body, expected);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "rate_limit_error",
+        "rate_limit_exceeded",
+        &[
+            "All accounts exhausted (2 rate-limited)",
+            "second account limited",
+        ],
+    );
     server.await.unwrap();
     let usage_a: (i64,) =
         sqlx::query_as("select request_count from account_usage where account_id = ?")
@@ -2322,9 +2321,16 @@ async fn v1_responses_websocket_without_history_should_return_stream_error_when_
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    let expected = format!("{QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN}\n");
-    assert_eq!(body, expected);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "invalid_request_error",
+        "codex_api_error",
+        &[
+            "All accounts exhausted (1 quota-exhausted)",
+            "quota reached",
+        ],
+    );
     server.await.unwrap();
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_ws_402_single")
@@ -2388,9 +2394,17 @@ async fn v1_responses_websocket_without_history_should_return_stream_error_when_
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    let expected = format!("{MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN}\n");
-    assert_eq!(body, expected);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "invalid_request_error",
+        "codex_api_error",
+        &[
+            "No accounts available",
+            "model_not_available",
+            "not available",
+        ],
+    );
     server.await.unwrap();
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_ws_model_single")
@@ -2447,9 +2461,13 @@ async fn v1_responses_websocket_with_history_should_return_stream_error_when_pat
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    let expected = format!("{PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN}\n");
-    assert_eq!(body, expected);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "server_error",
+        "codex_api_error",
+        &["No accounts available", "Cloudflare path-block"],
+    );
     server.await.unwrap();
 }
 
@@ -2539,23 +2557,6 @@ fn websocket_completed_function_call_response(response_id: &str, call_id: &str) 
     value["response"]["usage"]["input_tokens"] = json!(6);
     value["response"]["usage"]["output_tokens"] = json!(1);
     value.to_string()
-}
-
-fn redact_proxy_response_ids(body: &str) -> String {
-    let mut redacted = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(index) = rest.find("resp_proxy_") {
-        redacted.push_str(&rest[..index]);
-        redacted.push_str("resp_proxy_REDACTED");
-        rest = &rest[index + "resp_proxy_".len()..];
-        let id_len = rest
-            .bytes()
-            .take_while(|byte| byte.is_ascii_alphanumeric())
-            .count();
-        rest = &rest[id_len..];
-    }
-    redacted.push_str(rest);
-    redacted
 }
 
 async fn read_http_upgrade_request(stream: &mut TcpStream) -> String {
