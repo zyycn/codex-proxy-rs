@@ -26,7 +26,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；除“代码证据索引与审计边界”外，其余链路均为 `部分对齐`。
 
 最高优先级未对齐项：
-- 安全模拟仍缺 TLS 指纹证明，以及 WS permessage-deflate 被上游接受后的压缩 frame 解码证明。
+- 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
@@ -116,10 +116,9 @@ Rust 证据：
 
 未完全对齐：
 - Rust 当前没有测试证明真实传输层 TLS/HTTP 指纹与原版 native transport 行为完全一致。IP 代理/VPN 明确非目标，但 TLS/header 指纹仍属于安全模拟链路，不能在未验证时声明 100%。
-- WebSocket 已按原版 `ws@8.19.0` 发出 `Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits`，但 Rust 后续 frame 解码仍由 `tungstenite` 负责；若上游真的协商并发送压缩 frame，当前还没有真实上游证据证明不会触发 RSV/压缩解码问题。
 
 缺口/后续动作：
-- 若目标是安全模拟 100%，需要继续处理 TLS 指纹和 WS compression negotiation 的真实上游验证；TLS 是否要追到 native transport 级别需要单独决策。
+- 若目标是安全模拟 100%，需要继续处理 TLS 指纹真实上游验证；TLS 是否要追到 native transport 级别需要单独决策。
 
 ## 3. OAuth/device/refresh 链路
 
@@ -298,6 +297,7 @@ Rust 证据：
 - 本轮修正后，WS handshake header profile 已独立于 HTTP SSE profile，不再携带 `Content-Type` 与 `Accept: text/event-stream`；`tests/codex_gateway/websocket.rs` 已覆盖该行为。
 - 本轮修正后，`src/codex/gateway/transport/websocket/opening.rs` 不再使用 `tokio-tungstenite` 默认 `HeaderMap` opening 序列化，而是显式生成原版 `ws@8.19.0` opening request：`Sec-WebSocket-Extensions` 位于 `Sec-WebSocket-Key` 前，业务 headers 按原版对象插入顺序输出，并恢复 `Authorization`、`ChatGPT-Account-Id`、`User-Agent`、`Accept-Encoding`、`Accept-Language`、`OpenAI-Beta`、`Cookie` 等原版大小写。
 - `tests/codex_gateway/websocket.rs::websocket_handshake_should_offer_original_permessage_deflate_extension` 通过 raw TCP 断言 WS opening request 的关键 header 顺序、大小写和 permessage-deflate offer 与原版抓包一致。
+- 本轮修正后，`src/codex/gateway/transport/websocket/deflate.rs` 在服务端接受 `Sec-WebSocket-Extensions: permessage-deflate` 时，会在底层流上解码 server-to-client RSV1 text/binary frame，再交给 `tungstenite` 处理；未协商时保持原始流直通。`tests/codex_gateway/websocket.rs::websocket_should_decode_permessage_deflate_response_frame_when_server_accepts_extension` 先以 `NonZeroReservedBits` 失败，再修复通过，覆盖服务端接受扩展并返回压缩 `response.completed` frame。
 - `src/codex/gateway/transport/websocket/mod.rs:230-328` pooled/reused WS stale failure 会重试一次 one-shot；内部 `codex.rate_limits` 会转为 rate-limit headers；terminal event 转为 SSE chunk。
 - 本轮修正后，`src/codex/gateway/transport/websocket/mod.rs` 的 one-shot WebSocket handshake 使用 20 秒 open timeout；`connect_websocket_with_timeout_should_fail_when_handshake_stalls` 覆盖握手停滞时返回 timeout。
 - `src/codex/gateway/transport/websocket/pool.rs:58-76` 默认 `max_age=55min`、`max_per_account=8`、`maintenance_interval=25s`、`ping_interval=25s`、`ping_timeout=5s`、`liveness_timeout=62.5s`。
@@ -319,6 +319,7 @@ Rust 证据：
 - WS URL、`response.create` frame 主字段、tool 默认值、service tier、prompt cache key、client metadata、internal rate-limit event、terminal event SSE 包装均已基本对齐。
 - WS handshake headers 已去掉原版没有的 `Content-Type` 与 `Accept: text/event-stream`。
 - WS opening request 的关键 wire 顺序、大小写和 `Sec-WebSocket-Extensions` offer 已按原版 `ws@8.19.0` 对齐，并由 raw TCP 测试覆盖。
+- WS permessage-deflate 协商后的 server-to-client 压缩 text/binary frame 已支持解码，避免上游接受扩展后因 RSV1 frame 触发 `tungstenite` `NonZeroReservedBits`。
 - one-shot WebSocket handshake 已增加原版同等 20 秒 open timeout；普通无历史请求超时后仍可按原版策略降级 HTTP SSE，`previous_response_id` required WS 不降级。
 - 连接池核心状态机基本对齐：55 分钟 max age、每账号最多 8 条、严格单 in-flight、busy/cap bypass、stale reuse 一次 fresh retry、idle keepalive、liveness/GC、shutdown、账号状态变更驱逐。
 - WebSocket pool 配置面已对齐原版：配置文件显式提供 `ws_pool.enabled/max_age_ms/max_per_account`，运行时按配置启停复用和调整 max age/account cap。
@@ -328,10 +329,9 @@ Rust 证据：
 未完全对齐：
 - pool key 表达不完全一致。原版 key 是 `${entryId}:${rawConversationId}`；Rust key 是 `(base_url, account_id, accountScopedConversationId)`。行为上通过测试证明同 conversation 会复用，但若后续要与原版日志/配置/诊断完全一致，命名与 key 语义仍不同。
 - Rust pool maintenance 是集中 sweep ping idle connection；原版是每条 `PersistentWs` 自带 interval，busy 时跳过 ping。默认行为接近，但调度模型不是逐字等价。
-- Rust 已发出原版 permessage-deflate offer，但后续 frame 解码仍由 `tungstenite` 负责；需要真实上游或压缩 frame fixture 证明 OpenAI 不会返回需要解压的 RSV1 frame，或补齐压缩解码能力。
 
 缺口/后续动作：
-- 增加 WS compression negotiation 验证：覆盖上游接受 `Sec-WebSocket-Extensions` 后的响应 header 与 frame 行为。
+- 若需要更强证明，可增加真实 OpenAI 上游抓包验证，确认当前 Codex 后端是否实际返回压缩 frame；本地压缩 frame fixture 已覆盖客户端能力。
 
 ## 7. response/SSE/WS frame 转换链路
 
