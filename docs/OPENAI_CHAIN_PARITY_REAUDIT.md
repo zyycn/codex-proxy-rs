@@ -27,7 +27,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
-- response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
+- response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -413,11 +413,11 @@ Rust 证据：
 - `src/routes/shared/proxy-upstream-attempt.ts:71-96` 每次上游请求后记录 egress log，并应用 rate-limit headers。
 
 Rust 证据：
-- `src/codex/serving/dispatch/fallback.rs:22-190` 把 429、402、403 Cloudflare challenge、403 ban、空 body 404 Cloudflare path-block、401 token invalid/deactivated 分类成 `UpstreamAccountRetry`。
-- `src/codex/serving/dispatch/fallback.rs:350-470` 对 429 设置 quota cooldown 并记录 request attempt；402 设置 `QuotaExhausted`；Cloudflare challenge 删除 cookies 并设置 persisted cooldown；空 body 404 清理当前账号 cookies、记录 1 小时滑窗内 path-block 次数，连续 3 次设置 `Disabled`；401 token invalid 设置 `Expired`，401 deactivated 设置 `Banned`；403 ban 设置 `Banned`；状态变化会 evict WS pool。
+- `src/codex/serving/dispatch/fallback.rs:20-211` 把 429、402、403 Cloudflare challenge、403 ban、空 body 404 Cloudflare path-block、401 token invalid/deactivated 分类成 `UpstreamAccountRetry`。
+- `src/codex/serving/dispatch/fallback.rs:331-446` 对 429 设置 quota cooldown 并记录 request attempt；402 设置 `QuotaExhausted`；Cloudflare challenge 删除 cookies 并设置 persisted cooldown；空 body 404 清理当前账号 cookies、记录 1 小时滑窗内 path-block 次数，连续 3 次设置 `Disabled`；401 token invalid 设置 `Expired`，401 deactivated 设置 `Banned`；403 ban 设置 `Banned`；状态变化会 evict WS pool。
 - 本轮修正后，`src/codex/serving/dispatch/account_refresh.rs` 已删除；serving request path 不再对上游 401 做同账号 OAuth refresh，refresh 仍保留在账号健康检查、后台调度和 admin/manual refresh 链路。
-- `src/codex/serving/dispatch/mod.rs:338-476`、`689-923` 在 HTTP SSE/WS streaming 请求建立前，遇到可分类错误会尝试 acquire fallback account；显式 `previous_response_id` 的 WS history 请求遇到 429/402/403 会保持原账号，不切换 fallback。
-- 本轮修正后，`src/codex/serving/responses.rs:145-365` non-streaming 请求前错误与 mid-SSE `error`/`response.failed` 都会先尝试 request-level recovery，再进入 `classify_upstream_account_retry()`；显式 `previous_response_id` 遇到可分类 429/402/403 时只记录并保持原账号。
+- 本轮修正后，`src/codex/serving/dispatch/mod.rs` 在 HTTP SSE/WS streaming 请求建立前，遇到可分类错误会尝试 acquire fallback account；显式 `previous_response_id` 仍保持 WebSocket required，不会降级 HTTP SSE，但 429/402/403/401/model unsupported 等账号级错误会按原版通用 error handler 尝试备用账号。
+- 本轮修正后，`src/codex/serving/responses.rs` non-streaming 请求前错误与 mid-SSE `error`/`response.failed` 都会先尝试 request-level recovery，再进入 `classify_upstream_account_retry()`；显式 `previous_response_id` 遇到可分类账号错误不再有专用 hold 分支，会进入同一 fallback 状态机。
 - 本轮修正后，`src/codex/serving/dispatch/mod.rs` 的 HTTP SSE streaming 与 WebSocket streaming 请求建立失败也会先尝试 request-level recovery，`previous_response_not_found` 可同账号 strip-and-retry。
 - 本轮修正后，`src/codex/serving/dispatch/mod.rs` 在 non-streaming、HTTP SSE streaming、WebSocket streaming 的上游 request attempt 外层加入 `retry_upstream_5xx()`：仅对 `CodexClientError::Upstream` 的 5xx 做同账号最多 2 次重试，退避为 1000ms、2000ms，与原版 `withRetry()` 默认策略一致。
 - 本轮修正后，`src/codex/serving/dispatch/fallback.rs` 识别 4xx `model not supported`、`model_not_supported`、`model not available`、`model_not_available`，只允许一次备用账号 retry，不标记账号状态，也不驱逐 WebSocket pool。
@@ -428,7 +428,7 @@ Rust 证据：
 - `tests/codex_serving/responses_websocket.rs` 覆盖 WebSocket 非历史请求先因 429 fallback 到备用账号，再因 401 将备用账号标记 expired 并返回 401，不做同账号 refresh。
 - 本轮新增 `tests/fixtures/responses/http_sse/after_model_unsupported_retry.sse`、`tests/fixtures/responses/http_sse/response_failed_model_unsupported.sse`，并用 `tests/codex_serving/upstream_fallback.rs` 覆盖 HTTP-time model unsupported fallback、non-streaming mid-SSE model unsupported fallback、以及 model unsupported 最多只重试一次。
 - 本轮新增 `tests/fixtures/responses/http_sse/after_5xx_retry.sse`、`tests/fixtures/responses/http_sse/stream_after_5xx_retry.sse`，并用 `tests/codex_serving/upstream_fallback.rs` 覆盖 non-streaming 与 streaming 两条路径在同账号连续 2 次 5xx 后第三次成功，且不会切换到备用账号。
-- `tests/codex_serving/responses_websocket.rs:652-927` 覆盖 `previous_response_id` WS 429 不跨账号重试、非历史 WS fallback 和 fallback 账户 refresh。
+- `tests/codex_serving/responses_websocket.rs` 覆盖 `previous_response_id` WS 429 fallback 到备用账号且继续携带同一 `previous_response_id`，并覆盖非历史 WS fallback 和 fallback 账户 refresh。
 
 结论：部分对齐。
 
@@ -443,12 +443,11 @@ Rust 证据：
 - fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming 响应体。
 - Cloudflare challenge fallback exhausted status/message 已对齐原版：上游 403 challenge 会作为 retry decision 暴露 502 和 `Upstream blocked the request (Cloudflare challenge)`，无备用账号时返回该 502 语义；`v1_responses_should_return_502_when_cloudflare_challenge_has_no_fallback` 覆盖单账号无 fallback 场景。
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
-- WS history 请求不跨账号重试这一点从安全角度更保守，避免 `previous_response_id` 的 server-side history 静默丢失。
+- 显式 `previous_response_id` 的账号级错误恢复已对齐原版：不降级 HTTP SSE，仍通过 WebSocket 向备用账号重试；若备用账号无法识别该 server-side history，再由 `previous_response_not_found` strip-and-retry 恢复。
 
 未完全对齐：
 - recovery 优先级仍不是完整原版状态机。Rust 已实现 implicit resume restore/replay 与 strip-and-retry 优先于账号 fallback，但状态机仍分散在 responses/dispatch 中，没有抽成原版同等的 `RetryAction` 分层。
 - non-streaming mid-SSE failure 仍不是完整原版 catch 状态机。429/402/403、401、model unsupported、400 strip-and-retry 与隐式续链 restore 已补齐；剩余主要是最终错误外壳的结构细节。
-- `previous_response_id` 限流/配额语义不一致。原版没有显式“history 请求保持原账户”的 retry hold，可能经 fallback 后再通过 `previous_response_not_found` strip-and-retry 恢复；Rust 遇到 429/402/403 会保持原账号并返回错误，保护历史但牺牲可恢复性。
 
 缺口/后续动作：
 - 引入原版级 `UpstreamRecoveryAction` 状态机：implicit resume replay、strip-and-retry、error handler、fallback transition 分层清晰，避免分散在 responses/dispatch 中。

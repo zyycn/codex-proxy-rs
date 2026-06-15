@@ -19,8 +19,8 @@ use crate::{
         affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
         classify_upstream_request_recovery, completed_response_json,
         no_available_accounts_response, normalize_service_tier_for_upstream,
-        websocket_history_retry_metadata, CodexRequestLogContext, CodexUpstreamService,
-        CollectedResponse, ImplicitResumeSnapshot, UpstreamRequestRecovery,
+        CodexRequestLogContext, CodexUpstreamService, CollectedResponse, ImplicitResumeSnapshot,
+        UpstreamRequestRecovery,
     },
     codex::serving::http::errors::{
         codex_client_error_message, codex_client_error_response,
@@ -291,75 +291,52 @@ impl ResponsesService {
                                 if retry.is_model_unsupported() {
                                     model_unsupported_retry_used = true;
                                 }
-                                if codex_request.previous_response_id.is_some()
-                                    && retry.preserve_history_account_affinity()
-                                {
-                                    self.upstream
-                                        .apply_account_retry(
-                                            &acquired.account,
-                                            retry,
-                                            codex_request.expects_image_generation(),
-                                        )
-                                        .await;
-                                    self.upstream
-                                        .log_response(
-                                            &log_context,
-                                            retry.status(),
-                                            EventLevel::Warn,
-                                            "v1 responses SSE history 失败保持原账户",
-                                            websocket_history_retry_metadata(retry, false),
-                                        )
-                                        .await;
-                                } else {
-                                    let fallback = self
-                                        .upstream
-                                        .apply_retry_and_acquire_fallback(
-                                            &acquired.account,
-                                            retry,
-                                            &codex_request.model,
-                                            &mut excluded_account_ids,
-                                            codex_request.expects_image_generation(),
-                                        )
-                                        .await;
-                                    self.upstream
-                                        .log_response(
-                                            &log_context,
-                                            retry.status(),
-                                            EventLevel::Warn,
-                                            "v1 responses 上游 SSE 失败将使用备用账户重试",
-                                            retry.metadata(false),
-                                        )
-                                        .await;
-                                    if let Some(fallback) = fallback {
-                                        log_context =
-                                            log_context.with_account(&fallback.account.id);
-                                        acquired = fallback;
-                                        continue;
-                                    }
-                                    let retry_message = retry.fallback_response_message(
-                                        codex_client_error_message(&error),
-                                    );
-                                    let message = self
-                                        .upstream
-                                        .fallback_exhausted_message(&retry_message)
-                                        .await;
-                                    let error_response =
-                                        codex_client_error_response_with_status_and_message(
-                                            error,
-                                            retry.status(),
-                                            &message,
-                                        );
-                                    self.upstream
-                                        .log_response(
-                                            &log_context,
-                                            error_response.0,
-                                            EventLevel::Error,
-                                            "v1 responses 上游 SSE fallback 已耗尽",
-                                            failure.metadata(false),
-                                        )
-                                        .await;
-                                    return error_response.into_response();
+                                let fallback = self
+                                    .upstream
+                                    .apply_retry_and_acquire_fallback(
+                                        &acquired.account,
+                                        retry,
+                                        &codex_request.model,
+                                        &mut excluded_account_ids,
+                                        codex_request.expects_image_generation(),
+                                    )
+                                    .await;
+                                self.upstream
+                                    .log_response(
+                                        &log_context,
+                                        retry.status(),
+                                        EventLevel::Warn,
+                                        "v1 responses 上游 SSE 失败将使用备用账户重试",
+                                        retry.metadata(false),
+                                    )
+                                    .await;
+                                if let Some(fallback) = fallback {
+                                    log_context = log_context.with_account(&fallback.account.id);
+                                    acquired = fallback;
+                                    continue;
                                 }
+                                let retry_message = retry
+                                    .fallback_response_message(codex_client_error_message(&error));
+                                let message = self
+                                    .upstream
+                                    .fallback_exhausted_message(&retry_message)
+                                    .await;
+                                let error_response =
+                                    codex_client_error_response_with_status_and_message(
+                                        error,
+                                        retry.status(),
+                                        &message,
+                                    );
+                                self.upstream
+                                    .log_response(
+                                        &log_context,
+                                        error_response.0,
+                                        EventLevel::Error,
+                                        "v1 responses 上游 SSE fallback 已耗尽",
+                                        failure.metadata(false),
+                                    )
+                                    .await;
+                                return error_response.into_response();
                             }
                             if self
                                 .upstream
@@ -416,74 +393,51 @@ impl ResponsesService {
                         if retry.is_model_unsupported() {
                             model_unsupported_retry_used = true;
                         }
-                        if codex_request.previous_response_id.is_some()
-                            && retry.preserve_history_account_affinity()
-                        {
-                            // previous_response_id history is account-affine upstream.
-                            self.upstream
-                                .apply_account_retry(
-                                    &acquired.account,
-                                    retry,
-                                    codex_request.expects_image_generation(),
-                                )
-                                .await;
-                            self.upstream
-                                .log_response(
-                                    &log_context,
-                                    retry.status(),
-                                    EventLevel::Warn,
-                                    "v1 responses WebSocket history 请求保持原账户",
-                                    websocket_history_retry_metadata(retry, false),
-                                )
-                                .await;
-                        } else {
-                            let fallback = self
-                                .upstream
-                                .apply_retry_and_acquire_fallback(
-                                    &acquired.account,
-                                    retry,
-                                    &codex_request.model,
-                                    &mut excluded_account_ids,
-                                    codex_request.expects_image_generation(),
-                                )
-                                .await;
-                            self.upstream
-                                .log_response(
-                                    &log_context,
-                                    retry.status(),
-                                    EventLevel::Warn,
-                                    "v1 responses 上游请求将使用备用账户重试",
-                                    retry.metadata(false),
-                                )
-                                .await;
-                            if let Some(fallback) = fallback {
-                                log_context = log_context.with_account(&fallback.account.id);
-                                acquired = fallback;
-                                continue;
-                            }
-                            let retry_message =
-                                retry.fallback_response_message(codex_client_error_message(&error));
-                            let message = self
-                                .upstream
-                                .fallback_exhausted_message(&retry_message)
-                                .await;
-                            let error_response =
-                                codex_client_error_response_with_status_and_message(
-                                    error,
-                                    retry.status(),
-                                    &message,
-                                );
-                            self.upstream
-                                .log_response(
-                                    &log_context,
-                                    error_response.0,
-                                    EventLevel::Error,
-                                    "v1 responses 上游请求 fallback 已耗尽",
-                                    json!({"stream": false}),
-                                )
-                                .await;
-                            return error_response.into_response();
+                        let fallback = self
+                            .upstream
+                            .apply_retry_and_acquire_fallback(
+                                &acquired.account,
+                                retry,
+                                &codex_request.model,
+                                &mut excluded_account_ids,
+                                codex_request.expects_image_generation(),
+                            )
+                            .await;
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                retry.status(),
+                                EventLevel::Warn,
+                                "v1 responses 上游请求将使用备用账户重试",
+                                retry.metadata(false),
+                            )
+                            .await;
+                        if let Some(fallback) = fallback {
+                            log_context = log_context.with_account(&fallback.account.id);
+                            acquired = fallback;
+                            continue;
                         }
+                        let retry_message =
+                            retry.fallback_response_message(codex_client_error_message(&error));
+                        let message = self
+                            .upstream
+                            .fallback_exhausted_message(&retry_message)
+                            .await;
+                        let error_response = codex_client_error_response_with_status_and_message(
+                            error,
+                            retry.status(),
+                            &message,
+                        );
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                error_response.0,
+                                EventLevel::Error,
+                                "v1 responses 上游请求 fallback 已耗尽",
+                                json!({"stream": false}),
+                            )
+                            .await;
+                        return error_response.into_response();
                     }
                     if self
                         .upstream

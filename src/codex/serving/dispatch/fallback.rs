@@ -100,10 +100,6 @@ impl UpstreamAccountRetry {
         matches!(self, Self::ModelUnsupported { .. })
     }
 
-    pub(crate) fn preserve_history_account_affinity(self) -> bool {
-        !self.is_model_unsupported()
-    }
-
     pub(crate) fn fallback_response_message(self, upstream_message: String) -> String {
         match self {
             Self::CloudflareChallenge { .. } => {
@@ -274,65 +270,6 @@ fn error_message(body: &str) -> Option<String> {
         .or_else(|| value.pointer("/error/message"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-}
-
-pub(crate) fn websocket_history_retry_metadata(retry: UpstreamAccountRetry, stream: bool) -> Value {
-    match retry {
-        UpstreamAccountRetry::ModelUnsupported { .. } => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "modelUnsupported",
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::RateLimited {
-            retry_after_seconds,
-        } => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "rateLimited",
-            "retryAfterSeconds": retry_after_seconds,
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::QuotaExhausted => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "quotaExhausted",
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::CloudflareChallenge { cooldown_seconds } => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "cloudflareChallenge",
-            "cooldownSeconds": cooldown_seconds,
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::CloudflarePathBlock => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "cloudflarePathBlock",
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::TokenInvalid { account_status } => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "tokenInvalid",
-            "accountStatus": account_status_metadata(account_status),
-            "accountAffinity": "previousResponseId",
-        }),
-        UpstreamAccountRetry::Banned => json!({
-            "stream": stream,
-            "transport": "websocket",
-            "retry": false,
-            "reason": "banned",
-            "accountAffinity": "previousResponseId",
-        }),
-    }
 }
 
 pub(super) fn build_account_exhaustion_detail(

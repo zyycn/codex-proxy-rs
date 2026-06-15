@@ -73,8 +73,8 @@ use crate::codex::serving::http::errors::{
 
 pub(crate) use self::{
     fallback::{
-        classify_upstream_account_retry, classify_upstream_request_recovery,
-        websocket_history_retry_metadata, UpstreamAccountRetry, UpstreamRequestRecovery,
+        classify_upstream_account_retry, classify_upstream_request_recovery, UpstreamAccountRetry,
+        UpstreamRequestRecovery,
     },
     routing::{no_available_accounts_response, normalize_service_tier_for_upstream},
     stream::{completed_response_json, CollectedResponse},
@@ -85,8 +85,7 @@ use self::affinity::{
     SessionAffinityRepository,
 };
 use self::fallback::{
-    apply_upstream_account_retry_with_deps, apply_upstream_retry_and_acquire_fallback_with_deps,
-    build_account_exhaustion_detail,
+    apply_upstream_retry_and_acquire_fallback_with_deps, build_account_exhaustion_detail,
 };
 pub(crate) use self::implicit_resume::ImplicitResumeSnapshot;
 use self::implicit_resume::{continuation_input_start, implicit_resume_allowed};
@@ -326,21 +325,6 @@ impl CodexUpstreamService {
 
     pub(crate) async fn fallback_exhausted_message(&self, message: &str) -> String {
         fallback_exhausted_message_with_deps(&self.deps, message).await
-    }
-
-    pub(crate) async fn apply_account_retry(
-        &self,
-        account: &Account,
-        retry: UpstreamAccountRetry,
-        image_generation_requested: bool,
-    ) {
-        apply_upstream_account_retry_with_deps(
-            &self.deps,
-            account,
-            retry,
-            image_generation_requested,
-        )
-        .await;
     }
 
     pub(crate) async fn responses_stream(
@@ -1581,70 +1565,47 @@ async fn responses_websocket_stream(
                     if retry.is_model_unsupported() {
                         model_unsupported_retry_used = true;
                     }
-                    if request.previous_response_id.is_some()
-                        && retry.preserve_history_account_affinity()
-                    {
-                        // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
-                        apply_upstream_account_retry_with_deps(
-                            &deps,
-                            &acquired.account,
-                            retry,
-                            request.expects_image_generation(),
-                        )
-                        .await;
-                        log_codex_upstream_response_with_deps(
-                            &deps,
-                            &log_context,
-                            retry.status(),
-                            EventLevel::Warn,
-                            "v1 responses WebSocket history 请求保持原账户",
-                            websocket_history_retry_metadata(retry, true),
-                        )
-                        .await;
-                    } else {
-                        let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
-                            &deps,
-                            &acquired.account,
-                            retry,
-                            &request.model,
-                            &mut excluded_account_ids,
-                            request.expects_image_generation(),
-                        )
-                        .await;
-                        log_codex_upstream_response_with_deps(
-                            &deps,
-                            &log_context,
-                            retry.status(),
-                            EventLevel::Warn,
-                            "v1 responses WebSocket 上游请求将使用备用账户重试",
-                            retry.metadata(true),
-                        )
-                        .await;
-                        if let Some(fallback) = fallback {
-                            log_context = log_context.with_account(&fallback.account.id);
-                            acquired = fallback;
-                            continue;
-                        }
-                        let retry_message =
-                            retry.fallback_response_message(codex_client_error_message(&error));
-                        let message =
-                            fallback_exhausted_message_with_deps(&deps, &retry_message).await;
-                        let error_response = codex_client_error_response_with_status_and_message(
-                            error,
-                            retry.status(),
-                            &message,
-                        );
-                        log_codex_upstream_response_with_deps(
-                            &deps,
-                            &log_context,
-                            error_response.0,
-                            EventLevel::Error,
-                            "v1 responses WebSocket stream fallback 已耗尽",
-                            json!({"stream": true, "transport": "websocket"}),
-                        )
-                        .await;
-                        return error_response.into_response();
+                    let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
+                        &deps,
+                        &acquired.account,
+                        retry,
+                        &request.model,
+                        &mut excluded_account_ids,
+                        request.expects_image_generation(),
+                    )
+                    .await;
+                    log_codex_upstream_response_with_deps(
+                        &deps,
+                        &log_context,
+                        retry.status(),
+                        EventLevel::Warn,
+                        "v1 responses WebSocket 上游请求将使用备用账户重试",
+                        retry.metadata(true),
+                    )
+                    .await;
+                    if let Some(fallback) = fallback {
+                        log_context = log_context.with_account(&fallback.account.id);
+                        acquired = fallback;
+                        continue;
                     }
+                    let retry_message =
+                        retry.fallback_response_message(codex_client_error_message(&error));
+                    let message = fallback_exhausted_message_with_deps(&deps, &retry_message).await;
+                    let error_response = codex_client_error_response_with_status_and_message(
+                        error,
+                        retry.status(),
+                        &message,
+                    );
+                    log_codex_upstream_response_with_deps(
+                        &deps,
+                        &log_context,
+                        error_response.0,
+                        EventLevel::Error,
+                        "v1 responses WebSocket stream fallback 已耗尽",
+                        json!({"stream": true, "transport": "websocket"}),
+                    )
+                    .await;
+                    return error_response.into_response();
                 }
                 record_failed_request_attempt_with_deps(
                     &deps,

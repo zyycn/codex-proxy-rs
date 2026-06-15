@@ -1916,7 +1916,7 @@ async fn v1_responses_should_use_websocket_for_previous_response_id_streaming() 
 }
 
 #[tokio::test]
-async fn v1_responses_previous_response_id_websocket_429_should_not_retry_different_account() {
+async fn v1_responses_previous_response_id_websocket_429_should_retry_fallback_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1929,6 +1929,8 @@ async fn v1_responses_previous_response_id_websocket_429_should_not_retry_differ
             WEBSOCKET_HISTORY_RATE_LIMITED,
         )
         .await;
+        accept_successful_websocket_response(&listener, "Bearer access-b", "resp_history_fallback")
+            .await
     });
     let imported = build_imported_app_with_accounts(
         format!("http://{addr}"),
@@ -1969,20 +1971,23 @@ async fn v1_responses_previous_response_id_websocket_429_should_not_retry_differ
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    server.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("\"id\":\"resp_history_fallback\""));
+    let fallback_request = server.await.unwrap();
+    assert_eq!(fallback_request["previous_response_id"], "resp_prev");
     let account_b_usage =
         sqlx::query_as::<_, (i64,)>("select count(*) from account_usage where account_id = ?")
             .bind("acct_b")
             .fetch_one(&imported.pool)
             .await
             .unwrap();
-    assert_eq!(account_b_usage.0, 0);
+    assert_eq!(account_b_usage.0, 1);
 }
 
 #[tokio::test]
-async fn v1_responses_non_stream_previous_response_id_websocket_429_should_not_retry_different_account(
-) {
+async fn v1_responses_non_stream_previous_response_id_websocket_429_should_retry_fallback_account()
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1995,6 +2000,12 @@ async fn v1_responses_non_stream_previous_response_id_websocket_429_should_not_r
             WEBSOCKET_HISTORY_RATE_LIMITED,
         )
         .await;
+        accept_successful_websocket_response(
+            &listener,
+            "Bearer access-b",
+            "resp_history_fallback_non_stream",
+        )
+        .await
     });
     let imported = build_imported_app_with_accounts(
         format!("http://{addr}"),
@@ -2035,15 +2046,18 @@ async fn v1_responses_non_stream_previous_response_id_websocket_429_should_not_r
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    server.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_history_fallback_non_stream");
+    let fallback_request = server.await.unwrap();
+    assert_eq!(fallback_request["previous_response_id"], "resp_prev");
     let account_b_usage =
         sqlx::query_as::<_, (i64,)>("select count(*) from account_usage where account_id = ?")
             .bind("acct_b")
             .fetch_one(&imported.pool)
             .await
             .unwrap();
-    assert_eq!(account_b_usage.0, 0);
+    assert_eq!(account_b_usage.0, 1);
 }
 
 #[tokio::test]
