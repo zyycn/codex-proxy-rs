@@ -150,7 +150,7 @@ fn max_optional_datetime(
     }
 }
 
-pub(super) fn quota_from_usage(usage: &Value) -> Value {
+pub(crate) fn quota_from_usage(usage: &Value) -> Value {
     let additional = usage
         .get("additional_rate_limits")
         .and_then(Value::as_array)

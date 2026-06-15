@@ -36,6 +36,13 @@ set
   updated_at = ?
 where id = ?";
 
+const SET_QUOTA_VERIFY_REQUIRED_SQL: &str = r"
+update accounts
+set
+  quota_verify_required = ?,
+  updated_at = ?
+where id = ?";
+
 const SET_CLOUDFLARE_COOLDOWN_UNTIL_SQL: &str = r"
 update accounts
 set
@@ -91,6 +98,20 @@ impl AccountRepository {
         let result = sqlx::query(SET_QUOTA_COOLDOWN_UNTIL_SQL)
             .bind(&cooldown_until)
             .bind(cooldown_until)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn set_quota_verify_required(
+        &self,
+        id: &str,
+        required: bool,
+    ) -> AccountRepositoryResult<bool> {
+        let result = sqlx::query(SET_QUOTA_VERIFY_REQUIRED_SQL)
+            .bind(if required { 1_i64 } else { 0 })
             .bind(Utc::now().to_rfc3339())
             .bind(id)
             .execute(&self.pool)

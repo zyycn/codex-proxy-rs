@@ -354,7 +354,7 @@ async fn v1_responses_should_passively_cache_rate_limit_headers() {
         .await;
     let imported = build_imported_app(server.uri()).await;
     sqlx::query(
-        r#"update accounts set quota_json = '{"credits":{"has_credits":true,"unlimited":false,"balance":12}}' where id = ?"#,
+        r#"update accounts set quota_json = '{"credits":{"has_credits":true,"unlimited":false,"balance":12}}', quota_verify_required = 1 where id = ?"#,
     )
     .bind("acct_imported")
     .execute(&imported.pool)
@@ -381,8 +381,8 @@ async fn v1_responses_should_passively_cache_rate_limit_headers() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let stored: (String, i64, Option<String>) = sqlx::query_as(
-        "select quota_json, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    let stored: (String, i64, Option<String>, i64) = sqlx::query_as(
+        "select quota_json, quota_limit_reached, quota_cooldown_until, quota_verify_required from accounts where id = ?",
     )
     .bind("acct_imported")
     .fetch_one(&imported.pool)
@@ -394,6 +394,7 @@ async fn v1_responses_should_passively_cache_rate_limit_headers() {
     assert_eq!(quota["credits"]["balance"], 12);
     assert_eq!(stored.1, 1);
     assert!(stored.2.is_some());
+    assert_eq!(stored.3, 0);
     let window: (i64, i64, i64, i64, Option<String>, Option<String>, Option<i64>) =
         sqlx::query_as(
             "select window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds from account_usage where account_id = ?",

@@ -208,6 +208,14 @@ impl AccountPool {
         true
     }
 
+    pub fn set_quota_verify_required(&mut self, account_id: &str, required: bool) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.quota_verify_required = required;
+        true
+    }
+
     pub fn sync_rate_limit_window(
         &mut self,
         account_id: &str,
