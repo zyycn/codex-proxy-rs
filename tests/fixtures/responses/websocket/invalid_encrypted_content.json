@@ -1,0 +1,1 @@
+{"type":"response.failed","response":{"id":"resp_invalid_encrypted_content","object":"response","status":"failed","error":{"code":"invalid_encrypted_content","message":"Invalid encrypted content in reasoning replay"}},"error":{"code":"invalid_encrypted_content","message":"Invalid encrypted content in reasoning replay"}}

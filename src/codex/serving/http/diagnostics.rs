@@ -129,7 +129,7 @@ pub(crate) async fn diagnostics_data(state: &AppState) -> DiagnosticsData {
     let config = state.services.settings.current().await;
     let auth_status = state.services.admin_auth.status().await.ok();
     let capacity = state.services.accounts.runtime_capacity_summary().await;
-    let fingerprint = Fingerprint::default_codex_desktop();
+    let fingerprint = state.services.diagnostics.fingerprint().clone();
 
     DiagnosticsData {
         status: "ok",
@@ -166,7 +166,7 @@ pub async fn debug_fingerprint(
     }
 
     // 从实际服务中获取指纹
-    let fingerprint = state.services.responses.upstream_fingerprint();
+    let fingerprint = state.services.diagnostics.fingerprint();
 
     (
         StatusCode::OK,
@@ -230,7 +230,7 @@ fn transport_diagnostics(config: &AppConfig, fingerprint: Fingerprint) -> Transp
 fn fingerprint_diagnostics(fingerprint: Fingerprint) -> FingerprintDiagnostics {
     let user_agent = fingerprint.user_agent();
     FingerprintDiagnostics {
-        source: "staticDefault",
+        source: "runtime",
         originator: fingerprint.originator,
         app_version: fingerprint.app_version,
         build_number: fingerprint.build_number,

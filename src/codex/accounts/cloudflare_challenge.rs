@@ -1,22 +1,31 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use chrono::{DateTime, Duration, Utc};
 use tokio::sync::RwLock;
 
 /// Cloudflare Path Block Tracker
 ///
 /// 追踪每个账户连续遇到的 Cloudflare path-block 404 错误。
-/// 当一个账户连续遇到 3 次 path-block 时，自动将其标记为 Banned。
+/// 当一个账户连续遇到 3 次 path-block 时，自动将其标记为 Disabled。
 ///
 /// Path-block 的特征：
 /// - HTTP 404 状态码
 /// - 空响应体或 Cloudflare 页面
 /// - 通常发生在 /backend-api/responses 路径
 const PATH_BLOCK_THRESHOLD: u32 = 3;
+const PATH_BLOCK_STALE_AFTER: Duration = Duration::hours(1);
+
+#[derive(Debug, Clone, Copy)]
+struct PathBlockState {
+    count: u32,
+    last_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CfPathBlockTracker {
     /// 每个账户的连续 path-block 计数
-    counts: Arc<RwLock<HashMap<String, u32>>>,
+    counts: Arc<RwLock<HashMap<String, PathBlockState>>>,
 }
 
 impl Default for CfPathBlockTracker {
@@ -37,9 +46,20 @@ impl CfPathBlockTracker {
     /// 返回当前连续计数，调用者应该在达到阈值时采取行动
     pub async fn record_path_block(&self, account_id: &str) -> u32 {
         let mut counts = self.counts.write().await;
-        let count = counts.entry(account_id.to_string()).or_insert(0);
-        *count += 1;
-        *count
+        let now = Utc::now();
+        let count = counts
+            .get(account_id)
+            .filter(|state| now.signed_duration_since(state.last_at) <= PATH_BLOCK_STALE_AFTER)
+            .map(|state| state.count + 1)
+            .unwrap_or(1);
+        counts.insert(
+            account_id.to_string(),
+            PathBlockState {
+                count,
+                last_at: now,
+            },
+        );
+        count
     }
 
     /// 重置账户的 path-block 计数（成功请求后调用）
@@ -51,7 +71,13 @@ impl CfPathBlockTracker {
     /// 获取账户当前的 path-block 计数
     pub async fn get_count(&self, account_id: &str) -> u32 {
         let counts = self.counts.read().await;
-        counts.get(account_id).copied().unwrap_or(0)
+        counts
+            .get(account_id)
+            .filter(|state| {
+                Utc::now().signed_duration_since(state.last_at) <= PATH_BLOCK_STALE_AFTER
+            })
+            .map(|state| state.count)
+            .unwrap_or(0)
     }
 
     /// 检查是否应该禁用账户

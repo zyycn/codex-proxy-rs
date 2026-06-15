@@ -1,14 +1,16 @@
-mod account_refresh;
 pub mod affinity;
 pub mod fallback;
+mod implicit_resume;
 mod limits;
 // 上游调度辅助命名为 routing，避免出现 dispatch::dispatch 的模块套娃。
+mod reasoning_replay;
 pub mod routing;
 pub mod stream;
 mod stream_audit;
 pub mod usage;
 
 use std::{
+    future::Future,
     sync::Arc,
     time::{Duration as StdDuration, Instant},
 };
@@ -24,12 +26,14 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures::{stream as futures_stream, StreamExt};
+use rand::RngExt;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::{
     codex::accounts::cookies::repository::CookieRepository,
     codex::accounts::{
+        cloudflare_challenge::CfPathBlockTracker,
         model::Account,
         pool::{AccountAcquireRequest, AccountPool, AcquiredAccount},
         repository::AccountRepository,
@@ -41,14 +45,14 @@ use crate::{
     codex::gateway::conversation_identity::{build_conversation_identity, ensure_prompt_cache_key},
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::installation_id::get_installation_id,
-    codex::gateway::oauth::TokenRefresher,
     codex::gateway::protocol::codex_to_openai::openai_error,
     codex::gateway::transport::{
         http_client::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream,
-            CodexBackendWebSocketStream, CodexClientError, CodexRequestContext,
+            CodexBackendWebSocketStream, CodexClientError, CodexCompactResponse,
+            CodexRequestContext,
         },
-        types::CodexResponsesRequest,
+        types::{CodexCompactRequest, CodexResponsesRequest},
         usage_events::TokenUsage,
         websocket::{
             transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
@@ -61,22 +65,31 @@ use crate::codex::serving::http::errors::codex_client_error_response;
 
 pub(crate) use self::{
     fallback::{
-        classify_upstream_account_retry, websocket_history_retry_metadata, UpstreamAccountRetry,
+        classify_upstream_account_retry, classify_upstream_request_recovery,
+        websocket_history_retry_metadata, UpstreamAccountRetry, UpstreamRequestRecovery,
     },
     routing::{no_available_accounts_response, normalize_service_tier_for_upstream},
     stream::{completed_response_json, CollectedResponse},
 };
 
-use self::affinity::{compute_variant_hash, SessionAffinityMap, SessionAffinityRepository};
+use self::affinity::{
+    compute_variant_hash, hash_instructions, prepare_variant_identity, SessionAffinityMap,
+    SessionAffinityRepository,
+};
 use self::fallback::{
     apply_upstream_account_retry_with_deps, apply_upstream_retry_and_acquire_fallback_with_deps,
 };
+pub(crate) use self::implicit_resume::ImplicitResumeSnapshot;
+use self::implicit_resume::{continuation_input_start, implicit_resume_allowed};
+use self::reasoning_replay::ReasoningReplayCache;
 use self::stream_audit::{StreamAudit, WebSocketStreamAudit};
 use self::{
-    account_refresh::refresh_account_after_unauthorized,
     limits::apply_rate_limit_headers_with_deps,
     routing::request_domain,
-    stream::{completed_response_metadata, ensure_stream_metadata},
+    stream::{
+        completed_response_metadata, ensure_stream_metadata, has_terminal_sse_event,
+        premature_close_failed_event, TupleStreamReconverter,
+    },
     usage::{record_empty_response_with_deps, record_usage_with_deps},
 };
 
@@ -87,12 +100,16 @@ struct CodexUpstreamDependencies {
     account_repository: Option<AccountRepository>,
     cookie_repository: Option<CookieRepository>,
     logs: LogService,
-    token_refresher: Option<Arc<dyn TokenRefresher>>,
     fingerprint: Fingerprint, // 用于实际请求的指纹
     session_affinity: Arc<SessionAffinityMap>,
     session_affinity_repository: Option<SessionAffinityRepository>,
+    reasoning_replay: Arc<ReasoningReplayCache>,
     websocket_pool: Arc<CodexWebSocketPool>,
+    cf_path_block_tracker: CfPathBlockTracker,
 }
+
+const MAX_UPSTREAM_5XX_RETRIES: u8 = 2;
+const UPSTREAM_5XX_RETRY_BASE_DELAY_MS: u64 = 1_000;
 
 #[derive(Clone)]
 pub(crate) struct CodexUpstreamService {
@@ -111,7 +128,6 @@ impl CodexUpstreamService {
         account_pool: Arc<Mutex<AccountPool>>,
         repositories: CodexUpstreamRepositories,
         logs: LogService,
-        token_refresher: Option<Arc<dyn TokenRefresher>>,
         fingerprint: Fingerprint,
         websocket_pool: Arc<CodexWebSocketPool>,
     ) -> Self {
@@ -122,11 +138,12 @@ impl CodexUpstreamService {
                 account_repository: repositories.account,
                 cookie_repository: repositories.cookie,
                 logs,
-                token_refresher,
                 fingerprint,
                 session_affinity: Arc::new(SessionAffinityMap::with_default_ttl()),
                 session_affinity_repository: repositories.session_affinity,
+                reasoning_replay: Arc::new(ReasoningReplayCache::default()),
                 websocket_pool,
+                cf_path_block_tracker: CfPathBlockTracker::new(),
             },
         }
     }
@@ -139,7 +156,11 @@ impl CodexUpstreamService {
             .acquire_with(AccountAcquireRequest::new(model, Utc::now()))
     }
 
-    pub(crate) async fn prepare_response_session(&self, request: &mut CodexResponsesRequest) {
+    pub(crate) async fn prepare_response_session(
+        &self,
+        request: &mut CodexResponsesRequest,
+    ) -> Option<ImplicitResumeSnapshot> {
+        prepare_variant_identity(request);
         if let Some(previous_response_id) = request.previous_response_id.as_deref() {
             if let Some(conversation_id) = self
                 .deps
@@ -160,8 +181,11 @@ impl CodexUpstreamService {
                     .lookup_turn_state(previous_response_id)
                     .await;
             }
+            ensure_prompt_cache_key(request);
+            return None;
         }
         ensure_prompt_cache_key(request);
+        apply_implicit_resume_with_deps(&self.deps, request).await
     }
 
     pub(crate) async fn acquire_account_for_request(
@@ -192,6 +216,10 @@ impl CodexUpstreamService {
         self.deps.account_pool.lock().await.release(account_id);
     }
 
+    pub(crate) async fn forget_response_affinity(&self, response_id: &str) {
+        self.deps.session_affinity.forget(response_id).await;
+    }
+
     pub(crate) async fn stagger_request(&self, previous_slot_at: Option<DateTime<Utc>>) {
         stagger_request_with_deps(&self.deps, previous_slot_at).await;
     }
@@ -201,14 +229,25 @@ impl CodexUpstreamService {
         &self.deps.fingerprint
     }
 
-    pub(crate) async fn send_codex_request_with_refresh_retry(
+    pub(crate) async fn send_codex_request_with_upstream_retries(
         &self,
         request: &CodexResponsesRequest,
         account: &Account,
         request_id: &str,
     ) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError>
     {
-        send_codex_request_with_refresh_retry_deps(&self.deps, request, account, request_id).await
+        send_codex_request_with_upstream_retries_deps(&self.deps, request, account, request_id)
+            .await
+    }
+
+    pub(crate) async fn send_compact_request_with_upstream_retries(
+        &self,
+        request: &CodexCompactRequest,
+        account: &Account,
+        request_id: &str,
+    ) -> Result<CodexCompactResponse, CodexClientError> {
+        send_compact_request_with_upstream_retries_deps(&self.deps, request, account, request_id)
+            .await
     }
 
     pub(crate) async fn apply_retry_and_acquire_fallback(
@@ -237,16 +276,24 @@ impl CodexUpstreamService {
         request: CodexResponsesRequest,
         acquired: AcquiredAccount,
         log_context: CodexRequestLogContext,
+        implicit_resume: Option<ImplicitResumeSnapshot>,
     ) -> Response {
         let deps = self.deps.clone();
         if matches!(
             transport_for_request(&request),
             CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired
         ) {
-            return responses_websocket_stream(deps, request, acquired, log_context).await;
+            return responses_websocket_stream(
+                deps,
+                request,
+                acquired,
+                log_context,
+                implicit_resume,
+            )
+            .await;
         }
 
-        responses_http_sse_stream(deps, request, acquired, log_context).await
+        responses_http_sse_stream(deps, request, acquired, log_context, implicit_resume).await
     }
 
     pub(crate) async fn persist_cookies(
@@ -279,6 +326,14 @@ impl CodexUpstreamService {
         .await;
     }
 
+    pub(crate) async fn evict_reasoning_replay(
+        &self,
+        request: &CodexResponsesRequest,
+        account_id: &str,
+    ) {
+        evict_reasoning_replay_with_deps(&self.deps, request, account_id).await;
+    }
+
     pub(crate) async fn log_response(
         &self,
         context: &CodexRequestLogContext,
@@ -306,6 +361,89 @@ impl CodexUpstreamService {
     }
 }
 
+const IMPLICIT_RESUME_MAX_AGE: StdDuration = StdDuration::from_secs(55 * 60);
+
+async fn apply_implicit_resume_with_deps(
+    deps: &CodexUpstreamDependencies,
+    request: &mut CodexResponsesRequest,
+) -> Option<ImplicitResumeSnapshot> {
+    if request.previous_response_id.is_some() {
+        return None;
+    }
+    let continuation_start = continuation_input_start(&request.input);
+    if continuation_start == 0 || continuation_start >= request.input.len() {
+        return None;
+    }
+    let conversation_id = request
+        .prompt_cache_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    let snapshot = ImplicitResumeSnapshot::capture(request);
+    let variant_hash = compute_variant_hash(request);
+    let previous_response_id = deps
+        .session_affinity
+        .lookup_latest_response_by_conversation(
+            conversation_id,
+            Some(IMPLICIT_RESUME_MAX_AGE),
+            Some(&variant_hash),
+        )
+        .await?;
+    let current_instructions_hash = hash_instructions(Some(&request.instructions));
+    if deps
+        .session_affinity
+        .lookup_instructions_hash(&previous_response_id)
+        .await
+        .as_deref()
+        != Some(current_instructions_hash.as_str())
+    {
+        return None;
+    }
+
+    let stored_function_call_ids = deps
+        .session_affinity
+        .lookup_function_call_ids(&previous_response_id)
+        .await;
+    if !implicit_resume_allowed(
+        &request.input[continuation_start..],
+        &request.input,
+        &stored_function_call_ids,
+    ) {
+        return None;
+    }
+
+    let account_id = deps
+        .session_affinity
+        .lookup_account(&previous_response_id)
+        .await?;
+    let replay_items = deps
+        .reasoning_replay
+        .lookup(
+            &previous_response_id,
+            &account_id,
+            conversation_id,
+            &variant_hash,
+        )
+        .await;
+    let continuation = request.input[continuation_start..].to_vec();
+    let mut input = replay_items;
+    input.extend(continuation);
+
+    request.previous_response_id = Some(previous_response_id.clone());
+    request.use_websocket = true;
+    request.force_http_sse = false;
+    request.input = input;
+    if let Some(turn_state) = deps
+        .session_affinity
+        .lookup_turn_state(&previous_response_id)
+        .await
+    {
+        request.turn_state = Some(turn_state);
+    }
+    Some(snapshot)
+}
+
 async fn stagger_request_with_deps(
     deps: &CodexUpstreamDependencies,
     previous_slot_at: Option<DateTime<Utc>>,
@@ -317,11 +455,12 @@ async fn stagger_request_with_deps(
     if interval_ms == 0 {
         return;
     }
+    let target_interval_ms = jitter_request_interval_ms(interval_ms);
     let elapsed_ms = Utc::now()
         .signed_duration_since(previous_slot_at)
         .num_milliseconds()
         .max(0) as u64;
-    let Some(wait_ms) = interval_ms.checked_sub(elapsed_ms) else {
+    let Some(wait_ms) = target_interval_ms.checked_sub(elapsed_ms) else {
         return;
     };
     if wait_ms == 0 {
@@ -330,21 +469,65 @@ async fn stagger_request_with_deps(
     tracing::debug!(
         wait_ms,
         request_interval_ms = interval_ms,
+        target_interval_ms,
         "按账户请求间隔等待后发送上游请求"
     );
     tokio::time::sleep(StdDuration::from_millis(wait_ms)).await;
 }
 
+fn jitter_request_interval_ms(interval_ms: u64) -> u64 {
+    let mut rng = rand::rng();
+    jitter_request_interval_ms_with_factor(interval_ms, rng.random_range(0.7..=1.3))
+}
+
+fn jitter_request_interval_ms_with_factor(interval_ms: u64, factor: f64) -> u64 {
+    let factor = factor.clamp(0.7, 1.3);
+    ((interval_ms as f64) * factor).round().min(u64::MAX as f64) as u64
+}
+
+async fn apply_upstream_request_recovery_with_deps(
+    deps: &CodexUpstreamDependencies,
+    request: &mut CodexResponsesRequest,
+    recovery: UpstreamRequestRecovery,
+    stream: bool,
+    log_context: &CodexRequestLogContext,
+    history_recovery_used: &mut bool,
+    implicit_resume: &mut Option<ImplicitResumeSnapshot>,
+) {
+    *history_recovery_used = true;
+    let stale_response_id = request.previous_response_id.clone();
+    if let Some(response_id) = stale_response_id.as_deref() {
+        deps.session_affinity.forget(response_id).await;
+    }
+    if let Some(snapshot) = implicit_resume.take() {
+        snapshot.restore(request);
+    }
+    request.previous_response_id = None;
+    request.turn_state = None;
+    log_codex_upstream_response_with_deps(
+        deps,
+        log_context,
+        StatusCode::BAD_REQUEST,
+        EventLevel::Warn,
+        "v1 responses 上游历史失效，去除 previous_response_id 后重试",
+        recovery.metadata(stream, stale_response_id.as_deref()),
+    )
+    .await;
+}
+
 async fn responses_http_sse_stream(
     deps: CodexUpstreamDependencies,
-    request: CodexResponsesRequest,
+    mut request: CodexResponsesRequest,
     mut acquired: AcquiredAccount,
     mut log_context: CodexRequestLogContext,
+    mut implicit_resume: Option<ImplicitResumeSnapshot>,
 ) -> Response {
     let mut excluded_account_ids = Vec::new();
+    let mut history_recovery_used = false;
+    let mut model_unsupported_retry_used = false;
     let stream_response = loop {
         stagger_request_with_deps(&deps, acquired.previous_slot_at).await;
-        let stream_response = send_codex_stream_request_with_refresh_retry(
+        let stream_response = send_codex_stream_request_with_upstream_retries(
             &deps,
             &request,
             &acquired.account,
@@ -355,7 +538,27 @@ async fn responses_http_sse_stream(
             Ok(response) => break response,
             Err(error) => {
                 deps.account_pool.lock().await.release(&acquired.account.id);
-                if let Some(retry) = classify_upstream_account_retry(&error) {
+                if let Some(recovery) =
+                    classify_upstream_request_recovery(&error, history_recovery_used)
+                {
+                    apply_upstream_request_recovery_with_deps(
+                        &deps,
+                        &mut request,
+                        recovery,
+                        true,
+                        &log_context,
+                        &mut history_recovery_used,
+                        &mut implicit_resume,
+                    )
+                    .await;
+                    continue;
+                }
+                if let Some(retry) =
+                    classify_upstream_account_retry(&error, model_unsupported_retry_used)
+                {
+                    if retry.is_model_unsupported() {
+                        model_unsupported_retry_used = true;
+                    }
                     let fallback = apply_upstream_retry_and_acquire_fallback_with_deps(
                         &deps,
                         &acquired.account,
@@ -424,44 +627,124 @@ async fn responses_http_sse_stream(
 
     let rate_limit_headers = stream_response.rate_limit_headers.clone();
     let upstream = Box::pin(stream_response.response.bytes_stream());
+    let tuple_schema = request.tuple_schema.clone();
     let audit = StreamAudit::new(
         deps,
         log_context,
         acquired.account.id,
         acquired.account.plan_type,
+        request,
         rate_limit_headers,
     );
 
-    use tokio::time::{interval, Duration};
+    use tokio::time::{interval_at, Duration, Instant as TokioInstant};
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
     const HEARTBEAT_CHUNK: &[u8] = b": ping\n\n";
+    let heartbeat_timer = interval_at(TokioInstant::now() + HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL);
+    let tuple_reconverter = TupleStreamReconverter::new(tuple_schema);
 
     let body_stream = futures_stream::unfold(
-        Some((upstream, Vec::new(), audit, interval(HEARTBEAT_INTERVAL))),
+        Some((
+            upstream,
+            Vec::new(),
+            audit,
+            heartbeat_timer,
+            tuple_reconverter,
+        )),
         |state| async move {
-            let (mut upstream, mut collected, mut audit, mut heartbeat_timer) = state?;
+            let (
+                mut upstream,
+                mut collected,
+                mut audit,
+                mut heartbeat_timer,
+                mut tuple_reconverter,
+            ) = state?;
 
             tokio::select! {
                 chunk_result = upstream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
                             collected.extend_from_slice(&chunk);
-                            Some((Ok(chunk), Some((upstream, collected, audit, heartbeat_timer))))
+                            let chunk = match std::str::from_utf8(&chunk) {
+                                Ok(text) => {
+                                    axum::body::Bytes::from(tuple_reconverter.transform_chunk(text))
+                                }
+                                Err(_) => chunk,
+                            };
+                            Some((
+                                Ok::<axum::body::Bytes, reqwest::Error>(chunk),
+                                Some((
+                                    upstream,
+                                    collected,
+                                    audit,
+                                    heartbeat_timer,
+                                    tuple_reconverter,
+                                )),
+                            ))
                         }
                         Some(Err(error)) => {
-                            audit.log_transport_error(&error).await;
-                            Some((Err(error), None))
+                            if collected_has_terminal_sse_event(&collected) {
+                                let tail = tuple_reconverter.finish();
+                                audit.complete(&collected).await;
+                                if tail.is_empty() {
+                                    None
+                                } else {
+                                    Some((
+                                        Ok::<axum::body::Bytes, reqwest::Error>(tail.into()),
+                                        None,
+                                    ))
+                                }
+                            } else {
+                                let detail = error.to_string();
+                                let mut output = tuple_reconverter.finish();
+                                let failure = append_premature_close_failed_event(
+                                    &mut collected,
+                                    Some(detail.as_str()),
+                                );
+                                output.push_str(&failure);
+                                audit.complete(&collected).await;
+                                Some((
+                                    Ok::<axum::body::Bytes, reqwest::Error>(output.into()),
+                                    None,
+                                ))
+                            }
                         }
                         None => {
-                            audit.complete(&collected).await;
-                            None
+                            if collected_has_terminal_sse_event(&collected) {
+                                let tail = tuple_reconverter.finish();
+                                audit.complete(&collected).await;
+                                if tail.is_empty() {
+                                    None
+                                } else {
+                                    Some((
+                                        Ok::<axum::body::Bytes, reqwest::Error>(tail.into()),
+                                        None,
+                                    ))
+                                }
+                            } else {
+                                let mut output = tuple_reconverter.finish();
+                                let failure =
+                                    append_premature_close_failed_event(&mut collected, None);
+                                output.push_str(&failure);
+                                audit.complete(&collected).await;
+                                Some((
+                                    Ok::<axum::body::Bytes, reqwest::Error>(output.into()),
+                                    None,
+                                ))
+                            }
                         }
                     }
                 }
                 _ = heartbeat_timer.tick() => {
                     Some((
-                        Ok(HEARTBEAT_CHUNK.into()),
-                        Some((upstream, collected, audit, heartbeat_timer)),
+                        Ok::<axum::body::Bytes, reqwest::Error>(HEARTBEAT_CHUNK.into()),
+                        Some((
+                            upstream,
+                            collected,
+                            audit,
+                            heartbeat_timer,
+                            tuple_reconverter,
+                        )),
                     ))
                 }
             }
@@ -488,7 +771,9 @@ async fn responses_http_sse_stream(
 fn websocket_stream_error_allows_http_sse_fallback(error: &CodexClientError) -> bool {
     match error {
         CodexClientError::WebSocket(
-            CodexWebSocketError::Transport(_) | CodexWebSocketError::EmptyResponse,
+            CodexWebSocketError::Transport(_)
+            | CodexWebSocketError::OpenTimeout { .. }
+            | CodexWebSocketError::EmptyResponse,
         ) => true,
         CodexClientError::Upstream { status, .. } => matches!(
             *status,
@@ -501,31 +786,53 @@ fn websocket_stream_error_allows_http_sse_fallback(error: &CodexClientError) -> 
     }
 }
 
-async fn send_codex_request_with_refresh_retry_deps(
+fn collected_has_terminal_sse_event(collected: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(collected);
+    has_terminal_sse_event(&body).unwrap_or(false)
+}
+
+fn append_premature_close_failed_event(collected: &mut Vec<u8>, detail: Option<&str>) -> String {
+    let failure = premature_close_failed_event(detail);
+    collected.extend_from_slice(failure.as_bytes());
+    failure
+}
+
+async fn send_codex_request_with_upstream_retries_deps(
     deps: &CodexUpstreamDependencies,
     request: &CodexResponsesRequest,
     account: &Account,
     request_id: &str,
 ) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError> {
-    let result = match send_codex_request(deps, request, account, request_id).await {
-        Err(CodexClientError::Upstream {
-            status,
-            body,
-            retry_after_seconds,
-        }) if status == StatusCode::UNAUTHORIZED => {
-            let Some(refreshed) =
-                refresh_account_after_unauthorized(deps, request, account, request_id).await
-            else {
-                return Err(CodexClientError::Upstream {
-                    status,
-                    body,
-                    retry_after_seconds,
-                });
-            };
-            send_codex_request(deps, request, &refreshed, request_id).await
-        }
-        result => result,
-    };
+    let result = retry_upstream_5xx(
+        || send_codex_request(deps, request, account, request_id),
+        request_id,
+        &request.model,
+    )
+    .await;
+    if let Ok(response) = &result {
+        apply_rate_limit_headers_with_deps(
+            deps,
+            &account.id,
+            account.plan_type.as_deref(),
+            &response.rate_limit_headers,
+        )
+        .await;
+    }
+    result
+}
+
+async fn send_compact_request_with_upstream_retries_deps(
+    deps: &CodexUpstreamDependencies,
+    request: &CodexCompactRequest,
+    account: &Account,
+    request_id: &str,
+) -> Result<CodexCompactResponse, CodexClientError> {
+    let result = retry_upstream_5xx(
+        || send_compact_request(deps, request, account, request_id),
+        request_id,
+        &request.model,
+    )
+    .await;
     if let Ok(response) = &result {
         apply_rate_limit_headers_with_deps(
             deps,
@@ -587,31 +894,59 @@ async fn send_codex_request(
         .await
 }
 
-async fn send_codex_stream_request_with_refresh_retry(
+async fn send_compact_request(
+    deps: &CodexUpstreamDependencies,
+    request: &CodexCompactRequest,
+    account: &Account,
+    request_id: &str,
+) -> Result<CodexCompactResponse, CodexClientError> {
+    let request_domain = request_domain(&deps.config.api.base_url);
+    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
+        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
+        _ => None,
+    };
+
+    let installation_id = get_installation_id(Some(&deps.config.database.url));
+    let client = CodexBackendClient::new(
+        build_reqwest_client(deps.config.tls.force_http11)?,
+        deps.config.api.base_url.clone(),
+        deps.fingerprint.clone(),
+    );
+
+    client
+        .create_compact_response(
+            request,
+            CodexRequestContext {
+                access_token: &account.access_token,
+                account_id: account.account_id.as_deref(),
+                request_id,
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: cookie_header.as_deref(),
+                installation_id: Some(&installation_id),
+                session_id: None,
+            },
+        )
+        .await
+}
+
+async fn send_codex_stream_request_with_upstream_retries(
     deps: &CodexUpstreamDependencies,
     request: &CodexResponsesRequest,
     account: &Account,
     request_id: &str,
 ) -> Result<CodexBackendStream, CodexClientError> {
-    match send_codex_stream_request(deps, request, account, request_id).await {
-        Err(CodexClientError::Upstream {
-            status,
-            body,
-            retry_after_seconds,
-        }) if status == StatusCode::UNAUTHORIZED => {
-            let Some(refreshed) =
-                refresh_account_after_unauthorized(deps, request, account, request_id).await
-            else {
-                return Err(CodexClientError::Upstream {
-                    status,
-                    body,
-                    retry_after_seconds,
-                });
-            };
-            send_codex_stream_request(deps, request, &refreshed, request_id).await
-        }
-        result => result,
-    }
+    retry_upstream_5xx(
+        || send_codex_stream_request(deps, request, account, request_id),
+        request_id,
+        &request.model,
+    )
+    .await
 }
 
 async fn send_codex_stream_request(
@@ -666,31 +1001,62 @@ async fn send_codex_stream_request(
         .await
 }
 
-async fn send_codex_websocket_stream_request_with_refresh_retry(
+async fn send_codex_websocket_stream_request_with_upstream_retries(
     deps: &CodexUpstreamDependencies,
     request: &CodexResponsesRequest,
     account: &Account,
     request_id: &str,
 ) -> Result<CodexBackendWebSocketStream, CodexClientError> {
-    match send_codex_websocket_stream_request(deps, request, account, request_id).await {
-        Err(CodexClientError::Upstream {
-            status,
-            body,
-            retry_after_seconds,
-        }) if status == StatusCode::UNAUTHORIZED => {
-            let Some(refreshed) =
-                refresh_account_after_unauthorized(deps, request, account, request_id).await
-            else {
-                return Err(CodexClientError::Upstream {
-                    status,
-                    body,
-                    retry_after_seconds,
-                });
-            };
-            send_codex_websocket_stream_request(deps, request, &refreshed, request_id).await
+    retry_upstream_5xx(
+        || send_codex_websocket_stream_request(deps, request, account, request_id),
+        request_id,
+        &request.model,
+    )
+    .await
+}
+
+async fn retry_upstream_5xx<T, F, Fut>(
+    mut operation: F,
+    request_id: &str,
+    model: &str,
+) -> Result<T, CodexClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, CodexClientError>>,
+{
+    let mut attempt = 0;
+    loop {
+        match operation().await {
+            Err(error)
+                if is_retryable_upstream_5xx(&error) && attempt < MAX_UPSTREAM_5XX_RETRIES =>
+            {
+                let delay = upstream_5xx_retry_delay(attempt);
+                tracing::warn!(
+                    error = %error,
+                    request_id = %request_id,
+                    model = %model,
+                    retry_attempt = attempt + 1,
+                    max_retries = MAX_UPSTREAM_5XX_RETRIES,
+                    delay_ms = delay.as_millis(),
+                    "Codex 上游 5xx，按原版策略同账户重试"
+                );
+                tokio::time::sleep(delay).await;
+                attempt += 1;
+            }
+            result => return result,
         }
-        result => result,
     }
+}
+
+fn is_retryable_upstream_5xx(error: &CodexClientError) -> bool {
+    matches!(
+        error,
+        CodexClientError::Upstream { status, .. } if status.is_server_error()
+    )
+}
+
+fn upstream_5xx_retry_delay(attempt: u8) -> StdDuration {
+    StdDuration::from_millis(UPSTREAM_5XX_RETRY_BASE_DELAY_MS * (1_u64 << u32::from(attempt)))
 }
 
 async fn send_codex_websocket_stream_request(
@@ -784,7 +1150,16 @@ async fn record_response_affinity_with_deps(
             Some(&request.instructions),
             usage.map(|usage| usage.input_tokens),
             Some(metadata.function_call_ids),
-            variant_hash,
+            Some(variant_hash.clone()),
+        )
+        .await;
+    deps.reasoning_replay
+        .record(
+            &response_id,
+            account_id,
+            conversation_id,
+            &variant_hash,
+            &metadata.replay_items,
         )
         .await;
     if let Some(repository) = deps.session_affinity_repository.as_ref() {
@@ -802,16 +1177,48 @@ async fn record_response_affinity_with_deps(
     }
 }
 
+async fn evict_reasoning_replay_with_deps(
+    deps: &CodexUpstreamDependencies,
+    request: &CodexResponsesRequest,
+    account_id: &str,
+) {
+    let Some(conversation_id) = request
+        .prompt_cache_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let variant_hash = compute_variant_hash(request);
+    let evicted = deps
+        .reasoning_replay
+        .evict_by_identity(account_id, conversation_id, &variant_hash)
+        .await;
+    if evicted > 0 {
+        tracing::info!(
+            account_id = %account_id,
+            conversation_id = %conversation_id,
+            variant_hash = %variant_hash,
+            evicted,
+            "已驱逐无效 encrypted content 对应的 reasoning replay"
+        );
+    }
+}
+
 async fn responses_websocket_stream(
     deps: CodexUpstreamDependencies,
-    request: CodexResponsesRequest,
+    mut request: CodexResponsesRequest,
     mut acquired: AcquiredAccount,
     mut log_context: CodexRequestLogContext,
+    mut implicit_resume: Option<ImplicitResumeSnapshot>,
 ) -> Response {
     let mut excluded_account_ids = Vec::new();
+    let mut history_recovery_used = false;
+    let mut model_unsupported_retry_used = false;
     let stream_response = loop {
         stagger_request_with_deps(&deps, acquired.previous_slot_at).await;
-        let response = send_codex_websocket_stream_request_with_refresh_retry(
+        let response = send_codex_websocket_stream_request_with_upstream_retries(
             &deps,
             &request,
             &acquired.account,
@@ -826,11 +1233,40 @@ async fn responses_websocket_stream(
                     && websocket_stream_error_allows_http_sse_fallback(&error)
                 {
                     acquired.previous_slot_at = None;
-                    return responses_http_sse_stream(deps, request, acquired, log_context).await;
+                    return responses_http_sse_stream(
+                        deps,
+                        request,
+                        acquired,
+                        log_context,
+                        implicit_resume,
+                    )
+                    .await;
                 }
                 deps.account_pool.lock().await.release(&acquired.account.id);
-                if let Some(retry) = classify_upstream_account_retry(&error) {
-                    if request.previous_response_id.is_some() {
+                if let Some(recovery) =
+                    classify_upstream_request_recovery(&error, history_recovery_used)
+                {
+                    apply_upstream_request_recovery_with_deps(
+                        &deps,
+                        &mut request,
+                        recovery,
+                        true,
+                        &log_context,
+                        &mut history_recovery_used,
+                        &mut implicit_resume,
+                    )
+                    .await;
+                    continue;
+                }
+                if let Some(retry) =
+                    classify_upstream_account_retry(&error, model_unsupported_retry_used)
+                {
+                    if retry.is_model_unsupported() {
+                        model_unsupported_retry_used = true;
+                    }
+                    if request.previous_response_id.is_some()
+                        && retry.preserve_history_account_affinity()
+                    {
                         // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
                         apply_upstream_account_retry_with_deps(&deps, &acquired.account, retry)
                             .await;
@@ -911,6 +1347,7 @@ async fn responses_websocket_stream(
             .into_response();
     }
 
+    let tuple_schema = request.tuple_schema.clone();
     let audit = WebSocketStreamAudit::new(
         deps,
         log_context,
@@ -923,39 +1360,97 @@ async fn responses_websocket_stream(
     );
     let upstream = stream_response.body_stream;
 
-    use tokio::time::{interval, Duration};
+    use tokio::time::{interval_at, Duration, Instant as TokioInstant};
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
     const HEARTBEAT_CHUNK: &str = ": ping\n\n";
+    let heartbeat_timer = interval_at(TokioInstant::now() + HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL);
+    let tuple_reconverter = TupleStreamReconverter::new(tuple_schema);
 
     let body_stream = futures_stream::unfold(
-        Some((upstream, Vec::new(), audit, interval(HEARTBEAT_INTERVAL))),
+        Some((
+            upstream,
+            Vec::new(),
+            audit,
+            heartbeat_timer,
+            tuple_reconverter,
+        )),
         |state| async move {
-            let (mut upstream, mut collected, mut audit, mut heartbeat_timer) = state?;
+            let (
+                mut upstream,
+                mut collected,
+                mut audit,
+                mut heartbeat_timer,
+                mut tuple_reconverter,
+            ) = state?;
 
             tokio::select! {
                 chunk_result = upstream.next() => {
                     match chunk_result {
                         Some(Ok(chunk)) => {
                             collected.extend_from_slice(chunk.as_bytes());
+                            let chunk = tuple_reconverter.transform_chunk(&chunk);
                             Some((
                                 Ok::<String, std::io::Error>(chunk),
-                                Some((upstream, collected, audit, heartbeat_timer)),
+                                Some((
+                                    upstream,
+                                    collected,
+                                    audit,
+                                    heartbeat_timer,
+                                    tuple_reconverter,
+                                )),
                             ))
                         }
                         Some(Err(error)) => {
-                            audit.log_transport_error(&error).await;
-                            Some((Err(std::io::Error::other(error.to_string())), None))
+                            if collected_has_terminal_sse_event(&collected) {
+                                let tail = tuple_reconverter.finish();
+                                audit.complete(&collected).await;
+                                if tail.is_empty() {
+                                    None
+                                } else {
+                                    Some((Ok::<String, std::io::Error>(tail), None))
+                                }
+                            } else {
+                                let detail = error.to_string();
+                                let mut output = tuple_reconverter.finish();
+                                let failure = append_premature_close_failed_event(
+                                    &mut collected,
+                                    Some(detail.as_str()),
+                                );
+                                output.push_str(&failure);
+                                audit.complete(&collected).await;
+                                Some((Ok::<String, std::io::Error>(output), None))
+                            }
                         }
                         None => {
-                            audit.complete(&collected).await;
-                            None
+                            if collected_has_terminal_sse_event(&collected) {
+                                let tail = tuple_reconverter.finish();
+                                audit.complete(&collected).await;
+                                if tail.is_empty() {
+                                    None
+                                } else {
+                                    Some((Ok::<String, std::io::Error>(tail), None))
+                                }
+                            } else {
+                                let mut output = tuple_reconverter.finish();
+                                let failure =
+                                    append_premature_close_failed_event(&mut collected, None);
+                                output.push_str(&failure);
+                                audit.complete(&collected).await;
+                                Some((Ok::<String, std::io::Error>(output), None))
+                            }
                         }
                     }
                 }
                 _ = heartbeat_timer.tick() => {
                     Some((
                         Ok::<String, std::io::Error>(HEARTBEAT_CHUNK.to_string()),
-                        Some((upstream, collected, audit, heartbeat_timer)),
+                        Some((
+                            upstream,
+                            collected,
+                            audit,
+                            heartbeat_timer,
+                            tuple_reconverter,
+                        )),
                     ))
                 }
             }
@@ -1056,5 +1551,18 @@ async fn log_codex_upstream_response_with_deps(
     event.metadata = metadata;
     if let Err(error) = deps.logs.record(event).await {
         tracing::warn!(error = %error, "写入 v1 response 事件日志失败");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jitter_request_interval_ms_with_factor;
+
+    #[test]
+    fn jitter_request_interval_ms_with_factor_should_match_original_bounds() {
+        assert_eq!(jitter_request_interval_ms_with_factor(300, 0.7), 210);
+        assert_eq!(jitter_request_interval_ms_with_factor(300, 1.3), 390);
+        assert_eq!(jitter_request_interval_ms_with_factor(300, 0.1), 210);
+        assert_eq!(jitter_request_interval_ms_with_factor(300, 2.0), 390);
     }
 }

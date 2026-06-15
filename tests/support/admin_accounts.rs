@@ -13,8 +13,9 @@ use tokio::sync::Mutex;
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
-    codex::gateway::oauth::{
-        DeviceCode, OAuthClient, OAuthError, RefreshFailure, TokenPair, TokenRefresher,
+    codex::gateway::{
+        fingerprint::model::Fingerprint,
+        oauth::{DeviceCode, OAuthClient, OAuthError, RefreshFailure, TokenPair, TokenRefresher},
     },
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
@@ -128,6 +129,9 @@ pub fn test_config(database_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -148,6 +152,7 @@ pub fn test_config(database_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
@@ -191,12 +196,40 @@ pub async fn admin_accounts_test_app_with_base_url(
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
     let url = format!("sqlite://{}", db.display());
+    let config = test_config_with_base_url(url, base_url);
+    admin_accounts_test_app_with_config(dir, config, key_byte).await
+}
+
+pub async fn admin_accounts_test_app_with_config(
+    dir: tempfile::TempDir,
+    config: AppConfig,
+    key_byte: u8,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir) {
+    let pool = connect_sqlite(&config.database.url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let state =
+        AppState::with_pool_and_secret_box(config, pool.clone(), SecretBox::new([key_byte; 32]));
+    let app = build_router(state.clone());
+    (app, state, pool, dir)
+}
+
+pub async fn admin_accounts_test_app_with_base_url_and_fingerprint(
+    db_name: &str,
+    key_byte: u8,
+    base_url: String,
+    fingerprint: Fingerprint,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let state = AppState::with_pool_and_secret_box(
+    let state = AppState::with_pool_secret_api_key_hasher_and_fingerprint(
         test_config_with_base_url(url, base_url),
         pool.clone(),
         SecretBox::new([key_byte; 32]),
+        ApiKeyHasher::new([key_byte; 32]),
+        fingerprint,
     );
     let app = build_router(state.clone());
     (app, state, pool, dir)
@@ -217,6 +250,31 @@ where
     seed_admin_session(&pool, "session_1").await;
     let state = AppState::with_pool_secret_api_key_hasher_and_token_refresher(
         test_config(url),
+        pool.clone(),
+        SecretBox::new([key_byte; 32]),
+        ApiKeyHasher::new([key_byte; 32]),
+        token_refresher,
+    );
+    let app = build_router(state.clone());
+    (app, state, pool, dir)
+}
+
+pub async fn admin_accounts_test_app_with_base_url_and_refresher<C>(
+    db_name: &str,
+    key_byte: u8,
+    base_url: String,
+    token_refresher: C,
+) -> (Router, AppState, sqlx::SqlitePool, tempfile::TempDir)
+where
+    C: TokenRefresher,
+{
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let state = AppState::with_pool_secret_api_key_hasher_and_token_refresher(
+        test_config_with_base_url(url, base_url),
         pool.clone(),
         SecretBox::new([key_byte; 32]),
         ApiKeyHasher::new([key_byte; 32]),

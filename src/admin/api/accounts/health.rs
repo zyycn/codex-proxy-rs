@@ -97,7 +97,7 @@ pub async fn health_check_accounts(
     let results = state
         .services
         .accounts
-        .health_check_accounts(payload.ids, concurrency, stagger_ms, &request_id)
+        .health_check_accounts(payload.ids, concurrency, stagger_ms)
         .await
         .map_err(|error| health_check_error(error, &request_id))?
         .into_iter()

@@ -1,0 +1,2 @@
+event: response.failed
+data: {"response":{"id":"resp_sse_model_unsupported","object":"response","status":"failed","error":{"code":"model_not_supported","message":"Model gpt-5.5 is not supported on this account plan"}}}

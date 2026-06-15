@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 
 use crate::{
     codex::gateway::protocol::error::{AppError, AppResult},
+    codex::gateway::protocol::tuple_schema::prepare_schema,
     codex::gateway::transport::types::CodexResponsesRequest,
 };
 
@@ -52,6 +53,12 @@ pub fn translate_chat_to_codex(req: ChatCompletionRequest) -> AppResult<CodexRes
         ));
     }
 
+    let client_conversation_id = req
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
     let instructions = chat_instructions(&req.messages);
     let mut input = chat_input(req.messages);
     if input.is_empty() {
@@ -63,8 +70,12 @@ pub fn translate_chat_to_codex(req: ChatCompletionRequest) -> AppResult<CodexRes
     request.tools = codex_tools(req.tools, req.functions);
     request.tool_choice = req.tool_choice;
     request.parallel_tool_calls = req.parallel_tool_calls;
-    request.text = response_format_text(req.response_format);
+    let response_format = response_format_text(req.response_format);
+    request.text = response_format.text;
+    request.tuple_schema = response_format.tuple_schema;
     request.service_tier = req.service_tier;
+    request.prompt_cache_key = client_conversation_id.clone();
+    request.client_conversation_id = client_conversation_id;
     if let Some(effort) = req.reasoning_effort {
         request.reasoning = Some(json!({"effort": effort, "summary": "auto"}));
     }
@@ -243,27 +254,58 @@ fn codex_tools(tools: Option<Vec<Value>>, functions: Option<Vec<Value>>) -> Opti
         })
 }
 
-fn response_format_text(response_format: Option<Value>) -> Option<Value> {
-    let format = response_format?;
-    let kind = format.get("type").and_then(Value::as_str)?;
+struct PreparedResponseFormat {
+    text: Option<Value>,
+    tuple_schema: Option<Value>,
+}
+
+fn response_format_text(response_format: Option<Value>) -> PreparedResponseFormat {
+    let Some(format) = response_format else {
+        return PreparedResponseFormat {
+            text: None,
+            tuple_schema: None,
+        };
+    };
+    let Some(kind) = format.get("type").and_then(Value::as_str) else {
+        return PreparedResponseFormat {
+            text: None,
+            tuple_schema: None,
+        };
+    };
     match kind {
-        "json_object" => Some(json!({"format": {"type": "json_object"}})),
+        "json_object" => PreparedResponseFormat {
+            text: Some(json!({"format": {"type": "json_object"}})),
+            tuple_schema: None,
+        },
         "json_schema" => {
-            let schema = format.get("json_schema")?;
+            let Some(schema) = format.get("json_schema") else {
+                return PreparedResponseFormat {
+                    text: None,
+                    tuple_schema: None,
+                };
+            };
             let name = schema
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("response");
+            let prepared_schema =
+                prepare_schema(schema.get("schema").cloned().unwrap_or_else(|| json!({})));
             let mut codex_format = json!({
                 "type": "json_schema",
                 "name": name,
-                "schema": schema.get("schema").cloned().unwrap_or_else(|| json!({})),
+                "schema": prepared_schema.schema,
             });
             if let Some(strict) = schema.get("strict").and_then(Value::as_bool) {
                 codex_format["strict"] = Value::Bool(strict);
             }
-            Some(json!({"format": codex_format}))
+            PreparedResponseFormat {
+                text: Some(json!({"format": codex_format})),
+                tuple_schema: prepared_schema.original_schema,
+            }
         }
-        _ => None,
+        _ => PreparedResponseFormat {
+            text: None,
+            tuple_schema: None,
+        },
     }
 }

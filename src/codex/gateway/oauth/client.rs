@@ -9,17 +9,16 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::config::AuthConfig;
+
 use super::{
     refresh::{RefreshFailure, TokenRefresher},
     token::TokenPair,
 };
 
-const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_OAUTH_AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_OAUTH_DEVICE_CODE_ENDPOINT: &str = "https://auth.openai.com/oauth/device/code";
-const OPENAI_OAUTH_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const OAUTH_CALLBACK_PORT: u16 = 1455;
-const OAUTH_CALLBACK_PATH: &str = "/auth/openai/callback";
+const OAUTH_CALLBACK_PATH: &str = "/auth/callback";
 
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
@@ -30,12 +29,12 @@ pub struct OAuthConfig {
 }
 
 impl OAuthConfig {
-    pub fn codex_default() -> Self {
+    pub fn from_auth_config(config: &AuthConfig) -> Self {
         Self {
-            client_id: CODEX_OAUTH_CLIENT_ID.to_string(),
-            auth_endpoint: OPENAI_OAUTH_AUTHORIZE_ENDPOINT.to_string(),
+            client_id: config.oauth_client_id.clone(),
+            auth_endpoint: config.oauth_auth_endpoint.clone(),
             device_code_endpoint: OPENAI_OAUTH_DEVICE_CODE_ENDPOINT.to_string(),
-            token_endpoint: OPENAI_OAUTH_TOKEN_ENDPOINT.to_string(),
+            token_endpoint: config.oauth_token_endpoint.clone(),
         }
     }
 }
@@ -192,10 +191,6 @@ pub struct OpenAiOAuthRefresher {
 impl OpenAiOAuthRefresher {
     pub fn new(client: Client, config: OAuthConfig) -> Self {
         Self { client, config }
-    }
-
-    pub fn codex_default(client: Client) -> Self {
-        Self::new(client, OAuthConfig::codex_default())
     }
 }
 

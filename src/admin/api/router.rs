@@ -33,7 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/auth/logout", post(auth_logout))
         .route("/api/admin/auth/login-start", post(auth_login_start))
         .route("/api/admin/auth/code-relay", post(auth_code_relay))
-        .route("/auth/openai/callback", get(auth_callback))
+        .route("/auth/callback", get(auth_callback))
         .route("/api/admin/auth/device-login", post(auth_device_login))
         .route(
             "/api/admin/auth/device-poll/{device_code}",

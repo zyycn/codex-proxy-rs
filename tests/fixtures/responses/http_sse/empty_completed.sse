@@ -1,0 +1,2 @@
+event: response.completed
+data: {"response":{"id":"resp_empty","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0}}}

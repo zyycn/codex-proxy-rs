@@ -3,7 +3,6 @@ use axum::{
     http::{Request, StatusCode},
 };
 use futures::{SinkExt, StreamExt};
-use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -20,13 +19,11 @@ use tokio_tungstenite::{
 };
 use tower::ServiceExt;
 
-use codex_proxy_rs::codex::accounts::repository::AccountRepository;
-
 use crate::support::{
-    response_text,
+    response_json, response_text,
     upstream::{
         build_imported_app, build_imported_app_with_accounts,
-        build_imported_app_with_accounts_and_token_refresher, ImportAccount, StaticTokenRefresher,
+        build_imported_app_with_accounts_and_config, ImportAccount,
     },
 };
 
@@ -42,6 +39,34 @@ const WEBSOCKET_FIRST_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/first_account_limited.json");
 const WEBSOCKET_SECOND_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/second_account_limited.json");
+const WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND: &str =
+    include_str!("../fixtures/responses/websocket/previous_response_not_found.json");
+const WEBSOCKET_UNANSWERED_FUNCTION_CALL: &str =
+    include_str!("../fixtures/responses/websocket/unanswered_function_call.json");
+const WEBSOCKET_PARTIAL_DELTA: &str =
+    include_str!("../fixtures/responses/websocket/partial_delta.json");
+const WEBSOCKET_INVALID_ENCRYPTED_CONTENT: &str =
+    include_str!("../fixtures/responses/websocket/invalid_encrypted_content.json");
+const WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY: &str =
+    include_str!("../fixtures/responses/websocket/completed_with_reasoning_replay.json");
+
+#[expect(
+    clippy::result_large_err,
+    reason = "tungstenite 的 header callback API 固定使用较大的 handshake error response"
+)]
+fn assert_access_secret_header(
+    request: &WsRequest,
+    response: WsResponse,
+) -> Result<WsResponse, tokio_tungstenite::tungstenite::handshake::server::ErrorResponse> {
+    assert_eq!(
+        request
+            .headers()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer access-secret")
+    );
+    Ok(response)
+}
 
 #[tokio::test]
 async fn v1_responses_should_use_websocket_upstream_by_default_while_serving_sse() {
@@ -107,7 +132,7 @@ async fn v1_responses_should_use_websocket_upstream_by_default_while_serving_sse
 }
 
 #[tokio::test]
-async fn v1_responses_should_ignore_removed_use_websocket_alias() {
+async fn v1_responses_should_ignore_camel_case_use_websocket_field() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (request_tx, request_rx) = oneshot::channel();
@@ -119,7 +144,7 @@ async fn v1_responses_should_ignore_removed_use_websocket_alias() {
         request_tx.send(request).unwrap();
         websocket
             .send(Message::Text(
-                websocket_completed_response("resp_route_ws_removed_alias", 6, 2).into(),
+                websocket_completed_response("resp_route_ws_camel_case_transport", 6, 2).into(),
             ))
             .await
             .unwrap();
@@ -225,6 +250,51 @@ async fn v1_responses_websocket_should_stream_first_frame_before_terminal_event(
     while let Some(chunk) = timeout(Duration::from_secs(1), body.next()).await.unwrap() {
         chunk.unwrap();
     }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_stream_should_synthesize_response_failed_when_closed_before_terminal(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let message = websocket.next().await.unwrap().unwrap();
+        let _request = serde_json::from_str::<Value>(&message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(WEBSOCKET_PARTIAL_DELTA.trim().into()))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("event: response.output_text.delta"));
+    assert!(body.contains("event: response.failed"));
+    assert!(body.contains("stream_disconnected"));
     server.await.unwrap();
 }
 
@@ -356,6 +426,665 @@ async fn v1_responses_websocket_should_reuse_connection_for_recorded_conversatio
         "pooled websocket reuse should stay on the recorded conversation key"
     );
     assert_eq!(second_request["previous_response_id"], "resp_pool_first");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_not_reuse_connection_when_pool_is_disabled() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_disabled_pool_first", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        loop {
+            tokio::select! {
+                message = websocket.next() => {
+                    match message {
+                        Some(Ok(message)) if message.is_text() => {
+                            let second_request = serde_json::from_str::<Value>(
+                                &message.into_text().unwrap(),
+                            )
+                            .unwrap();
+                            websocket
+                                .send(Message::Text(
+                                    websocket_completed_response(
+                                        "resp_disabled_pool_second",
+                                        3,
+                                        1,
+                                    )
+                                    .into(),
+                                ))
+                                .await
+                                .unwrap();
+                            websocket.close(None).await.unwrap();
+                            break (true, first_request, second_request);
+                        }
+                        Some(_) => continue,
+                        None => {
+                            let second_request = accept_successful_websocket_response(
+                                &listener,
+                                "Bearer access-secret",
+                                "resp_disabled_pool_second",
+                            )
+                            .await;
+                            break (false, first_request, second_request);
+                        }
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted.unwrap();
+                    let mut second_websocket = accept_async(stream).await.unwrap();
+                    let second_message = second_websocket.next().await.unwrap().unwrap();
+                    let second_request = serde_json::from_str::<Value>(
+                        &second_message.into_text().unwrap(),
+                    )
+                    .unwrap();
+                    second_websocket
+                        .send(Message::Text(
+                            websocket_completed_response("resp_disabled_pool_second", 3, 1).into(),
+                        ))
+                        .await
+                        .unwrap();
+                    second_websocket.close(None).await.unwrap();
+                    break (false, first_request, second_request);
+                }
+            }
+        }
+    });
+    let imported = build_imported_app_with_accounts_and_config(
+        format!("http://{addr}"),
+        &[ImportAccount {
+            id: "acct_imported",
+            account_id: "chatgpt-account",
+            token: "access-secret",
+            refresh_token: "refresh-secret",
+        }],
+        |config| {
+            config.ws_pool.enabled = false;
+        },
+    )
+    .await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{
+                            "role": "user",
+                            "content": "do not reuse this upstream websocket"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_text(first_response).await;
+    assert!(first_body.contains("\"id\":\"resp_disabled_pool_first\""));
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"previous_response_id":"resp_disabled_pool_first"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_text(second_response).await;
+    assert!(second_body.contains("\"id\":\"resp_disabled_pool_second\""));
+
+    let (reused_connection, first_request, second_request) = server.await.unwrap();
+    assert!(
+        !reused_connection,
+        "disabled pool reused the upstream websocket"
+    );
+    assert_eq!(
+        second_request["prompt_cache_key"], first_request["prompt_cache_key"],
+        "disabling the pool must not change the recorded conversation key"
+    );
+    assert_eq!(
+        second_request["previous_response_id"],
+        "resp_disabled_pool_first"
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_implicitly_resume_full_history_continuation_with_reasoning_replay(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().into(),
+            ))
+            .await
+            .unwrap();
+
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_implicit_resume_second", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "remember this"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "remember this"
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "cached answer"
+                            },
+                            {
+                                "role": "user",
+                                "content": "continue"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert!(first_request["prompt_cache_key"].as_str().is_some());
+    assert_eq!(
+        second_request["previous_response_id"],
+        "resp_implicit_resume_first"
+    );
+    assert_eq!(
+        second_request["prompt_cache_key"], first_request["prompt_cache_key"],
+        "implicit resume should reuse the recorded conversation identity"
+    );
+    assert_eq!(
+        second_request["input"][0]["encrypted_content"],
+        "enc_reasoning_replay"
+    );
+    assert_eq!(second_request["input"][1]["content"], "continue");
+    assert_eq!(second_request["input"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_not_implicitly_resume_across_codex_windows() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().into(),
+            ))
+            .await
+            .unwrap();
+
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_window_b", 8, 2).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "prompt_cache_key": "shared-variant-session",
+                        "codexWindowId": "window-a",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "remember this"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "prompt_cache_key": "shared-variant-session",
+                        "codexWindowId": "window-b",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "remember this"
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "cached answer"
+                            },
+                            {
+                                "role": "user",
+                                "content": "continue in another window"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert_eq!(
+        second_request["prompt_cache_key"], first_request["prompt_cache_key"],
+        "both windows still share the same upstream conversation identity"
+    );
+    assert!(second_request.get("previous_response_id").is_none());
+    assert_eq!(second_request["input"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_evict_reasoning_replay_after_invalid_encrypted_content() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().into(),
+            ))
+            .await
+            .unwrap();
+
+        let invalid_message = websocket.next().await.unwrap().unwrap();
+        let invalid_request =
+            serde_json::from_str::<Value>(&invalid_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                WEBSOCKET_INVALID_ENCRYPTED_CONTENT.trim().into(),
+            ))
+            .await
+            .unwrap();
+
+        let retried_message = websocket.next().await.unwrap().unwrap();
+        let retried_request =
+            serde_json::from_str::<Value>(&retried_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_after_replay_eviction", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, invalid_request, retried_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "remember this"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let continuation_body = json!({
+        "model": "gpt-5.5",
+        "instructions": "answer briefly",
+        "stream": false,
+        "input": [
+            {
+                "role": "user",
+                "content": "remember this"
+            },
+            {
+                "role": "assistant",
+                "content": "cached answer"
+            },
+            {
+                "role": "user",
+                "content": "continue"
+            }
+        ]
+    })
+    .to_string();
+
+    let invalid_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(continuation_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_response.status(), StatusCode::BAD_GATEWAY);
+
+    let retried_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(continuation_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried_response.status(), StatusCode::OK);
+
+    let (first_request, invalid_request, retried_request) = server.await.unwrap();
+    assert_eq!(
+        invalid_request["previous_response_id"],
+        "resp_implicit_resume_first"
+    );
+    assert_eq!(
+        invalid_request["input"][0]["encrypted_content"],
+        "enc_reasoning_replay"
+    );
+    assert_eq!(
+        retried_request["prompt_cache_key"], first_request["prompt_cache_key"],
+        "the replay eviction must not change the conversation identity"
+    );
+    assert_eq!(
+        retried_request["previous_response_id"],
+        "resp_implicit_resume_first"
+    );
+    assert_eq!(retried_request["input"].as_array().unwrap().len(), 1);
+    assert_eq!(retried_request["input"][0]["content"], "continue");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_restore_full_history_when_implicit_resume_previous_response_is_missing(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().into(),
+            ))
+            .await
+            .unwrap();
+
+        let implicit_message = websocket.next().await.unwrap().unwrap();
+        let implicit_request =
+            serde_json::from_str::<Value>(&implicit_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.into()))
+            .await
+            .unwrap();
+
+        let restored_message = websocket.next().await.unwrap().unwrap();
+        let restored_request =
+            serde_json::from_str::<Value>(&restored_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_implicit_resume_restored", 10, 2).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, implicit_request, restored_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "remember this"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "remember this"
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "cached answer"
+                            },
+                            {
+                                "role": "user",
+                                "content": "continue"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let body = response_json(second_response).await;
+    assert_eq!(body["id"], "resp_implicit_resume_restored");
+
+    let (_first_request, implicit_request, restored_request) = server.await.unwrap();
+    assert_eq!(
+        implicit_request["previous_response_id"],
+        "resp_implicit_resume_first"
+    );
+    assert_eq!(implicit_request["input"].as_array().unwrap().len(), 2);
+    assert!(restored_request.get("previous_response_id").is_none());
+    assert_eq!(restored_request["input"].as_array().unwrap().len(), 3);
+    assert_eq!(restored_request["input"][0]["role"], "user");
+    assert_eq!(restored_request["input"][1]["role"], "assistant");
+    assert_eq!(restored_request["input"][2]["content"], "continue");
 }
 
 #[tokio::test]
@@ -592,6 +1321,180 @@ async fn v1_responses_should_route_previous_response_id_to_recorded_account() {
 }
 
 #[tokio::test]
+async fn v1_responses_non_stream_previous_response_not_found_should_strip_history_and_retry_same_account(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_hdr_async(stream, assert_access_secret_header)
+            .await
+            .unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.into()))
+            .await
+            .unwrap();
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_after_history_strip", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"previous_response_id":"resp_missing"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_history_strip");
+    let (first_request, second_request) = server.await.unwrap();
+    assert_eq!(first_request["previous_response_id"], "resp_missing");
+    assert!(second_request.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn v1_responses_stream_previous_response_not_found_should_strip_history_and_retry_same_account(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_hdr_async(stream, assert_access_secret_header)
+            .await
+            .unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.into()))
+            .await
+            .unwrap();
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_stream_after_history_strip", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"previous_response_id":"resp_missing"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("\"id\":\"resp_stream_after_history_strip\""));
+    let (first_request, second_request) = server.await.unwrap();
+    assert_eq!(first_request["previous_response_id"], "resp_missing");
+    assert!(second_request.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn v1_responses_non_stream_unanswered_function_call_should_strip_history_and_retry_same_account(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_hdr_async(stream, assert_access_secret_header)
+            .await
+            .unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(WEBSOCKET_UNANSWERED_FUNCTION_CALL.into()))
+            .await
+            .unwrap();
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_after_function_call_strip", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"previous_response_id":"resp_with_call"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "resp_after_function_call_strip");
+    let (first_request, second_request) = server.await.unwrap();
+    assert_eq!(first_request["previous_response_id"], "resp_with_call");
+    assert!(second_request.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
 async fn v1_responses_should_use_websocket_for_previous_response_id_streaming() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -780,7 +1683,7 @@ async fn v1_responses_non_stream_previous_response_id_websocket_429_should_not_r
 }
 
 #[tokio::test]
-async fn v1_responses_websocket_without_history_should_fallback_and_refresh_fallback_account() {
+async fn v1_responses_websocket_without_history_should_mark_expired_after_fallback_401() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -801,11 +1704,9 @@ async fn v1_responses_websocket_without_history_should_fallback_and_refresh_fall
             None,
             WEBSOCKET_TOKEN_REVOKED,
         )
-        .await;
-        accept_successful_websocket_response(&listener, "Bearer refreshed-b", "resp_ws_fallback")
-            .await
+        .await
     });
-    let imported = build_imported_app_with_accounts_and_token_refresher(
+    let imported = build_imported_app_with_accounts(
         format!("http://{addr}"),
         &[
             ImportAccount {
@@ -821,10 +1722,6 @@ async fn v1_responses_websocket_without_history_should_fallback_and_refresh_fall
                 refresh_token: "refresh-b",
             },
         ],
-        StaticTokenRefresher {
-            access_token: "refreshed-b".to_string(),
-            refresh_token: None,
-        },
     )
     .await;
 
@@ -848,19 +1745,14 @@ async fn v1_responses_websocket_without_history_should_fallback_and_refresh_fall
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_text(response).await;
-    assert!(body.contains("\"id\":\"resp_ws_fallback\""));
-    let websocket_request = server.await.unwrap();
-    assert_eq!(websocket_request["type"], "response.create");
-    assert!(websocket_request.get("previous_response_id").is_none());
-    let repo = AccountRepository::new(imported.pool.clone(), imported.secret_box);
-    let account_b = repo.get("acct_b").await.unwrap().unwrap();
-    assert_eq!(account_b.access_token.expose_secret(), "refreshed-b");
-    assert_eq!(
-        account_b.refresh_token.unwrap().expose_secret(),
-        "refresh-b"
-    );
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    server.await.unwrap();
+    let account_b_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_b")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_b_status.0, "expired");
     let usage_a: (i64, i64, i64) = sqlx::query_as(
         "select request_count, input_tokens, output_tokens from account_usage where account_id = ?",
     )
@@ -869,14 +1761,6 @@ async fn v1_responses_websocket_without_history_should_fallback_and_refresh_fall
     .await
     .unwrap();
     assert_eq!(usage_a, (1, 0, 0));
-    let usage_b: (i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens from account_usage where account_id = ?",
-    )
-    .bind("acct_b")
-    .fetch_one(&imported.pool)
-    .await
-    .unwrap();
-    assert_eq!(usage_b, (1, 3, 1));
 }
 
 #[tokio::test]
@@ -972,7 +1856,7 @@ async fn reject_next_websocket_upgrade(
     let request = read_http_upgrade_request(&mut stream).await;
     assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
     assert!(
-        request.contains(&format!("authorization: {expected_authorization}")),
+        request.contains(&format!("Authorization: {expected_authorization}")),
         "unexpected websocket authorization header in request:\n{request}"
     );
     let retry_after = retry_after_seconds

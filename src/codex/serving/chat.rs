@@ -109,13 +109,14 @@ impl ChatService {
         );
 
         let mut excluded_account_ids = Vec::new();
+        let mut model_unsupported_retry_used = false;
         let response = loop {
             self.upstream
                 .stagger_request(acquired.previous_slot_at)
                 .await;
             let response = self
                 .upstream
-                .send_codex_request_with_refresh_retry(
+                .send_codex_request_with_upstream_retries(
                     &codex_request,
                     &acquired.account,
                     request_id,
@@ -126,7 +127,12 @@ impl ChatService {
             match response {
                 Ok(response) => break response,
                 Err(error) => {
-                    if let Some(retry) = classify_upstream_account_retry(&error) {
+                    if let Some(retry) =
+                        classify_upstream_account_retry(&error, model_unsupported_retry_used)
+                    {
+                        if retry.is_model_unsupported() {
+                            model_unsupported_retry_used = true;
+                        }
                         let fallback = self
                             .upstream
                             .apply_retry_and_acquire_fallback(
@@ -203,6 +209,7 @@ impl ChatService {
                 &response.body,
                 &display_model,
                 include_reasoning,
+                codex_request.tuple_schema.as_ref(),
             ) {
                 Ok(Some(body)) => Response::builder()
                     .status(StatusCode::OK)
@@ -237,8 +244,12 @@ impl ChatService {
                     .into_response(),
             }
         } else {
-            match chat_completion_from_codex_sse(&response.body, &display_model, include_reasoning)
-            {
+            match chat_completion_from_codex_sse(
+                &response.body,
+                &display_model,
+                include_reasoning,
+                codex_request.tuple_schema.as_ref(),
+            ) {
                 Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
                 Ok(None) => (
                     StatusCode::BAD_GATEWAY,

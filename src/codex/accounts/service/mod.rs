@@ -20,7 +20,10 @@ use crate::{
             AccountRepository, AccountUsageRepository, StoredAccount, StoredAccountMetadata,
         },
     },
-    codex::gateway::{oauth::TokenRefresher, transport::websocket::CodexWebSocketPool},
+    codex::gateway::{
+        fingerprint::model::Fingerprint, oauth::TokenRefresher,
+        transport::websocket::CodexWebSocketPool,
+    },
     config::AppConfig,
     utils::pagination::Page,
 };
@@ -34,6 +37,17 @@ pub struct AccountService {
     token_refresher: Option<Arc<dyn TokenRefresher>>,
     account_pool: Arc<Mutex<AccountPool>>,
     websocket_pool: Arc<CodexWebSocketPool>,
+    fingerprint: Fingerprint,
+}
+
+pub struct AccountServiceDependencies {
+    pub repository: Option<AccountRepository>,
+    pub usage_repository: Option<AccountUsageRepository>,
+    pub cookie_repository: Option<CookieRepository>,
+    pub token_refresher: Option<Arc<dyn TokenRefresher>>,
+    pub account_pool: Arc<Mutex<AccountPool>>,
+    pub websocket_pool: Arc<CodexWebSocketPool>,
+    pub fingerprint: Fingerprint,
 }
 
 #[derive(Debug)]
@@ -241,15 +255,16 @@ pub enum ValidatedAccountImportError {
 }
 
 impl AccountService {
-    pub fn new(
-        config: Arc<AppConfig>,
-        repository: Option<AccountRepository>,
-        usage_repository: Option<AccountUsageRepository>,
-        cookie_repository: Option<CookieRepository>,
-        token_refresher: Option<Arc<dyn TokenRefresher>>,
-        account_pool: Arc<Mutex<AccountPool>>,
-        websocket_pool: Arc<CodexWebSocketPool>,
-    ) -> Self {
+    pub fn new(config: Arc<AppConfig>, dependencies: AccountServiceDependencies) -> Self {
+        let AccountServiceDependencies {
+            repository,
+            usage_repository,
+            cookie_repository,
+            token_refresher,
+            account_pool,
+            websocket_pool,
+            fingerprint,
+        } = dependencies;
         Self {
             config,
             repository,
@@ -258,6 +273,7 @@ impl AccountService {
             token_refresher,
             account_pool,
             websocket_pool,
+            fingerprint,
         }
     }
 

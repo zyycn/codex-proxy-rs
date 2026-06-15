@@ -25,9 +25,20 @@ pub struct AdminAuthService {
     auth_repository: Option<AdminAuthRepository>,
     account_repository: Option<AccountRepository>,
     account_pool: Arc<Mutex<AccountPool>>,
+    oauth_config: OAuthConfig,
     oauth_client: Option<Arc<dyn OAuthClient>>,
     oauth_sessions: Arc<Mutex<PkceSessionStore>>,
     accounts: AccountService,
+}
+
+pub struct AdminAuthDependencies {
+    pub auth_repository: Option<AdminAuthRepository>,
+    pub account_repository: Option<AccountRepository>,
+    pub account_pool: Arc<Mutex<AccountPool>>,
+    pub oauth_config: OAuthConfig,
+    pub oauth_client: Option<Arc<dyn OAuthClient>>,
+    pub oauth_sessions: Arc<Mutex<PkceSessionStore>>,
+    pub accounts: AccountService,
 }
 
 #[derive(Debug)]
@@ -123,20 +134,22 @@ pub enum AdminAuthPkceExchange {
 }
 
 impl AdminAuthService {
-    pub fn new(
-        config: Arc<AppConfig>,
-        auth_repository: Option<AdminAuthRepository>,
-        account_repository: Option<AccountRepository>,
-        account_pool: Arc<Mutex<AccountPool>>,
-        oauth_client: Option<Arc<dyn OAuthClient>>,
-        oauth_sessions: Arc<Mutex<PkceSessionStore>>,
-        accounts: AccountService,
-    ) -> Self {
+    pub fn new(config: Arc<AppConfig>, dependencies: AdminAuthDependencies) -> Self {
+        let AdminAuthDependencies {
+            auth_repository,
+            account_repository,
+            account_pool,
+            oauth_config,
+            oauth_client,
+            oauth_sessions,
+            accounts,
+        } = dependencies;
         Self {
             config,
             auth_repository,
             account_repository,
             account_pool,
+            oauth_config,
             oauth_client,
             oauth_sessions,
             accounts,
@@ -265,7 +278,7 @@ impl AdminAuthService {
             .oauth_sessions
             .lock()
             .await
-            .start_login(return_host, &OAuthConfig::codex_default());
+            .start_login(return_host, &self.oauth_config);
         AdminAuthLoginStart {
             auth_url: login.auth_url,
             state: login.state,

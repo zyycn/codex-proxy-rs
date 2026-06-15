@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "error": {
+    "code": "previous_response_not_found",
+    "message": "Previous response with id resp_missing was not found"
+  }
+}

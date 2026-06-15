@@ -1,0 +1,25 @@
+{
+  "type": "response.completed",
+  "response": {
+    "id": "resp_implicit_resume_first",
+    "object": "response",
+    "output": [
+      {
+        "type": "reasoning",
+        "id": "rs_implicit_resume",
+        "status": "completed",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "cached reasoning"
+          }
+        ],
+        "encrypted_content": "enc_reasoning_replay"
+      }
+    ],
+    "usage": {
+      "input_tokens": 8,
+      "output_tokens": 2
+    }
+  }
+}

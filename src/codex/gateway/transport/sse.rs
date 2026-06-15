@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SseEvent {
     pub event: Option<String>,
@@ -12,6 +14,8 @@ pub struct SseEvent {
 pub enum SseError {
     #[error("invalid SSE retry value: {0}")]
     InvalidRetry(String),
+    #[error("SSE buffer exceeded {max_bytes} bytes — aborting stream")]
+    BufferExceeded { max_bytes: usize },
 }
 
 #[derive(Debug, Default)]
@@ -40,6 +44,13 @@ impl EventBuilder {
             return None;
         }
         self.has_data = false;
+        if self.data == "[DONE]" {
+            self.event = None;
+            self.id = None;
+            self.retry = None;
+            self.data.clear();
+            return None;
+        }
         Some(SseEvent {
             event: self.event.take(),
             data: std::mem::take(&mut self.data),
@@ -52,20 +63,28 @@ impl EventBuilder {
 pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
     let mut events = Vec::new();
     let mut builder = EventBuilder::default();
+    let mut saw_sse_syntax = false;
+    let mut event_buffer_bytes = 0usize;
 
     for raw_line in input.lines() {
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
         if line.is_empty() {
+            event_buffer_bytes = 0;
             if let Some(event) = builder.finish() {
                 events.push(event);
             }
             continue;
         }
+        track_event_buffer_bytes(&mut event_buffer_bytes, raw_line)?;
         if line.starts_with(':') {
+            saw_sse_syntax = true;
             continue;
         }
 
         let (field, value) = split_sse_field(line);
+        if matches!(field, "event" | "data" | "id" | "retry") {
+            saw_sse_syntax = true;
+        }
         match field {
             "event" => builder.event = Some(value.to_string()),
             "data" => builder.push_data(value),
@@ -77,6 +96,7 @@ pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
                         .map_err(|_| SseError::InvalidRetry(value.to_string()))?,
                 );
             }
+            _ if builder.has_data && !is_sse_metadata_line(line) => builder.push_data(line),
             _ => {}
         }
     }
@@ -84,7 +104,66 @@ pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
     if let Some(event) = builder.finish() {
         events.push(event);
     }
+    if events.is_empty() && !saw_sse_syntax && !input.trim().is_empty() {
+        events.push(non_sse_response_event(input.trim()));
+    }
     Ok(events)
+}
+
+fn track_event_buffer_bytes(current_bytes: &mut usize, line: &str) -> Result<(), SseError> {
+    let line_separator_bytes = usize::from(*current_bytes != 0);
+    *current_bytes = current_bytes
+        .saturating_add(line_separator_bytes)
+        .saturating_add(line.len());
+    if *current_bytes > MAX_SSE_EVENT_BUFFER_BYTES {
+        return Err(SseError::BufferExceeded {
+            max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
+        });
+    }
+    Ok(())
+}
+
+fn is_sse_metadata_line(line: &str) -> bool {
+    line.starts_with("event:")
+        || line.starts_with("data:")
+        || line.starts_with("id:")
+        || line.starts_with("retry:")
+        || line.starts_with(':')
+}
+
+fn non_sse_response_event(raw: &str) -> SseEvent {
+    let message = non_sse_error_message(raw);
+    let data = serde_json::json!({
+        "error": {
+            "type": "error",
+            "code": "non_sse_response",
+            "message": message,
+        }
+    })
+    .to_string();
+    SseEvent {
+        event: Some("error".to_string()),
+        data,
+        id: None,
+        retry: None,
+    }
+}
+
+fn non_sse_error_message(raw: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return raw.to_string();
+    };
+    value
+        .get("detail")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or(raw)
+        .to_string()
 }
 
 pub fn encode_sse_event(event: &str, data: &str) -> String {

@@ -4,7 +4,7 @@
 
 **Goal:** Build `codex-proxy-rs`, a lean Rust rewrite of `codex-proxy` that exposes OpenAI-compatible local endpoints backed only by ChatGPT/Codex accounts and the official Codex backend.
 
-**Architecture:** Create a new Rust service at `/home/zyy/桌面/Codes/codex-proxy-rs`. The only upstream is `https://chatgpt.com/backend-api`; remove OpenAI official API key passthrough, Anthropic, Gemini, custom providers, Ollama, Electron, and per-account proxy assignment. Treat Codex Desktop impersonation as a first-class subsystem: locked `reqwest` + `rustls`, exact headers, account-scoped Cookie replay, and fingerprint auto-update. Keep `src/main.rs` as the binary/bootstrap layer and keep reusable logic in `src/lib.rs` modules with typed `thiserror` errors.
+**Architecture:** Create a new Rust service at `/home/zyy/桌面/Codes/codex-proxy-rs`. The only upstream is `https://chatgpt.com/backend-api`; remove OpenAI official API key passthrough, non-OpenAI/Codex routing, non-OpenAI local model bridges, Electron, and per-account proxy assignment. Treat Codex Desktop impersonation as a first-class subsystem: locked `reqwest` + `rustls`, exact headers, account-scoped Cookie replay, and fingerprint auto-update. Keep `src/main.rs` as the binary/bootstrap layer and keep reusable logic in `src/lib.rs` modules with typed `thiserror` errors.
 
 **Tech Stack:** Rust 2021, `tokio`, `axum`, `tower-http`, `sqlx` + SQLite WAL, `config`, `serde`, `serde_json`, `serde_yaml`, `tracing`, `tracing-subscriber`, rotating file logging, `argon2`, `rand`, `uuid`, `chrono`, `thiserror`, `anyhow` only in `main.rs` and tests, `base64`, `aes-gcm`, `hmac`, `sha2`, `secrecy`, `zeroize`, `wiremock`, `insta`, `tempfile`. Use the latest stable crate versions at implementation time except dependencies intentionally pinned for Codex Desktop TLS fingerprint parity: `reqwest = 0.12.28` and `rustls = 0.23.36` until a fingerprint review proves a newer pair is equivalent.
 
@@ -28,8 +28,8 @@ Keep:
 Remove:
 
 - OpenAI official API Key direct upstream.
-- Anthropic, Gemini, custom provider routing, OpenRouter-style provider pools.
-- Ollama bridge and Ollama settings.
+- non-OpenAI/Codex provider routing.
+- non-OpenAI local model bridge and settings.
 - Per-account proxy assignment, proxy health checks, proxy UI, proxy routing.
 - Electron desktop packaging and large dashboard UI.
 - Legacy compatibility layers, old-project API adapters, and old-project data migration scripts.
@@ -2686,7 +2686,7 @@ Append to `/home/zyy/桌面/Codes/codex-proxy-rs/tests/routes_responses_test.rs`
 
 ```rust
 #[tokio::test]
-async fn responses_route_rejects_non_codex_provider_models() {
+async fn responses_route_rejects_unknown_models() {
     let app = build_router(AppState::new(test_config()));
     let response = app
         .oneshot(
@@ -2695,7 +2695,7 @@ async fn responses_route_rejects_non_codex_provider_models() {
                 .uri("/v1/responses")
                 .header("authorization", "Bearer cpr_test")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"claude-3","input":[]}"#))
+                .body(Body::from(r#"{"model":"unknown-model","input":[]}"#))
                 .unwrap(),
         )
         .await
@@ -2709,7 +2709,7 @@ async fn responses_route_rejects_non_codex_provider_models() {
 Run:
 
 ```bash
-cargo test responses_route_rejects_non_codex_provider_models
+cargo test responses_route_rejects_unknown_models
 ```
 
 Expected: fails with `401 Unauthorized`, because client API key validation and model validation are not implemented.
@@ -2756,7 +2756,7 @@ pub async fn responses(headers: HeaderMap, Json(body): Json<ResponsesBody>) -> i
 Run:
 
 ```bash
-cargo test responses_route_rejects_non_codex_provider_models
+cargo test responses_route_rejects_unknown_models
 ```
 
 Expected: pass.
@@ -2886,8 +2886,8 @@ Rust rewrite of Codex Proxy focused only on ChatGPT/Codex accounts and the Codex
 ## Excluded
 
 - OpenAI official API Key upstream
-- Anthropic, Gemini, custom providers, OpenRouter-style routing
-- Ollama bridge
+- non-OpenAI/Codex provider routing
+- non-OpenAI local model bridge
 - Per-account proxy assignment
 - Electron app
 - Legacy compatibility layers and old-project data migration scripts
@@ -2952,7 +2952,7 @@ git commit -m "docs: document codex-proxy-rs scope"
 - [x] Add a tested Codex WebSocket boundary. `src/codex/transport/websocket.rs` classifies HTTP SSE versus WebSocket-only requests, adds `previous_response_id`/`use_websocket` request fields, and returns typed errors instead of silently downgrading WebSocket-required traffic.
 - [x] Extend account scheduling primitives against the original TypeScript lifecycle. `AccountPool` now covers max concurrent slots, stale slot cleanup, least-used/round-robin/sticky strategies, tier priority, model-plan filtering, cached quota skip, exclude IDs, preferred account selection for session affinity, Cloudflare cooldown skip, request-staggering metadata, and capacity summary.
 - [x] Set `gpt-5.5` as the default/test model baseline across code, tests, and plan examples. `/v1/models` now asserts the exact default model instead of only checking for a `gpt` prefix.
-- [x] Add `/admin/settings` for the retained Rust settings surface. GET and PATCH are admin-session gated, lower camelCase, exclude proxy URL, Ollama, third-party provider, OpenAI official API key, proxy API key, and Electron/self-update fields, and PATCH writes retained config to root `local.yaml`.
+- [x] Add `/admin/settings` for the retained Rust settings surface. GET and PATCH are admin-session gated, lower camelCase, exclude proxy URL, non-OpenAI local model bridge and third-party provider, OpenAI official API key, proxy API key, and Electron/self-update fields, and PATCH writes retained config to root `local.yaml`.
 - [x] Add a native static model catalog foundation. It exposes `gpt-5.5`, configured aliases, reasoning/service tier suffix parsing, `/v1/models`, `/v1/models/catalog`, `/v1/models/{id}`, `/v1/models/{id}/info`, and `/debug/models`. Backend model fetching/cache and `/admin/refresh-models` remain separate tasks.
 - [x] Add encrypted admin account import/list foundations. `/admin/accounts/import` stores access/refresh tokens through `SecretBox` and `/admin/accounts` returns paginated sanitized account metadata without tokens or token decryption. The runtime now loads or creates the master key file before constructing repository-backed routes.
 - [x] Add the first native Codex upstream lifecycle slice. Imported accounts are synchronized into the process account pool, `/v1/responses` acquires an account, sends Codex Desktop HTTP SSE requests with encrypted Cookie replay/capture, collects `response.completed`, records usage, and releases the slot. Startup pool snapshots, retry/fallback, 401 refresh, rate-limit capture, and WebSocket remain separate tasks.
@@ -2972,10 +2972,10 @@ The Rust project has no legacy compatibility requirement, but the in-scope behav
 
 - [x] **HTTP auth boundary:** restore a real `src/http/auth.rs` module instead of scattered header checks. It validates `Bearer cpr_...` client API keys for `/v1/*`, validates admin session cookies for `/admin/*`, rejects cross-use in both directions, and returns the documented OpenAI/admin response families.
 - [x] **Account SQLite repository:** implement `src/codex/accounts/repository.rs` for encrypted access/refresh tokens, account metadata, quota JSON, usage counters, labels, status transitions, pagination, batch-safe mutations, metadata-only auth status reads, and account-wide delete for logout. Do not add TypeScript JSON migration or legacy import shims.
-- [x] **Admin account routes:** rebuild `/auth/status`, `/auth/accounts`, import/export, batch delete/status, health-check, per-account refresh, label, delete, reset usage, quota, Cookie CRUD, and quota warnings as `/admin/*` endpoints with admin envelopes and cursor pagination where a list is returned. Encrypted native import/export, manual token add, CLI import, paginated sanitized list, removed Sub2API/proxy-format compatibility, label/status/delete, batch delete/status, Cookie CRUD, health/probe, refresh, quota, quota warnings, reset usage, admin auth status, and admin logout are complete.
+- [x] **Admin account routes:** rebuild `/auth/status`, `/auth/accounts`, import/export, batch delete/status, health-check, per-account refresh, label, delete, reset usage, quota, Cookie CRUD, and quota warnings as `/admin/*` endpoints with admin envelopes and cursor pagination where a list is returned. Encrypted native import/export, manual token add, CLI import, paginated sanitized list, removed external legacy/proxy-format compatibility, label/status/delete, batch delete/status, Cookie CRUD, health/probe, refresh, quota, quota warnings, reset usage, admin auth status, and admin logout are complete.
 - [x] **Login routes:** implement OAuth PKCE login-start/code-relay/callback, device-login/device-poll, CLI auth import, manual access-token import, and logout as account-login flows. CLI auth import, validated manual token import, device login/poll, OAuth PKCE login-start/code-relay/callback, admin-session-gated auth status, and logout are complete. Keep this separate from admin password login and client API key creation.
 - [x] **Client API key management:** implement admin CRUD for local client API keys: list/create/delete/batch-delete/label/status/export/import. Create/list/status/delete/batch-delete/label/export/import and `/v1/*` SQLite verification are complete. Remove provider/model binding semantics from the TypeScript version; Rust client API keys authorize only local `/v1/*` access.
-- [x] **Settings:** implement admin settings for server/runtime fields that remain in scope: default model, reasoning effort, service tier, model aliases, refresh enabled/margin/concurrency, max concurrent per account, request interval, rotation strategy, tier priority, quota refresh/thresholds/skip exhausted, logs state/capacity/body capture, and usage history retention. GET and PATCH `/admin/settings` are admin-session gated, PATCH validates retained fields, writes a root `local.yaml` overlay, and rejects proxy URL, Ollama, third-party provider, OpenAI official key, proxy API key, and Electron/self-update settings. Existing constructed runtime services still use construction-time config until restart or a later runtime reconfiguration task.
+- [x] **Settings:** implement admin settings for server/runtime fields that remain in scope: default model, reasoning effort, service tier, model aliases, refresh enabled/margin/concurrency, max concurrent per account, request interval, rotation strategy, tier priority, quota refresh/thresholds/skip exhausted, logs state/capacity/body capture, and usage history retention. GET and PATCH `/admin/settings` are admin-session gated, PATCH validates retained fields, writes a root `local.yaml` overlay, and rejects proxy URL, non-OpenAI local model bridge and third-party provider, OpenAI official key, proxy API key, and Electron/self-update settings. Existing constructed runtime services still use construction-time config until restart or a later runtime reconfiguration task.
 - [x] **Diagnostics:** expand health/admin diagnostics to include authenticated state, pool summary, capacity summary, transport/fingerprint status, paths, runtime metadata, and test-connection checks. `/admin/diagnostics` returns the non-secret runtime summary behind admin-session auth. Local-only `/debug/diagnostics` returns runtime metadata, paths, account repository/pool state, capacity summary, transport config, and static fingerprint status without secrets. Local-only `/debug/fingerprint` returns the runtime Desktop fingerprint summary. Local-only `/debug/upstream` probes the Codex models endpoint with runtime TLS/fingerprint headers and returns only status metadata. Keep production-local gating for sensitive debug endpoints.
 - [ ] **Logs and usage stats:** add `/admin/logs/state`, clear/detail, error-log equivalents if retained, and richer bounded history queries if needed. `GET/PATCH /admin/logs/state`, `/admin/logs/{id}`, `DELETE /admin/logs`, `/admin/logs` kind/level/request/account/route/model/status/search filters, log file rotation, SQLite event pagination, `/admin/usage-stats` pagination, and `/admin/usage-stats/summary` are complete. Remaining: decide whether to retain old error-log grouping/raw/count/seen/report APIs and richer bounded body-history queries.
 - [x] **Model catalog:** replace the hard-coded `/v1/models` list with a model store that supports static defaults, configured aliases, `-low/-medium/-high/-xhigh/-fast/-flex` suffix parsing, backend model fetching per plan, cache persistence, `/v1/models/catalog`, `/v1/models/{id}`, `/v1/models/{id}/info`, `/admin/refresh-models`, and `/debug/models`. Static defaults, aliases, suffix parsing, cached backend snapshots, plan allowlists, admin refresh, read-only model routes, and debug summary are complete.
@@ -2986,7 +2986,7 @@ The Rust project has no legacy compatibility requirement, but the in-scope behav
 
 ## 2026-06-12 Detailed Original Coverage Audit
 
-This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/codex-proxy` and compared them with the Rust implementation. Deleted provider/proxy/Ollama/Electron features stay deleted; the items below are in-scope Codex/OpenAI-compatible behavior that is not yet fully rebuilt.
+This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/codex-proxy` and compared them with the Rust implementation. Deleted non-OpenAI/proxy/Electron features stay deleted; the items below are in-scope Codex/OpenAI-compatible behavior that is not yet fully rebuilt.
 
 - [x] **OpenAI Chat Completions route wiring:** Rust mounts `/v1/chat/completions` to a dedicated Chat handler that parses Chat `messages`, translates to Codex Responses requests, and returns OpenAI Chat completion JSON or SSE chunks.
 - [ ] **Responses request semantics:** Rust now retains `service_tier` normalization (`fast` -> `priority` upstream), `prompt_cache_key`, `client_metadata`, `include`, `text.format`, `tool_choice`, `parallel_tool_calls`, Codex context headers, session/window/thread metadata, and reasoning include defaults. Remaining parity gaps include tuple-schema reconversion edge cases, sanitized reasoning replay behavior, and real-client verification for installation/fingerprint metadata.
@@ -2994,7 +2994,7 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 - [x] **Account login flows:** Rust has admin login, native account import/export, Codex CLI auth import, validated manual token import, OpenAI OAuth device login/poll, OAuth PKCE login-start/code-relay/callback, admin-session-gated account logout, and `/auth/status`-equivalent `/admin/auth/status`. These are rebuilt as admin/session-gated account-login endpoints, not by treating local client API keys as passwords.
 - [ ] **Admin account management:** Rust has paginated sanitized list, native import/export, manual token add with upstream refresh-token exchange and JWT metadata/expires extraction, device-code token import, label/status/delete, batch delete/status, Cookie get/set/delete, per-account refresh/probe, reset usage, quota fetch/update, quota warnings, auth status, and logout. Missing persistence-health reporting and durable quota-window restore.
 - [x] **Client API key management:** Rust creates/lists/status-toggles/deletes/batch-deletes/labels/exports/imports local `cpr_` keys and verifies them for `/v1/*`. Do not port the TypeScript provider/model binding or provider model-fetch APIs.
-- [x] **Settings:** Rust exposes admin-session-gated GET/PATCH `/admin/settings` for retained fields. PATCH validates default model, default reasoning effort, service tier, aliases, refresh settings, max concurrent accounts, request interval, rotation strategy, tier priority, quota refresh/threshold/skip settings, log state/capacity/body capture, and usage retention, writes root `local.yaml`, and does not re-add proxy URL, provider, Ollama, proxy API key, or Electron/self-update settings. Existing constructed runtime services still use construction-time config until restart or a later runtime reconfiguration task.
+- [x] **Settings:** Rust exposes admin-session-gated GET/PATCH `/admin/settings` for retained fields. PATCH validates default model, default reasoning effort, service tier, aliases, refresh settings, max concurrent accounts, request interval, rotation strategy, tier priority, quota refresh/threshold/skip settings, log state/capacity/body capture, and usage retention, writes root `local.yaml`, and rejects unknown fields. Existing constructed runtime services still use construction-time config until restart or a later runtime reconfiguration task.
 - [x] **Logs and error diagnostics:** Rust has cursor-paginated SQLite event logs, rotating files, `GET/PATCH /admin/logs/state`, detail-by-id, clear, and admin log filters for kind, level, request ID, account ID, route, model, status code, and message/metadata search. Missing direction/body-history filters, bounded in-memory request/response body capture, and the original local error-log grouping/raw/count/seen/report/clear APIs if retained for troubleshooting.
 - [x] **Usage and quota background jobs:** Rust records cumulative account usage from `/v1/*` and computes admin quota warnings from cached SQLite quota snapshots. **✅ Completed: Usage history snapshots (`raw`, `five_min`, `hourly`, `daily`) with automatic time-bucket alignment, configurable retention, and efficient aggregation.** Remaining: passive quota-window recovery if needed.
 - [x] **Model catalog:** Rust has a static default catalog, aliases, suffix parsing, read routes, debug summary, backend Codex model fetch/probe, per-plan snapshots, model-plan index feeding account scheduling, `/admin/refresh-models`, and runtime cache persistence. Missing richer metadata fields and optional external model-cache loading if retained.
@@ -3002,13 +3002,13 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 - [x] **Refresh scheduler parity:** Rust has typed refresh policy and 401-triggered refresh retry. Implemented long-running refresh timers at `exp - margin`, crash recovery for `refreshing`/`expired` accounts, exponential backoff (5s → 15s → 45s → 135s → 300s), recovery scheduling (10min), permanent-failure thresholding (2 consecutive errors), per-account in-flight suppression. Still missing: cross-process refresh locks (optional for multi-instance), and disk refresh-token sync before consuming one-time RTs (optional safety feature).
 - [ ] **Codex Desktop fingerprint and transport parity:** Rust uses pinned `reqwest`/`rustls` and core headers, but exact parity is not proven. Missing header-order/default-header parity (`sec-ch-ua`, accept language/encoding/fetch headers), `x-codex-installation-id`, runtime selection of the newest stored fingerprint, Sparkle appcast XML polling, update-state/version-state persistence, optional local Codex.app Chromium extraction, and real Desktop TLS/header capture comparison. `x-openai-internal-codex-residency` currently needs real-client verification because the builder inserts `global` and the reqwest client overwrites it with `us`.
 - [x] **Health and diagnostics:** Rust `/health` returns `status: ok`, `/admin/auth/status` returns admin-session-gated authenticated state plus account pool summary, `/admin/diagnostics` returns the non-secret runtime diagnostics summary, local-only `/debug/diagnostics` returns capacity summary, transport/fingerprint status, paths, runtime metadata, and retained settings summary without secrets, and local-only `/debug/upstream` probes the Codex models endpoint without returning tokens or upstream bodies.
-- [x] **Background service lifecycle:** Rust startup restores accounts and initializes tracing. Implemented and integrated scheduler tasks: account refresh (RefreshScheduler) with JWT exp-margin timers, crash recovery, exponential backoff, permanent-failure detection, recovery scheduling, and per-account in-flight suppression; session cleanup (SessionCleanupScheduler) with configurable interval and graceful shutdown via tokio::select! in main.rs. Optional schedulers not yet implemented: model refresh, quota refresh, active quota refresh, fingerprint polling. Ollama, proxy health timers, self-update, Electron, and provider router startup remain intentionally deleted.
+- [x] **Background service lifecycle:** Rust startup restores accounts and initializes tracing. Implemented and integrated scheduler tasks: account refresh (RefreshScheduler) with JWT exp-margin timers, crash recovery, exponential backoff, permanent-failure detection, recovery scheduling, and per-account in-flight suppression; session cleanup (SessionCleanupScheduler) with configurable interval and graceful shutdown via tokio::select! in main.rs. Optional schedulers not yet implemented: model refresh, quota refresh, active quota refresh, fingerprint polling. Non-OpenAI local model timers, proxy health timers, self-update, Electron, and provider router startup remain intentionally deleted.
 
 ### Keep Removed
 
 - [x] Do not rebuild per-account proxy assignment, proxy pool, proxy health checks, or proxy import/export.
-- [x] Do not rebuild Ollama bridge/settings.
-- [x] Do not rebuild Anthropic, Gemini, OpenRouter/custom provider routing, or OpenAI official API key direct upstream.
+- [x] Do not rebuild non-OpenAI local model bridge/settings.
+- [x] Do not rebuild non-OpenAI/Codex provider routing, or OpenAI official API key direct upstream.
 - [x] Do not rebuild Electron packaging, large dashboard static UI, or proxy self-update installer flows.
 - [x] Do not add old TypeScript data migration, deprecated API compatibility adapters, or dual-mode legacy behavior.
 
@@ -3016,7 +3016,7 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 
 - [x] Old `/admin/*` settings mutations used the proxy API key as a write gate. Rust settings mutation now uses admin sessions only and rejects client API key cross-use through the admin auth boundary.
 - [ ] Old refresh fallback could be dangerous for one-time refresh tokens if retried after a mid-flight failure. Rust must keep the one-time RT preservation rule and retry only when the request definitely did not reach the server.
-- [x] Old settings exposed proxy and provider knobs that are out of scope. Rust config and API keep proxy URL, provider, Ollama, OpenAI official key, proxy API key, and Electron/self-update fields out of the retained settings surface.
+- [x] Old settings exposed out-of-scope knobs. Rust config and API use a retained-field whitelist and reject unknown settings fields.
 - [x] Old route responses mix multiple body shapes. Rust keeps `/v1/*` OpenAI-compatible and `/admin/*` lower camelCase `code/message/data/requestId`, backed by dedicated API contract tests.
 - [x] Empty placeholder modules are not acceptable. Current module roots either expose real submodules or owned behavior; no empty Rust source modules remain in `src/`.
 
@@ -3040,7 +3040,7 @@ This pass re-read the TypeScript routes and core modules under `/home/zyy/Codes/
 - Any API/status-code change updates `docs/api.md` or `docs/status-codes.md` in the same commit.
 - Any dependency change updates `docs/dependency-policy.md` in the same commit.
 - No OpenAI official API Key direct upstream exists in code, config, routes, docs, or tests.
-- No Anthropic, Gemini, custom provider, Ollama, Electron, or per-account proxy assignment modules exist.
+- No non-OpenAI/Codex provider, Electron, or per-account proxy assignment modules exist.
 - `/v1/*` accepts only client API keys with `cpr_` shape and never accepts admin session cookies.
 - `/admin/*` accepts only admin session cookies and never accepts client API keys.
 - Codex upstream request code uses pinned `reqwest = 0.12.28` and `rustls = 0.23.36`.

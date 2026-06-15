@@ -9,7 +9,7 @@ use tokio::{
     time::sleep,
 };
 use tokio_tungstenite::{
-    accept_hdr_async,
+    accept_async, accept_hdr_async,
     tungstenite::{
         handshake::server::{Request as WsRequest, Response as WsResponse},
         Message,
@@ -370,6 +370,8 @@ async fn websocket_request_should_forward_security_chain_body_fields() {
     assert!(headers
         .iter()
         .any(|(name, value)| { name == "x-openai-subagent" && value == "review" }));
+    assert!(headers.iter().all(|(name, _)| name != "content-type"));
+    assert!(headers.iter().all(|(name, _)| name != "accept"));
 }
 
 #[tokio::test]
@@ -380,7 +382,7 @@ async fn websocket_handshake_429_should_surface_as_upstream_error_before_body_is
         let (mut stream, _) = listener.accept().await.unwrap();
         let request = read_http_upgrade_request(&mut stream).await;
         assert!(request.starts_with("GET /codex/responses HTTP/1.1"));
-        assert!(request.contains("authorization: Bearer access-token"));
+        assert!(request.contains("Authorization: Bearer access-token"));
         let body = r#"{"error":{"message":"rate limited"}}"#;
         let response = format!(
             "HTTP/1.1 429 Too Many Requests\r\nretry-after: 33\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -431,6 +433,63 @@ async fn websocket_handshake_429_should_surface_as_upstream_error_before_body_is
     assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(retry_after_seconds, Some(33));
     assert!(body.contains("rate limited"));
+}
+
+#[tokio::test]
+async fn websocket_handshake_should_offer_original_permessage_deflate_extension() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_upgrade_request(&mut stream).await;
+        request_tx.send(request).unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+    });
+
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::codex::gateway::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+    let result = client
+        .websocket_stream_response(&base_request(), request_context("req_ws_extensions", None))
+        .await;
+    assert!(result.is_err());
+
+    server.await.unwrap();
+    let raw_request = request_rx.await.unwrap();
+    assert_headers_appear_in_order(
+        &raw_request,
+        &[
+            "Host: ",
+            "Connection: Upgrade\r\n",
+            "Upgrade: websocket\r\n",
+            "Sec-WebSocket-Version: 13\r\n",
+            "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n",
+            "Sec-WebSocket-Key: ",
+            "Authorization: Bearer access-token\r\n",
+            "ChatGPT-Account-Id: chatgpt-account\r\n",
+            "originator: Codex Desktop\r\n",
+            "User-Agent: Codex Desktop/26.519.81530 (darwin; arm64)\r\n",
+            "sec-ch-ua: \"Chromium\";v=\"146\", \"Not:A-Brand\";v=\"24\"\r\n",
+            "sec-ch-ua-mobile: ?0\r\n",
+            "sec-ch-ua-platform: \"macOS\"\r\n",
+            "Accept-Encoding: gzip, deflate, br, zstd\r\n",
+            "Accept-Language: en-US,en;q=0.9\r\n",
+            "sec-fetch-site: same-origin\r\n",
+            "sec-fetch-mode: cors\r\n",
+            "sec-fetch-dest: empty\r\n",
+            "OpenAI-Beta: responses_websockets=2026-02-06\r\n",
+            "x-openai-internal-codex-residency: us\r\n",
+            "x-client-request-id: req_ws_extensions\r\n",
+        ],
+    );
 }
 
 #[tokio::test]
@@ -519,6 +578,104 @@ async fn websocket_first_error_frame_should_surface_as_upstream_error_without_ht
     assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(retry_after_seconds, Some(45));
     assert!(body.contains("usage_limit_reached"));
+}
+
+#[tokio::test]
+async fn websocket_one_shot_should_passthrough_connection_limit_failed_frame() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_ws_connection_limit",
+                        "error": {
+                            "code": "websocket_connection_limit_reached",
+                            "message": "connection limit reached"
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::codex::gateway::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+
+    let response = client
+        .create_response(&base_request(), request_context("req_ws_limit", None))
+        .await
+        .unwrap();
+
+    server.await.unwrap();
+    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("websocket_connection_limit_reached"));
+}
+
+#[tokio::test]
+async fn websocket_pooled_connection_limit_frame_should_surface_as_503() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_pooled_ws_connection_limit",
+                        "error": {
+                            "code": "websocket_connection_limit_reached",
+                            "message": "connection limit reached"
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+
+    let pool = Arc::new(CodexWebSocketPool::with_config(manual_pool_config(
+        Duration::from_secs(60),
+        8,
+    )));
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::codex::gateway::fingerprint::model::Fingerprint::default_for_tests(),
+    )
+    .with_websocket_pool(pool, "chatgpt-account");
+    let mut request = base_request();
+    request.prompt_cache_key = Some("chatgpt-account:conversation".to_string());
+
+    let error = client
+        .create_response(&request, request_context("req_pooled_ws_limit", None))
+        .await
+        .unwrap_err();
+
+    server.await.unwrap();
+    let CodexClientError::Upstream { status, body, .. } = error else {
+        panic!("expected upstream error, found {error:?}");
+    };
+    assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body.contains("websocket_connection_limit_reached"));
 }
 
 #[tokio::test]
@@ -879,4 +1036,14 @@ async fn read_http_upgrade_request(stream: &mut tokio::net::TcpStream) -> String
         }
     }
     String::from_utf8(request).unwrap()
+}
+
+fn assert_headers_appear_in_order(raw_request: &str, expected_headers: &[&str]) {
+    let mut offset = 0;
+    for expected in expected_headers {
+        let Some(index) = raw_request[offset..].find(expected) else {
+            panic!("missing websocket handshake header `{expected}` in:\n{raw_request}");
+        };
+        offset += index + expected.len();
+    }
 }

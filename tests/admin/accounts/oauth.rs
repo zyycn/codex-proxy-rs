@@ -17,8 +17,9 @@ use codex_proxy_rs::{
 
 use crate::support::{
     admin_accounts::{
-        admin_accounts_test_app, admin_accounts_test_app_with_oauth_client, import_test_account,
-        test_jwt, StaticOAuthClient,
+        admin_accounts_test_app, admin_accounts_test_app_with_config,
+        admin_accounts_test_app_with_oauth_client, import_test_account, test_config, test_jwt,
+        StaticOAuthClient,
     },
     response_json,
 };
@@ -408,13 +409,44 @@ async fn admin_auth_login_start_should_return_pkce_auth_url_and_state() {
     assert!(auth_url.starts_with("https://auth.openai.com/oauth/authorize?"));
     assert!(auth_url.contains("response_type=code"));
     assert!(auth_url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
-    assert!(
-        auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fopenai%2Fcallback")
-    );
+    assert!(auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
     assert!(auth_url.contains("scope=openid%20profile%20email%20offline_access"));
     assert!(auth_url.contains("code_challenge_method=S256"));
     assert!(auth_url.contains("originator=codex_cli_rs"));
     assert!(auth_url.contains(&format!("state={state}")));
+}
+
+#[tokio::test]
+async fn admin_auth_login_start_should_use_configured_oauth_authorize_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir
+        .path()
+        .join("admin-auth-login-start-configured-oauth.sqlite");
+    let mut config = test_config(format!("sqlite://{}", db.display()));
+    config.auth.oauth_client_id = "app_configured_client".to_string();
+    config.auth.oauth_auth_endpoint = "https://auth.example.test/oauth/authorize".to_string();
+    config.auth.oauth_token_endpoint = "https://auth.example.test/oauth/token".to_string();
+    let (app, _state, _pool, _dir) = admin_accounts_test_app_with_config(dir, config, 42).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/auth/login-start")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("host", "127.0.0.1:8080")
+                .header("x-request-id", "req_login_start_configured_oauth")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let auth_url = body["data"]["authUrl"].as_str().unwrap();
+    assert!(auth_url.starts_with("https://auth.example.test/oauth/authorize?"));
+    assert!(auth_url.contains("client_id=app_configured_client"));
 }
 
 #[tokio::test]
@@ -455,7 +487,7 @@ async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
     let start_body = response_json(start).await;
     let state_value = start_body["data"]["state"].as_str().unwrap();
     let callback_url =
-        format!("http://localhost:1455/auth/openai/callback?code=oauth-code&state={state_value}");
+        format!("http://localhost:1455/auth/callback?code=oauth-code&state={state_value}");
 
     let response = app
         .oneshot(
@@ -482,10 +514,7 @@ async fn admin_auth_code_relay_should_exchange_code_and_import_account() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].code, "oauth-code");
     assert!(!calls[0].code_verifier.is_empty());
-    assert_eq!(
-        calls[0].redirect_uri,
-        "http://localhost:1455/auth/openai/callback"
-    );
+    assert_eq!(calls[0].redirect_uri, "http://localhost:1455/auth/callback");
     drop(calls);
     let stored = AccountRepository::new(pool.clone(), SecretBox::new([43; 32]))
         .find_by_chatgpt_identity("pkce-account", Some("pkce-user"))
@@ -580,7 +609,7 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
         .unwrap();
     let start_body = response_json(start).await;
     let state_value = start_body["data"]["state"].as_str().unwrap();
-    let callback_path = format!("/auth/openai/callback?code=callback-code&state={state_value}");
+    let callback_path = format!("/auth/callback?code=callback-code&state={state_value}");
 
     let response = app
         .oneshot(
@@ -609,15 +638,35 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
 }
 
 #[tokio::test]
-async fn admin_auth_callback_should_not_expose_removed_admin_callback_alias() {
+async fn admin_auth_callback_should_not_expose_unsupported_admin_callback_path() {
     let (app, _state, _pool, _dir) =
-        admin_accounts_test_app("admin-auth-callback-removed-alias.sqlite", 45).await;
+        admin_accounts_test_app("admin-auth-callback-unsupported-admin.sqlite", 45).await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/auth/callback?code=callback-code&state=removed")
+                .uri("/api/admin/auth/callback?code=callback-code&state=unsupported")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_auth_callback_should_not_expose_unsupported_openai_callback_path() {
+    let (app, _state, _pool, _dir) =
+        admin_accounts_test_app("admin-auth-callback-unsupported-openai.sqlite", 46).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/auth/openai/callback?code=callback-code&state=unsupported")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),

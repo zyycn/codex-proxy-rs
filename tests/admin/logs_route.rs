@@ -46,6 +46,9 @@ fn test_config(database_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -66,6 +69,7 @@ fn test_config(database_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),

@@ -4,7 +4,10 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::codex::gateway::transport::sse::{parse_sse_events, SseError};
+use crate::codex::gateway::{
+    protocol::tuple_schema::reconvert_tuple_values,
+    transport::sse::{parse_sse_events, SseError},
+};
 
 pub fn openai_error(message: &str, code: &str) -> Value {
     json!({
@@ -21,6 +24,7 @@ pub fn chat_completion_from_codex_sse(
     body: &str,
     model: &str,
     include_reasoning: bool,
+    tuple_schema: Option<&Value>,
 ) -> Result<Option<Value>, SseError> {
     let events = parse_sse_events(body)?;
     let mut content = String::new();
@@ -77,6 +81,9 @@ pub fn chat_completion_from_codex_sse(
     if content.is_empty() {
         content = output_text_from_response(&response);
     }
+    if let Some(tuple_schema) = tuple_schema {
+        content = reconvert_tuple_text(&content, tuple_schema).unwrap_or(content);
+    }
     let mut message = json!({
         "role": "assistant",
         "content": if content.is_empty() && !tool_calls.is_empty() {
@@ -111,6 +118,7 @@ pub fn chat_completion_stream_from_codex_sse(
     body: &str,
     model: &str,
     include_reasoning: bool,
+    tuple_schema: Option<&Value>,
 ) -> Result<Option<String>, SseError> {
     let events = parse_sse_events(body)?;
     let chunk_id = format!("chatcmpl-{}", Uuid::new_v4().simple());
@@ -122,6 +130,7 @@ pub fn chat_completion_stream_from_codex_sse(
     let mut tool_call_indices = BTreeMap::new();
     let mut call_ids_with_deltas = BTreeSet::new();
     let mut next_tool_call_index = 0usize;
+    let mut tuple_text_buffer = tuple_schema.map(|_| String::new());
 
     push_sse_data(
         &mut output,
@@ -145,20 +154,11 @@ pub fn chat_completion_stream_from_codex_sse(
         match event.event.as_deref() {
             Some("response.output_text.delta") => {
                 if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    push_sse_data(
-                        &mut output,
-                        json!({
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": null,
-                            }],
-                        }),
-                    );
+                    if let Some(buffer) = tuple_text_buffer.as_mut() {
+                        buffer.push_str(delta);
+                    } else {
+                        push_chat_content_delta(&mut output, &chunk_id, created, model, delta);
+                    }
                 }
             }
             Some("response.reasoning_summary_text.delta") if include_reasoning => {
@@ -293,6 +293,14 @@ pub fn chat_completion_stream_from_codex_sse(
         return Ok(None);
     };
 
+    if let (Some(tuple_schema), Some(buffer)) = (tuple_schema, tuple_text_buffer.as_ref()) {
+        if !buffer.is_empty() {
+            let content =
+                reconvert_tuple_text(buffer, tuple_schema).unwrap_or_else(|| buffer.clone());
+            push_chat_content_delta(&mut output, &chunk_id, created, model, &content);
+        }
+    }
+
     push_sse_data(
         &mut output,
         json!({
@@ -311,6 +319,34 @@ pub fn chat_completion_stream_from_codex_sse(
     output.push_str("data: [DONE]\n\n");
 
     Ok(Some(output))
+}
+
+fn push_chat_content_delta(
+    output: &mut String,
+    chunk_id: &str,
+    created: i64,
+    model: &str,
+    content: &str,
+) {
+    push_sse_data(
+        output,
+        json!({
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": null,
+            }],
+        }),
+    );
+}
+
+fn reconvert_tuple_text(text: &str, tuple_schema: &Value) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(text).ok()?;
+    Some(reconvert_tuple_values(parsed, tuple_schema).to_string())
 }
 
 fn output_text_from_response(response: &Value) -> String {

@@ -16,6 +16,7 @@ use crate::{
 #[derive(Clone)]
 pub struct DiagnosticsService {
     config: Arc<AppConfig>,
+    fingerprint: Fingerprint,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,17 +34,25 @@ pub struct UpstreamProbeResult {
 }
 
 impl DiagnosticsService {
-    pub fn new(config: Arc<AppConfig>) -> Self {
-        Self { config }
+    pub fn new(config: Arc<AppConfig>, fingerprint: Fingerprint) -> Self {
+        Self {
+            config,
+            fingerprint,
+        }
+    }
+
+    pub(crate) fn fingerprint(&self) -> &Fingerprint {
+        &self.fingerprint
     }
 
     pub async fn probe_upstream(&self, request_id: &str) -> UpstreamProbeResult {
         let started_at = Instant::now();
-        let fingerprint = Fingerprint::default_codex_desktop();
         let client = match build_reqwest_client(self.config.tls.force_http11) {
-            Ok(client) => {
-                CodexBackendClient::new(client, self.config.api.base_url.clone(), fingerprint)
-            }
+            Ok(client) => CodexBackendClient::new(
+                client,
+                self.config.api.base_url.clone(),
+                self.fingerprint.clone(),
+            ),
             Err(error) => {
                 return self.unreachable_probe(
                     None,

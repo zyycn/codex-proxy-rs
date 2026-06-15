@@ -32,6 +32,35 @@ fn codex_headers_include_desktop_identity_and_turn_state() {
 }
 
 #[test]
+fn fingerprint_default_header_order_should_match_original_config() {
+    assert_eq!(
+        Fingerprint::default_header_order(),
+        vec![
+            "authorization",
+            "chatgpt-account-id",
+            "originator",
+            "x-openai-internal-codex-residency",
+            "x-client-request-id",
+            "x-codex-installation-id",
+            "x-codex-turn-state",
+            "openai-beta",
+            "user-agent",
+            "sec-ch-ua",
+            "sec-ch-ua-mobile",
+            "sec-ch-ua-platform",
+            "accept-encoding",
+            "accept-language",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "content-type",
+            "accept",
+            "cookie",
+        ]
+    );
+}
+
+#[test]
 fn update_manifest_updates_app_version_and_build_number() {
     let manifest = r#"{"version":"26.600.12345","build_number":"4001"}"#;
     let update = parse_update_manifest(manifest).unwrap();
@@ -52,7 +81,7 @@ async fn database_fingerprint_headers_should_match_expected_format() {
         platform: "darwin".to_string(),
         arch: "arm64".to_string(),
         chromium_version: "146".to_string(),
-        user_agent_template: "Codex Desktop/{app_version} ({platform}; {arch})".to_string(),
+        user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
         default_headers: Fingerprint::default_headers(),
         header_order: Fingerprint::default_header_order(),
     };
@@ -108,43 +137,38 @@ async fn database_fingerprint_headers_should_match_expected_format() {
     );
 }
 
-/// 验证新旧版本指纹的差异
 #[test]
-fn old_vs_new_fingerprint_user_agent_comparison() {
-    let old_fingerprint = Fingerprint::default_codex_desktop();
-    let new_fingerprint = Fingerprint {
+fn fingerprint_user_agent_should_reflect_updated_version_fields() {
+    let baseline_fingerprint = Fingerprint::default_codex_desktop();
+    let updated_fingerprint = Fingerprint {
         originator: "Codex Desktop".to_string(),
         app_version: "26.609.41114".to_string(),
         build_number: "3888".to_string(),
         platform: "darwin".to_string(),
         arch: "arm64".to_string(),
         chromium_version: "146".to_string(),
-        user_agent_template: "Codex Desktop/{app_version} ({platform}; {arch})".to_string(),
+        user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
         default_headers: Fingerprint::default_headers(),
         header_order: Fingerprint::default_header_order(),
     };
 
-    let old_ua = old_fingerprint.user_agent();
-    let new_ua = new_fingerprint.user_agent();
+    let baseline_ua = baseline_fingerprint.user_agent();
+    let updated_ua = updated_fingerprint.user_agent();
 
-    // 验证格式一致性
-    assert!(old_ua.starts_with("Codex Desktop/"));
-    assert!(new_ua.starts_with("Codex Desktop/"));
-    assert!(old_ua.contains("darwin"));
-    assert!(new_ua.contains("darwin"));
+    assert!(baseline_ua.starts_with("Codex Desktop/"));
+    assert!(updated_ua.starts_with("Codex Desktop/"));
+    assert!(baseline_ua.contains("darwin"));
+    assert!(updated_ua.contains("darwin"));
 
-    // 验证版本号不同
     assert_ne!(
-        old_ua, new_ua,
-        "New and old fingerprints should have different User-Agent"
+        baseline_ua, updated_ua,
+        "fingerprint version fields should affect User-Agent"
     );
 
-    // 验证新版本包含更新的版本号
-    assert!(new_ua.contains("26.609.41114"));
+    assert!(updated_ua.contains("26.609.41114"));
 
-    // 验证 sec-ch-ua 格式
     assert_eq!(
-        new_fingerprint.sec_ch_ua(),
+        updated_fingerprint.sec_ch_ua(),
         "\"Chromium\";v=\"146\", \"Not:A-Brand\";v=\"24\""
     );
 }
