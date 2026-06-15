@@ -61,7 +61,10 @@ use crate::{
     config::AppConfig,
 };
 
-use crate::codex::serving::http::errors::codex_client_error_response;
+use crate::codex::serving::http::errors::{
+    codex_client_error_message, codex_client_error_response,
+    codex_client_error_response_with_message,
+};
 
 pub(crate) use self::{
     fallback::{
@@ -78,6 +81,7 @@ use self::affinity::{
 };
 use self::fallback::{
     apply_upstream_account_retry_with_deps, apply_upstream_retry_and_acquire_fallback_with_deps,
+    build_account_exhaustion_detail,
 };
 pub(crate) use self::implicit_resume::ImplicitResumeSnapshot;
 use self::implicit_resume::{continuation_input_start, implicit_resume_allowed};
@@ -267,6 +271,10 @@ impl CodexUpstreamService {
         .await
     }
 
+    pub(crate) async fn fallback_exhausted_message(&self, message: &str) -> String {
+        fallback_exhausted_message_with_deps(&self.deps, message).await
+    }
+
     pub(crate) async fn apply_account_retry(&self, account: &Account, retry: UpstreamAccountRetry) {
         apply_upstream_account_retry_with_deps(&self.deps, account, retry).await;
     }
@@ -362,6 +370,14 @@ impl CodexUpstreamService {
 }
 
 const IMPLICIT_RESUME_MAX_AGE: StdDuration = StdDuration::from_secs(55 * 60);
+
+async fn fallback_exhausted_message_with_deps(
+    deps: &CodexUpstreamDependencies,
+    message: &str,
+) -> String {
+    let summary = deps.account_pool.lock().await.status_summary(Utc::now());
+    build_account_exhaustion_detail(summary, message)
+}
 
 async fn apply_implicit_resume_with_deps(
     deps: &CodexUpstreamDependencies,
@@ -581,6 +597,22 @@ async fn responses_http_sse_stream(
                         acquired = fallback;
                         continue;
                     }
+                    let message = fallback_exhausted_message_with_deps(
+                        &deps,
+                        &codex_client_error_message(&error),
+                    )
+                    .await;
+                    let error_response = codex_client_error_response_with_message(error, &message);
+                    log_codex_upstream_response_with_deps(
+                        &deps,
+                        &log_context,
+                        error_response.0,
+                        EventLevel::Error,
+                        "v1 responses stream fallback 已耗尽",
+                        json!({"stream": true}),
+                    )
+                    .await;
+                    return error_response.into_response();
                 }
                 let error_response = codex_client_error_response(error);
                 log_codex_upstream_response_with_deps(
@@ -1327,6 +1359,23 @@ async fn responses_websocket_stream(
                             acquired = fallback;
                             continue;
                         }
+                        let message = fallback_exhausted_message_with_deps(
+                            &deps,
+                            &codex_client_error_message(&error),
+                        )
+                        .await;
+                        let error_response =
+                            codex_client_error_response_with_message(error, &message);
+                        log_codex_upstream_response_with_deps(
+                            &deps,
+                            &log_context,
+                            error_response.0,
+                            EventLevel::Error,
+                            "v1 responses WebSocket stream fallback 已耗尽",
+                            json!({"stream": true, "transport": "websocket"}),
+                        )
+                        .await;
+                        return error_response.into_response();
                     }
                 }
                 let error_response = codex_client_error_response(error);

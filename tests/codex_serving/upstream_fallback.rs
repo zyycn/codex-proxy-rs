@@ -1328,6 +1328,11 @@ async fn v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallbac
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["error"]["message"],
+        "All accounts exhausted (1 expired). Codex upstream error: {\"error\":{\"code\":\"token_revoked\",\"message\":\"token revoked\"}}"
+    );
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_401_single")
         .fetch_one(&imported.pool)

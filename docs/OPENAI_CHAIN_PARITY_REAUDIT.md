@@ -436,20 +436,20 @@ Rust 证据：
 - CF path-block 404 已接入主链路：空 body 404 会清理当前账号 cookies、记录 1 小时滑窗内连续次数、尝试 fallback account，达到 3 次后把账号标记为 `disabled`；无 fallback 时返回 502 `upstream_error`。
 - model unsupported fallback 已对齐原版：账号 plan 不支持当前 model 时最多换一个备用账号重试一次，不改变账号状态；HTTP-time 错误与 non-streaming mid-SSE `response.failed` 均有测试覆盖。
 - 401 token invalid fallback 已对齐原版：request path 不再 refresh 同账号；普通 401 会标记当前账号 `expired` 并尝试备用账号，包含 `deactivated` 的 401 会标记 `banned`；HTTP SSE streaming/non-streaming 与 WebSocket fallback exhausted 均有测试覆盖。
+- fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming 响应体。
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
 - WS history 请求不跨账号重试这一点从安全角度更保守，避免 `previous_response_id` 的 server-side history 静默丢失。
 
 未完全对齐：
 - recovery 优先级仍不是完整原版状态机。Rust 已实现 implicit resume restore/replay 与 strip-and-retry 优先于账号 fallback，但状态机仍分散在 responses/dispatch 中，没有抽成原版同等的 `RetryAction` 分层。
-- non-streaming mid-SSE failure 仍不是完整原版 catch 状态机。429/402/403、401、model unsupported、400 strip-and-retry 与隐式续链 restore 已补齐；剩余主要是最终错误外壳和 fallback exhausted body。
+- non-streaming mid-SSE failure 仍不是完整原版 catch 状态机。429/402/403、401、model unsupported、400 strip-and-retry 与隐式续链 restore 已补齐；剩余主要是最终错误外壳的结构细节。
 - `previous_response_id` 限流/配额语义不一致。原版没有显式“history 请求保持原账户”的 retry hold，可能经 fallback 后再通过 `previous_response_not_found` strip-and-retry 恢复；Rust 遇到 429/402/403 会保持原账号并返回错误，保护历史但牺牲可恢复性。
-- 无 fallback 时的响应体不一致。原版会把 account pool exhaustion summary 拼进错误；Rust 多数路径直接返回 `Codex upstream error: ...`，缺少账号耗尽上下文。
 - CF challenge exhausted status 不一致。原版 Cloudflare challenge fallback exhausted 使用 502 语义；Rust 若无 fallback，最终会走原 403 upstream error。
 
 缺口/后续动作：
 - 引入原版级 `UpstreamRecoveryAction` 状态机：implicit resume replay、strip-and-retry、error handler、fallback transition 分层清晰，避免分散在 responses/dispatch 中。
 - 继续补 HTTP SSE mid-SSE failure 的 `previous_response_not_found` 与 unanswered function call 覆盖；当前已有 WS 首帧错误覆盖 streaming/non-streaming。
-- 增加 fallback exhausted response body 的 parity tests。
+- 增加 fallback exhausted response body 的非 stream/Chat 直测，当前默认 streaming Responses 主链路已覆盖。
 
 ## 9. rate-limit、usage、quota、cookie 持久化
 
