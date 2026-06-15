@@ -267,6 +267,12 @@ fn refresh_account_error(error: RefreshAccountError, request_id: &str) -> AdminE
             "Token refresher is not initialized",
             request_id,
         ),
+        RefreshAccountError::StoreStatus => AdminError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            50001,
+            "Failed to store account status",
+            request_id,
+        ),
         RefreshAccountError::StoreRefreshed => AdminError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             50001,

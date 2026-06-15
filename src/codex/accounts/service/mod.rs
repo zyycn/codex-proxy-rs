@@ -215,6 +215,7 @@ pub enum RefreshAccountError {
     NotFound,
     LeaseAcquire,
     TokenRefresherUnavailable,
+    StoreStatus,
     StoreRefreshed,
 }
 
@@ -226,6 +227,7 @@ impl std::fmt::Display for RefreshAccountError {
             Self::NotFound => write!(f, "account not found"),
             Self::LeaseAcquire => write!(f, "failed to acquire refresh lease"),
             Self::TokenRefresherUnavailable => write!(f, "token refresher unavailable"),
+            Self::StoreStatus => write!(f, "failed to store account status"),
             Self::StoreRefreshed => write!(f, "failed to store refreshed tokens"),
         }
     }

@@ -298,7 +298,11 @@ impl RefreshScheduler {
         let mut permanent_hits = 0;
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let error = match self.account_service.probe_account_refresh(account_id).await {
+            let error = match self
+                .account_service
+                .probe_scheduled_account_refresh(account_id)
+                .await
+            {
                 Ok(result) if matches!(result.outcome, AccountProbeOutcome::Alive) => {
                     info!(account_id = %account_id, "token 刷新成功");
                     // 获取新令牌并重新调度下次刷新
@@ -612,10 +616,63 @@ mod tests {
         assert_eq!(refresher.calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             observed_statuses.lock().await.as_slice(),
-            [AccountStatus::Active, AccountStatus::Active]
+            [AccountStatus::Refreshing, AccountStatus::Refreshing]
         );
         let stored = repo.get("acct_scheduler").await.unwrap().unwrap();
         assert_eq!(stored.status, AccountStatus::Expired);
+    }
+
+    #[tokio::test]
+    async fn do_refresh_inner_should_persist_refreshing_during_refresh_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("refresh-scheduler-refreshing.sqlite");
+        let url = format!("sqlite://{}", db.display());
+        let pool = connect_sqlite(&url).await.unwrap();
+        let repo = AccountRepository::new(pool.clone(), SecretBox::new([43u8; 32]));
+        repo.insert(NewAccount {
+            id: "acct_refreshing".to_string(),
+            email: None,
+            account_id: None,
+            user_id: None,
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new("access-old".to_string().into()),
+            refresh_token: Some(SecretString::new("refresh-old".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+        })
+        .await
+        .unwrap();
+        let observed_statuses = Arc::new(Mutex::new(Vec::new()));
+        let refresher = StatusObservingSuccessRefresher {
+            repo: repo.clone(),
+            account_id: "acct_refreshing".to_string(),
+            observed_statuses: observed_statuses.clone(),
+        };
+        let config = test_config(url);
+        let account_service = Arc::new(AccountService::new(
+            Arc::new(config.clone()),
+            AccountServiceDependencies {
+                repository: Some(repo.clone()),
+                usage_repository: Some(AccountUsageRepository::new(pool)),
+                cookie_repository: None,
+                token_refresher: Some(Arc::new(refresher)),
+                account_pool: Arc::new(Mutex::new(AccountPool::default())),
+                websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
+                fingerprint: Fingerprint::default_for_tests(),
+            },
+        ));
+        let scheduler = RefreshScheduler::new(account_service, config);
+
+        let result = scheduler.do_refresh_inner("acct_refreshing").await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            observed_statuses.lock().await.as_slice(),
+            [AccountStatus::Refreshing]
+        );
+        let stored = repo.get("acct_refreshing").await.unwrap().unwrap();
+        assert_eq!(stored.status, AccountStatus::Active);
     }
 
     #[tokio::test]
@@ -659,14 +716,12 @@ mod tests {
         let refresh =
             tokio::spawn(async move { running_scheduler.do_refresh_inner("acct_recovery").await });
 
-        for delay in [
-            Duration::from_secs(5),
-            Duration::from_secs(15),
-            Duration::from_secs(45),
-            Duration::from_secs(135),
-        ] {
+        for _ in 0..MAX_ATTEMPTS {
+            if refresher.calls.load(Ordering::SeqCst) >= MAX_ATTEMPTS as usize {
+                break;
+            }
             tokio::task::yield_now().await;
-            tokio::time::advance(delay).await;
+            tokio::time::advance(Duration::from_secs(300)).await;
         }
 
         let result = refresh.await.unwrap();
@@ -703,6 +758,31 @@ mod tests {
                 .status;
             self.observed_statuses.lock().await.push(status);
             Err(RefreshFailure::InvalidGrant)
+        }
+    }
+
+    #[derive(Clone)]
+    struct StatusObservingSuccessRefresher {
+        repo: AccountRepository,
+        account_id: String,
+        observed_statuses: Arc<Mutex<Vec<AccountStatus>>>,
+    }
+
+    #[async_trait]
+    impl TokenRefresher for StatusObservingSuccessRefresher {
+        async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+            let status = self
+                .repo
+                .get(&self.account_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status;
+            self.observed_statuses.lock().await.push(status);
+            Ok(TokenPair {
+                access_token: "access-new".to_string(),
+                refresh_token: None,
+            })
         }
     }
 
