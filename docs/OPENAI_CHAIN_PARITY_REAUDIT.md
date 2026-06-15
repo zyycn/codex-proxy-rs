@@ -478,6 +478,7 @@ Rust 证据：
 - `src/codex/serving/dispatch/usage.rs:7-30` 成功 usage 会同步运行时窗口 token usage，并写入数据库累计 usage。
 - `src/codex/accounts/pool.rs:403-441` acquire 时更新运行时 `request_count`、`window_request_count`、`last_used_at`，并在已知窗口长度但无窗口开始时间时推导窗口 reset。
 - `src/codex/accounts/pool.rs:502-571` 运行时会在窗口到期时重置窗口计数、清除过期 quota cooldown，并推进下一窗口 reset。
+- 本轮修正后，`src/codex/gateway/transport/usage_events.rs` 的 SSE usage 提取按原版 Responses passthrough 语义优先使用 `response.completed.response.usage`，不会把 `response.created`/中间事件中的重复 usage 累加；若没有 completed usage，才回退到最后一份可见 usage。
 - `tests/codex_accounts/repository.rs:230-326` 覆盖 window usage 持久化与恢复。
 - `tests/codex_serving/responses_http_sse.rs:279-350` 覆盖 passive rate-limit headers 缓存 quota、窗口字段和 cooldown。
 - `tests/codex_accounts/pool_scheduling.rs:150-466` 覆盖窗口过期重置、least_used 的 quota/window/request_count 排序和 runtime request count。
@@ -491,6 +492,7 @@ Rust 证据：
 - Cookie 过期清理已对齐原版长期运行语义：读取时跳过过期 cookie，同时后台调度器每 5 分钟持久删除过期行；`cookie_repository_cleanup_expired_cookies_should_delete_only_expired_rows` 与 `cookie_cleanup_scheduler_should_delete_expired_cookie_rows` 覆盖 repository 和 scheduler 两层。
 - primary/secondary/code_review rate-limit header 和 `codex.rate_limits` event 的解析与 quota 归一化主路径基本对齐，并能保留已有 credits。
 - usage input/output/cached token 的成功路径持久化、窗口统计和重启恢复已对齐到可用水平。
+- SSE usage 提取已对齐原版最终 usage 语义，不再对多个事件里重复出现的同一份 usage 做累计；`extract_sse_usage_should_use_completed_response_usage_without_merging_earlier_usage` 覆盖该行为。
 - least_used 依赖的 request_count、window_reset_at、quota_limited 字段已经进入运行时调度和数据库恢复路径。
 
 未完全对齐：
@@ -500,14 +502,12 @@ Rust 证据：
 - Cookie domain/path 语义不同。原版 CookieJar 是 per-account 简单 map，不按 domain/path 过滤；Rust 按 domain/path 存储和匹配。对 `chatgpt.com` 主链路更严格，但不是原版逐字行为。
 - quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at` 并可能标记 quotaVerifyRequired；Rust 设置 `window_started_at`，没有 `window_counters_reset_at` 字段，也不触发 quotaVerifyRequired。
 - passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
-- usage 提取策略有潜在差异。Rust `extract_sse_usage()` 会合并所有 SSE event 中出现的 usage；原版 Responses passthrough collect/stream 主要在 `response.completed` 中取 usage。若上游多个事件重复携带同一 usage，Rust 可能重复累计。
 
 缺口/后续动作：
 - 补 `TokenUsage` 的 image_generation 字段与数据库/运行时窗口字段，或明确 Rust 不支持 image_generation usage 统计。
 - 增加 dirty quota verification 机制：窗口离线 reset 后标记需要校验，请求前调用 usage endpoint，失败时保留 dirty 标记并限制放大次数。
 - 统一持久 request_count 计数点，决定是否像原版一样在 release/attempt 维度记录所有真实上游尝试；至少补 transport/5xx/403/402 exhausted 的测试。
 - 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
-- 为 usage merge 增加测试，覆盖多个 event 带 usage 时是否重复累计。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
 
 ## 10. session affinity、implicit resume、reasoning replay

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use codex_proxy_rs::codex::gateway::transport::{
     sse::{encode_sse_event, parse_sse_events, MAX_SSE_EVENT_BUFFER_BYTES},
-    usage_events::{extract_usage, TokenUsage},
+    usage_events::{extract_sse_usage, extract_usage, TokenUsage},
 };
 
 #[test]
@@ -144,6 +144,28 @@ fn extract_usage_reads_openai_token_usage_shape_and_merges() {
             output_tokens: 6,
             cached_tokens: 2,
             total_tokens: 15,
+        }
+    );
+}
+
+#[test]
+fn extract_sse_usage_should_use_completed_response_usage_without_merging_earlier_usage() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n",
+    );
+
+    let usage = extract_sse_usage(body).unwrap().unwrap();
+
+    assert_eq!(
+        usage,
+        TokenUsage {
+            input_tokens: 3,
+            output_tokens: 5,
+            cached_tokens: 1,
+            total_tokens: 8,
         }
     );
 }
