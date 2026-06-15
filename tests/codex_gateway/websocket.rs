@@ -31,6 +31,9 @@ use codex_proxy_rs::codex::gateway::transport::{
 
 mod pool;
 
+const WS_COMPLETED_SSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/websocket_completed.sse");
+
 #[test]
 fn transport_for_request_should_default_to_websocket_without_history() {
     let request = base_request();
@@ -209,19 +212,7 @@ async fn ordinary_response_should_use_websocket_transport_by_default() {
         *request_for_task.lock().await = Some(serde_json::from_str::<Value>(&text).unwrap());
         websocket
             .send(Message::Text(
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_ws_default",
-                        "object": "response",
-                        "usage": {
-                            "input_tokens": 4,
-                            "output_tokens": 2
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
+                websocket_completed_response("resp_ws_default", 4, 2).into(),
             ))
             .await
             .unwrap();
@@ -262,6 +253,10 @@ async fn ordinary_response_should_use_websocket_transport_by_default() {
     assert_eq!(request["type"], "response.create");
     assert_eq!(request["model"], "gpt-5.5");
     assert!(request.get("previous_response_id").is_none());
+    assert_eq!(
+        response.body,
+        with_sse_terminal_separator(WS_COMPLETED_SSE_GOLDEN)
+    );
     assert!(response.body.contains("event: response.completed"));
     assert!(response.body.contains("\"id\":\"resp_ws_default\""));
     assert_eq!(response.usage.unwrap().input_tokens, 4);
@@ -1065,6 +1060,14 @@ fn websocket_completed_response(
         }
     })
     .to_string()
+}
+
+fn with_sse_terminal_separator(body: &str) -> String {
+    if body.ends_with("\n\n") {
+        body.to_string()
+    } else {
+        format!("{body}\n")
+    }
 }
 
 async fn read_http_upgrade_request(stream: &mut tokio::net::TcpStream) -> String {

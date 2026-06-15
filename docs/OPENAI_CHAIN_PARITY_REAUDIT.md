@@ -379,6 +379,7 @@ Rust 证据：
 - 本轮新增 `tests/fixtures/responses/websocket/previous_response_not_found.json`、`tests/fixtures/responses/websocket/unanswered_function_call.json`，并用 `tests/codex_serving/responses_websocket.rs` 覆盖 non-streaming 与 streaming `previous_response_not_found`、non-streaming unanswered function call 的同账号 strip-and-retry。
 - `tests/codex_gateway/usage_events.rs` 覆盖 multiline data、非标准 JSON 续行、`[DONE]` 忽略和非 SSE JSON body 转 `non_sse_response`。
 - `tests/codex_gateway/websocket.rs:376-760` 覆盖 WS 内部 rate-limit event 不转发、首个 rotatable error、mid-stream close error 和 fallback。
+- 本轮新增 `tests/fixtures/responses/golden/websocket_completed.sse`，并在 `tests/codex_gateway/websocket.rs::ordinary_response_should_use_websocket_transport_by_default` 中对 WebSocket `response.completed` JSON frame 转下游 SSE chunk 做 exact golden 断言，锁定 `event:`、`data:` 和 SSE 终止分隔符格式。
 - 本轮修正后，HTTP SSE streaming 在上游正常 EOF 但缺少 `response.completed`/`response.failed`/`error` 时，会给客户端追加原版格式的 `response.failed`，错误码为 `stream_disconnected`；`tests/codex_serving/upstream_errors.rs::v1_responses_stream_should_synthesize_response_failed_when_http_sse_closes_before_terminal` 覆盖该行为。
 - 本轮新增 `tests/fixtures/responses/golden/stream_premature_close.sse`，并在 `tests/codex_serving/upstream_errors.rs::v1_responses_stream_should_synthesize_response_failed_when_http_sse_closes_before_terminal` 中对 HTTP SSE premature close 的完整下游 SSE 输出做 exact golden 断言；动态 `resp_proxy_*` id 在测试侧 redaction 后比较。
 - 本轮修正后，WebSocket streaming 在首个可见 frame 已发送后遇到 `ClosedBeforeTerminal` 或其它未见 terminal 的 body stream 错误时，也会追加同样的 `response.failed/stream_disconnected`，不再把 body stream error 直接暴露给客户端；`tests/codex_serving/responses_websocket.rs::v1_responses_websocket_stream_should_synthesize_response_failed_when_closed_before_terminal` 覆盖该行为。
@@ -388,6 +389,7 @@ Rust 证据：
 
 已对齐：
 - 标准 SSE 事件解析、WS JSON frame 到 SSE chunk 的基本转换、terminal event 判断、`codex.rate_limits` 内部事件过滤、heartbeat 15 秒节奏、usage 提取、function call ids 提取、空响应重试等主路径已经具备。
+- WebSocket `response.completed` frame 到 SSE chunk 已有 exact golden 覆盖，确认 raw WS JSON 按原版对下游表现为 `event: response.completed` + 单个 `data:` JSON frame。
 - SSE parser 已对齐原版的三个容错点：漂亮打印 JSON 续行、`[DONE]` 忽略、非 SSE body 合成 `error/non_sse_response`。
 - streaming 路径对客户端保持 SSE 格式，HTTP SSE 与 WebSocket 两种上游传输都能以 SSE 返回给下游。
 - `response.failed`/`error` 在 streaming 路径会被透传并写入审计；non-streaming 路径也能识别为上游失败，并已对 429/402/403 进入账号状态机和 fallback。
@@ -401,10 +403,10 @@ Rust 证据：
 - Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳。
 
 未完全对齐：
-- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close 和最终错误外壳；本轮已先补 HTTP SSE premature close exact golden，但还需要更系统的 golden tests 防止格式细节回退。
+- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close 与 WS completed exact golden，但还需要更系统的 golden tests 防止格式细节回退。
 
 缺口/后续动作：
-- 增加 golden tests：标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、reasoning replay、WS frame to SSE chunk。
+- 增加 golden tests：标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、reasoning replay。
 
 ## 8. fallback、retry、错误分类
 
