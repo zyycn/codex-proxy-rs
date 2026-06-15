@@ -143,6 +143,7 @@ impl ChatService {
                                 retry,
                                 &codex_request.model,
                                 &mut excluded_account_ids,
+                                false,
                             )
                             .await;
                         self.upstream
@@ -183,7 +184,7 @@ impl ChatService {
                     }
                     if self
                         .upstream
-                        .record_request_attempt(&acquired.account.id)
+                        .record_request_attempt(&acquired.account.id, false)
                         .await
                         .is_err()
                     {
@@ -229,7 +230,7 @@ impl ChatService {
         if let Some(usage) = response.usage {
             if self
                 .upstream
-                .record_usage(&acquired.account.id, usage)
+                .record_usage(&acquired.account.id, usage, false)
                 .await
                 .is_err()
             {

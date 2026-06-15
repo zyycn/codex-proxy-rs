@@ -37,6 +37,10 @@ pub struct AdminUsageStatsData {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
     pub last_used_at: Option<String>,
 }
 
@@ -52,6 +56,10 @@ impl From<AccountUsageListRecord> for AdminUsageStatsData {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cached_tokens: usage.cached_tokens,
+            image_input_tokens: usage.image_input_tokens,
+            image_output_tokens: usage.image_output_tokens,
+            image_request_count: usage.image_request_count,
+            image_request_failed_count: usage.image_request_failed_count,
             last_used_at: usage.last_used_at.map(|value| value.to_rfc3339()),
         }
     }
@@ -66,6 +74,10 @@ pub struct AdminUsageStatsSummaryData {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
 }
 
 impl From<AccountUsageSummary> for AdminUsageStatsSummaryData {
@@ -77,6 +89,10 @@ impl From<AccountUsageSummary> for AdminUsageStatsSummaryData {
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_tokens: summary.cached_tokens,
+            image_input_tokens: summary.image_input_tokens,
+            image_output_tokens: summary.image_output_tokens,
+            image_request_count: summary.image_request_count,
+            image_request_failed_count: summary.image_request_failed_count,
         }
     }
 }

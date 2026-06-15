@@ -9,6 +9,8 @@ pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
+    pub image_input_tokens: u64,
+    pub image_output_tokens: u64,
     pub total_tokens: u64,
 }
 
@@ -18,6 +20,8 @@ impl TokenUsage {
             input_tokens,
             output_tokens,
             cached_tokens,
+            image_input_tokens: 0,
+            image_output_tokens: 0,
             total_tokens: input_tokens + output_tokens,
         }
     }
@@ -27,6 +31,8 @@ impl TokenUsage {
             input_tokens: self.input_tokens + other.input_tokens,
             output_tokens: self.output_tokens + other.output_tokens,
             cached_tokens: self.cached_tokens + other.cached_tokens,
+            image_input_tokens: self.image_input_tokens + other.image_input_tokens,
+            image_output_tokens: self.image_output_tokens + other.image_output_tokens,
             total_tokens: self.total_tokens + other.total_tokens,
         }
     }
@@ -48,6 +54,11 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         .or_else(|| nested_number_field(usage, &["prompt_tokens_details", "cached_tokens"]))
         .or_else(|| number_field(usage, "cached_tokens"))
         .unwrap_or_default();
+    let image_input_tokens =
+        nested_number_field(body, &["tool_usage", "image_gen", "input_tokens"]).unwrap_or_default();
+    let image_output_tokens =
+        nested_number_field(body, &["tool_usage", "image_gen", "output_tokens"])
+            .unwrap_or_default();
     let total_tokens = number_field(usage, "total_tokens").unwrap_or(input_tokens + output_tokens);
 
     let has_usage = [
@@ -61,11 +72,15 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     .iter()
     .any(|field| usage.get(*field).is_some())
         || usage.get("input_tokens_details").is_some()
-        || usage.get("prompt_tokens_details").is_some();
+        || usage.get("prompt_tokens_details").is_some()
+        || image_input_tokens > 0
+        || image_output_tokens > 0;
     has_usage.then_some(TokenUsage {
         input_tokens,
         output_tokens,
         cached_tokens,
+        image_input_tokens,
+        image_output_tokens,
         total_tokens,
     })
 }

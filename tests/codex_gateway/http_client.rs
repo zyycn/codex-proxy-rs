@@ -90,6 +90,8 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
             input_tokens: 2,
             output_tokens: 3,
             cached_tokens: 1,
+            image_input_tokens: 0,
+            image_output_tokens: 0,
             total_tokens: 5,
         })
     );

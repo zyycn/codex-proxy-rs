@@ -129,6 +129,7 @@ async fn app_state_should_restore_account_pool_from_sqlite_accounts() {
             output_tokens: 3,
             cached_tokens: 2,
             empty_response_count: 0,
+            ..UsageDelta::default()
         },
     )
     .await
@@ -254,6 +255,7 @@ async fn app_state_should_restore_session_affinity_from_sqlite() {
             output_tokens: 0,
             cached_tokens: 0,
             empty_response_count: 0,
+            ..UsageDelta::default()
         },
     )
     .await

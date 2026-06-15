@@ -381,8 +381,9 @@ pub(super) async fn apply_upstream_retry_and_acquire_fallback_with_deps(
     retry: UpstreamAccountRetry,
     model: &str,
     excluded_account_ids: &mut Vec<String>,
+    image_generation_requested: bool,
 ) -> Option<AcquiredAccount> {
-    apply_upstream_account_retry_with_deps(deps, account, retry).await;
+    apply_upstream_account_retry_with_deps(deps, account, retry, image_generation_requested).await;
     excluded_account_ids.push(account.id.clone());
     deps.account_pool.lock().await.acquire_with(
         AccountAcquireRequest::new(model, Utc::now())
@@ -394,8 +395,10 @@ pub(super) async fn apply_upstream_account_retry_with_deps(
     deps: &CodexUpstreamDependencies,
     account: &Account,
     retry: UpstreamAccountRetry,
+    image_generation_requested: bool,
 ) {
-    if let Err(error) = record_request_attempt(deps, &account.id).await {
+    if let Err(error) = record_request_attempt(deps, &account.id, image_generation_requested).await
+    {
         tracing::warn!(
             error = ?error,
             account_id = %account.id,

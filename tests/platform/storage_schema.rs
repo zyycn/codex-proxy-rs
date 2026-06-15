@@ -49,6 +49,35 @@ async fn sqlite_schema_should_persist_account_usage_window_columns() {
 }
 
 #[tokio::test]
+async fn sqlite_schema_should_persist_image_generation_usage_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('account_usage') where name in ('image_input_tokens', 'image_output_tokens', 'image_request_count', 'image_request_failed_count', 'window_image_input_tokens', 'window_image_output_tokens', 'window_image_request_count', 'window_image_request_failed_count') order by name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        [
+            "image_input_tokens",
+            "image_output_tokens",
+            "image_request_count",
+            "image_request_failed_count",
+            "window_image_input_tokens",
+            "window_image_output_tokens",
+            "window_image_request_count",
+            "window_image_request_failed_count",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn sqlite_schema_should_persist_quota_verify_required_flag() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
