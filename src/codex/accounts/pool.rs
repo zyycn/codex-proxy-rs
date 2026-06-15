@@ -556,6 +556,7 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
     }
 
     if account.quota_limit_reached && (cooldown_expired || window_expired) {
+        account.quota_verify_required = true;
         account.quota_limit_reached = false;
         account.quota_cooldown_until = None;
     }
