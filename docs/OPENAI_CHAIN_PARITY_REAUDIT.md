@@ -30,7 +30,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
-- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage 和 Cookie domain/path 语义已补齐，剩余差异集中在 quota window reset 细节和双方都未解析的 active-limit header。
+- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage、Cookie domain/path 语义和 active-limit header 复核已补齐，剩余差异集中在 quota window reset 细节。
 
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
@@ -457,6 +457,7 @@ Rust 证据：
 - `src/proxy/cookie-jar.ts:27-45` cookie 持久化格式 v2 记录 value 与 expires；自动捕获白名单只有 `cf_clearance`，关键 cookie 立即异步落盘，普通变更 1 秒 debounce。
 - `src/proxy/cookie-jar.ts:78-102` 构造 Cookie header 时跳过过期 cookie；`cleanupExpired()` 每 5 分钟清理并持久化。
 - `src/proxy/rate-limit-headers.ts:44-85` 从 `x-codex-primary-*`、`x-codex-secondary-*`、`x-codex-code-review-*`/`x-codex-review-*`/`x-code-review-*` 解析 rate-limit，并转为 normalized quota。
+- 2026-06-15 复核 `x-codex-active-limit`：原版 `src/proxy/rate-limit-headers.ts:2-18` 只在注释列出 `{prefix}-active-limit`；`ParsedRateLimit`、`parseRateLimitHeaders()`、`rateLimitToQuota()` 和全仓 `rg` 均没有解析或消费该字段。
 - `src/proxy/rate-limit-headers.ts:101-169` 解析 `codex.rate_limits` WS 内部 event，支持 review limit name 归类。
 - `src/auth/quota-utils.ts:1-105` 从 `/codex/usage` body 归一化 plan、primary/secondary/code_review/additional_rate_limits/credits。
 - `src/routes/shared/proxy-rate-limit.ts:28-49` passive rate-limit 更新 cachedQuota、同步 window_reset_at/limit_window_seconds；若 primary 已达 100 且 reset_at 在未来，会主动写入 rate-limit 侧效应。
@@ -477,6 +478,7 @@ Rust 证据：
 - `src/codex/accounts/repository/usage.rs:63-99` `sync_rate_limit_window()` 会在 reset_at 漂移超过窗口 50% 或默认 3600 秒时重置窗口计数，否则只同步 reset_at/limit_window_seconds。
 - `src/codex/accounts/repository/accounts.rs:329-562` list pool accounts 时会把持久化 usage/window 字段恢复到运行时 `Account`。
 - `src/codex/gateway/transport/rate_limits.rs:58-144` rate-limit header 与 `codex.rate_limits` event 解析规则基本对应原版，并在 passive quota 缺 credits 时保留已有 credits。
+- 2026-06-15 复核 `x-codex-active-limit`：Rust 全仓除本文档外没有 active-limit 代码引用；`src/codex/gateway/transport/rate_limits.rs` 与原版一致，只解析 primary、secondary 和 code_review/review header family。
 - `src/codex/serving/dispatch/limits.rs:8-67` response headers 或 WS rate-limit updates 会更新 `quota_json`、同步运行时和数据库窗口，并在 primary limit reached 时写 quota cooldown、驱逐 WS。
 - `src/codex/serving/dispatch/usage.rs:7-30` 成功 usage 会同步运行时窗口 token usage，并写入数据库累计 usage。
 - `src/codex/accounts/pool.rs:403-441` acquire 时更新运行时 `request_count`、`window_request_count`、`last_used_at`，并在已知窗口长度但无窗口开始时间时推导窗口 reset。
@@ -509,13 +511,13 @@ Rust 证据：
 - transport error 的最终失败请求持久 request_count 已有覆盖；`v1_responses_should_record_request_count_when_http_transport_fails` 证明 HTTP transport 失败也会按原版 release 语义写入一次无 token 的 request attempt。
 - dirty quota verification 已对齐原版主语义：`quota_verify_required` 进入 schema、runtime `Account` 和启动恢复路径；本地解除 quota 限制时会把账号标成 dirty；请求前会用 upstream `/usage` 校验 dirty 账号，仍限流时释放并切换账号，最多 5 次，校验失败时保留 dirty 标记并继续当前账号。
 - image_generation usage 已对齐原版主语义：`tool_usage.image_gen` token 与 host-model token 分开累计；请求声明 `tools: [{type: "image_generation"}]` 且 `image_output_tokens > 0` 记成功，否则记失败；total/window 字段都能持久化并恢复到运行时账号。覆盖测试包括 `extract_usage_reads_image_generation_tool_usage_separately`、`extract_sse_usage_should_read_completed_image_generation_tool_usage`、`sqlite_schema_should_persist_image_generation_usage_columns`、`account_repository_should_accumulate_image_generation_usage_counters`、`account_repository_should_restore_window_usage_into_runtime_pool_accounts`、`v1_responses_should_record_image_generation_usage_when_tool_succeeds`、`v1_responses_should_record_failed_image_generation_attempt_when_tool_has_no_output`。
+- `x-codex-active-limit` 已确认不是当前对齐缺口：原版只在注释中提及，实际没有解析、存储或调度消费；Rust 保持相同未使用状态。若未来 OpenAI/Codex upstream 开始实际依赖该字段，应作为新需求同时重新审计原版与 Rust。
 
 未完全对齐：
 - quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at`；Rust 设置 `window_started_at` 并触发 `quota_verify_required`，但没有 `window_counters_reset_at` 字段。
-- passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
 
 缺口/后续动作：
-- 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
+- 继续复核 quota window reset：确认 Rust 的 `window_started_at + quota_verify_required` 是否足以替代原版 `window_counters_reset_at`，或需要新增字段来保存本地窗口重置时间。
 
 ## 10. session affinity、implicit resume、reasoning replay
 
