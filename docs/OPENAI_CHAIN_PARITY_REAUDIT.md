@@ -23,15 +23,13 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 ## 总体结论
 
-本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；除“代码证据索引与审计边界”外，其余链路均为 `部分对齐`。
+本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“rate-limit、usage、quota、cookie 持久化”已对齐，其余链路仍为 `部分对齐`。
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
-- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage、Cookie domain/path 语义、active-limit header 复核和 quota window reset 细节已补齐。
-
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -499,7 +497,7 @@ Rust 证据：
 - `tests/codex_serving/responses_http_sse.rs:279-350` 覆盖 passive rate-limit headers 缓存 quota、窗口字段和 cooldown。
 - `tests/codex_accounts/pool_scheduling.rs:150-466` 覆盖窗口过期重置、least_used 的 quota/window/request_count 排序和 runtime request count。
 
-结论：部分对齐。
+结论：已对齐。
 
 已对齐：
 - 之前审计中提到的窗口统计字段已经不再缺失：Rust schema、repository、runtime pool 和测试都覆盖了 window request/token/reset/limit_window_seconds。
