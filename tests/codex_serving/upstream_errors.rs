@@ -21,6 +21,8 @@ const STREAM_FAILED_EVENT_SSE: &str =
     include_str!("../fixtures/responses/http_sse/stream_failed_event.sse");
 const STREAM_PREMATURE_CLOSE_SSE: &str =
     include_str!("../fixtures/responses/http_sse/stream_premature_close.sse");
+const STREAM_PREMATURE_CLOSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/stream_premature_close.sse");
 
 #[tokio::test]
 async fn v1_responses_non_stream_should_return_codex_api_error_when_sse_error_event_arrives() {
@@ -236,6 +238,10 @@ async fn v1_responses_stream_should_synthesize_response_failed_when_http_sse_clo
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
+    assert_eq!(
+        redact_proxy_response_id(&body),
+        with_sse_terminal_separator(STREAM_PREMATURE_CLOSE_GOLDEN)
+    );
     assert!(body.contains("event: response.output_text.delta"));
     assert!(body.contains("event: response.failed"));
     assert!(body.contains("stream_disconnected"));
@@ -243,4 +249,30 @@ async fn v1_responses_stream_should_synthesize_response_failed_when_http_sse_clo
     assert_eq!(event.3, 502);
     assert_eq!(event.4["failureEvent"], "response.failed");
     assert_eq!(event.4["upstreamCode"], "stream_disconnected");
+}
+
+fn redact_proxy_response_id(body: &str) -> String {
+    const PREFIX: &str = r#""id":"resp_proxy_"#;
+    let mut redacted = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(index) = rest.find(PREFIX) {
+        redacted.push_str(&rest[..index]);
+        redacted.push_str(r#""id":"resp_proxy_redacted"#);
+        let suffix = &rest[index + PREFIX.len()..];
+        let Some(end) = suffix.find('"') else {
+            rest = suffix;
+            break;
+        };
+        rest = &suffix[end..];
+    }
+    redacted.push_str(rest);
+    redacted
+}
+
+fn with_sse_terminal_separator(body: &str) -> String {
+    if body.ends_with("\n\n") {
+        body.to_string()
+    } else {
+        format!("{body}\n")
+    }
 }

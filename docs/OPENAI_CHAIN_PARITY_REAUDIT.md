@@ -27,7 +27,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
-- response 转换仍缺完整 golden 覆盖；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback、Responses/compact 最终错误外壳、集中 `UpstreamRecoveryAction` 分类入口、request/account recovery transition 边界已补齐。
+- response 转换仍缺完整 golden 覆盖；HTTP SSE premature close exact golden、tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback、Responses/compact 最终错误外壳、集中 `UpstreamRecoveryAction` 分类入口、request/account recovery transition 边界已补齐。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -380,6 +380,7 @@ Rust 证据：
 - `tests/codex_gateway/usage_events.rs` 覆盖 multiline data、非标准 JSON 续行、`[DONE]` 忽略和非 SSE JSON body 转 `non_sse_response`。
 - `tests/codex_gateway/websocket.rs:376-760` 覆盖 WS 内部 rate-limit event 不转发、首个 rotatable error、mid-stream close error 和 fallback。
 - 本轮修正后，HTTP SSE streaming 在上游正常 EOF 但缺少 `response.completed`/`response.failed`/`error` 时，会给客户端追加原版格式的 `response.failed`，错误码为 `stream_disconnected`；`tests/codex_serving/upstream_errors.rs::v1_responses_stream_should_synthesize_response_failed_when_http_sse_closes_before_terminal` 覆盖该行为。
+- 本轮新增 `tests/fixtures/responses/golden/stream_premature_close.sse`，并在 `tests/codex_serving/upstream_errors.rs::v1_responses_stream_should_synthesize_response_failed_when_http_sse_closes_before_terminal` 中对 HTTP SSE premature close 的完整下游 SSE 输出做 exact golden 断言；动态 `resp_proxy_*` id 在测试侧 redaction 后比较。
 - 本轮修正后，WebSocket streaming 在首个可见 frame 已发送后遇到 `ClosedBeforeTerminal` 或其它未见 terminal 的 body stream 错误时，也会追加同样的 `response.failed/stream_disconnected`，不再把 body stream error 直接暴露给客户端；`tests/codex_serving/responses_websocket.rs::v1_responses_websocket_stream_should_synthesize_response_failed_when_closed_before_terminal` 覆盖该行为。
 - 本轮修正后，HTTP SSE 与 WebSocket streaming 的 heartbeat 首次触发延后到 15 秒，不会因为 `tokio::time::interval()` 的立即 tick 抢在上游首个可见 frame 前面；`tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_stream_first_frame_before_terminal_event` 覆盖首个 WebSocket delta 可先于 terminal 返回给客户端。
 
@@ -394,15 +395,16 @@ Rust 证据：
 - retry/recovery 分类优先级已集中为 `UpstreamRecoveryAction`：request recovery 优先于 account retry，model unsupported 只允许一次，再进入最终错误响应。
 - HTTP SSE non-streaming collect 阶段的 `previous_response_not_found` 与 unanswered function call 已有端到端覆盖，确认 mid-SSE error event 会复用同账号 strip-and-retry。
 - streaming premature close 已按原版对齐：HTTP SSE 正常 EOF、HTTP SSE body stream error、WebSocket body stream error 在缺少 terminal event 时都会合成 `event: response.failed`，错误码 `stream_disconnected`，并进入现有 stream 审计失败记录。
+- HTTP SSE premature close 已有 exact golden 覆盖，锁定先透传已收到 delta、再追加 `response.failed/stream_disconnected`、并以 SSE 双换行结束的完整输出格式。
 - 单个未解析 SSE event buffer 已按原版限制为 64 MiB，避免异常上游响应在解析阶段无界增长。
 - OpenAI Responses 与 OpenAI Chat 的 tuple schema request conversion/reconvert 已对齐原版，不涉及非 OpenAI translator。
 - Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳。
 
 未完全对齐：
-- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close 和最终错误外壳，但还需要更系统的 golden tests 防止格式细节回退。
+- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close 和最终错误外壳；本轮已先补 HTTP SSE premature close exact golden，但还需要更系统的 golden tests 防止格式细节回退。
 
 缺口/后续动作：
-- 增加 golden tests：标准 SSE、漂亮打印 JSON 续行、非 SSE body、premature close、`response.failed` auth recovery、reasoning replay、WS frame to SSE chunk。
+- 增加 golden tests：标准 SSE、漂亮打印 JSON 续行、非 SSE body、`response.failed` auth recovery、reasoning replay、WS frame to SSE chunk。
 
 ## 8. fallback、retry、错误分类
 
