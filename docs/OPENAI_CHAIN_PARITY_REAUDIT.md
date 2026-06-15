@@ -437,6 +437,7 @@ Rust 证据：
 - model unsupported fallback 已对齐原版：账号 plan 不支持当前 model 时最多换一个备用账号重试一次，不改变账号状态；HTTP-time 错误与 non-streaming mid-SSE `response.failed` 均有测试覆盖。
 - 401 token invalid fallback 已对齐原版：request path 不再 refresh 同账号；普通 401 会标记当前账号 `expired` 并尝试备用账号，包含 `deactivated` 的 401 会标记 `banned`；HTTP SSE streaming/non-streaming 与 WebSocket fallback exhausted 均有测试覆盖。
 - fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming 响应体。
+- Cloudflare challenge fallback exhausted status/message 已对齐原版：上游 403 challenge 会作为 retry decision 暴露 502 和 `Upstream blocked the request (Cloudflare challenge)`，无备用账号时返回该 502 语义；`v1_responses_should_return_502_when_cloudflare_challenge_has_no_fallback` 覆盖单账号无 fallback 场景。
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
 - WS history 请求不跨账号重试这一点从安全角度更保守，避免 `previous_response_id` 的 server-side history 静默丢失。
 
@@ -444,7 +445,6 @@ Rust 证据：
 - recovery 优先级仍不是完整原版状态机。Rust 已实现 implicit resume restore/replay 与 strip-and-retry 优先于账号 fallback，但状态机仍分散在 responses/dispatch 中，没有抽成原版同等的 `RetryAction` 分层。
 - non-streaming mid-SSE failure 仍不是完整原版 catch 状态机。429/402/403、401、model unsupported、400 strip-and-retry 与隐式续链 restore 已补齐；剩余主要是最终错误外壳的结构细节。
 - `previous_response_id` 限流/配额语义不一致。原版没有显式“history 请求保持原账户”的 retry hold，可能经 fallback 后再通过 `previous_response_not_found` strip-and-retry 恢复；Rust 遇到 429/402/403 会保持原账号并返回错误，保护历史但牺牲可恢复性。
-- CF challenge exhausted status 不一致。原版 Cloudflare challenge fallback exhausted 使用 502 语义；Rust 若无 fallback，最终会走原 403 upstream error。
 
 缺口/后续动作：
 - 引入原版级 `UpstreamRecoveryAction` 状态机：implicit resume replay、strip-and-retry、error handler、fallback transition 分层清晰，避免分散在 responses/dispatch 中。

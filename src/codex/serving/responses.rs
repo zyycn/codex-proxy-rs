@@ -24,7 +24,7 @@ use crate::{
     },
     codex::serving::http::errors::{
         codex_client_error_message, codex_client_error_response,
-        codex_client_error_response_with_message,
+        codex_client_error_response_with_status_and_message,
     },
     config::ModelConfig,
 };
@@ -328,14 +328,19 @@ impl ResponsesService {
                                         acquired = fallback;
                                         continue;
                                     }
+                                    let retry_message = retry.fallback_response_message(
+                                        codex_client_error_message(&error),
+                                    );
                                     let message = self
                                         .upstream
-                                        .fallback_exhausted_message(&codex_client_error_message(
-                                            &error,
-                                        ))
+                                        .fallback_exhausted_message(&retry_message)
                                         .await;
                                     let error_response =
-                                        codex_client_error_response_with_message(error, &message);
+                                        codex_client_error_response_with_status_and_message(
+                                            error,
+                                            retry.status(),
+                                            &message,
+                                        );
                                     self.upstream
                                         .log_response(
                                             &log_context,
@@ -424,12 +429,18 @@ impl ResponsesService {
                                 acquired = fallback;
                                 continue;
                             }
+                            let retry_message =
+                                retry.fallback_response_message(codex_client_error_message(&error));
                             let message = self
                                 .upstream
-                                .fallback_exhausted_message(&codex_client_error_message(&error))
+                                .fallback_exhausted_message(&retry_message)
                                 .await;
                             let error_response =
-                                codex_client_error_response_with_message(error, &message);
+                                codex_client_error_response_with_status_and_message(
+                                    error,
+                                    retry.status(),
+                                    &message,
+                                );
                             self.upstream
                                 .log_response(
                                     &log_context,
@@ -755,12 +766,18 @@ impl ResponsesService {
                                 acquired = fallback;
                                 continue;
                             }
+                            let retry_message =
+                                retry.fallback_response_message(codex_client_error_message(&error));
                             let message = self
                                 .upstream
-                                .fallback_exhausted_message(&codex_client_error_message(&error))
+                                .fallback_exhausted_message(&retry_message)
                                 .await;
                             let error_response =
-                                codex_client_error_response_with_message(error, &message);
+                                codex_client_error_response_with_status_and_message(
+                                    error,
+                                    retry.status(),
+                                    &message,
+                                );
                             self.upstream
                                 .log_response(
                                     &log_context,
