@@ -793,8 +793,33 @@ fn collected_has_terminal_sse_event(collected: &[u8]) -> bool {
 
 fn append_premature_close_failed_event(collected: &mut Vec<u8>, detail: Option<&str>) -> String {
     let failure = premature_close_failed_event(detail);
+    let prefix = sse_event_boundary_prefix(collected);
+    collected.extend_from_slice(prefix.as_bytes());
     collected.extend_from_slice(failure.as_bytes());
-    failure
+    if prefix.is_empty() {
+        failure
+    } else {
+        let mut output = String::with_capacity(prefix.len() + failure.len());
+        output.push_str(prefix);
+        output.push_str(&failure);
+        output
+    }
+}
+
+fn sse_event_boundary_prefix(collected: &[u8]) -> &'static str {
+    if collected.is_empty() || collected_ends_with_sse_event_boundary(collected) {
+        ""
+    } else if collected.ends_with(b"\n") {
+        "\n"
+    } else {
+        "\n\n"
+    }
+}
+
+fn collected_ends_with_sse_event_boundary(collected: &[u8]) -> bool {
+    collected.ends_with(b"\n\n")
+        || collected.ends_with(b"\r\n\r\n")
+        || collected.ends_with(b"\n\r\n")
 }
 
 async fn send_codex_request_with_upstream_retries_deps(
@@ -1556,7 +1581,7 @@ async fn log_codex_upstream_response_with_deps(
 
 #[cfg(test)]
 mod tests {
-    use super::jitter_request_interval_ms_with_factor;
+    use super::{append_premature_close_failed_event, jitter_request_interval_ms_with_factor};
 
     #[test]
     fn jitter_request_interval_ms_with_factor_should_match_original_bounds() {
@@ -1564,5 +1589,18 @@ mod tests {
         assert_eq!(jitter_request_interval_ms_with_factor(300, 1.3), 390);
         assert_eq!(jitter_request_interval_ms_with_factor(300, 0.1), 210);
         assert_eq!(jitter_request_interval_ms_with_factor(300, 2.0), 390);
+    }
+
+    #[test]
+    fn append_premature_close_failed_event_should_close_partial_sse_event_before_failure() {
+        let mut collected =
+            b"event: response.output_text.delta\ndata: {\"delta\":\"partial\"}\n".to_vec();
+
+        append_premature_close_failed_event(&mut collected, None);
+
+        let body = String::from_utf8(collected).unwrap();
+        let failure = super::stream::responses_sse_failure(&body).unwrap();
+        let metadata = failure.unwrap().metadata(true);
+        assert_eq!(metadata["upstreamCode"], "stream_disconnected");
     }
 }
