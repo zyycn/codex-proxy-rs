@@ -127,6 +127,7 @@ Rust 证据：
 - `src/auth/oauth-pkce.ts:476-532` device flow 使用 `/oauth/device/code` 和 token endpoint，字段与 RFC device code flow 一致。
 - `src/auth/refresh-scheduler.ts:21-32` permanent error 分为 banned 与 expired，且 `PERMANENT_THRESHOLD = 2`，连续两次才标记状态。
 - `src/auth/refresh-scheduler.ts:174-192` 全局 refresh 并发由 `auth.refresh_concurrency` 限制。
+- `src/auth/refresh-scheduler.ts:245-305` 在确认账号存在且有 refresh token 后，会先把账号状态标记为 `refreshing`；刷新成功后写回 active，新一轮 token 临时失败耗尽后恢复 active 并安排 10 分钟 recovery，permanent threshold 命中后写 expired/banned。
 - `src/auth/refresh-lock.ts:1-70` 每账号 refresh 有跨进程锁，锁 5 分钟过期。
 - `src/auth/health-check.ts:1-110` 账号健康检查只调用 OAuth refresh，不访问 Codex API。
 
@@ -142,6 +143,7 @@ Rust 证据：
 - `src/codex/tasks/token_refresh.rs:36-50` 定义了与原版一致的重试次数、退避基数、恢复延迟、permanent threshold 和 banned/expired 错误集合。
 - `src/codex/tasks/token_refresh.rs:52-65` 用 `Semaphore` 实现全局 refresh 并发限制。
 - `src/codex/accounts/service/refresh.rs:45-68` 用 SQLite refresh lease 实现跨进程/跨实例防重，TTL 5 分钟。
+- `src/codex/tasks/token_refresh.rs` 会从持久化 `refreshing` 状态恢复，但当前后台刷新开始前不主动把账号状态写为 `refreshing`；运行中防重主要依赖内存 `in_flight` 与 SQLite refresh lease。
 - 本轮修正后，`src/codex/accounts/service/refresh.rs` 提供 `probe_account_refresh()`，用于执行 OAuth refresh 探测但失败不直接落库状态；admin/manual refresh 仍通过 `refresh_account()` 应用结果。
 - 本轮修正后，`src/codex/tasks/token_refresh.rs` 后台调度器调用 `probe_account_refresh()`，只有 `AccountProbeOutcome::Alive` 视为成功，`Dead` 会进入重试与 permanent threshold 判断；第二次 permanent failure 后才写入 expired/banned。
 - `src/codex/tasks/token_refresh.rs` 单元测试 `do_refresh_inner_should_mark_expired_only_after_second_permanent_failure` 覆盖连续两次 `InvalidGrant` 前数据库状态仍为 `active`，第二次失败后才写入 `expired`。
@@ -161,14 +163,15 @@ Rust 证据：
 - refresh 成功时保留未轮换的旧 refresh_token，这一点符合原版保护逻辑。
 - 后台 refresh 调度器已不再把 `Dead` probe 误判为成功；scheduler 路径 permanent failure 的状态写入已延后到连续两次失败。
 - 后台 refresh 调度器的临时错误耗尽语义已与原版一致：不把账号标为 expired，恢复为 active，并安排 10 分钟 recovery。
+- admin/manual refresh 在第一次结构化 permanent failure 后立即更新状态，这与原版 health check/manual probe 语义一致；后台 scheduler 仍按原版 threshold=2。
+- 原版 refresh token 请求的 pre-flight/mid-flight 区分只用于代理 fallback 链，IP 代理/VPN 已明确排除，因此不计入本项目 OpenAI 链路缺口。
 - 账号健康检查已回到原版 OAuth refresh-only 安全边界。
 
 未完全对齐：
-- admin/manual refresh 仍在第一次结构化 permanent failure 后立即更新状态；原版 health check 也会立即 mark expired，但后台 scheduler 已按原版 threshold=2。若要所有手动路径也完全同构，需要重新定义 admin 手动刷新语义。
-- 原版 refresh 对一次性 RT 的网络错误非常谨慎，只有请求确认未到服务器时才 fallback/retry；Rust 当前 `reqwest` refresh client 不能区分 pre-flight 与 mid-flight 失败，且 runtime 调度器错误处理路径与原版不等价。
+- Rust 后台刷新开始前没有像原版一样持久写入 `refreshing`。它依赖 SQLite lease 避免并发刷新，但进程在 refresh HTTP 请求中途崩溃时，重启后的即时恢复语义与原版 `refreshing -> immediate retry` 不完全一致。
 
 缺口/后续动作：
-- 若要继续把 refresh client 做到原版级细粒度，需要区分 refresh token 请求的 pre-flight 网络失败与 mid-flight 失败，避免一次性 RT 被服务器接收后仍重试。
+- 若要继续对齐 OAuth scheduler，需要决定是否在后台刷新尝试期间持久写入 `refreshing`，并补充崩溃恢复状态机测试。
 
 ## 4. `/v1/responses` 请求构造与 prompt cache identity
 
