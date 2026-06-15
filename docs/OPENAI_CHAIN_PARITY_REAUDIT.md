@@ -496,6 +496,7 @@ Rust 证据：
 - least_used 依赖的 request_count、window_reset_at、quota_limited 字段已经进入运行时调度和数据库恢复路径。
 - account retry decision 的失败请求持久 request_count 已对齐原版 release 语义：进入 429/402/403/401/model unsupported/Cloudflare 等账号 fallback/hold 处理时会写入一次无 token 的 request attempt；`v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_account` 覆盖 402 fallback 失败账号计数。
 - 非 account retry decision 的最终失败请求持久 request_count 已对齐到原版 release 语义：未进入账号 fallback/hold 的最终错误会写入一次无 token 的 request attempt；`v1_responses_should_record_request_count_when_5xx_retries_are_exhausted` 覆盖 5xx 内部重试 3 次但持久 request_count 只计 1 次。
+- transport error 的最终失败请求持久 request_count 已有覆盖；`v1_responses_should_record_request_count_when_http_transport_fails` 证明 HTTP transport 失败也会按原版 release 语义写入一次无 token 的 request attempt。
 
 未完全对齐：
 - image_generation usage 未对齐。原版记录 image input/output tokens、image request success/failure 和对应窗口计数；Rust `TokenUsage` 只有 input/output/cached/total，没有解析或持久化 `tool_usage.image_gen`。
@@ -507,7 +508,6 @@ Rust 证据：
 缺口/后续动作：
 - 补 `TokenUsage` 的 image_generation 字段与数据库/运行时窗口字段，或明确 Rust 不支持 image_generation usage 统计。
 - 增加 dirty quota verification 机制：窗口离线 reset 后标记需要校验，请求前调用 usage endpoint，失败时保留 dirty 标记并限制放大次数。
-- 继续补 transport error request_count 覆盖；5xx exhausted 已覆盖。
 - 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
 

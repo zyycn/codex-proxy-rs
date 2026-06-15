@@ -4,6 +4,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::json;
+use std::net::TcpListener;
 use tower::ServiceExt;
 use wiremock::{
     matchers::{header, method, path},
@@ -361,6 +362,51 @@ async fn v1_responses_should_record_request_count_when_5xx_retries_are_exhausted
         .filter(|request| request.method.as_str() == "POST")
         .count();
     assert_eq!(post_count, 3);
+}
+
+#[tokio::test]
+async fn v1_responses_should_record_request_count_when_http_transport_fails() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let imported = build_imported_app_with_accounts(
+        upstream_url,
+        &[ImportAccount {
+            id: "acct_transport_failed",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let failed_usage: Option<(i64,)> =
+        sqlx::query_as("select request_count from account_usage where account_id = ?")
+            .bind("acct_transport_failed")
+            .fetch_optional(&imported.pool)
+            .await
+            .unwrap();
+    assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
 }
 
 #[tokio::test]
