@@ -465,6 +465,13 @@ async fn v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_accou
         .await
         .unwrap();
     assert_eq!(account_status.0, "quota_exhausted");
+    let failed_usage: Option<(i64,)> =
+        sqlx::query_as("select request_count from account_usage where account_id = ?")
+            .bind("acct_a")
+            .fetch_optional(&imported.pool)
+            .await
+            .unwrap();
+    assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
 }
 
 #[tokio::test]

@@ -395,6 +395,13 @@ pub(super) async fn apply_upstream_account_retry_with_deps(
     account: &Account,
     retry: UpstreamAccountRetry,
 ) {
+    if let Err(error) = record_request_attempt(deps, &account.id).await {
+        tracing::warn!(
+            error = ?error,
+            account_id = %account.id,
+            "记录上游失败账户请求尝试失败"
+        );
+    }
     let evict_websocket_pool = match retry {
         UpstreamAccountRetry::ModelUnsupported { .. } => {
             tracing::warn!(
@@ -424,13 +431,6 @@ pub(super) async fn apply_upstream_account_retry_with_deps(
                 .lock()
                 .await
                 .mark_quota_limited_until(&account.id, cooldown_until);
-            if let Err(error) = record_request_attempt(deps, &account.id).await {
-                tracing::warn!(
-                    error = ?error,
-                    account_id = %account.id,
-                    "记录被 rate limit 的账户请求尝试失败"
-                );
-            }
             true
         }
         UpstreamAccountRetry::QuotaExhausted => {
