@@ -159,6 +159,7 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
         .unwrap();
 
     assert!(!acquired.account.quota_limit_reached);
+    assert!(acquired.account.quota_verify_required);
     assert!(acquired.account.quota_cooldown_until.is_none());
     assert!(acquired.account.cloudflare_cooldown_until.is_none());
     assert_eq!(acquired.account.window_request_count, 1);
