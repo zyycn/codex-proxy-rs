@@ -1,0 +1,24 @@
+{
+  "id": "chatcmpl-REDACTED",
+  "object": "chat.completion",
+  "created": 0,
+  "model": "gpt-5.5",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "hello"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 9,
+    "completion_tokens": 3,
+    "total_tokens": 12,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  }
+}

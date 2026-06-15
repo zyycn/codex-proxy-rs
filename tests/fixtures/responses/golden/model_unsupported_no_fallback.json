@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "server_error",
+    "code": "codex_api_error",
+    "message": "No accounts available. Codex upstream error: {\"error\":{\"code\":\"model_not_available\",\"message\":\"Model gpt-5.5 is not available on this account plan\"}}"
+  }
+}

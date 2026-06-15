@@ -51,6 +51,14 @@ const CLOUDFLARE_CHALLENGE_NO_FALLBACK_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/cloudflare_challenge_no_fallback.json");
 const TOKEN_INVALID_NO_FALLBACK_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/token_invalid_no_fallback.json");
+const QUOTA_EXHAUSTED_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/quota_exhausted_no_fallback.json");
+const MODEL_UNSUPPORTED_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/model_unsupported_no_fallback.json");
+const PATH_BLOCK_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/path_block_no_fallback.json");
+const ACCOUNT_DEACTIVATED_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/account_deactivated_no_fallback.json");
 const TOKEN_INVALID_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
     include_str!("../fixtures/responses/golden/token_invalid_no_fallback_stream.sse"),
     "\n"
@@ -1827,6 +1835,61 @@ async fn v1_responses_should_mark_quota_exhausted_and_return_stream_error_when_4
 }
 
 #[tokio::test]
+async fn v1_responses_non_stream_should_mark_quota_exhausted_and_return_402_when_402_has_no_fallback(
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {"message": "quota reached"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_402_single_non_stream",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    let body = response_json(response).await;
+    let expected: serde_json::Value =
+        serde_json::from_str(QUOTA_EXHAUSTED_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_402_single_non_stream")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "quota_exhausted");
+}
+
+#[tokio::test]
 async fn v1_responses_should_return_stream_error_when_model_unsupported_has_no_fallback() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1882,6 +1945,63 @@ async fn v1_responses_should_return_stream_error_when_model_unsupported_has_no_f
     assert_eq!(body, MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN);
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_model_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
+}
+
+#[tokio::test]
+async fn v1_responses_non_stream_should_return_model_unsupported_when_no_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": "Model gpt-5.5 is not available on this account plan",
+                "code": "model_not_available"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_model_single_non_stream",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    let expected: serde_json::Value =
+        serde_json::from_str(MODEL_UNSUPPORTED_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_model_single_non_stream")
         .fetch_one(&imported.pool)
         .await
         .unwrap();
@@ -1945,6 +2065,64 @@ async fn v1_responses_should_return_stream_error_when_cloudflare_path_block_has_
     assert_eq!(
         cookie_repo
             .cookie_header("acct_path_block_single", "chatgpt.com")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_non_stream_should_return_path_block_when_cloudflare_path_block_has_no_fallback(
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_path_block_single_non_stream",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+    let cookie_repo = CookieRepository::new(imported.pool.clone(), imported.secret_box.clone());
+    cookie_repo
+        .set_cookie_header("acct_path_block_single_non_stream", "cf_clearance=old")
+        .await
+        .unwrap();
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = response_json(response).await;
+    let expected: serde_json::Value = serde_json::from_str(PATH_BLOCK_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
+    assert_eq!(
+        cookie_repo
+            .cookie_header("acct_path_block_single_non_stream", "chatgpt.com")
             .await
             .unwrap(),
         None
@@ -2048,6 +2226,10 @@ async fn v1_responses_should_mark_banned_when_401_says_account_deactivated() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    let expected: serde_json::Value =
+        serde_json::from_str(ACCOUNT_DEACTIVATED_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_401_deactivated")
         .fetch_one(&imported.pool)

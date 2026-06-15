@@ -23,6 +23,14 @@ const STREAM_PREMATURE_CLOSE_SSE: &str =
     include_str!("../fixtures/responses/http_sse/stream_premature_close.sse");
 const STREAM_PREMATURE_CLOSE_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/stream_premature_close.sse");
+const ERROR_EVENT_RESPONSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/error_event_response.json");
+const RESPONSE_FAILED_RATE_LIMIT_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/response_failed_rate_limit.json");
+const STREAM_ERROR_EVENT_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/stream_error_event.sse");
+const STREAM_RESPONSE_FAILED_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/stream_response_failed.sse");
 
 #[tokio::test]
 async fn v1_responses_non_stream_should_return_codex_api_error_when_sse_error_event_arrives() {
@@ -59,13 +67,8 @@ async fn v1_responses_non_stream_should_return_codex_api_error_when_sse_error_ev
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let body = response_json(response).await;
-    assert_eq!(body["type"], "error");
-    assert_eq!(body["error"]["code"], "codex_api_error");
-    assert_eq!(body["error"]["type"], "server_error");
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("model overloaded"));
+    let expected: serde_json::Value = serde_json::from_str(ERROR_EVENT_RESPONSE_GOLDEN).unwrap();
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]
@@ -103,13 +106,9 @@ async fn v1_responses_non_stream_should_return_rate_limit_error_when_response_fa
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = response_json(response).await;
-    assert_eq!(body["type"], "error");
-    assert_eq!(body["error"]["code"], "rate_limit_exceeded");
-    assert_eq!(body["error"]["type"], "rate_limit_error");
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("quota reached"));
+    let expected: serde_json::Value =
+        serde_json::from_str(RESPONSE_FAILED_RATE_LIMIT_GOLDEN).unwrap();
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]
@@ -149,8 +148,7 @@ async fn v1_responses_stream_should_passthrough_error_event_and_log_failure() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
-    assert!(body.contains("event: error"));
-    assert!(body.contains("upstream stream failed"));
+    assert_eq!(body, with_sse_terminal_separator(STREAM_ERROR_EVENT_GOLDEN));
     let event = fetch_v1_event_log(&imported.pool, "req_stream_error_event").await;
     assert_eq!(event.3, 502);
     assert_eq!(event.4["failureEvent"], "error");
@@ -193,8 +191,10 @@ async fn v1_responses_stream_should_passthrough_response_failed_and_log_failure(
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
-    assert!(body.contains("event: response.failed"));
-    assert!(body.contains("resp_stream_failed"));
+    assert_eq!(
+        body,
+        with_sse_terminal_separator(STREAM_RESPONSE_FAILED_GOLDEN)
+    );
     let event = fetch_v1_event_log(&imported.pool, "req_stream_response_failed").await;
     assert_eq!(event.3, 502);
     assert_eq!(event.4["failureEvent"], "response.failed");
