@@ -19,7 +19,7 @@ const {
 </script>
 
 <template>
-  <div class="ml-7 w-[1584px] pt-[34px] pb-[60px]">
+  <div class="w-full min-w-[1180px] px-7 pt-[34px] pb-[34px]">
     <header class="flex h-[68px] items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-[800] mb-0 text-[var(--cp-text-primary)]">
@@ -33,11 +33,11 @@ const {
       <AppTopbar class="mt-0.5" />
     </header>
 
-    <section class="mt-6 grid grid-cols-4 gap-6" aria-label="核心指标">
+    <section class="mt-6 grid grid-cols-[repeat(4,minmax(0,1fr))] gap-6" aria-label="核心指标">
       <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
     </section>
 
-    <section class="mt-6 grid grid-cols-[948px_608px] gap-7">
+    <section class="mt-6 grid grid-cols-[minmax(0,948fr)_minmax(0,608fr)] gap-7">
       <RequestTrendCard :points="trendPoints" :summary="trendSummary" />
       <ServiceStatusCard :items="serviceStatuses" />
     </section>

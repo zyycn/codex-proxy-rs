@@ -98,9 +98,13 @@
   --cp-shadow-control: 0 8px 18px -16px #0e172614;
   --cp-shadow-popover: 0 16px 34px -18px #0e172622;
   --cp-shadow-sidebar: 2px 0 12px -12px #0e172607;
+  --cp-scrollbar-track: #eef3f8;
+  --cp-scrollbar-thumb: #cbd7e6;
+  --cp-scrollbar-thumb-hover: #aebed0;
 
   --cp-space-page-x: 28px;
   --cp-space-page-y: 32px;
   --cp-gap-card: 24px;
-  --cp-sidebar-width: 280px;
+  --cp-sidebar-width: 256px;
+  --cp-sidebar-collapsed-width: 88px;
 }
