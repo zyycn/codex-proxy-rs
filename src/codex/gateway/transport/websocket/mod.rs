@@ -14,6 +14,7 @@ use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
 use reqwest::{header::HeaderMap, StatusCode};
 
 use crate::codex::gateway::transport::{
+    endpoints::{endpoint_url, CODEX_RESPONSES_PATH},
     rate_limits::{parse_rate_limits_event_raw, rate_limits_to_header_pairs, ParsedRateLimits},
     types::CodexResponsesRequest,
 };
@@ -471,7 +472,7 @@ fn build_ws_request(
 }
 
 fn websocket_url(base_url: &str) -> String {
-    let url = format!("{}/codex/responses", base_url.trim_end_matches('/'));
+    let url = endpoint_url(base_url, CODEX_RESPONSES_PATH);
     if let Some(rest) = url.strip_prefix("https://") {
         format!("wss://{rest}")
     } else if let Some(rest) = url.strip_prefix("http://") {

@@ -12,6 +12,7 @@ use crate::{
         model::AccountStatus,
         repository::{AccountRepository, StoredAccount},
     },
+    codex::gateway::transport::endpoints::primary_usage_request_path,
     codex::gateway::transport::http_client::{
         build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
     },
@@ -111,10 +112,11 @@ pub(super) async fn fetch_account_usage(
 
 async fn account_cookie_header(service: &AccountService, account_id: &str) -> Option<String> {
     let domain = request_domain(&service.config.api.base_url)?;
+    let request_path = primary_usage_request_path(&service.config.api.base_url);
     service
         .cookie_repository
         .as_ref()?
-        .cookie_header(account_id, &domain)
+        .cookie_header_for_request(account_id, &domain, &request_path)
         .await
         .ok()
         .flatten()

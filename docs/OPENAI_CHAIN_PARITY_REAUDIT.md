@@ -30,7 +30,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
-- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数和 image_generation usage 已补齐，剩余差异集中在 Cookie domain/path、quota window reset 细节和双方都未解析的 active-limit header。
+- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage 和 Cookie domain/path 语义已补齐，剩余差异集中在 quota window reset 细节和双方都未解析的 active-limit header。
 
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
@@ -467,7 +467,9 @@ Rust 证据：
 
 Rust 证据：
 - `src/codex/accounts/cookies/repository.rs:1-111` cookie 存在 SQLite `account_cookies`，value 加密，唯一键为 `(account_id, domain, name, path)`；自动捕获白名单只有 `cf_clearance`。
-- `src/codex/accounts/cookies/repository.rs:70-102` 构造 Cookie header 时按 domain 过滤并跳过过期 cookie；`delete_account_cookies()` 支持按账号清理。
+- `src/codex/accounts/cookies/repository.rs:70-130` 构造 Cookie header 时按 domain/path 过滤并跳过过期 cookie，同名 cookie 会按更长 path 优先输出；`delete_account_cookies()` 支持按账号清理。
+- 本阶段修正后，`src/codex/gateway/transport/endpoints.rs` 集中定义 Codex upstream endpoint URL/path 规则；HTTP SSE、compact、WebSocket、dirty quota usage 和账号 usage 查询读取 Cookie 时都使用真实 upstream request path。
+- 本阶段修正后，`tests/codex_accounts/cookie_store.rs::cookie_repository_should_scope_cookie_replay_by_domain_and_path` 覆盖 repository 层 domain/path 过滤和同名 cookie 的长 path 优先；`tests/codex_serving/responses_http_sse.rs::v1_responses_should_scope_upstream_cookie_by_codex_response_path` 先以只带根路径 Cookie 失败，再修复为 `/codex/responses` 请求携带 `/codex` 与根路径 Cookie。
 - 本轮修正后，`src/codex/accounts/cookies/repository.rs` 提供 `cleanup_expired(now)`，会按现有 RFC2822/RFC3339 过期解析规则持久删除过期 cookie；`src/codex/tasks/cookie_cleanup.rs` 每 5 分钟运行一次清理，并在 `src/runtime/tasks/coordinator.rs` 中随后台任务启动。
 - `src/platform/storage/schema.sql:68-83` `account_usage` 已持久化 `window_request_count`、`window_input_tokens`、`window_output_tokens`、`window_cached_tokens`、`window_started_at`、`window_reset_at`、`limit_window_seconds`、`last_used_at`。
 - 本轮修正后，`src/platform/storage/schema.sql` 的 `accounts.quota_verify_required` 可持久化本地 quota reset 后的 dirty verification 标记，并通过 `AccountRepository::list_pool_accounts()` 恢复到运行时 `Account`。
@@ -497,6 +499,7 @@ Rust 证据：
 - Cookie 自动捕获白名单与原版一致，只自动保存 `cf_clearance`，不会保存 `__cf_bm`。
 - Rust 使用 SQLite + AES 加密保存 cookie，比原版 JSON 文件更适合当前数据库架构；主请求链路能注入 Cookie 并捕获 `Set-Cookie`。
 - Cookie 过期清理已对齐原版长期运行语义：读取时跳过过期 cookie，同时后台调度器每 5 分钟持久删除过期行；`cookie_repository_cleanup_expired_cookies_should_delete_only_expired_rows` 与 `cookie_cleanup_scheduler_should_delete_expired_cookie_rows` 覆盖 repository 和 scheduler 两层。
+- Cookie domain/path 精细化已确认为 Rust 新架构选择：原版 per-account map 不做浏览器式 path 过滤，Rust 在无历史负担下保留 SQLite `(account_id, domain, name, path)` 唯一键，并按真实 upstream request path 选择 Cookie。这不是回退到原版简单 map 的缺口。
 - primary/secondary/code_review rate-limit header 和 `codex.rate_limits` event 的解析与 quota 归一化主路径基本对齐，并能保留已有 credits。
 - usage input/output/cached token 的成功路径持久化、窗口统计和重启恢复已对齐到可用水平。
 - SSE usage 提取已对齐原版最终 usage 语义，不再对多个事件里重复出现的同一份 usage 做累计；`extract_sse_usage_should_use_completed_response_usage_without_merging_earlier_usage` 覆盖该行为。
@@ -508,12 +511,10 @@ Rust 证据：
 - image_generation usage 已对齐原版主语义：`tool_usage.image_gen` token 与 host-model token 分开累计；请求声明 `tools: [{type: "image_generation"}]` 且 `image_output_tokens > 0` 记成功，否则记失败；total/window 字段都能持久化并恢复到运行时账号。覆盖测试包括 `extract_usage_reads_image_generation_tool_usage_separately`、`extract_sse_usage_should_read_completed_image_generation_tool_usage`、`sqlite_schema_should_persist_image_generation_usage_columns`、`account_repository_should_accumulate_image_generation_usage_counters`、`account_repository_should_restore_window_usage_into_runtime_pool_accounts`、`v1_responses_should_record_image_generation_usage_when_tool_succeeds`、`v1_responses_should_record_failed_image_generation_attempt_when_tool_has_no_output`。
 
 未完全对齐：
-- Cookie domain/path 语义不同。原版 CookieJar 是 per-account 简单 map，不按 domain/path 过滤；Rust 按 domain/path 存储和匹配。对 `chatgpt.com` 主链路更严格，但不是原版逐字行为。
 - quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at`；Rust 设置 `window_started_at` 并触发 `quota_verify_required`，但没有 `window_counters_reset_at` 字段。
 - passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
 
 缺口/后续动作：
-- 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
 
 ## 10. session affinity、implicit resume、reasoning replay

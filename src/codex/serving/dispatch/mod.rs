@@ -48,6 +48,10 @@ use crate::{
     codex::gateway::installation_id::get_installation_id,
     codex::gateway::protocol::codex_to_openai::openai_error,
     codex::gateway::transport::{
+        endpoints::{
+            endpoint_request_path, primary_usage_request_path, CODEX_RESPONSES_COMPACT_PATH,
+            CODEX_RESPONSES_PATH,
+        },
         http_client::{
             build_reqwest_client, CodexBackendClient, CodexBackendStream,
             CodexBackendWebSocketStream, CodexClientError, CodexCompactResponse,
@@ -90,7 +94,6 @@ use self::reasoning_replay::ReasoningReplayCache;
 use self::stream_audit::{StreamAudit, WebSocketStreamAudit};
 use self::{
     limits::apply_rate_limit_headers_with_deps,
-    routing::request_domain,
     stream::{
         completed_response_metadata, ensure_stream_metadata, has_terminal_sse_event,
         premature_close_failed_event, TupleStreamReconverter,
@@ -471,6 +474,28 @@ async fn record_failed_request_attempt_with_deps(
     }
 }
 
+async fn upstream_cookie_header_for_endpoint(
+    deps: &CodexUpstreamDependencies,
+    account_id: &str,
+    endpoint_path: &str,
+) -> Option<String> {
+    let request_path = endpoint_request_path(&deps.config.api.base_url, endpoint_path);
+    upstream_cookie_header_for_request_path(deps, account_id, &request_path).await
+}
+
+async fn upstream_cookie_header_for_request_path(
+    deps: &CodexUpstreamDependencies,
+    account_id: &str,
+    request_path: &str,
+) -> Option<String> {
+    let repo = deps.cookie_repository.as_ref()?;
+    let domain = routing::request_domain(&deps.config.api.base_url)?;
+    repo.cookie_header_for_request(account_id, &domain, request_path)
+        .await
+        .ok()
+        .flatten()
+}
+
 struct DirtyQuotaVerification {
     limit_reached: bool,
 }
@@ -495,11 +520,9 @@ async fn fetch_dirty_account_usage_with_deps(
     account: &Account,
     request_id: &str,
 ) -> Result<Value, CodexClientError> {
-    let request_domain = request_domain(&deps.config.api.base_url);
-    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
-        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
-        _ => None,
-    };
+    let usage_path = primary_usage_request_path(&deps.config.api.base_url);
+    let cookie_header =
+        upstream_cookie_header_for_request_path(deps, &account.id, &usage_path).await;
     let client = CodexBackendClient::new(
         build_reqwest_client(deps.config.tls.force_http11)?,
         deps.config.api.base_url.clone(),
@@ -1157,11 +1180,8 @@ async fn send_codex_request(
     account: &Account,
     request_id: &str,
 ) -> Result<crate::codex::gateway::transport::http_client::CodexBackendResponse, CodexClientError> {
-    let request_domain = request_domain(&deps.config.api.base_url);
-    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
-        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
-        _ => None,
-    };
+    let cookie_header =
+        upstream_cookie_header_for_endpoint(deps, &account.id, CODEX_RESPONSES_PATH).await;
 
     let account_scope = &account.id;
     let identity = build_conversation_identity(
@@ -1206,11 +1226,8 @@ async fn send_compact_request(
     account: &Account,
     request_id: &str,
 ) -> Result<CodexCompactResponse, CodexClientError> {
-    let request_domain = request_domain(&deps.config.api.base_url);
-    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
-        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
-        _ => None,
-    };
+    let cookie_header =
+        upstream_cookie_header_for_endpoint(deps, &account.id, CODEX_RESPONSES_COMPACT_PATH).await;
 
     let installation_id = get_installation_id(Some(&deps.config.database.url));
     let client = CodexBackendClient::new(
@@ -1261,11 +1278,8 @@ async fn send_codex_stream_request(
     account: &Account,
     request_id: &str,
 ) -> Result<CodexBackendStream, CodexClientError> {
-    let request_domain = request_domain(&deps.config.api.base_url);
-    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
-        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
-        _ => None,
-    };
+    let cookie_header =
+        upstream_cookie_header_for_endpoint(deps, &account.id, CODEX_RESPONSES_PATH).await;
 
     // Build conversation identity for session affinity
     // Use account.id as the scope since entry_id doesn't exist
@@ -1371,11 +1385,8 @@ async fn send_codex_websocket_stream_request(
     account: &Account,
     request_id: &str,
 ) -> Result<CodexBackendWebSocketStream, CodexClientError> {
-    let request_domain = request_domain(&deps.config.api.base_url);
-    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
-        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
-        _ => None,
-    };
+    let cookie_header =
+        upstream_cookie_header_for_endpoint(deps, &account.id, CODEX_RESPONSES_PATH).await;
 
     let account_scope = &account.id;
     let identity = build_conversation_identity(

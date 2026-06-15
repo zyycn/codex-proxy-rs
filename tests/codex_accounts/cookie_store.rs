@@ -67,6 +67,36 @@ async fn cookie_repository_encrypts_and_replays_account_scoped_cookies() {
 }
 
 #[tokio::test]
+async fn cookie_repository_should_scope_cookie_replay_by_domain_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("path-scoped-cookies.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_account(&pool, "acct_a").await;
+    let repo = CookieRepository::new(pool, SecretBox::new([11u8; 32]));
+
+    repo.capture_set_cookie("acct_a", "cf_clearance=root; Domain=.chatgpt.com; Path=/")
+        .await
+        .unwrap();
+    repo.capture_set_cookie("acct_a", "cf_clearance=api; Domain=.chatgpt.com; Path=/api")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.cookie_header_for_request("acct_a", "chatgpt.com", "/codex/responses")
+            .await
+            .unwrap(),
+        Some("cf_clearance=root".to_string())
+    );
+    assert_eq!(
+        repo.cookie_header_for_request("acct_a", "chatgpt.com", "/api/codex/usage")
+            .await
+            .unwrap(),
+        Some("cf_clearance=api; cf_clearance=root".to_string())
+    );
+}
+
+#[tokio::test]
 async fn cookie_repository_should_only_auto_capture_cf_clearance() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("capturable-cookies.sqlite");
