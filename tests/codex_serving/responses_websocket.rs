@@ -19,6 +19,8 @@ use tokio_tungstenite::{
 };
 use tower::ServiceExt;
 
+use codex_proxy_rs::runtime::{build_router, state::AppState};
+
 use crate::support::{
     response_json, response_text,
     upstream::{
@@ -698,6 +700,368 @@ async fn v1_responses_websocket_should_implicitly_resume_full_history_continuati
     );
     assert_eq!(second_request["input"][1]["content"], "continue");
     assert_eq!(second_request["input"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_not_implicitly_resume_unmatched_function_call_output() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_function_call_response("resp_call_first", "call_expected")
+                    .into(),
+            ))
+            .await
+            .unwrap();
+
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_call_mismatch_second", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "use the lookup tool",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "call the lookup tool"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "use the lookup tool",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "call the lookup tool"
+                            },
+                            {
+                                "type": "function_call",
+                                "call_id": "call_expected",
+                                "name": "lookup",
+                                "arguments": "{}"
+                            },
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call_missing",
+                                "output": "tool output"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert!(first_request["prompt_cache_key"].as_str().is_some());
+    assert!(second_request.get("previous_response_id").is_none());
+    assert_eq!(second_request["input"].as_array().unwrap().len(), 3);
+    assert_eq!(second_request["input"][2]["call_id"], "call_missing");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_not_implicitly_resume_self_contained_function_call_replay() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_message = websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_function_call_response(
+                    "resp_self_contained_first",
+                    "call_self",
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let second_message = websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_self_contained_second", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "use the lookup tool",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "call the lookup tool"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "use the lookup tool",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "call the lookup tool"
+                            },
+                            {
+                                "type": "function_call",
+                                "call_id": "call_self",
+                                "name": "lookup",
+                                "arguments": "{}"
+                            },
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call_self",
+                                "output": "tool output"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert!(first_request["prompt_cache_key"].as_str().is_some());
+    assert!(second_request.get("previous_response_id").is_none());
+    assert_eq!(second_request["input"].as_array().unwrap().len(), 3);
+    assert_eq!(second_request["input"][2]["call_id"], "call_self");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_should_implicitly_resume_after_sqlite_affinity_restore() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let first_message = first_websocket.next().await.unwrap().unwrap();
+        let first_request =
+            serde_json::from_str::<Value>(&first_message.into_text().unwrap()).unwrap();
+        first_websocket
+            .send(Message::Text(
+                WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().into(),
+            ))
+            .await
+            .unwrap();
+        first_websocket.close(None).await.unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let second_message = second_websocket.next().await.unwrap().unwrap();
+        let second_request =
+            serde_json::from_str::<Value>(&second_message.into_text().unwrap()).unwrap();
+        second_websocket
+            .send(Message::Text(
+                websocket_completed_response("resp_restored_implicit_resume", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        (first_request, second_request)
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let first_response = imported
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [{
+                            "role": "user",
+                            "content": "remember this"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let restored_state = AppState::with_pool_secret_and_api_key_hasher(
+        imported.config.clone(),
+        imported.pool.clone(),
+        imported.secret_box.clone(),
+        imported.api_key_hasher.clone(),
+    );
+    assert_eq!(
+        restored_state
+            .reload_account_pool_from_repository()
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        restored_state
+            .reload_session_affinity_from_repository()
+            .await
+            .unwrap(),
+        1
+    );
+    let restored_app = build_router(restored_state);
+
+    let second_response = restored_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "instructions": "answer briefly",
+                        "stream": false,
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": "remember this"
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "cached answer"
+                            },
+                            {
+                                "role": "user",
+                                "content": "continue"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert_eq!(
+        second_request["prompt_cache_key"], first_request["prompt_cache_key"],
+        "SQLite-restored affinity should keep the recorded conversation identity"
+    );
+    assert_eq!(
+        second_request["previous_response_id"],
+        "resp_implicit_resume_first"
+    );
+    assert_eq!(second_request["input"].as_array().unwrap().len(), 1);
+    assert_eq!(second_request["input"][0]["content"], "continue");
 }
 
 #[tokio::test]
@@ -1914,6 +2278,21 @@ fn websocket_completed_response(
     value["response"]["id"] = Value::String(response_id.to_string());
     value["response"]["usage"]["input_tokens"] = json!(input_tokens);
     value["response"]["usage"]["output_tokens"] = json!(output_tokens);
+    value.to_string()
+}
+
+fn websocket_completed_function_call_response(response_id: &str, call_id: &str) -> String {
+    let mut value: Value = serde_json::from_str(WEBSOCKET_COMPLETED_RESPONSE).unwrap();
+    value["response"]["id"] = Value::String(response_id.to_string());
+    value["response"]["output"] = json!([{
+        "type": "function_call",
+        "id": format!("fc_{call_id}"),
+        "call_id": call_id,
+        "name": "lookup",
+        "arguments": "{}"
+    }]);
+    value["response"]["usage"]["input_tokens"] = json!(6);
+    value["response"]["usage"]["output_tokens"] = json!(1);
     value.to_string()
 }
 

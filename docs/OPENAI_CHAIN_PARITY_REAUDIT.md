@@ -23,12 +23,11 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 ## 总体结论
 
-本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“OAuth/device/refresh 链路”、“/v1/responses 请求构造与 prompt cache identity”和“rate-limit、usage、quota、cookie 持久化”已对齐，其余链路仍为 `部分对齐`。
+本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“OAuth/device/refresh 链路”、“/v1/responses 请求构造与 prompt cache identity”、“rate-limit、usage、quota、cookie 持久化”和“session affinity、implicit resume、reasoning replay”已对齐，其余链路仍为 `部分对齐`。
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
-- session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -46,7 +45,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 | 7 | response/SSE/WS frame 转换链路 | 已完成 | 部分对齐 |
 | 8 | fallback、retry、错误分类 | 已完成 | 部分对齐 |
 | 9 | rate-limit、usage、quota、cookie 持久化 | 已完成 | 已对齐 |
-| 10 | session affinity、implicit resume、reasoning replay | 已完成 | 部分对齐 |
+| 10 | session affinity、implicit resume、reasoning replay | 已完成 | 已对齐 |
 
 ## 1. 代码证据索引与审计边界
 
@@ -561,8 +560,11 @@ Rust 证据：
 - `tests/codex_serving/responses_websocket.rs:476-590` 覆盖显式 previous_response_id 路由到记录账号、继承 previous_response_id、持久化 function_call_ids/input_tokens/expires_at。
 - 本轮新增 `tests/fixtures/responses/websocket/completed_with_reasoning_replay.json` 和 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_implicitly_resume_full_history_continuation_with_reasoning_replay`，覆盖 completed response 记录 replay item 后，下一轮 full-history continuation 自动变成 implicit resume request。
 - 本轮新增 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_restore_full_history_when_implicit_resume_previous_response_is_missing`，覆盖隐式续链失败后的 full-history restore/replay。
+- 本轮新增 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_not_implicitly_resume_unmatched_function_call_output`，覆盖 continuation 中的 `function_call_output.call_id` 与已记录 function call 不匹配时不会错误启用 implicit resume。
+- 本轮新增 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_not_implicitly_resume_self_contained_function_call_replay`，覆盖 full history 已自包含 `function_call` 与 `function_call_output` 时不会错误启用 implicit resume。
+- 本轮新增 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_implicitly_resume_after_sqlite_affinity_restore`，覆盖真实请求写入 SQLite session affinity 后，重建 AppState、恢复账号池和 affinity，再发 full-history continuation 仍会设置 `previous_response_id` 并截取 continuation input。
 
-结论：部分对齐。
+结论：已对齐。
 
 已对齐：
 - 显式 `previous_response_id` 的核心 affinity 已对齐：response_id 能映射回账号、conversation id、turn_state，后续请求可路由到同一账号并继续 WebSocket 链。
@@ -579,16 +581,17 @@ Rust 证据：
 - 本轮新增 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_not_implicitly_resume_across_codex_windows`，覆盖同一显式 `prompt_cache_key` 下不同 `codexWindowId` 不会串用 `previous_response_id`；新增 affinity 单元测试覆盖 window identity 和显式 prompt cache anchor。
 - invalid encrypted content 驱逐已接入：Rust 会识别 `error`/`response.failed` 中的 `invalid_encrypted_content` 或等价的 invalid/encrypted/content 文本，并按 `account_id + conversation_id + variant_hash` 驱逐 reasoning replay cache；non-streaming、HTTP SSE streaming audit、WebSocket streaming audit 都使用同一驱逐方法。
 - 本轮新增 `tests/fixtures/responses/websocket/invalid_encrypted_content.json` 与 `tests/codex_serving/responses_websocket.rs::v1_responses_websocket_should_evict_reasoning_replay_after_invalid_encrypted_content`，覆盖 replay item 被上游判无效后，后续 implicit resume 不再注入同一个 encrypted reasoning item。
+- missing/unmatched function call output、self-contained function call replay、SQLite restore 后继续 implicit resume 的端到端测试已补齐，覆盖了之前仅有实现但缺少端到端证明的边界。
 
 已对齐：
 - OpenAI chat `clientConversationId` 已接入。原版 `/v1/chat/completions` 会把 OpenAI `user` 字段作为 shared handler 的 `clientConversationId`；Rust 现在将 `ChatCompletionRequest.user` 写入 Codex 请求的内部 `client_conversation_id` 和 `prompt_cache_key`，进入上游前仍按账号作用域转换为 `cp_...` session id。
 - 本轮新增 `tests/codex_serving/chat_completions.rs::chat_completions_should_use_user_as_client_conversation_id`，覆盖 OpenAI chat `user` 进入上游 `prompt_cache_key`。
 
 未完全对齐：
-- 当前剩余风险主要是覆盖面，而不是已确认的 OpenAI 行为缺失：还需要更多端到端用例证明 missing/unanswered tool calls、self-contained replay、SQLite restore 后 implicit resume 等边界不会回归。
+- 无。
 
 非目标：
 - usage hint 不移植。它在原版只影响非 OpenAI cache token 展示/估算，不影响 OpenAI chat translator 或 Responses passthrough；Rust 只保留 OpenAI 链路时不需要该兼容层。
 
 缺口/后续动作：
-- 增加端到端测试：missing/unanswered tool calls 跳过、self-contained replay、WS not_found restore full-history、SQLite restore 后继续 implicit resume、variant identity 分支隔离。
+- 无。
