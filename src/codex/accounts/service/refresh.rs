@@ -23,6 +23,7 @@ const REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
 enum RefreshFailurePolicy {
     PersistStatus,
     ReportOnly,
+    ScheduledProbe,
 }
 
 impl AccountService {
@@ -39,6 +40,14 @@ impl AccountService {
         account_id: &str,
     ) -> Result<AccountProbeResult, RefreshAccountError> {
         self.refresh_account_with_failure_policy(account_id, RefreshFailurePolicy::ReportOnly)
+            .await
+    }
+
+    pub async fn probe_scheduled_account_refresh(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountProbeResult, RefreshAccountError> {
+        self.refresh_account_with_failure_policy(account_id, RefreshFailurePolicy::ScheduledProbe)
             .await
     }
 
@@ -111,6 +120,9 @@ impl AccountService {
         };
         let started_at = std::time::Instant::now();
         let previous_status = account.status;
+        if matches!(failure_policy, RefreshFailurePolicy::ScheduledProbe) {
+            self.mark_scheduled_refreshing(repo, account_id).await?;
+        }
         match refresh_with_latest_disk_token_retry(repo, &account, refresh_token, &refresher).await
         {
             Ok(tokens) => {
@@ -139,7 +151,7 @@ impl AccountService {
                         self.apply_refresh_failure_status(repo, &account, failure)
                             .await
                     }
-                    RefreshFailurePolicy::ReportOnly => None,
+                    RefreshFailurePolicy::ReportOnly | RefreshFailurePolicy::ScheduledProbe => None,
                 };
                 Ok(AccountProbeResult {
                     id: account.id,
@@ -152,6 +164,22 @@ impl AccountService {
                 })
             }
         }
+    }
+
+    async fn mark_scheduled_refreshing(
+        &self,
+        repo: &AccountRepository,
+        account_id: &str,
+    ) -> Result<(), RefreshAccountError> {
+        repo.set_status(account_id, AccountStatus::Refreshing)
+            .await
+            .map_err(|_| RefreshAccountError::StoreStatus)?;
+        self.account_pool
+            .lock()
+            .await
+            .set_status(account_id, AccountStatus::Refreshing);
+        self.websocket_pool.evict_account(account_id).await;
+        Ok(())
     }
 
     async fn persist_refreshed_account(
