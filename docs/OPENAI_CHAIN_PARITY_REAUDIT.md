@@ -148,6 +148,7 @@ Rust 证据：
 - 本轮修正后，`src/codex/accounts/service/refresh.rs` 提供 `probe_account_refresh()`，用于执行 OAuth refresh 探测但失败不直接落库状态；admin/manual refresh 仍通过 `refresh_account()` 应用结果。
 - 本轮修正后，`src/codex/tasks/token_refresh.rs` 后台调度器调用 `probe_account_refresh()`，只有 `AccountProbeOutcome::Alive` 视为成功，`Dead` 会进入重试与 permanent threshold 判断；第二次 permanent failure 后才写入 expired/banned。
 - `src/codex/tasks/token_refresh.rs` 单元测试 `do_refresh_inner_should_mark_expired_only_after_second_permanent_failure` 覆盖连续两次 `InvalidGrant` 前数据库状态仍为 `active`，第二次失败后才写入 `expired`。
+- 本轮修正后，`src/codex/tasks/token_refresh.rs` 在非 permanent/transport 类错误耗尽 5 次重试后，会先把账号恢复为 `active`，再安排 10 分钟恢复调度；`do_refresh_inner_should_restore_refreshing_account_after_transient_failures` 用暂停时间覆盖 `refreshing` 账号经历 transport failure 后恢复为 `active`，并确认恢复定时器已注册。
 - `src/codex/gateway/oauth/client.rs:402-423` 把 `quota`、`banned`、`token_revoked` 等映射为结构化 `RefreshFailure`。
 - 本轮修正后，`src/codex/accounts/service/health.rs` 健康检查通过 `refresh_account()` 调用 OAuth refresh token 链路，不再访问 Codex usage endpoint；`tests/admin/accounts/cookies_quota.rs` 断言 `/api/codex/usage` 调用次数为 0。
 
@@ -162,6 +163,7 @@ Rust 证据：
 - 每账号 refresh 防重已经存在，Rust 用 SQLite lease 替代文件锁，语义上更适合当前数据库架构。
 - refresh 成功时保留未轮换的旧 refresh_token，这一点符合原版保护逻辑。
 - 后台 refresh 调度器已不再把 `Dead` probe 误判为成功；scheduler 路径 permanent failure 的状态写入已延后到连续两次失败。
+- 后台 refresh 调度器的临时错误耗尽语义已与原版一致：不把账号标为 expired，恢复为 active，并安排 10 分钟 recovery。
 - 账号健康检查已回到原版 OAuth refresh-only 安全边界。
 
 未完全对齐：
@@ -169,7 +171,7 @@ Rust 证据：
 - 原版 refresh 对一次性 RT 的网络错误非常谨慎，只有请求确认未到服务器时才 fallback/retry；Rust 当前 `reqwest` refresh client 不能区分 pre-flight 与 mid-flight 失败，且 runtime 调度器错误处理路径与原版不等价。
 
 缺口/后续动作：
-- 增加 transport error 的后台恢复调度测试，覆盖非 permanent 错误耗尽重试后进入 10 分钟恢复调度。
+- 若要继续把 refresh client 做到原版级细粒度，需要区分 refresh token 请求的 pre-flight 网络失败与 mid-flight 失败，避免一次性 RT 被服务器接收后仍重试。
 
 ## 4. `/v1/responses` 请求构造与 prompt cache identity
 
