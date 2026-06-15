@@ -111,6 +111,42 @@ async fn v1_responses_should_reject_non_object_json_without_upstream_request() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_return_responses_error_when_no_accounts_are_available() {
+    let server = MockServer::start().await;
+    let imported = build_imported_app_with_accounts_and_config(server.uri(), &[], |_| {}).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response_json(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "server_error");
+    assert_eq!(body["error"]["code"], "no_available_accounts");
+}
+
+#[tokio::test]
 async fn v1_responses_should_skip_event_log_when_logging_disabled() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1129,6 +1165,90 @@ async fn v1_responses_compact_should_post_json_to_codex_compact_upstream() {
         upstream_body["input"][2]["encrypted_content"],
         "enc_compact"
     );
+}
+
+#[tokio::test]
+async fn v1_responses_compact_should_return_rate_limit_error_when_fallback_is_exhausted() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "code": "rate_limit_exceeded",
+                "message": "compact quota reached"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response_json(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+    assert_eq!(body["error"]["code"], "rate_limit_exceeded");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("compact quota reached"));
+}
+
+#[tokio::test]
+async fn v1_responses_compact_should_return_responses_error_when_no_accounts_are_available() {
+    let server = MockServer::start().await;
+    let imported = build_imported_app_with_accounts_and_config(server.uri(), &[], |_| {}).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response_json(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "server_error");
+    assert_eq!(body["error"]["code"], "no_available_accounts");
 }
 
 #[tokio::test]

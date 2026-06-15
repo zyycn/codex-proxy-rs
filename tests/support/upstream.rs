@@ -229,20 +229,22 @@ async fn build_imported_app_with_accounts_config_and_fingerprint(
         })
         .collect::<Vec<_>>();
 
-    let import_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/admin/accounts/import")
-                .header("content-type", "application/json")
-                .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::from(json!({ "accounts": accounts }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(import_response.status(), StatusCode::OK);
+    if !accounts.is_empty() {
+        let import_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/accounts/import")
+                    .header("content-type", "application/json")
+                    .header("cookie", "cpr_admin_session=session_1")
+                    .body(Body::from(json!({ "accounts": accounts }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(import_response.status(), StatusCode::OK);
+    }
 
     ImportedApp {
         app,

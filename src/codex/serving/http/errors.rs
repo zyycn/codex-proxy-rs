@@ -1,5 +1,5 @@
 use axum::{http::StatusCode, Json};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     codex::gateway::protocol::codex_to_openai::openai_error,
@@ -20,6 +20,50 @@ pub(crate) fn codex_client_error_response_with_status_and_message(
 ) -> (StatusCode, Json<Value>) {
     let code = codex_client_error_code(&error);
     (status, Json(openai_error(message, code)))
+}
+
+pub(crate) fn responses_codex_client_error_response(
+    error: CodexClientError,
+) -> (StatusCode, Json<Value>) {
+    let status = codex_client_error_status(&error);
+    let message = codex_client_error_message(&error);
+    responses_error_response(status, &message)
+}
+
+pub(crate) fn responses_error_response(
+    status: StatusCode,
+    message: &str,
+) -> (StatusCode, Json<Value>) {
+    let (error_type, code) = if status == StatusCode::TOO_MANY_REQUESTS {
+        ("rate_limit_error", "rate_limit_exceeded")
+    } else {
+        ("server_error", "codex_api_error")
+    };
+    (
+        status,
+        Json(json!({
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "code": code,
+                "message": message,
+            }
+        })),
+    )
+}
+
+pub(crate) fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "type": "error",
+            "error": {
+                "type": "server_error",
+                "code": "no_available_accounts",
+                "message": "No available accounts. All accounts are expired or rate-limited.",
+            }
+        })),
+    )
 }
 
 pub(crate) fn codex_client_error_message(error: &CodexClientError) -> String {

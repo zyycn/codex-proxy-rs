@@ -18,13 +18,12 @@ use crate::{
     codex::serving::dispatch::{
         affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
         classify_upstream_request_recovery, completed_response_json,
-        no_available_accounts_response, normalize_service_tier_for_upstream,
-        CodexRequestLogContext, CodexUpstreamService, CollectedResponse, ImplicitResumeSnapshot,
-        UpstreamRequestRecovery,
+        normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,
+        CollectedResponse, ImplicitResumeSnapshot, UpstreamRequestRecovery,
     },
     codex::serving::http::errors::{
-        codex_client_error_message, codex_client_error_response,
-        codex_client_error_response_with_status_and_message,
+        codex_client_error_message, responses_codex_client_error_response,
+        responses_error_response, responses_no_available_accounts_response,
     },
     config::ModelConfig,
 };
@@ -157,7 +156,7 @@ impl ResponsesService {
             .acquire_account_for_request(&codex_request, request_id)
             .await
         else {
-            return no_available_accounts_response().into_response();
+            return responses_no_available_accounts_response().into_response();
         };
         let mut log_context = CodexRequestLogContext::new(
             request_id,
@@ -322,11 +321,7 @@ impl ResponsesService {
                                     .fallback_exhausted_message(&retry_message)
                                     .await;
                                 let error_response =
-                                    codex_client_error_response_with_status_and_message(
-                                        error,
-                                        retry.status(),
-                                        &message,
-                                    );
+                                    responses_error_response(retry.status(), &message);
                                 self.upstream
                                     .log_response(
                                         &log_context,
@@ -357,7 +352,7 @@ impl ResponsesService {
                                     )
                                     .await;
                             }
-                            let error_response = codex_client_error_response(error);
+                            let error_response = responses_codex_client_error_response(error);
                             self.upstream
                                 .log_response(
                                     &log_context,
@@ -423,11 +418,7 @@ impl ResponsesService {
                             .upstream
                             .fallback_exhausted_message(&retry_message)
                             .await;
-                        let error_response = codex_client_error_response_with_status_and_message(
-                            error,
-                            retry.status(),
-                            &message,
-                        );
+                        let error_response = responses_error_response(retry.status(), &message);
                         self.upstream
                             .log_response(
                                 &log_context,
@@ -458,7 +449,7 @@ impl ResponsesService {
                             )
                             .await;
                     }
-                    let error_response = codex_client_error_response(error);
+                    let error_response = responses_codex_client_error_response(error);
                     self.upstream
                         .log_response(
                             &log_context,
@@ -597,7 +588,8 @@ impl ResponsesService {
                         .evict_reasoning_replay(&codex_request, &acquired.account.id)
                         .await;
                 }
-                let error_response = codex_client_error_response(failure.upstream_error());
+                let error_response =
+                    responses_codex_client_error_response(failure.upstream_error());
                 self.upstream
                     .log_response(
                         &log_context,
@@ -681,7 +673,7 @@ impl ResponsesService {
         };
 
         let Some(mut acquired) = self.upstream.acquire_account(&compact_request.model).await else {
-            return no_available_accounts_response().into_response();
+            return responses_no_available_accounts_response().into_response();
         };
         let mut log_context = CodexRequestLogContext::new(
             request_id,
@@ -785,12 +777,7 @@ impl ResponsesService {
                                 .upstream
                                 .fallback_exhausted_message(&retry_message)
                                 .await;
-                            let error_response =
-                                codex_client_error_response_with_status_and_message(
-                                    error,
-                                    retry.status(),
-                                    &message,
-                                );
+                            let error_response = responses_error_response(retry.status(), &message);
                             self.upstream
                                 .log_response(
                                     &log_context,
@@ -823,7 +810,7 @@ impl ResponsesService {
                             )
                             .await;
                     }
-                    let error_response = codex_client_error_response(error);
+                    let error_response = responses_codex_client_error_response(error);
                     self.upstream
                         .log_response(
                             &log_context,
