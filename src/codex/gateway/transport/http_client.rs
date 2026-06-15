@@ -20,6 +20,9 @@ use uuid::Uuid;
 use crate::{
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::transport::{
+        endpoints::{
+            endpoint_url, usage_endpoint_urls, CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH,
+        },
         headers::build_ordered_codex_base_headers,
         sse::SseError,
         types::{CodexCompactRequest, CodexResponsesRequest},
@@ -491,7 +494,7 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         headers: HeaderMap,
     ) -> CodexClientResult<ReqwestResponse> {
-        let url = format!("{}/codex/responses", self.base_url);
+        let url = endpoint_url(&self.base_url, CODEX_RESPONSES_PATH);
         Ok(self
             .client
             .post(url)
@@ -506,7 +509,7 @@ impl CodexBackendClient {
         request: &CodexCompactRequest,
         headers: HeaderMap,
     ) -> CodexClientResult<ReqwestResponse> {
-        let url = format!("{}/codex/responses/compact", self.base_url);
+        let url = endpoint_url(&self.base_url, CODEX_RESPONSES_COMPACT_PATH);
         Ok(self
             .client
             .post(url)
@@ -517,17 +520,7 @@ impl CodexBackendClient {
     }
 
     fn usage_endpoints(&self) -> Vec<String> {
-        if self.base_url.contains("/backend-api") {
-            vec![
-                format!("{}/wham/usage", self.base_url),
-                format!("{}/codex/usage", self.base_url),
-            ]
-        } else {
-            vec![
-                format!("{}/api/codex/usage", self.base_url),
-                format!("{}/codex/usage", self.base_url),
-            ]
-        }
+        usage_endpoint_urls(&self.base_url)
     }
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {

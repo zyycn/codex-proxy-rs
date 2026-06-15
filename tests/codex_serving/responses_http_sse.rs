@@ -430,6 +430,69 @@ async fn v1_responses_should_record_failed_image_generation_attempt_when_tool_ha
 }
 
 #[tokio::test]
+async fn v1_responses_should_scope_upstream_cookie_by_codex_response_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+    let cookie_domain = reqwest::Url::parse(&server.uri())
+        .unwrap()
+        .host_str()
+        .unwrap()
+        .to_string();
+    let cookie_repo = CookieRepository::new(imported.pool.clone(), imported.secret_box.clone());
+    cookie_repo
+        .capture_set_cookie(
+            "acct_imported",
+            &format!("cf_clearance=root; Domain={cookie_domain}; Path=/"),
+        )
+        .await
+        .unwrap();
+    cookie_repo
+        .capture_set_cookie(
+            "acct_imported",
+            &format!("cf_clearance=codex; Domain={cookie_domain}; Path=/codex"),
+        )
+        .await
+        .unwrap();
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let cookie_header = requests
+        .iter()
+        .find(|request| request.url.path() == "/codex/responses")
+        .and_then(|request| request.headers.get("cookie"))
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(cookie_header, Some("cf_clearance=codex; cf_clearance=root"));
+}
+
+#[tokio::test]
 async fn v1_responses_should_passively_cache_rate_limit_headers() {
     let server = MockServer::start().await;
     let reset_at = Utc::now().timestamp() + 300;

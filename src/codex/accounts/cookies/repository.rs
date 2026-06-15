@@ -74,8 +74,18 @@ impl CookieRepository {
         account_id: &str,
         request_domain: &str,
     ) -> CookieResult<Option<String>> {
+        self.cookie_header_for_request(account_id, request_domain, "/")
+            .await
+    }
+
+    pub async fn cookie_header_for_request(
+        &self,
+        account_id: &str,
+        request_domain: &str,
+        request_path: &str,
+    ) -> CookieResult<Option<String>> {
         let rows = sqlx::query(
-            "select domain, name, value_cipher, expires_at from account_cookies where account_id = ? order by name asc",
+            "select domain, name, value_cipher, path, expires_at from account_cookies where account_id = ?",
         )
         .bind(account_id)
         .fetch_all(&self.pool)
@@ -87,18 +97,38 @@ impl CookieRepository {
             if !domain_matches(request_domain, &domain) {
                 continue;
             }
+            let path = row.get::<String, _>("path");
+            if !path_matches(request_path, &path) {
+                continue;
+            }
             if cookie_is_expired(row.get::<Option<String>, _>("expires_at").as_deref(), now) {
                 continue;
             }
             let name = row.get::<String, _>("name");
             let value_cipher = row.get::<String, _>("value_cipher");
             let value = self.secret_box.decrypt(&value_cipher)?;
-            pairs.push(format!("{name}={}", value.expose_secret()));
+            pairs.push(CookieHeaderPair {
+                path_len: path.len(),
+                name: name.clone(),
+                value: format!("{name}={}", value.expose_secret()),
+            });
         }
         if pairs.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(pairs.join("; ")))
+            pairs.sort_by(|left, right| {
+                right
+                    .path_len
+                    .cmp(&left.path_len)
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            Ok(Some(
+                pairs
+                    .into_iter()
+                    .map(|pair| pair.value)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ))
         }
     }
 
@@ -139,6 +169,12 @@ struct ParsedCookie {
     expires_at: Option<String>,
 }
 
+struct CookieHeaderPair {
+    path_len: usize,
+    name: String,
+    value: String,
+}
+
 fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
     let mut parts = raw.split(';').map(str::trim);
     let (name, value) = parts.next()?.split_once('=')?;
@@ -151,7 +187,7 @@ fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
         };
         match attribute.trim().to_ascii_lowercase().as_str() {
             "domain" => domain = value.trim_start_matches('.').to_string(),
-            "path" => path = value.to_string(),
+            "path" => path = normalize_cookie_path(value),
             "max-age" => {
                 if let Ok(seconds) = value.parse::<i64>() {
                     expires_at = Some(max_age_expires_at(seconds));
@@ -205,6 +241,36 @@ fn domain_matches(request_domain: &str, cookie_domain: &str) -> bool {
         || request_domain
             .strip_suffix(cookie_domain)
             .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn normalize_cookie_path(path: &str) -> String {
+    let path = path.trim();
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        "/".to_string()
+    }
+}
+
+fn path_matches(request_path: &str, cookie_path: &str) -> bool {
+    let request_path = normalize_request_path(request_path);
+    let cookie_path = normalize_cookie_path(cookie_path);
+    request_path == cookie_path
+        || (request_path.starts_with(&cookie_path)
+            && (cookie_path.ends_with('/')
+                || request_path
+                    .as_bytes()
+                    .get(cookie_path.len())
+                    .is_some_and(|byte| *byte == b'/')))
+}
+
+fn normalize_request_path(path: &str) -> String {
+    let path = path.trim();
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
 }
 
 fn cookie_is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> bool {
