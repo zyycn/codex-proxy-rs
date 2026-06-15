@@ -4,7 +4,10 @@ use secrecy::{ExposeSecret, SecretString};
 use codex_proxy_rs::{
     codex::accounts::{
         model::AccountStatus,
-        repository::{AccountClaimsUpdate, AccountRepository, NewAccount, TokenUpdate, UsageDelta},
+        repository::{
+            AccountClaimsUpdate, AccountRepository, AccountUsageRepository, NewAccount,
+            TokenUpdate, UsageDelta,
+        },
     },
     platform::crypto::SecretBox,
     platform::storage::db::connect_sqlite,
@@ -388,6 +391,44 @@ async fn account_repository_should_restore_window_usage_into_runtime_pool_accoun
     assert_eq!(account.window_started_at, Some(window_started_at));
     assert_eq!(account.window_reset_at, Some(window_reset_at));
     assert_eq!(account.limit_window_seconds, Some(300));
+}
+
+#[tokio::test]
+async fn account_repository_reset_usage_should_preserve_rate_limit_window_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let secret_box = SecretBox::new([35u8; 32]);
+    let repo = AccountRepository::new(pool.clone(), secret_box.clone());
+    let window_started_at = Utc::now() - Duration::minutes(10);
+    let window_reset_at = Utc::now() + Duration::minutes(5);
+
+    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds, last_used_at) values (?, 9, 31, 9, 2, 7, 11, 13, 17, ?, ?, 300, ?)",
+    )
+    .bind("acct_a")
+    .bind(window_started_at.to_rfc3339())
+    .bind(window_reset_at.to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    AccountUsageRepository::new(pool.clone())
+        .reset_account("acct_a")
+        .await
+        .unwrap();
+
+    let usage = repo.get_usage("acct_a").await.unwrap().unwrap();
+    assert_eq!(usage.request_count, 0);
+    assert_eq!(usage.window_request_count, 0);
+    assert_eq!(usage.window_reset_at, Some(window_reset_at));
+    assert_eq!(usage.limit_window_seconds, Some(300));
+    assert!(usage
+        .window_started_at
+        .is_some_and(|reset_at| { reset_at > window_started_at && reset_at <= Utc::now() }));
 }
 
 #[tokio::test]

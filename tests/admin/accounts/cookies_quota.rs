@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::{Duration, Utc};
 use serde_json::json;
 use tokio::sync::Mutex;
 use tower::ServiceExt;
@@ -266,10 +267,13 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
     let (app, state, pool, _dir) =
         admin_accounts_test_app("admin-account-reset-usage.sqlite", 30).await;
     import_test_account(&app, "session_1", "acct_reset_usage").await;
+    let window_reset_at = Utc::now() + Duration::minutes(5);
     sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, 7, 11, 13, 17, ?)",
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds, last_used_at) values (?, 7, 11, 13, 17, 5, 19, 23, 29, ?, ?, 300, ?)",
     )
     .bind("acct_reset_usage")
+    .bind("2026-06-12T12:30:00Z")
+    .bind(window_reset_at.to_rfc3339())
     .bind("2026-06-12T12:00:00Z")
     .execute(&pool)
     .await
@@ -293,14 +297,40 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
     let body = response_json(response).await;
     assert_eq!(body["data"]["id"], "acct_reset_usage");
     assert_eq!(body["data"]["reset"], true);
-    let usage: (i64, i64, i64, i64, Option<String>) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens, cached_tokens, last_used_at from account_usage where account_id = ?",
+    type ResetUsageRow = (
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+    );
+    let usage: ResetUsageRow = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens, cached_tokens, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_reset_at, last_used_at from account_usage where account_id = ?",
     )
     .bind("acct_reset_usage")
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(usage, (0, 0, 0, 0, None));
+    assert_eq!(
+        usage,
+        (
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Some(window_reset_at.to_rfc3339()),
+            None
+        )
+    );
     let acquired = state
         .services
         .accounts
@@ -308,6 +338,7 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
         .await
         .unwrap();
     assert_eq!(acquired.request_count, 1);
+    assert_eq!(acquired.window_reset_at, Some(window_reset_at));
     assert_ne!(
         acquired.last_used_at.as_deref(),
         Some("2026-06-12T12:00:00Z")

@@ -171,8 +171,11 @@ on conflict(account_id) do update set
   window_image_output_tokens = 0,
   window_image_request_count = 0,
   window_image_request_failed_count = 0,
-  window_started_at = null,
-  window_reset_at = null,
+  window_started_at = case
+    when account_usage.window_reset_at is not null then ?
+    else null
+  end,
+  window_reset_at = account_usage.window_reset_at,
   last_used_at = null";
 
 const LIST_ACCOUNT_USAGE_AFTER_CURSOR_SQL: &str = r"
@@ -399,6 +402,7 @@ impl AccountUsageRepository {
     pub async fn reset_account(&self, account_id: &str) -> AccountRepositoryResult<()> {
         sqlx::query(RESET_ACCOUNT_USAGE_SQL)
             .bind(account_id)
+            .bind(Utc::now().to_rfc3339())
             .execute(&self.pool)
             .await?;
         Ok(())

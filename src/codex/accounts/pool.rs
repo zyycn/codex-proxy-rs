@@ -194,8 +194,7 @@ impl AccountPool {
         account.window_image_output_tokens = 0;
         account.window_image_request_count = 0;
         account.window_image_request_failed_count = 0;
-        account.window_started_at = None;
-        account.window_reset_at = None;
+        account.window_started_at = account.window_reset_at.map(|_| Utc::now());
         true
     }
 

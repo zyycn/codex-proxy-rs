@@ -30,7 +30,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
-- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage、Cookie domain/path 语义和 active-limit header 复核已补齐，剩余差异集中在 quota window reset 细节。
+- rate-limit/usage/cookie 持久化主路径已接近；dirty quota verification、失败请求持久计数、image_generation usage、Cookie domain/path 语义、active-limit header 复核和 quota window reset 细节已补齐。
 
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
@@ -48,7 +48,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 | 6 | WebSocket 上游链路与连接池 | 已完成 | 部分对齐 |
 | 7 | response/SSE/WS frame 转换链路 | 已完成 | 部分对齐 |
 | 8 | fallback、retry、错误分类 | 已完成 | 部分对齐 |
-| 9 | rate-limit、usage、quota、cookie 持久化 | 已完成 | 部分对齐 |
+| 9 | rate-limit、usage、quota、cookie 持久化 | 已完成 | 已对齐 |
 | 10 | session affinity、implicit resume、reasoning replay | 已完成 | 部分对齐 |
 
 ## 1. 代码证据索引与审计边界
@@ -464,6 +464,7 @@ Rust 证据：
 - `src/auth/account-registry.ts:215-266` 429 会合成或更新 cachedQuota.rate_limit，且不会缩短已知更晚 reset_at；`countRequest` 时同步增加 request_count/window_request_count。
 - `src/auth/account-registry.ts:414-480` release 时记录 request_count、token usage、cached tokens、image_generation tokens、empty response、window counters。
 - `src/auth/account-registry.ts:520-584` window 到期会重置窗口计数并推进下一窗口；cachedQuota 离线 reset 后会设置 `quotaVerifyRequired=true`。
+- `src/auth/account-registry.ts:520-545` 手动 reset usage 会清空累计和窗口计数，但保留 `window_reset_at` 与 `limit_window_seconds`，并用 `window_counters_reset_at` 记录本次 reset 时间。
 - `src/routes/shared/proxy-handler.ts:88-139` 在账号被 dirty quota 标记时，请求进入前最多做 5 次 `/usage` 校验，避免本地窗口推断把仍然限流的账号重新放回池。
 
 Rust 证据：
@@ -476,6 +477,7 @@ Rust 证据：
 - 本轮修正后，`src/platform/storage/schema.sql` 的 `accounts.quota_verify_required` 可持久化本地 quota reset 后的 dirty verification 标记，并通过 `AccountRepository::list_pool_accounts()` 恢复到运行时 `Account`。
 - `src/codex/accounts/repository/usage.rs:12-44` `record_usage()` 会累计 total/window request 和 token 计数，并设置 `last_used_at`。
 - `src/codex/accounts/repository/usage.rs:63-99` `sync_rate_limit_window()` 会在 reset_at 漂移超过窗口 50% 或默认 3600 秒时重置窗口计数，否则只同步 reset_at/limit_window_seconds。
+- 本阶段修正后，`src/codex/accounts/repository/usage.rs` 的手动 reset usage 会保留既有 `window_reset_at` 与 `limit_window_seconds`，并在存在窗口边界时把 `window_started_at` 更新为本次 reset 时间；`src/codex/accounts/pool.rs` 的运行时 reset 同步保留窗口边界。
 - `src/codex/accounts/repository/accounts.rs:329-562` list pool accounts 时会把持久化 usage/window 字段恢复到运行时 `Account`。
 - `src/codex/gateway/transport/rate_limits.rs:58-144` rate-limit header 与 `codex.rate_limits` event 解析规则基本对应原版，并在 passive quota 缺 credits 时保留已有 credits。
 - 2026-06-15 复核 `x-codex-active-limit`：Rust 全仓除本文档外没有 active-limit 代码引用；`src/codex/gateway/transport/rate_limits.rs` 与原版一致，只解析 primary、secondary 和 code_review/review header family。
@@ -491,6 +493,7 @@ Rust 证据：
 - 本阶段修正后，`src/codex/gateway/transport/usage_events.rs` 的 `TokenUsage` 已增加 `image_input_tokens/image_output_tokens`，`extract_usage()` 和 `extract_sse_usage()` 会从 `response.tool_usage.image_gen` 读取图片工具 token，且 `total_tokens` 仍只表示 host-model token，符合原版“图片工具单独计费”的语义。
 - 本阶段修正后，`src/platform/storage/schema.sql`、`src/codex/accounts/repository/usage.rs`、`src/codex/accounts/repository/accounts.rs` 和运行时 `Account` 已加入 total/window image token 与 image request success/failure 字段；`src/codex/serving/dispatch/usage.rs` 按请求是否声明 `image_generation` tool 和 `image_output_tokens > 0` 记录成功或失败。
 - `tests/codex_accounts/repository.rs:230-326` 覆盖 window usage 持久化与恢复。
+- 本阶段新增/扩展 `tests/codex_accounts/repository.rs::account_repository_reset_usage_should_preserve_rate_limit_window_metadata` 和 `tests/admin/accounts/cookies_quota.rs::admin_account_reset_usage_should_clear_local_counters_and_pool_last_used`，覆盖手动 reset usage 清空计数但不丢失持久层和运行时池的 rate-limit window metadata。
 - `tests/codex_serving/responses_http_sse.rs:279-350` 覆盖 passive rate-limit headers 缓存 quota、窗口字段和 cooldown。
 - `tests/codex_accounts/pool_scheduling.rs:150-466` 覆盖窗口过期重置、least_used 的 quota/window/request_count 排序和 runtime request count。
 
@@ -510,14 +513,15 @@ Rust 证据：
 - 非 account retry decision 的最终失败请求持久 request_count 已对齐到原版 release 语义：未进入账号 fallback/hold 的最终错误会写入一次无 token 的 request attempt；`v1_responses_should_record_request_count_when_5xx_retries_are_exhausted` 覆盖 5xx 内部重试 3 次但持久 request_count 只计 1 次。
 - transport error 的最终失败请求持久 request_count 已有覆盖；`v1_responses_should_record_request_count_when_http_transport_fails` 证明 HTTP transport 失败也会按原版 release 语义写入一次无 token 的 request attempt。
 - dirty quota verification 已对齐原版主语义：`quota_verify_required` 进入 schema、runtime `Account` 和启动恢复路径；本地解除 quota 限制时会把账号标成 dirty；请求前会用 upstream `/usage` 校验 dirty 账号，仍限流时释放并切换账号，最多 5 次，校验失败时保留 dirty 标记并继续当前账号。
+- quota window reset 已对齐原版语义：窗口自然过期、passive header reset 漂移和手动 reset usage 都会清空窗口计数；Rust 使用 `window_started_at` 表达当前窗口计数开始/重置时间，而不是再增加一个重复的 `window_counters_reset_at` 字段。手动 reset usage 现在与原版一致保留 `window_reset_at` 和 `limit_window_seconds`，不会破坏后续 least_used 窗口排序。
 - image_generation usage 已对齐原版主语义：`tool_usage.image_gen` token 与 host-model token 分开累计；请求声明 `tools: [{type: "image_generation"}]` 且 `image_output_tokens > 0` 记成功，否则记失败；total/window 字段都能持久化并恢复到运行时账号。覆盖测试包括 `extract_usage_reads_image_generation_tool_usage_separately`、`extract_sse_usage_should_read_completed_image_generation_tool_usage`、`sqlite_schema_should_persist_image_generation_usage_columns`、`account_repository_should_accumulate_image_generation_usage_counters`、`account_repository_should_restore_window_usage_into_runtime_pool_accounts`、`v1_responses_should_record_image_generation_usage_when_tool_succeeds`、`v1_responses_should_record_failed_image_generation_attempt_when_tool_has_no_output`。
 - `x-codex-active-limit` 已确认不是当前对齐缺口：原版只在注释中提及，实际没有解析、存储或调度消费；Rust 保持相同未使用状态。若未来 OpenAI/Codex upstream 开始实际依赖该字段，应作为新需求同时重新审计原版与 Rust。
 
 未完全对齐：
-- quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at`；Rust 设置 `window_started_at` 并触发 `quota_verify_required`，但没有 `window_counters_reset_at` 字段。
+- 无。
 
 缺口/后续动作：
-- 继续复核 quota window reset：确认 Rust 的 `window_started_at + quota_verify_required` 是否足以替代原版 `window_counters_reset_at`，或需要新增字段来保存本地窗口重置时间。
+- 无。
 
 ## 10. session affinity、implicit resume、reasoning replay
 
