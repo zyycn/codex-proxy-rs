@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
+import BaseCard from '../../../components/base/BaseCard.vue'
 import type { AccountUsageItem, SemanticTone } from '../types'
 
 defineProps<{
@@ -76,24 +77,24 @@ const loadToneClasses: Record<SemanticTone, string> = {
 </script>
 
 <template>
-  <article class="h-[450px] w-[1584px] rounded-[18px] bg-white shadow-[var(--cp-shadow-card)]">
-    <div class="grid grid-cols-[360px_556px_556px] gap-7 px-7 pt-6">
-      <section class="h-[402px] w-[360px]">
+  <BaseCard as="article" :padded="false" class="h-[450px] w-full">
+    <div class="grid grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] gap-7 px-7 pt-6">
+      <section class="h-[402px] w-full">
         <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">账号调度</h2>
         <p class="mt-[7px] mb-0 text-[13px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">容量、并发与分配策略</p>
 
         <div class="mt-[31px] h-[122px] rounded-[14px] bg-[var(--cp-bg-subtle)] px-4 pt-[18px]">
-          <span class="text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">可调度容量</span>
-          <div class="mt-[7px] flex items-end justify-between">
+          <span class="block h-[14px] text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">可调度容量</span>
+          <div class="mt-[12px] grid h-[34px] grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
             <strong class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-[var(--cp-text-primary)]">81 / 135</strong>
-            <span class="pb-[3px] text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">60% 已分配</span>
+            <span class="mt-[14px] text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">60% 已分配</span>
           </div>
-          <div class="mt-[17px] h-2.5 w-[328px] overflow-hidden rounded-full bg-[#E2E8F0]">
-            <i class="block h-2.5 w-[197px] rounded-full bg-[var(--cp-success)]" />
+          <div class="mt-[18px] h-2.5 w-full overflow-hidden rounded-full bg-[#E2E8F0]">
+            <i class="block h-2.5 w-[60%] rounded-full bg-[var(--cp-success)]" />
           </div>
         </div>
 
-        <div class="mt-4 grid h-[90px] grid-cols-3 rounded-[14px] bg-[var(--cp-bg-subtle)] px-4 pt-5">
+        <div class="mt-4 grid h-[90px] grid-cols-3 gap-4 rounded-[14px] bg-[var(--cp-bg-subtle)] px-4 pt-5">
           <div v-for="stat in scheduleStats" :key="stat.label">
             <span class="text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">{{ stat.label }}</span>
             <strong class="mt-[13px] block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-[var(--cp-text-primary)]">{{ stat.value }}</strong>
@@ -106,38 +107,36 @@ const loadToneClasses: Record<SemanticTone, string> = {
         </div>
       </section>
 
-      <section class="w-[556px]">
+      <section class="w-full">
         <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">活跃账号用量</h2>
         <p class="mt-[7px] mb-0 text-[13px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">24h 请求排序</p>
 
-        <div class="mt-[51px] grid h-[330px] w-[556px] gap-1.5 overflow-hidden">
+        <div class="mt-[27px] grid h-[330px] w-full gap-1.5 overflow-hidden">
           <article
             v-for="account in accounts"
             :key="account.name"
-            class="grid h-[78px] w-[528px] grid-cols-[34px_10px_120px_6px_70px_30px_64px_2px_70px_4px_84px] items-center rounded-[14px] px-3.5"
+            class="grid h-[78px] w-[calc(100%-28px)] grid-cols-[34px_10px_minmax(220px,1fr)_6px_64px_2px_70px_4px_84px_6px] items-start rounded-[14px] px-3.5 transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-[var(--cp-bg-subtle)] active:translate-y-0"
             :class="account.name === 'Amy Ops' || account.name === 'Build Bot' ? 'bg-[var(--cp-bg-subtle)]' : 'bg-white'"
           >
-            <span class="inline-flex size-[34px] items-center justify-center rounded-full" :class="rowToneClasses[account.tone]">
+            <span class="mt-[22px] inline-flex size-[34px] items-center justify-center rounded-full" :class="rowToneClasses[account.tone]">
               {{ account.name[0] }}
             </span>
-            <span class="col-start-3 grid">
-              <span>
+            <span class="col-start-3 row-start-1 mt-[17px] flex min-w-0 items-start">
                 <strong class="text-[14px] leading-[1.15] font-[650] text-[var(--cp-text-primary)]">{{ account.name }}</strong>
-                <small class="ml-1.5 text-[11px] leading-[1.15] font-[650] text-[var(--cp-text-muted)]">{{ account.plan }}</small>
-              </span>
-              <span class="mt-[12px] text-[12px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">{{ account.email }}</span>
+              <small class="ml-1.5 mt-[3px] text-[11px] leading-[1.15] font-[650] text-[var(--cp-text-muted)]">{{ account.plan }}</small>
             </span>
-            <strong class="col-start-7 font-mono text-[14px] leading-[1.15] font-bold tabular-nums text-[var(--cp-text-primary)]">{{ account.requests }}</strong>
-            <strong class="col-start-9 font-mono text-[14px] leading-[1.15] font-bold tabular-nums text-[var(--cp-text-primary)]">{{ account.tokens }}</strong>
-            <span class="col-start-7 row-start-1 mt-11 text-[12px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">{{ account.lastUsed }}</span>
-            <span class="col-start-11 row-start-1 mt-[19px] block h-1.5 w-[84px] overflow-hidden rounded-full bg-[var(--cp-bg-muted)]">
+            <span class="col-start-3 row-start-1 mt-[48px] min-w-0 truncate text-[12px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">{{ account.email }}</span>
+            <strong class="col-start-5 row-start-1 mt-5 w-16 font-mono text-[14px] leading-[1.15] font-bold tabular-nums text-[var(--cp-text-primary)]">{{ account.requests }}</strong>
+            <strong class="col-start-7 row-start-1 mt-5 w-[70px] font-mono text-[14px] leading-[1.15] font-bold tabular-nums text-[var(--cp-text-primary)]">{{ account.tokens }}</strong>
+            <span class="col-start-5 row-start-1 mt-[48px] w-20 text-[12px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">{{ account.lastUsed }}</span>
+            <span class="col-start-9 row-start-1 mt-9 block h-1.5 w-[84px] overflow-hidden rounded-full bg-[var(--cp-bg-muted)]">
               <i class="block h-1.5 rounded-full" :class="loadToneClasses[account.tone]" :style="{ width: `${account.loadWidth}px` }" />
             </span>
           </article>
         </div>
       </section>
 
-      <section class="h-[402px] w-[556px]">
+      <section class="h-[402px] w-full">
         <header class="flex h-[50px] items-start justify-between">
           <div>
             <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">账号状态</h2>
@@ -149,24 +148,24 @@ const loadToneClasses: Record<SemanticTone, string> = {
           </div>
         </header>
 
-        <div class="mt-[22px] h-[42px] w-[532px]">
+        <div class="mt-[22px] h-[42px] w-full">
           <div class="flex h-4 items-center justify-between">
             <span class="text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">状态分布</span>
             <span class="text-[12px] leading-[1.15] font-[650] text-[var(--cp-danger-text)]">不可用 7</span>
           </div>
-          <div class="mt-2.5 flex h-3 w-[532px] overflow-hidden rounded-full bg-[var(--cp-bg-muted)]">
-            <i class="h-3 w-[372px] bg-[var(--cp-success)]" />
-            <i class="h-3 w-11 bg-[var(--cp-normal)]" />
-            <i class="h-3 w-14 bg-[var(--cp-warning)]" />
-            <i class="h-3 w-[60px] bg-[var(--cp-danger)]" />
+          <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-[var(--cp-bg-muted)]">
+            <i class="h-3 basis-[71.1%] bg-[var(--cp-success)]" />
+            <i class="h-3 basis-[4.4%] bg-[var(--cp-normal)]" />
+            <i class="h-3 basis-[13.3%] bg-[var(--cp-warning)]" />
+            <i class="h-3 basis-[11.2%] bg-[var(--cp-danger)]" />
           </div>
         </div>
 
-        <div class="mt-[26px] grid h-[262px] w-[532px] gap-2.5">
+        <div class="mt-[26px] grid h-[262px] w-full gap-2.5">
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid h-[58px] grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-[var(--cp-bg-subtle)] px-3.5"
+            class="grid h-[58px] grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-[var(--cp-bg-subtle)] px-3.5 transition-[background-color,transform] duration-200 hover:-translate-y-px active:translate-y-0"
           >
             <span class="inline-flex size-7 items-center justify-center rounded-[9px]" :class="rowToneClasses[row.tone]">
               <component :is="row.icon" :size="16" />
@@ -180,5 +179,5 @@ const loadToneClasses: Record<SemanticTone, string> = {
         </div>
       </section>
     </div>
-  </article>
+  </BaseCard>
 </template>

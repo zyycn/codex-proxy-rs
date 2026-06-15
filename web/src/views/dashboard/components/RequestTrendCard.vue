@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BaseCard from '../../../components/base/BaseCard.vue'
 import type { SemanticTone, TrendPoint, TrendSummaryItem } from '../types'
 
 defineProps<{
@@ -19,7 +20,7 @@ const dotToneClasses: Record<SemanticTone, string> = {
 </script>
 
 <template>
-  <article class="h-[380px] w-[948px] rounded-[18px] bg-white px-7 pt-[22px] shadow-[var(--cp-shadow-card)]">
+  <BaseCard as="article" :padded="false" class="h-[380px] w-full px-7 pt-[22px]">
     <header class="flex items-start justify-between">
       <div class="pt-0.5">
         <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">请求趋势</h2>
@@ -39,9 +40,9 @@ const dotToneClasses: Record<SemanticTone, string> = {
       </div>
     </header>
 
-    <div class="mt-7 grid grid-cols-[682px_180px] gap-[30px]">
-      <div class="h-[268px] w-[682px] overflow-hidden rounded-[10px] bg-white">
-        <svg class="block h-[268px] w-[682px]" viewBox="0 0 682 268" role="img" aria-label="最近 24 小时请求趋势">
+    <div class="mt-[19px] grid grid-cols-[minmax(0,1fr)_minmax(150px,180px)] gap-[30px]">
+      <div class="h-[268px] w-full overflow-hidden rounded-[10px] bg-white">
+        <svg class="block h-[268px] w-full" viewBox="0 0 682 268" preserveAspectRatio="none" role="img" aria-label="最近 24 小时请求趋势">
           <g transform="translate(0 0)">
             <line v-for="y in [18, 62, 106, 150, 194, 238]" :key="y" x1="0" x2="650" :y1="y" :y2="y" stroke="#F1F5F9" />
             <path
@@ -78,18 +79,18 @@ const dotToneClasses: Record<SemanticTone, string> = {
         </svg>
       </div>
 
-      <aside class="h-[268px] w-[180px] rounded-2xl bg-[var(--cp-bg-subtle)] px-5 py-[18px]">
+      <aside class="h-[268px] w-full rounded-2xl bg-[var(--cp-bg-subtle)] px-5 py-[18px]">
         <div
           v-for="(item, index) in summary"
           :key="item.label"
-          class="grid grid-cols-[100px_8px] items-start gap-3"
-          :class="index === 0 ? '' : 'mt-[38px]'"
+          class="grid grid-cols-[minmax(0,1fr)_8px] items-start gap-x-3 gap-y-px"
+          :class="index === 0 ? '' : 'mt-[36.6px]'"
         >
           <span class="col-span-2 text-[12px] leading-[1.15] font-bold text-[var(--cp-text-secondary)]">{{ item.label }}</span>
           <strong class="mt-[7px] font-mono text-[24px] leading-[1.15] font-[760] tabular-nums text-[var(--cp-text-primary)]">{{ item.value }}</strong>
-          <i class="mt-[14px] size-2 rounded-full" :class="dotToneClasses[item.tone]" />
+          <i class="mt-[14px] size-2 justify-self-end rounded-full" :class="dotToneClasses[item.tone]" />
         </div>
       </aside>
     </div>
-  </article>
+  </BaseCard>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BaseCard from '../../../components/base/BaseCard.vue'
 import type { SemanticTone, ServiceStatusItem } from '../types'
 
 defineProps<{
@@ -23,14 +24,14 @@ const valueToneClasses: Record<SemanticTone, string> = {
 </script>
 
 <template>
-  <article class="h-[380px] w-[608px] rounded-[18px] bg-white px-7 pt-6 shadow-[var(--cp-shadow-card)]">
+  <BaseCard as="article" :padded="false" class="h-[380px] w-full px-7 pt-6">
     <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">服务状态</h2>
 
     <div class="mt-[23px] grid gap-2">
       <div
         v-for="item in items"
         :key="item.label"
-        class="grid h-[50px] w-[552px] grid-cols-[24px_16px_224px_16px_86px_34px_100px] items-center rounded-[14px] bg-[var(--cp-bg-subtle)] px-3.5"
+        class="grid h-[50px] w-full grid-cols-[24px_16px_minmax(0,224fr)_16px_86px_34px_100px] items-center rounded-[14px] bg-[var(--cp-bg-subtle)] px-3.5"
       >
         <span class="inline-flex size-6 items-center justify-center rounded-lg" :class="iconToneClasses[item.tone]">
           <component :is="item.icon" :size="14" />
@@ -40,5 +41,5 @@ const valueToneClasses: Record<SemanticTone, string> = {
         <span class="col-start-7 w-[100px] font-mono text-[12px] leading-[1.15] font-semibold text-[var(--cp-text-secondary)]">{{ item.detail }}</span>
       </div>
     </div>
-  </article>
+  </BaseCard>
 </template>
