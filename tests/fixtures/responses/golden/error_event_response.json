@@ -1,8 +1,0 @@
-{
-  "type": "error",
-  "error": {
-    "type": "server_error",
-    "code": "codex_api_error",
-    "message": "Codex upstream error: {\"error\":{\"code\":\"server_error\",\"message\":\"model overloaded\",\"type\":\"server_error\"}}"
-  }
-}

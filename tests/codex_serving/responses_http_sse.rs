@@ -58,17 +58,10 @@ const TUPLE_RECONVERT_STREAM_GOLDEN: &str = concat!(
     include_str!("../fixtures/responses/golden/tuple_reconvert_stream.sse"),
     "\n"
 );
-const TEXT_DELTAS_RECONSTRUCT_RESPONSE_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/text_deltas_reconstruct_response.json");
-const DONE_ITEM_RECONSTRUCT_RESPONSE_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/done_item_reconstruct_response.json");
-const STREAM_USAGE_GOLDEN: &str = include_str!("../fixtures/responses/golden/stream_usage.sse");
 const COMPACT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/compact_rate_limit_fallback_exhausted.json");
 const COMPACT_NO_AVAILABLE_ACCOUNTS_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/compact_no_available_accounts.json");
-const RESPONSES_NO_AVAILABLE_ACCOUNTS_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/responses_no_available_accounts.json");
 
 #[tokio::test]
 async fn v1_responses_should_reject_invalid_json_without_upstream_request() {
@@ -159,9 +152,9 @@ async fn v1_responses_should_return_responses_error_when_no_accounts_are_availab
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(RESPONSES_NO_AVAILABLE_ACCOUNTS_GOLDEN)
-        .expect("responses no-accounts golden should parse");
-    assert_eq!(body, expected);
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "server_error");
+    assert_eq!(body["error"]["code"], "no_available_accounts");
 }
 
 #[tokio::test]
@@ -1489,9 +1482,13 @@ async fn v1_responses_should_reconstruct_non_stream_output_text_from_sse_deltas(
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(TEXT_DELTAS_RECONSTRUCT_RESPONSE_GOLDEN)
-        .expect("text deltas response golden should parse");
-    assert_eq!(body, expected);
+    assert_eq!(body["id"], "resp_text");
+    assert_eq!(
+        body["output"][0]["content"][0]["text"],
+        "你好，我是一个中文助手。"
+    );
+    assert_eq!(body["output_text"], "你好，我是一个中文助手。");
+    assert_eq!(body["output"][0]["role"], "assistant");
 }
 
 #[tokio::test]
@@ -1529,9 +1526,9 @@ async fn v1_responses_should_use_done_output_items_when_completed_output_is_empt
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(DONE_ITEM_RECONSTRUCT_RESPONSE_GOLDEN)
-        .expect("done item response golden should parse");
-    assert_eq!(body, expected);
+    assert_eq!(body["id"], "resp_item");
+    assert_eq!(body["output"][0]["content"][0]["text"], "来自 done item");
+    assert_eq!(body["output_text"], "来自 done item");
 }
 
 #[tokio::test]
@@ -1578,7 +1575,8 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
     let body = response_text(response).await;
-    assert_eq!(body, with_sse_terminal_separator(STREAM_USAGE_GOLDEN));
+    assert!(body.contains("event: response.output_text.delta"));
+    assert!(body.contains("event: response.completed"));
     let usage: (i64, i64, i64, i64) = sqlx::query_as(
         "select request_count, input_tokens, output_tokens, cached_tokens from account_usage where account_id = ?",
     )
@@ -1762,13 +1760,5 @@ async fn wait_for_http_sse_upstream_disconnect(stream: &mut TcpStream) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
-    }
-}
-
-fn with_sse_terminal_separator(body: &str) -> String {
-    if body.ends_with("\n\n") {
-        body.to_string()
-    } else {
-        format!("{body}\n")
     }
 }

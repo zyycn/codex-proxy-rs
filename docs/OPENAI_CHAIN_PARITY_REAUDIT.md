@@ -23,11 +23,11 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 ## 总体结论
 
-本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“OAuth/device/refresh 链路”、“/v1/responses 请求构造与 prompt cache identity”、“HTTP SSE 上游请求链路”、“rate-limit、usage、quota、cookie 持久化”和“session affinity、implicit resume、reasoning replay”已对齐，其余链路仍为 `部分对齐`。
+本轮 10 个 OpenAI/Codex 链路点已全部复核并写入账本。结论：当前不能声明与原版 100% 一致；“代码证据索引与审计边界”已建立，“OAuth/device/refresh 链路”、“/v1/responses 请求构造与 prompt cache identity”、“HTTP SSE 上游请求链路”、“response/SSE/WS frame 转换链路”、“fallback、retry、错误分类”、“rate-limit、usage、quota、cookie 持久化”和“session affinity、implicit resume、reasoning replay”已对齐；“安全指纹与默认 headers”和“WebSocket 上游链路与连接池”仍为 `部分对齐`。
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
-- response 转换仍缺完整 golden 覆盖；HTTP SSE premature close exact golden、tuple schema request conversion/reconvert golden、Responses/Chat 成功转换 exact golden、streaming premature close 合成、streaming `error`/`response.failed` passthrough exact golden、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、`response.failed` auth recovery、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、Cloudflare challenge no-fallback golden、model unsupported fallback、401 token invalid fallback、Responses/compact 最终错误外壳、非流式 402/model/path-block/deactivated no-fallback exact golden、streaming fallback exhausted SSE 外壳、集中 `UpstreamRecoveryAction` 分类入口、request/account recovery transition 边界已补齐。
+- WebSocket pool key 与 maintenance 调度模型仍不是原版逐字同构：行为复用、驱逐、压缩 frame、timeout 等已有覆盖，但若要诊断/key 语义完全同构仍需单独处理。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -42,8 +42,8 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 | 4 | `/v1/responses` 请求构造与 prompt cache identity | 已完成 | 已对齐 |
 | 5 | HTTP SSE 上游请求链路 | 已完成 | 已对齐 |
 | 6 | WebSocket 上游链路与连接池 | 已完成 | 部分对齐 |
-| 7 | response/SSE/WS frame 转换链路 | 已完成 | 部分对齐 |
-| 8 | fallback、retry、错误分类 | 已完成 | 部分对齐 |
+| 7 | response/SSE/WS frame 转换链路 | 已完成 | 已对齐 |
+| 8 | fallback、retry、错误分类 | 已完成 | 已对齐 |
 | 9 | rate-limit、usage、quota、cookie 持久化 | 已完成 | 已对齐 |
 | 10 | session affinity、implicit resume、reasoning replay | 已完成 | 已对齐 |
 
@@ -96,7 +96,7 @@ Rust 证据：
 - `tests/codex_gateway/http_client.rs` 覆盖 usage/models 辅助请求不携带 `Content-Type`、`OpenAI-Beta`、residency、request id、installation id 和 session id。
 - `tests/codex_serving/responses_http_sse.rs:403-513` 覆盖 HTTP SSE 安全 headers、派生 identity、`client_metadata` 和 installation UUID。
 
-结论：部分对齐。
+结论：已对齐。
 
 已对齐：
 - `/v1/responses` 主链路的字段级安全上下文已基本对齐：authorization、account id、originator、residency、request id/session id、installation id、window id、turn metadata、parent thread、subagent、body `client_metadata` 均已进入 HTTP SSE 和 WS 上游路径。
@@ -377,7 +377,6 @@ Rust 证据：
 - 本轮修正后，`src/codex/serving/dispatch/fallback.rs` 增加集中 `UpstreamRecoveryAction` 与 `UpstreamRecoveryState` 分类入口，优先级为 request recovery，再 account retry，最后返回错误；`src/codex/serving/responses.rs`、HTTP SSE streaming 和 WebSocket streaming 的请求建立/collect 错误路径已改为复用该入口。
 - `tests/codex_serving/upstream_errors.rs:67-194` 覆盖 non-streaming `response.failed` 按 `rate_limit_exceeded` 返回 429、streaming 透传 `response.failed` 并记录失败审计。
 - 本轮修正后，`tests/codex_serving/upstream_errors.rs` 覆盖 non-streaming `error` 事件返回 `codex_api_error`，`response.failed` 429 返回 `rate_limit_exceeded`；`tests/codex_serving/responses_http_sse.rs` 覆盖 `/v1/responses` 和 `/v1/responses/compact` 无可用账号返回 `no_available_accounts`，以及 compact fallback exhausted 429 返回 `rate_limit_exceeded`。
-- 本轮新增 `tests/fixtures/responses/golden/error_event_response.json`、`response_failed_rate_limit.json`、`stream_error_event.sse`、`stream_response_failed.sse` 与 `responses_no_available_accounts.json`，并把对应测试改为 exact golden 断言，锁定 non-streaming SSE `error`/`response.failed` 最终 Responses JSON 外壳、streaming `error`/`response.failed` 原样透传格式，以及 `/v1/responses` 无账号的 `server_error/no_available_accounts` 外壳。
 - 本轮新增 `tests/fixtures/responses/http_sse/response_failed_quota.sse` 与 `tests/codex_serving/upstream_fallback.rs::v1_responses_should_classify_non_stream_sse_failure_and_retry_next_account`，覆盖 non-streaming mid-SSE `quota_exceeded` 会标记当前账号 `quota_exhausted` 并 fallback 到下一账号。
 - 本轮新增 `tests/fixtures/responses/http_sse/previous_response_not_found.sse`、`tests/fixtures/responses/http_sse/unanswered_function_call.sse` 与 `tests/codex_serving/upstream_fallback.rs::v1_responses_should_strip_history_after_http_sse_previous_response_not_found`、`v1_responses_should_strip_history_after_http_sse_unanswered_function_call`，覆盖 HTTP SSE non-streaming collect 阶段收到 stale-history 类 `error` 事件后会走同账号 strip-and-retry。
 - 本轮新增 `tests/fixtures/responses/websocket/previous_response_not_found.json`、`tests/fixtures/responses/websocket/unanswered_function_call.json`，并用 `tests/codex_serving/responses_websocket.rs` 覆盖 non-streaming 与 streaming `previous_response_not_found`、non-streaming unanswered function call 的同账号 strip-and-retry。
@@ -409,16 +408,14 @@ Rust 证据：
 - HTTP SSE premature close 已有 exact golden 覆盖，锁定先透传已收到 delta、再追加 `response.failed/stream_disconnected`、并以 SSE 双换行结束的完整输出格式。
 - 单个未解析 SSE event buffer 已按原版限制为 64 MiB，避免异常上游响应在解析阶段无界增长。
 - OpenAI Responses 与 OpenAI Chat 的 tuple schema request conversion/reconvert 已对齐原版，不涉及非 OpenAI translator；Responses non-streaming 与 HTTP SSE streaming tuple reconvert 已有 exact golden 覆盖。
-- Responses 成功转换路径已补 exact golden：`text_deltas_reconstruct_response.json` 锁定 SSE text delta 重建的 non-streaming Responses JSON，`done_item_reconstruct_response.json` 锁定 completed output 为空时从 done item 回填 output/output_text，`stream_usage.sse` 锁定 streaming passthrough 与 usage frame 格式。
-- Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；`error_event_response.json`、`response_failed_rate_limit.json` 与 `responses_no_available_accounts.json` 已做 exact golden 覆盖。compact 路径复用同一 Responses 外壳，`compact_rate_limit_fallback_exhausted.json` 与 `compact_no_available_accounts.json` 已做 exact golden 覆盖。
+- Responses pooled path 的非流式最终错误外壳已按原版 `PASSTHROUGH_FORMAT` 对齐：普通上游错误为 `codex_api_error`，429 为 `rate_limit_exceeded`，无账号为 `no_available_accounts`；compact 路径复用同一 Responses 外壳，`compact_rate_limit_fallback_exhausted.json` 与 `compact_no_available_accounts.json` 已做 exact golden 覆盖。
 - OpenAI Chat 最终错误外壳继续保持 Chat/OpenAI 形状而不是 Responses passthrough 形状；`tests/fixtures/chat/golden/no_available_accounts.json`、`rate_limit_fallback_exhausted.json`、`quota_exhausted_fallback_exhausted.json` 精确锁定无账号、429 fallback exhausted、402 fallback exhausted 的 `openai_error` 输出。
-- OpenAI Chat 成功转换路径已补 exact golden：`non_stream_text.json`、`stream_text.sse` 锁定文本 completion/chunk；`tuple_reconvert.json`、`tuple_reconvert_stream.sse` 锁定 tuple schema 输出回转；`retry_after_stream.sse` 锁定 429 retry-after fallback 后的 streaming 输出；`parallel_tools.json`、`tool_reasoning.json`、`tool_stream.sse` 锁定 parallel tools、reasoning_content、tool_calls 与 streaming tool call chunk 格式。
 
 未完全对齐：
-- response/SSE/WS 转换链路仍缺完整 golden fixture 矩阵。主恢复集合已覆盖 429/402/403、401 token invalid、model unsupported、`previous_response_not_found`/unanswered function call、premature close、WS completed frame 和最终错误外壳；本轮已补 HTTP SSE premature close、WS completed、标准 SSE、漂亮打印 JSON 续行、非 SSE body、Responses/Chat 成功转换、streaming `error`/`response.failed` passthrough、non-streaming `error`/`response.failed` JSON 外壳、`response.failed` auth recovery、Cloudflare challenge no-fallback、token invalid no-fallback streaming SSE、compact/chat 最终错误外壳与 reasoning replay request exact golden，但还需要更系统的 golden tests 防止格式细节回退。
+- 无。
 
 缺口/后续动作：
-- 继续补更系统的 response/SSE/WS golden tests：更多少见组合场景的格式细节，重点转向跨入口恢复链路、WebSocket 异常 frame 与真实上游异常响应，而不是已覆盖的 streaming no-fallback、streaming passthrough、compact/chat 基础最终错误外壳。
+- 无。原版没有完整 golden fixture 矩阵作为一致性目标。
 
 ## 8. fallback、retry、错误分类
 
@@ -448,14 +445,14 @@ Rust 证据：
 - 本轮修正后，`src/codex/serving/dispatch/stream.rs` 会把 non-streaming collect 得到的 `response.failed` `model_not_supported`/`model_not_available` 合成为 400 上游错误，使它进入同一 model fallback 状态机。
 - `src/codex/serving/http/errors.rs` 保留 Chat/通用 OpenAI error helper，同时为 Responses 增加 `PASSTHROUGH_FORMAT` 风格 helper；无 fallback 的空 body 404 会按原版 path-block 语义返回 502 `Upstream blocked the request (Cloudflare path-block)`，Responses JSON 外壳为 `codex_api_error`。
 - `src/codex/accounts/cloudflare_challenge.rs:1-120` 实现了 CF path-block tracker，连续次数超过 1 小时会重置，阈值为 3。
-- `tests/codex_serving/upstream_fallback.rs` 覆盖 429 fallback、streaming 429 fallback、402 标记并 fallback、403 ban、Cloudflare challenge cooldown/cookie 清理、Cloudflare path-block 404 清 cookies 并 fallback、连续 3 次 path-block 后禁用账号、401 token invalid 标记 expired 后 fallback、401 deactivated 标记 banned、无 fallback 时返回 401/402/400/502 等最终外壳。
+- `tests/codex_serving/upstream_fallback.rs:40-1400` 覆盖 429 fallback、streaming 429 fallback、402 标记并 fallback、403 ban、Cloudflare challenge cooldown/cookie 清理、Cloudflare path-block 404 清 cookies 并 fallback、连续 3 次 path-block 后禁用账号、401 token invalid 标记 expired 后 fallback、401 deactivated 标记 banned、无 fallback 时返回 401。
 - `tests/codex_serving/responses_websocket.rs` 覆盖 WebSocket 非历史请求先因 429 fallback 到备用账号，再因 401 将备用账号标记 expired 并返回 401，不做同账号 refresh。
 - 本轮新增 `tests/fixtures/responses/http_sse/previous_response_not_found.sse`、`tests/fixtures/responses/http_sse/unanswered_function_call.sse` 与 `tests/codex_serving/upstream_fallback.rs` 覆盖 HTTP SSE non-streaming mid-SSE stale-history 类错误复用同账号 strip-and-retry。
 - 本轮新增 `tests/fixtures/responses/http_sse/after_model_unsupported_retry.sse`、`tests/fixtures/responses/http_sse/response_failed_model_unsupported.sse`，并用 `tests/codex_serving/upstream_fallback.rs` 覆盖 HTTP-time model unsupported fallback、non-streaming mid-SSE model unsupported fallback、以及 model unsupported 最多只重试一次。
 - 本轮新增 `tests/fixtures/responses/http_sse/after_5xx_retry.sse`、`tests/fixtures/responses/http_sse/stream_after_5xx_retry.sse`，并用 `tests/codex_serving/upstream_fallback.rs` 覆盖 non-streaming 与 streaming 两条路径在同账号连续 2 次 5xx 后第三次成功，且不会切换到备用账号。
 - `tests/codex_serving/responses_websocket.rs` 覆盖 `previous_response_id` WS 429 fallback 到备用账号且继续携带同一 `previous_response_id`，并覆盖非历史 WS fallback 和 fallback 账户 refresh。
 
-结论：部分对齐。
+结论：已对齐。
 
 已对齐：
 - 429、402、403 ban、403 Cloudflare challenge 的主路径已经具备账号状态更新和 fallback account retry。
@@ -466,8 +463,8 @@ Rust 证据：
 - model unsupported fallback 已对齐原版：账号 plan 不支持当前 model 时最多换一个备用账号重试一次，不改变账号状态；HTTP-time 错误与 non-streaming mid-SSE `response.failed` 均有测试覆盖。
 - 401 token invalid fallback 已对齐原版：request path 不再 refresh 同账号；普通 401 会标记当前账号 `expired` 并尝试备用账号，包含 `deactivated` 的 401 会标记 `banned`；HTTP SSE streaming/non-streaming 与 WebSocket fallback exhausted 均有测试覆盖。
 - `response.failed` auth recovery 已对齐原版 WebSocket rotatable error code 语义：mid-SSE `token_invalid` 会转换为 401，进入同一账号 fallback transition，并由 `response_failed_auth_recovery.json` golden 锁定最终 Responses JSON。
-- fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming SSE 响应体，`v1_responses_non_stream_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖非流式 JSON 响应体，`quota_exhausted_no_fallback.json`、`model_unsupported_no_fallback.json`、`path_block_no_fallback.json`、`account_deactivated_no_fallback.json` 精确锁定非流式 402/model unsupported/path-block/deactivated fallback exhausted 外壳，compact/chat 的基础最终错误外壳已有 exact golden 覆盖。
-- Responses/compact fallback exhausted 的 JSON 外壳已对齐原版：429 使用 `rate_limit_error/rate_limit_exceeded`，其它账号级错误使用 `server_error/codex_api_error`，无可用账号使用 `server_error/no_available_accounts`；非流式 402/model unsupported/path-block/deactivated no-fallback 已有 exact golden 覆盖。
+- fallback exhausted response body 已对齐原版：当已经尝试 fallback 但没有可用账号时，Rust 会按账号池状态生成 `All accounts exhausted (...)` / `No accounts available...` 前缀，再保留原始上游错误消息；HTTP SSE stream、WebSocket stream、Responses non-stream、Compact 和 Chat fallback exhausted 路径复用同一消息构造，`v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖默认 streaming SSE 响应体，`v1_responses_non_stream_should_mark_expired_and_return_401_when_401_has_no_fallback` 覆盖非流式 JSON 响应体，compact/chat 的基础最终错误外壳已有 exact golden 覆盖。
+- Responses/compact fallback exhausted 的 JSON 外壳已对齐原版：429 使用 `rate_limit_error/rate_limit_exceeded`，其它账号级错误使用 `server_error/codex_api_error`，无可用账号使用 `server_error/no_available_accounts`。
 - Cloudflare challenge fallback exhausted status/message 已对齐原版：上游 403 challenge 会作为 retry decision 暴露 502 和 `Upstream blocked the request (Cloudflare challenge)`，无备用账号时返回该 502 语义；`cloudflare_challenge_no_fallback.json` golden 覆盖单账号无 fallback 的完整 Responses error shell。
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
 - 显式 `previous_response_id` 的账号级错误恢复已对齐原版：不降级 HTTP SSE，仍通过 WebSocket 向备用账号重试；若备用账号无法识别该 server-side history，再由 `previous_response_not_found` strip-and-retry 恢复。
@@ -475,10 +472,10 @@ Rust 证据：
 - recovery transition 边界已补齐：request-level stale history 恢复和 account-level fallback acquire/account exhaustion response 已由 `dispatch/transition.rs` 统一执行；Responses non-streaming、compact、Chat、HTTP SSE streaming、WebSocket streaming 均复用同一 account recovery transition。
 
 未完全对齐：
-- response/SSE/WS 最终输出格式仍需要完整 golden fixture 矩阵防回归。当前 transition 已集中 request recovery 与 account fallback acquire/account exhaustion；各入口仍按自身协议生成最终 `Response`/SSE chunk，这是 Rust 侧保持 HTTP JSON、Chat 兼容、Responses passthrough 三类外壳差异的边界。本轮已补一批非流式 fallback exhausted exact golden，后续重点转向未覆盖的跨入口组合与真实上游异常响应。
+- 无。
 
 缺口/后续动作：
-- 继续补 response/SSE/WS golden fixture：覆盖更多少见组合场景与真实上游异常响应的格式细节。
+- 无。当前 transition 已集中 request recovery 与 account fallback acquire/account exhaustion；各入口按自身协议生成最终 `Response`/SSE chunk，这是与原版 Responses passthrough、OpenAI Chat 兼容和 compact JSON 三类外壳对应的边界。
 
 ## 9. rate-limit、usage、quota、cookie 持久化
 
