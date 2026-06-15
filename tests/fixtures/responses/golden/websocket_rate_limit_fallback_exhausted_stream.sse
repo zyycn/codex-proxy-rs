@@ -1,2 +1,0 @@
-event: response.failed
-data: {"type":"response.failed","response":{"id":"resp_proxy_REDACTED","status":"failed","error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"All accounts exhausted (2 rate-limited). Codex upstream error: {\"error\":{\"message\":\"second account limited\"}}\n"}},"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"All accounts exhausted (2 rate-limited). Codex upstream error: {\"error\":{\"message\":\"second account limited\"}}\n"}}

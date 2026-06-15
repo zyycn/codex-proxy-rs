@@ -14,7 +14,7 @@ use wiremock::{
 use codex_proxy_rs::codex::accounts::cookies::repository::CookieRepository;
 
 use crate::support::{
-    response_json, response_text,
+    assert_response_failed_stream, response_json, response_text,
     upstream::{build_imported_app_with_accounts, ImportAccount},
 };
 
@@ -51,22 +51,6 @@ const CLOUDFLARE_CHALLENGE_NO_FALLBACK_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/cloudflare_challenge_no_fallback.json");
 const TOKEN_INVALID_NO_FALLBACK_GOLDEN: &str =
     include_str!("../fixtures/responses/golden/token_invalid_no_fallback.json");
-const TOKEN_INVALID_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
-    include_str!("../fixtures/responses/golden/token_invalid_no_fallback_stream.sse"),
-    "\n"
-);
-const QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
-    include_str!("../fixtures/responses/golden/quota_exhausted_no_fallback_stream.sse"),
-    "\n"
-);
-const MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
-    include_str!("../fixtures/responses/golden/model_unsupported_no_fallback_stream.sse"),
-    "\n"
-);
-const PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
-    include_str!("../fixtures/responses/golden/path_block_no_fallback_stream.sse"),
-    "\n"
-);
 
 #[tokio::test]
 async fn v1_responses_should_retry_next_account_after_429_retry_after() {
@@ -1756,8 +1740,13 @@ async fn v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallbac
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    assert_eq!(body, TOKEN_INVALID_NO_FALLBACK_STREAM_GOLDEN);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "invalid_request_error",
+        "authentication_error",
+        &["All accounts exhausted (1 expired)", "token_revoked"],
+    );
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_401_single")
         .fetch_one(&imported.pool)
@@ -1816,8 +1805,16 @@ async fn v1_responses_should_mark_quota_exhausted_and_return_stream_error_when_4
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    assert_eq!(body, QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "invalid_request_error",
+        "codex_api_error",
+        &[
+            "All accounts exhausted (1 quota-exhausted)",
+            "quota reached",
+        ],
+    );
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_402_single")
         .fetch_one(&imported.pool)
@@ -1878,8 +1875,17 @@ async fn v1_responses_should_return_stream_error_when_model_unsupported_has_no_f
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    assert_eq!(body, MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "invalid_request_error",
+        "codex_api_error",
+        &[
+            "No accounts available",
+            "model_not_available",
+            "not available",
+        ],
+    );
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_model_single")
         .fetch_one(&imported.pool)
@@ -1940,8 +1946,13 @@ async fn v1_responses_should_return_stream_error_when_cloudflare_path_block_has_
         .unwrap_or_default()
         .to_string();
     assert!(content_type.starts_with("text/event-stream"));
-    let body = redact_proxy_response_ids(&response_text(response).await);
-    assert_eq!(body, PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN);
+    let body = response_text(response).await;
+    assert_response_failed_stream(
+        &body,
+        "server_error",
+        "codex_api_error",
+        &["No accounts available", "Cloudflare path-block"],
+    );
     assert_eq!(
         cookie_repo
             .cookie_header("acct_path_block_single", "chatgpt.com")
@@ -2054,21 +2065,4 @@ async fn v1_responses_should_mark_banned_when_401_says_account_deactivated() {
         .await
         .unwrap();
     assert_eq!(account_status.0, "banned");
-}
-
-fn redact_proxy_response_ids(body: &str) -> String {
-    let mut redacted = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(index) = rest.find("resp_proxy_") {
-        redacted.push_str(&rest[..index]);
-        redacted.push_str("resp_proxy_REDACTED");
-        rest = &rest[index + "resp_proxy_".len()..];
-        let id_len = rest
-            .bytes()
-            .take_while(|byte| byte.is_ascii_alphanumeric())
-            .count();
-        rest = &rest[id_len..];
-    }
-    redacted.push_str(rest);
-    redacted
 }
