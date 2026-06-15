@@ -4,7 +4,7 @@ use crate::{
     admin::session::repository::AdminAuthRepository,
     codex::accounts::repository::AccountRepositoryError,
     codex::gateway::fingerprint::{model::Fingerprint, repository::FingerprintRepository},
-    codex::gateway::oauth::OpenAiOAuthRefresher,
+    codex::gateway::oauth::{OAuthConfig, OpenAiOAuthRefresher},
     codex::serving::dispatch::affinity::SessionAffinityRepositoryError,
     config::AppConfig,
     platform::{
@@ -40,11 +40,13 @@ pub type BootstrapResult<T> = Result<T, BootstrapError>;
 pub async fn build_state(config: AppConfig) -> BootstrapResult<(AppState, SqlitePool, usize)> {
     let secret_box = SecretBox::load_or_create(&config.security.master_key_file)?;
     let api_key_hasher = ApiKeyHasher::load_or_create(&config.security.api_key_pepper_file)?;
-    let oauth_client = OpenAiOAuthRefresher::codex_default(
+    let oauth_config = OAuthConfig::from_auth_config(&config.auth);
+    let oauth_client = OpenAiOAuthRefresher::new(
         reqwest::Client::builder()
             .use_rustls_tls()
             .no_proxy()
             .build()?,
+        oauth_config,
     );
     let pool = connect_sqlite(&config.database.url).await?;
 

@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"{\"point\":{\"0\":1,\"1\":2}}"}
+
+event: response.completed
+data: {"response":{"id":"resp_chat_tuple","object":"response","status":"completed","output_text":"{\"point\":{\"0\":0,\"1\":0}}","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"point\":{\"0\":1,\"1\":2}}"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}

@@ -16,6 +16,9 @@ auth:
   request_interval_ms: 50
   rotation_strategy: least_used
   tier_priority: []
+  oauth_client_id: app_EMoamEEZ73f0CkXaXp7hrann
+  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
+  oauth_token_endpoint: https://auth.openai.com/oauth/token
 quota:
   refresh_interval_minutes: 5
   warning_thresholds:
@@ -35,6 +38,10 @@ security:
   api_key_pepper_file: data/api-key-pepper.key
 tls:
   force_http11: false
+ws_pool:
+  enabled: true
+  max_age_ms: 3300000
+  max_per_account: 8
 admin:
   session_ttl_minutes: 1440
   default_username: admin

@@ -23,7 +23,7 @@ impl Fingerprint {
             platform: "darwin".to_string(),
             arch: "arm64".to_string(),
             chromium_version: "146".to_string(),
-            user_agent_template: "Codex Desktop/{app_version} ({platform}; {arch})".to_string(),
+            user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
             default_headers: Self::default_headers(),
             header_order: Self::default_header_order(),
         }
@@ -56,14 +56,7 @@ impl Fingerprint {
             "x-openai-internal-codex-residency".to_string(),
             "x-client-request-id".to_string(),
             "x-codex-installation-id".to_string(),
-            "session_id".to_string(),
-            "x-codex-window-id".to_string(),
             "x-codex-turn-state".to_string(),
-            "x-codex-turn-metadata".to_string(),
-            "x-codex-beta-features".to_string(),
-            "x-responsesapi-include-timing-metrics".to_string(),
-            "x-codex-parent-thread-id".to_string(),
-            "version".to_string(),
             "openai-beta".to_string(),
             "user-agent".to_string(),
             "sec-ch-ua".to_string(),
@@ -82,7 +75,7 @@ impl Fingerprint {
 
     pub fn user_agent(&self) -> String {
         self.user_agent_template
-            .replace("{app_version}", &self.app_version)
+            .replace("{version}", &self.app_version)
             .replace("{platform}", &self.platform)
             .replace("{arch}", &self.arch)
     }

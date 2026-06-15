@@ -21,6 +21,20 @@ use crate::{
 use super::super::{require_admin_session, AdminEnvelope, AdminError, AdminResponse};
 use super::validated_account_import_error;
 
+const NATIVE_IMPORT_CONTAINER_KEYS: [&str; 1] = ["accounts"];
+const NATIVE_IMPORT_ACCOUNT_KEYS: [&str; 10] = [
+    "id",
+    "email",
+    "accountId",
+    "userId",
+    "label",
+    "planType",
+    "token",
+    "refreshToken",
+    "accessTokenExpiresAt",
+    "status",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountImportFormat {
     Native,
@@ -213,7 +227,7 @@ fn parse_account_import_payload(payload: &Value) -> ParsedAccountImportPayload {
 }
 
 fn parse_native_account_payload(payload: &Value) -> Vec<AccountImportEntry> {
-    if has_removed_import_container_field(payload) {
+    if !has_only_allowed_keys(payload, &NATIVE_IMPORT_CONTAINER_KEYS) {
         return Vec::new();
     }
     let Some(accounts) = payload.get("accounts").and_then(Value::as_array) else {
@@ -226,7 +240,7 @@ fn parse_native_account_payload(payload: &Value) -> Vec<AccountImportEntry> {
 }
 
 fn account_entry_from_value(value: &Value) -> Option<AccountImportEntry> {
-    if has_removed_import_account_field(value) {
+    if !has_only_allowed_keys(value, &NATIVE_IMPORT_ACCOUNT_KEYS) {
         return None;
     }
 
@@ -245,39 +259,10 @@ fn account_entry_from_value(value: &Value) -> Option<AccountImportEntry> {
     (entry.token.is_some() || entry.refresh_token.is_some()).then_some(entry)
 }
 
-fn has_removed_import_container_field(value: &Value) -> bool {
-    ["proxies", "type", "exported_at"]
-        .iter()
-        .any(|field| value.get(*field).is_some())
-}
-
-fn has_removed_import_account_field(value: &Value) -> bool {
-    [
-        "accessToken",
-        "access_token",
-        "refresh_token",
-        "tokens",
-        "credentials",
-        "account_id",
-        "user_id",
-        "chatgpt_account_id",
-        "chatgpt_user_id",
-        "plan_type",
-        "access_token_expires_at",
-        "expires_at",
-        "name",
-        "account_name",
-        "accountName",
-        "account_note",
-        "accountNote",
-        "note",
-        "proxyApiKey",
-        "cachedQuota",
-        "quotaVerifyRequired",
-        "usage",
-    ]
-    .iter()
-    .any(|field| value.get(*field).is_some())
+fn has_only_allowed_keys(value: &Value, allowed: &[&str]) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
 }
 
 fn label_from_value(value: &Value) -> Option<String> {

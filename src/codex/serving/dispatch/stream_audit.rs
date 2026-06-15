@@ -11,12 +11,13 @@ use crate::{
         events::event::EventLevel,
         gateway::transport::{
             usage_events::extract_sse_usage,
-            websocket::{append_rate_limit_updates, CodexWebSocketError, SharedRateLimitUpdates},
+            websocket::{append_rate_limit_updates, SharedRateLimitUpdates},
         },
     },
 };
 
 use super::{
+    evict_reasoning_replay_with_deps,
     limits::apply_rate_limit_headers_with_deps,
     log_codex_upstream_response_with_deps, record_response_affinity_with_deps,
     record_usage_with_deps,
@@ -29,6 +30,7 @@ pub(super) struct StreamAudit {
     context: CodexRequestLogContext,
     account_slot: AccountSlotGuard,
     account_plan_type: Option<String>,
+    request: CodexResponsesRequest,
     rate_limit_headers: Vec<(String, String)>,
 }
 
@@ -38,6 +40,7 @@ impl StreamAudit {
         context: CodexRequestLogContext,
         account_id: String,
         account_plan_type: Option<String>,
+        request: CodexResponsesRequest,
         rate_limit_headers: Vec<(String, String)>,
     ) -> Self {
         let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account_id);
@@ -46,6 +49,7 @@ impl StreamAudit {
             context,
             account_slot,
             account_plan_type,
+            request,
             rate_limit_headers,
         }
     }
@@ -91,6 +95,14 @@ impl StreamAudit {
                 status = StatusCode::BAD_GATEWAY;
                 level = EventLevel::Error;
                 message = "v1 responses stream 上游 SSE 失败";
+                if failure.invalid_reasoning_replay() {
+                    evict_reasoning_replay_with_deps(
+                        &self.deps,
+                        &self.request,
+                        &self.context.account_id,
+                    )
+                    .await;
+                }
                 failure.extend_metadata(&mut metadata);
             }
             Ok(None) => {}
@@ -108,19 +120,6 @@ impl StreamAudit {
             level,
             message,
             metadata,
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-
-    pub(super) async fn log_transport_error(&mut self, error: &reqwest::Error) {
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            StatusCode::BAD_GATEWAY,
-            EventLevel::Error,
-            "v1 responses stream transport 失败",
-            json!({"stream": true, "transportError": error.to_string()}),
         )
         .await;
         self.account_slot.release().await;
@@ -242,6 +241,14 @@ impl WebSocketStreamAudit {
                 status = StatusCode::BAD_GATEWAY;
                 level = EventLevel::Error;
                 message = "v1 responses WebSocket stream 上游 SSE 失败";
+                if failure.invalid_reasoning_replay() {
+                    evict_reasoning_replay_with_deps(
+                        &self.deps,
+                        &self.request,
+                        &self.context.account_id,
+                    )
+                    .await;
+                }
                 failure.extend_metadata(&mut metadata);
             }
             Ok(None) => {}
@@ -264,24 +271,6 @@ impl WebSocketStreamAudit {
             level,
             message,
             metadata,
-        )
-        .await;
-        self.account_slot.release().await;
-    }
-
-    pub(super) async fn log_transport_error(&mut self, error: &CodexWebSocketError) {
-        log_codex_upstream_response_with_deps(
-            &self.deps,
-            &self.context,
-            StatusCode::BAD_GATEWAY,
-            EventLevel::Error,
-            "v1 responses WebSocket stream transport 失败",
-            json!({
-                "stream": true,
-                "transport": "websocket",
-                "rateLimitHeaders": self.rate_limit_headers.clone(),
-                "transportError": error.to_string(),
-            }),
         )
         .await;
         self.account_slot.release().await;

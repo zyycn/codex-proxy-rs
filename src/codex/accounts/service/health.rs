@@ -12,15 +12,14 @@ use crate::{
         model::AccountStatus,
         repository::{AccountRepository, StoredAccount},
     },
-    codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::transport::http_client::{
         build_reqwest_client, CodexBackendClient, CodexClientError, CodexRequestContext,
     },
 };
 
 use super::{
-    cookies::request_domain, quota::quota_from_usage, AccountProbeOutcome, AccountProbeResult,
-    AccountService, HealthCheckError,
+    cookies::request_domain, AccountProbeOutcome, AccountProbeResult, AccountService,
+    HealthCheckError,
 };
 
 impl AccountService {
@@ -29,7 +28,6 @@ impl AccountService {
         ids: Option<Vec<String>>,
         concurrency: usize,
         stagger_ms: u64,
-        request_id: &str,
     ) -> Result<Vec<AccountProbeResult>, HealthCheckError> {
         let repo = self
             .repository
@@ -43,8 +41,6 @@ impl AccountService {
         let results = stream::iter(accounts.into_iter().enumerate())
             .map(|(index, account)| {
                 let service = self.clone();
-                let repo = repo.clone();
-                let request_id = request_id.to_string();
                 async move {
                     if stagger_ms > 0 && index > 0 {
                         let multiplier = index.min(concurrency);
@@ -53,9 +49,7 @@ impl AccountService {
                         ))
                         .await;
                     }
-                    service
-                        .probe_account_with_codex_backend(&repo, account, &request_id)
-                        .await
+                    service.probe_account_with_oauth_refresh(account).await
                 }
             })
             .buffer_unordered(concurrency)
@@ -64,53 +58,23 @@ impl AccountService {
         Ok(results)
     }
 
-    async fn probe_account_with_codex_backend(
-        &self,
-        repo: &AccountRepository,
-        account: StoredAccount,
-        request_id: &str,
-    ) -> AccountProbeResult {
-        if account.status == AccountStatus::Disabled {
-            return skipped_probe_result(&account, "manually disabled");
-        }
-
+    async fn probe_account_with_oauth_refresh(&self, account: StoredAccount) -> AccountProbeResult {
         let started_at = std::time::Instant::now();
         let previous_status = account.status;
-        match fetch_account_usage(self, &account, request_id).await {
-            Ok(raw) => {
-                let quota = quota_from_usage(&raw);
-                let _ = repo
-                    .update_quota_json(&account.id, &quota.to_string())
-                    .await;
-                if account.status != AccountStatus::Active {
-                    let _ = repo.set_status(&account.id, AccountStatus::Active).await;
-                    self.account_pool
-                        .lock()
-                        .await
-                        .set_status(&account.id, AccountStatus::Active);
-                }
-                AccountProbeResult {
-                    id: account.id,
-                    email: account.email,
-                    previous_status,
-                    outcome: AccountProbeOutcome::Alive,
-                    status: Some(AccountStatus::Active),
-                    error: None,
-                    duration_ms: Some(started_at.elapsed().as_millis()),
-                }
+        match self.refresh_account(&account.id).await {
+            Ok(mut result) => {
+                result.previous_status = previous_status;
+                result
             }
-            Err(error) => {
-                let status = apply_codex_account_error(self, repo, &account, &error).await;
-                AccountProbeResult {
-                    id: account.id,
-                    email: account.email,
-                    previous_status,
-                    outcome: AccountProbeOutcome::Dead,
-                    status,
-                    error: Some(public_codex_error(&error)),
-                    duration_ms: Some(started_at.elapsed().as_millis()),
-                }
-            }
+            Err(error) => AccountProbeResult {
+                id: account.id,
+                email: account.email,
+                previous_status,
+                outcome: AccountProbeOutcome::Dead,
+                status: None,
+                error: Some(error.to_string()),
+                duration_ms: Some(started_at.elapsed().as_millis()),
+            },
         }
     }
 }
@@ -124,7 +88,7 @@ pub(super) async fn fetch_account_usage(
     let client = CodexBackendClient::new(
         build_reqwest_client(service.config.tls.force_http11)?,
         service.config.api.base_url.clone(),
-        Fingerprint::default_codex_desktop(),
+        service.fingerprint.clone(),
     );
     client
         .fetch_usage(CodexRequestContext {

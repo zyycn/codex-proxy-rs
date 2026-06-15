@@ -11,6 +11,12 @@ pub(super) struct ClassifiedWebSocketError {
     pub(super) connection_fatal: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WebSocketErrorClassificationProfile {
+    OneShot,
+    Pooled,
+}
+
 pub(super) fn websocket_request_body(request: &CodexResponsesRequest) -> Value {
     let mut body = json!({
         "type": "response.create",
@@ -82,7 +88,10 @@ pub(super) fn is_terminal_websocket_event(event: &str) -> bool {
     event == "response.completed" || event == "response.failed" || event == "error"
 }
 
-pub(super) fn classify_ws_error_frame(raw: &str) -> Option<ClassifiedWebSocketError> {
+pub(super) fn classify_ws_error_frame(
+    raw: &str,
+    profile: WebSocketErrorClassificationProfile,
+) -> Option<ClassifiedWebSocketError> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let event_type = value.get("type").and_then(Value::as_str)?;
     if event_type != "error" && event_type != "response.failed" {
@@ -95,10 +104,11 @@ pub(super) fn classify_ws_error_frame(raw: &str) -> Option<ClassifiedWebSocketEr
         .or_else(|| value.pointer("/error/type"))
         .and_then(Value::as_str)?
         .to_ascii_lowercase();
-    let status = rotatable_error_status(&code)?;
+    let status = rotatable_error_status(&code, profile)?;
     Some(ClassifiedWebSocketError {
         status,
-        connection_fatal: code == "websocket_connection_limit_reached",
+        connection_fatal: profile == WebSocketErrorClassificationProfile::Pooled
+            && code == "websocket_connection_limit_reached",
     })
 }
 
@@ -169,7 +179,10 @@ pub(super) fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
     (resets_at > now).then_some(resets_at - now)
 }
 
-fn rotatable_error_status(code: &str) -> Option<StatusCode> {
+fn rotatable_error_status(
+    code: &str,
+    profile: WebSocketErrorClassificationProfile,
+) -> Option<StatusCode> {
     match code {
         "usage_limit_reached" | "rate_limit_exceeded" | "rate_limit_reached" => {
             Some(StatusCode::TOO_MANY_REQUESTS)
@@ -180,7 +193,11 @@ fn rotatable_error_status(code: &str) -> Option<StatusCode> {
         }
         "forbidden" | "account_banned" | "banned" => Some(StatusCode::FORBIDDEN),
         "previous_response_not_found" => Some(StatusCode::BAD_REQUEST),
-        "websocket_connection_limit_reached" => Some(StatusCode::SERVICE_UNAVAILABLE),
+        "websocket_connection_limit_reached"
+            if profile == WebSocketErrorClassificationProfile::Pooled =>
+        {
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        }
         _ => None,
     }
 }

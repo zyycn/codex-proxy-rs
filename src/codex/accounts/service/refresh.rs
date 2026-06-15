@@ -19,10 +19,33 @@ use super::{
 
 const REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
 
+#[derive(Debug, Clone, Copy)]
+enum RefreshFailurePolicy {
+    PersistStatus,
+    ReportOnly,
+}
+
 impl AccountService {
     pub async fn refresh_account(
         &self,
         account_id: &str,
+    ) -> Result<AccountProbeResult, RefreshAccountError> {
+        self.refresh_account_with_failure_policy(account_id, RefreshFailurePolicy::PersistStatus)
+            .await
+    }
+
+    pub async fn probe_account_refresh(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountProbeResult, RefreshAccountError> {
+        self.refresh_account_with_failure_policy(account_id, RefreshFailurePolicy::ReportOnly)
+            .await
+    }
+
+    async fn refresh_account_with_failure_policy(
+        &self,
+        account_id: &str,
+        failure_policy: RefreshFailurePolicy,
     ) -> Result<AccountProbeResult, RefreshAccountError> {
         let repo = self
             .repository
@@ -56,7 +79,7 @@ impl AccountService {
         }
 
         let result = self
-            .refresh_account_with_lease(repo, account_id, refresher)
+            .refresh_account_with_lease(repo, account_id, refresher, failure_policy)
             .await;
         if let Err(error) = repo.release_refresh_lease(account_id, &lease_owner).await {
             tracing::warn!(
@@ -73,6 +96,7 @@ impl AccountService {
         repo: &AccountRepository,
         account_id: &str,
         refresher: Arc<dyn TokenRefresher>,
+        failure_policy: RefreshFailurePolicy,
     ) -> Result<AccountProbeResult, RefreshAccountError> {
         let account = match repo.get(account_id).await {
             Ok(Some(account)) => account,
@@ -110,9 +134,13 @@ impl AccountService {
                 })
             }
             Err(failure) => {
-                let status = self
-                    .apply_refresh_failure_status(repo, &account, failure)
-                    .await;
+                let status = match failure_policy {
+                    RefreshFailurePolicy::PersistStatus => {
+                        self.apply_refresh_failure_status(repo, &account, failure)
+                            .await
+                    }
+                    RefreshFailurePolicy::ReportOnly => None,
+                };
                 Ok(AccountProbeResult {
                     id: account.id,
                     email: account.email,

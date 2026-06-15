@@ -1,21 +1,28 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 
 use futures::StreamExt;
+use indexmap::IndexMap;
 use reqwest::{
     header::{
-        HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE, COOKIE, RETRY_AFTER, SET_COOKIE,
+        HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, COOKIE,
+        RETRY_AFTER, SET_COOKIE,
     },
     Client, Response as ReqwestResponse, StatusCode,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::{
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::transport::{
-        headers::build_ordered_codex_headers,
+        headers::build_ordered_codex_base_headers,
         sse::SseError,
-        types::CodexResponsesRequest,
+        types::{CodexCompactRequest, CodexResponsesRequest},
         usage_events::{extract_sse_usage, TokenUsage},
         websocket::{
             append_rate_limit_updates, create_response_via_websocket,
@@ -80,6 +87,13 @@ pub struct CodexBackendResponse {
     pub rate_limit_headers: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexCompactResponse {
+    pub body: Value,
+    pub set_cookie_headers: Vec<String>,
+    pub rate_limit_headers: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexConnectivityProbe {
     pub endpoint: String,
@@ -100,6 +114,8 @@ pub struct CodexBackendWebSocketStream {
     pub rate_limit_headers: Vec<(String, String)>,
     pub rate_limit_updates: SharedRateLimitUpdates,
 }
+
+const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct CodexBackendClient {
@@ -147,11 +163,12 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendResponse> {
         let transport = transport_for_request(request);
         let upstream_request = response_upstream_request(request, context);
-        let headers = self.request_headers_for_response(&upstream_request, context)?;
         if matches!(
             transport,
             CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired
         ) {
+            let headers =
+                self.request_headers_for_websocket_response(&upstream_request, context)?;
             match self
                 .create_response_via_configured_websocket(&upstream_request, headers.clone())
                 .await
@@ -179,6 +196,7 @@ impl CodexBackendClient {
             }
         }
 
+        let headers = self.request_headers_for_http_response(&upstream_request, context)?;
         let response = self
             .send_response_request(&upstream_request, headers)
             .await?;
@@ -187,7 +205,49 @@ impl CodexBackendClient {
         let set_cookie_headers = set_cookie_headers(&response);
         let rate_limit_headers = rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
+        if !status.is_success() {
+            let body = read_capped_error_body(response).await?;
+            return Err(CodexClientError::Upstream {
+                status,
+                retry_after_seconds: retry_after_seconds
+                    .or_else(|| retry_after_seconds_from_body(&body)),
+                body,
+            });
+        }
         let body = response.text().await?;
+        let usage = extract_sse_usage(&body)?;
+
+        Ok(CodexBackendResponse {
+            body,
+            usage,
+            turn_state,
+            set_cookie_headers,
+            rate_limit_headers,
+        })
+    }
+
+    #[tracing::instrument(
+        skip(self, request, context),
+        fields(
+            request_id = %context.request_id,
+            account_id = %context.account_id.unwrap_or("unknown"),
+            model = %request.model,
+            transport = "http_json",
+        )
+    )]
+    pub async fn create_compact_response(
+        &self,
+        request: &CodexCompactRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexCompactResponse> {
+        let headers = self.compact_request_headers(context)?;
+        let response = self.send_compact_request(request, headers).await?;
+        let status = response.status();
+        let set_cookie_headers = set_cookie_headers(&response);
+        let rate_limit_headers = rate_limit_headers(response.headers());
+        let retry_after_seconds = retry_after_seconds(response.headers(), None);
+        let body = response.text().await?;
+
         if !status.is_success() {
             return Err(CodexClientError::Upstream {
                 status,
@@ -196,12 +256,19 @@ impl CodexBackendClient {
                 body,
             });
         }
-        let usage = extract_sse_usage(&body)?;
 
-        Ok(CodexBackendResponse {
-            body,
-            usage,
-            turn_state,
+        let parsed =
+            serde_json::from_str::<Value>(&body).map_err(|_| CodexClientError::Upstream {
+                status: StatusCode::BAD_GATEWAY,
+                retry_after_seconds: None,
+                body: format!(
+                    "Compact response is not valid JSON: {}",
+                    truncate_for_error(&body)
+                ),
+            })?;
+
+        Ok(CodexCompactResponse {
+            body: parsed,
             set_cookie_headers,
             rate_limit_headers,
         })
@@ -222,7 +289,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStream> {
         let upstream_request = response_upstream_request(request, context);
-        let headers = self.request_headers_for_response(&upstream_request, context)?;
+        let headers = self.request_headers_for_http_response(&upstream_request, context)?;
         let response = self
             .send_response_request(&upstream_request, headers)
             .await?;
@@ -232,7 +299,7 @@ impl CodexBackendClient {
         let rate_limit_headers = rate_limit_headers(response.headers());
         if !status.is_success() {
             let retry_after_seconds = retry_after_seconds(response.headers(), None);
-            let body = response.text().await?;
+            let body = read_capped_error_body(response).await?;
             return Err(CodexClientError::Upstream {
                 status,
                 retry_after_seconds: retry_after_seconds
@@ -264,7 +331,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendWebSocketStream> {
         let upstream_request = response_upstream_request(request, context);
-        let headers = self.request_headers_for_response(&upstream_request, context)?;
+        let headers = self.request_headers_for_websocket_response(&upstream_request, context)?;
         let response = self
             .create_stream_via_configured_websocket(&upstream_request, headers)
             .await
@@ -350,8 +417,7 @@ impl CodexBackendClient {
         ];
 
         for endpoint in endpoints {
-            let mut headers = self.request_headers(context)?;
-            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let headers = self.auxiliary_request_headers(context)?;
             let response = self.client.get(endpoint).headers(headers).send().await?;
             if !response.status().is_success() {
                 continue;
@@ -374,8 +440,7 @@ impl CodexBackendClient {
             "{}/codex/models?client_version={}",
             self.base_url, self.fingerprint.app_version
         );
-        let mut headers = self.request_headers(context)?;
-        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        let headers = self.auxiliary_request_headers(context)?;
         let response = self.client.get(&endpoint).headers(headers).send().await?;
 
         Ok(CodexConnectivityProbe {
@@ -387,17 +452,17 @@ impl CodexBackendClient {
     pub async fn fetch_usage(&self, context: CodexRequestContext<'_>) -> CodexClientResult<Value> {
         let mut last_invalid_body = None;
         for endpoint in self.usage_endpoints() {
-            let mut headers = self.request_headers(context)?;
-            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let headers = self.auxiliary_request_headers(context)?;
             let response = self.client.get(endpoint).headers(headers).send().await?;
             let status = response.status();
             let retry_after_seconds = retry_after_seconds(response.headers(), None);
-            let body = response.text().await?;
             if status == StatusCode::NOT_FOUND {
+                let body = read_capped_error_body(response).await?;
                 last_invalid_body = Some(body);
                 continue;
             }
             if !status.is_success() {
+                let body = read_capped_error_body(response).await?;
                 return Err(CodexClientError::Upstream {
                     status,
                     retry_after_seconds: retry_after_seconds
@@ -405,6 +470,7 @@ impl CodexBackendClient {
                     body,
                 });
             }
+            let body = response.text().await?;
             match serde_json::from_str::<Value>(&body) {
                 Ok(parsed) if parsed.get("rate_limit").is_some() => return Ok(parsed),
                 _ => last_invalid_body = Some(body),
@@ -435,6 +501,21 @@ impl CodexBackendClient {
             .await?)
     }
 
+    async fn send_compact_request(
+        &self,
+        request: &CodexCompactRequest,
+        headers: HeaderMap,
+    ) -> CodexClientResult<ReqwestResponse> {
+        let url = format!("{}/codex/responses/compact", self.base_url);
+        Ok(self
+            .client
+            .post(url)
+            .headers(headers)
+            .json(request)
+            .send()
+            .await?)
+    }
+
     fn usage_endpoints(&self) -> Vec<String> {
         if self.base_url.contains("/backend-api") {
             vec![
@@ -451,35 +532,37 @@ impl CodexBackendClient {
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
         let request_id = context.session_id.unwrap_or(context.request_id);
-        let ordered_headers = build_ordered_codex_headers(
+        let ordered_headers = build_ordered_codex_base_headers(
             &self.fingerprint,
             context.access_token,
             context.account_id,
-            context.turn_state,
-            request_id,
         );
 
         let mut headers = HeaderMap::new();
-
-        for (name, value) in &ordered_headers {
-            if name == "content-type" || name == "openai-beta" || name == "cookie" {
-                continue;
-            }
-            headers.insert(
-                HeaderName::from_bytes(name.as_bytes())?,
-                HeaderValue::from_str(value)?,
-            );
-        }
-
-        if let Some(cookie_header) = context.cookie_header {
-            headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
-        }
+        insert_ordered_headers(&mut headers, &ordered_headers)?;
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
+        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+        headers.insert(
+            HeaderName::from_static("openai-beta"),
+            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-openai-internal-codex-residency"),
+            HeaderValue::from_static("us"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-client-request-id"),
+            HeaderValue::from_str(request_id)?,
+        );
         insert_optional_header(
             &mut headers,
             "x-codex-installation-id",
             context.installation_id,
         )?;
         insert_optional_header(&mut headers, "session_id", context.session_id)?;
+        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
+        insert_optional_header(&mut headers, "x-codex-turn-state", context.turn_state)?;
         insert_optional_header(&mut headers, "x-codex-turn-metadata", context.turn_metadata)?;
         insert_optional_header(&mut headers, "x-codex-beta-features", context.beta_features)?;
         insert_optional_header(
@@ -488,23 +571,74 @@ impl CodexBackendClient {
             context.include_timing_metrics,
         )?;
         insert_optional_header(&mut headers, "version", context.version)?;
-        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
         insert_optional_header(
             &mut headers,
             "x-codex-parent-thread-id",
             context.parent_thread_id,
         )?;
 
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        Ok(headers)
+    }
+
+    fn auxiliary_request_headers(
+        &self,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<HeaderMap> {
+        let ordered_headers = build_ordered_codex_base_headers(
+            &self.fingerprint,
+            context.access_token,
+            context.account_id,
         );
+
+        let mut headers = HeaderMap::new();
+
+        insert_ordered_headers(&mut headers, &ordered_headers)?;
+
+        if let Some(cookie_header) = context.cookie_header {
+            headers.insert(COOKIE, HeaderValue::from_str(cookie_header)?);
+        }
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate"));
 
         Ok(headers)
     }
 
-    fn request_headers_for_response(
+    fn compact_request_headers(
+        &self,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<HeaderMap> {
+        let ordered_headers = build_ordered_codex_base_headers(
+            &self.fingerprint,
+            context.access_token,
+            context.account_id,
+        );
+
+        let mut headers = HeaderMap::new();
+        insert_ordered_headers(&mut headers, &ordered_headers)?;
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
+        headers.insert(
+            HeaderName::from_static("openai-beta"),
+            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-openai-internal-codex-residency"),
+            HeaderValue::from_static("us"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-client-request-id"),
+            HeaderValue::from_str(&Uuid::new_v4().to_string())?,
+        );
+        insert_optional_header(
+            &mut headers,
+            "x-codex-installation-id",
+            context.installation_id,
+        )?;
+
+        Ok(headers)
+    }
+
+    fn request_headers_for_http_response(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
@@ -516,6 +650,17 @@ impl CodexBackendClient {
                 HeaderValue::from_str(&subagent)?,
             );
         }
+        Ok(headers)
+    }
+
+    fn request_headers_for_websocket_response(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<HeaderMap> {
+        let mut headers = self.request_headers_for_http_response(request, context)?;
+        headers.remove(CONTENT_TYPE);
+        headers.remove(ACCEPT);
         Ok(headers)
     }
 }
@@ -530,6 +675,25 @@ fn response_upstream_request(
     }
     upstream.client_metadata = response_client_metadata(request.client_metadata.as_ref(), context);
     upstream
+}
+
+async fn read_capped_error_body(response: ReqwestResponse) -> Result<String, reqwest::Error> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = MAX_UPSTREAM_ERROR_BODY_BYTES.saturating_sub(body.len());
+        if remaining == 0 {
+            break;
+        }
+        if chunk.len() <= remaining {
+            body.extend_from_slice(&chunk);
+        } else {
+            body.extend_from_slice(&chunk[..remaining]);
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 async fn collect_websocket_stream_response(
@@ -660,11 +824,34 @@ fn insert_optional_header(
     Ok(())
 }
 
+fn insert_ordered_headers(
+    headers: &mut HeaderMap,
+    ordered_headers: &IndexMap<String, String>,
+) -> CodexClientResult<()> {
+    for (name, value) in ordered_headers {
+        headers.insert(
+            HeaderName::from_bytes(name.as_bytes())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
+    Ok(())
+}
+
 pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error> {
-    // Codex Desktop 指纹依赖 reqwest/rustls 组合，升级前必须重新验证 TLS 行为。
+    static CLIENTS: OnceLock<Mutex<HashMap<bool, Client>>> = OnceLock::new();
+    let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut clients = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(client) = clients.get(&force_http11) {
+        return Ok(client.clone());
+    }
+
     let builder = Client::builder()
         .use_rustls_tls()
         .no_proxy()
+        .pool_max_idle_per_host(4)
+        .tcp_keepalive(Duration::from_secs(30))
         .gzip(true)
         .brotli(true)
         .zstd(true)
@@ -674,7 +861,9 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error
     } else {
         builder
     };
-    builder.build()
+    let client = builder.build()?;
+    clients.insert(force_http11, client.clone());
+    Ok(client)
 }
 
 fn turn_state(response: &ReqwestResponse) -> Option<String> {
@@ -755,7 +944,9 @@ fn truncate_for_error(body: &str) -> String {
 
 fn websocket_error_allows_http_sse_fallback(error: &CodexWebSocketError) -> bool {
     match error {
-        CodexWebSocketError::Transport(_) | CodexWebSocketError::EmptyResponse => true,
+        CodexWebSocketError::Transport(_)
+        | CodexWebSocketError::OpenTimeout { .. }
+        | CodexWebSocketError::EmptyResponse => true,
         CodexWebSocketError::Upstream { status, .. } => matches!(
             *status,
             StatusCode::NOT_FOUND

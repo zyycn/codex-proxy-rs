@@ -3,11 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::time::interval;
+
+use crate::codex::gateway::conversation_identity::derive_stable_conversation_key;
+use crate::codex::gateway::transport::types::CodexResponsesRequest;
 
 /// 会话亲和性条目 - 记录响应ID到账户的映射
 #[derive(Debug, Clone)]
@@ -117,10 +120,64 @@ from session_affinities
 where expires_at > ?
 order by created_at asc, response_id asc";
 
-pub(super) fn compute_variant_hash(value: &impl Serialize) -> Option<String> {
-    serde_json::to_string(value)
-        .ok()
-        .filter(|serialized| !serialized.is_empty())
+pub(super) fn compute_variant_hash(request: &CodexResponsesRequest) -> String {
+    compute_variant_hash_with_identity(request, request.variant_identity.as_deref())
+}
+
+fn compute_variant_hash_with_identity(
+    request: &CodexResponsesRequest,
+    identity: Option<&str>,
+) -> String {
+    let tools_json = request
+        .tools
+        .as_ref()
+        .map_or_else(|| "[]".to_string(), |tools| tools_json(tools));
+    let mut hasher = Sha256::new();
+    hasher.update(request.instructions.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(tools_json.as_bytes());
+    if let Some(identity) = identity
+        .map(str::trim)
+        .filter(|identity| !identity.is_empty())
+    {
+        hasher.update(b"\0");
+        hasher.update(identity.as_bytes());
+    }
+    hex::encode(hasher.finalize()).chars().take(12).collect()
+}
+
+fn tools_json(tools: &[serde_json::Value]) -> String {
+    serde_json::to_string(tools).unwrap_or_else(|_| "[]".to_string())
+}
+
+pub(super) fn prepare_variant_identity(request: &mut CodexResponsesRequest) {
+    request.variant_identity = build_variant_identity(request);
+}
+
+fn build_variant_identity(request: &CodexResponsesRequest) -> Option<String> {
+    let mut parts = Vec::with_capacity(2);
+    if let Some(window_id) = non_empty_string(request.codex_window_id.as_deref()) {
+        parts.push(format!("window:{window_id}"));
+    }
+    if request.explicit_prompt_cache_key
+        || non_empty_string(request.client_conversation_id.as_deref()).is_some()
+    {
+        if let Some(anchor) = derive_stable_conversation_key(request) {
+            parts.push(format!("anchor:{anchor}"));
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join("\0"))
+}
+
+fn non_empty_string(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+pub(super) fn hash_instructions(instructions: Option<&str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(instructions.unwrap_or_default().as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 impl SessionAffinityRepository {
@@ -229,13 +286,7 @@ impl SessionAffinityMap {
         function_call_ids: Option<Vec<String>>,
         variant_hash: Option<String>,
     ) -> AffinityEntry {
-        let instructions_hash = instructions.map(|s| {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(s.as_bytes());
-            let result = hasher.finalize();
-            hex::encode(result)
-        });
+        let instructions_hash = instructions.map(|value| hash_instructions(Some(value)));
 
         let entry = AffinityEntry {
             account_id,
@@ -572,16 +623,76 @@ mod tests {
     }
 
     #[test]
-    fn compute_variant_hash_should_follow_serialized_request_body() {
+    fn compute_variant_hash_should_follow_original_shape_contract() {
         let mut request = CodexResponsesRequest::new_http_sse(
             "gpt-5.5",
             "You are Codex.",
             vec![json!({"role": "user", "content": "hello"})],
         );
-        let first = compute_variant_hash(&request).unwrap();
+        request.tools = Some(vec![json!({"type": "function", "name": "shell"})]);
+        let first = compute_variant_hash(&request);
+        request.input = vec![
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "cached"}),
+            json!({"role": "user", "content": "continue"}),
+        ];
+        request.previous_response_id = Some("resp_dynamic".to_string());
+        request.prompt_cache_key = Some("conversation_dynamic".to_string());
+        request.include = Some(vec!["reasoning.encrypted_content".to_string()]);
+        let same_shape = compute_variant_hash(&request);
+
         request.instructions = "You are Codex with different instructions.".to_string();
-        let second = compute_variant_hash(&request).unwrap();
+        let different_instructions = compute_variant_hash(&request);
+
+        assert_eq!(first, same_shape);
+        assert_ne!(first, different_instructions);
+    }
+
+    #[test]
+    fn compute_variant_hash_should_include_optional_identity() {
+        let request = CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "You are Codex.",
+            vec![json!({"role": "user", "content": "hello"})],
+        );
+        let first = compute_variant_hash_with_identity(&request, Some("window:main"));
+        let second = compute_variant_hash_with_identity(&request, Some("window:review"));
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn compute_variant_hash_should_include_prepared_codex_window_identity() {
+        let mut first = CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "You are Codex.",
+            vec![json!({"role": "user", "content": "hello"})],
+        );
+        first.codex_window_id = Some("main-window".to_string());
+        prepare_variant_identity(&mut first);
+
+        let mut second = first.clone();
+        second.codex_window_id = Some("review-window".to_string());
+        prepare_variant_identity(&mut second);
+
+        assert_ne!(compute_variant_hash(&first), compute_variant_hash(&second));
+    }
+
+    #[test]
+    fn compute_variant_hash_should_include_explicit_prompt_cache_anchor() {
+        let mut first = CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "You are Codex.",
+            vec![json!({"role": "user", "content": "alpha"})],
+        );
+        first.prompt_cache_key = Some("shared-session".to_string());
+        first.explicit_prompt_cache_key = true;
+        prepare_variant_identity(&mut first);
+
+        let mut second = first.clone();
+        second.input = vec![json!({"role": "user", "content": "beta"})];
+        prepare_variant_identity(&mut second);
+
+        assert_ne!(compute_variant_hash(&first), compute_variant_hash(&second));
     }
 }

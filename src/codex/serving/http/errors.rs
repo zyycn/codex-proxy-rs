@@ -15,6 +15,17 @@ pub(crate) fn codex_client_error_response(error: CodexClientError) -> (StatusCod
                 "websocket_required",
             )),
         ),
+        CodexClientError::Upstream { status, body, .. }
+            if status == StatusCode::NOT_FOUND && body.trim().is_empty() =>
+        {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(openai_error(
+                    "Upstream blocked the request (Cloudflare path-block)",
+                    "upstream_error",
+                )),
+            )
+        }
         CodexClientError::Upstream { status, body, .. } => (
             status,
             Json(openai_error(

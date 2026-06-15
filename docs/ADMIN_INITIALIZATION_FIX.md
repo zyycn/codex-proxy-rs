@@ -165,7 +165,7 @@ curl -X POST http://127.0.0.1:8080/api/admin/accounts/import \
   "data": {
     "imported": 1,
     "skipped": 0,
-    "sourceFormat": "sub2api"
+    "sourceFormat": "native"
   }
 }
 ```

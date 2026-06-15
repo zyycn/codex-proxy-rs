@@ -11,7 +11,7 @@ const AUTO_UPDATED_FINGERPRINT_ID: &str = "auto_updated";
 const AUTO_UPDATE_SOURCE: &str = "auto_update";
 const AUTO_UPDATE_PLATFORM: &str = "darwin";
 const AUTO_UPDATE_ARCH: &str = "arm64";
-const AUTO_UPDATE_USER_AGENT_TEMPLATE: &str = "Codex Desktop/{app_version} ({platform}; {arch})";
+const AUTO_UPDATE_USER_AGENT_TEMPLATE: &str = "Codex Desktop/{version} ({platform}; {arch})";
 const DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION: &str = "146";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

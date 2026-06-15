@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     pub security: SecurityConfig,
     pub tls: TlsConfig,
+    pub ws_pool: WebSocketPoolConfig,
     pub admin: AdminConfig,
     pub logging: LoggingConfig,
 }
@@ -47,6 +48,9 @@ pub struct AuthConfig {
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub tier_priority: Vec<String>,
+    pub oauth_client_id: String,
+    pub oauth_auth_endpoint: String,
+    pub oauth_token_endpoint: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -81,6 +85,24 @@ pub struct SecurityConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TlsConfig {
     pub force_http11: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WebSocketPoolConfig {
+    pub enabled: bool,
+    pub max_age_ms: u64,
+    pub max_per_account: usize,
+}
+
+impl Default for WebSocketPoolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_age_ms: 3_300_000,
+            max_per_account: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

@@ -66,14 +66,14 @@ async fn sqlite_schema_should_persist_session_affinity_function_call_ids() {
 }
 
 #[tokio::test]
-async fn connect_sqlite_should_not_patch_legacy_tables() {
+async fn connect_sqlite_should_not_patch_incomplete_existing_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("legacy.sqlite");
+    let db = dir.path().join("incomplete.sqlite");
     let url = format!("sqlite://{}", db.display());
-    let legacy_options = SqliteConnectOptions::from_str(&url)
+    let incomplete_options = SqliteConnectOptions::from_str(&url)
         .unwrap()
         .create_if_missing(true);
-    let legacy_pool = SqlitePool::connect_with(legacy_options).await.unwrap();
+    let incomplete_pool = SqlitePool::connect_with(incomplete_options).await.unwrap();
     sqlx::raw_sql(
         "
         create table account_usage (
@@ -97,10 +97,10 @@ async fn connect_sqlite_should_not_patch_legacy_tables() {
         );
         ",
     )
-    .execute(&legacy_pool)
+    .execute(&incomplete_pool)
     .await
     .unwrap();
-    legacy_pool.close().await;
+    incomplete_pool.close().await;
 
     let pool = connect_sqlite(&url).await.unwrap();
     let window_column: Option<(String,)> = sqlx::query_as(

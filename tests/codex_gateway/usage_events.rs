@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use codex_proxy_rs::codex::gateway::transport::{
-    sse::{encode_sse_event, parse_sse_events},
+    sse::{encode_sse_event, parse_sse_events, MAX_SSE_EVENT_BUFFER_BYTES},
     usage_events::{extract_usage, TokenUsage},
 };
 
@@ -30,10 +30,57 @@ fn parse_sse_events_combines_multiline_data_and_metadata() {
 }
 
 #[test]
-fn parse_sse_events_accepts_done_sentinel_without_event_type() {
+fn parse_sse_events_should_keep_non_prefixed_json_continuation_lines() {
+    let input = concat!(
+        "event: error\n",
+        "data: {\n",
+        "  \"error\": {\n",
+        "    \"message\": \"bad upstream\"\n",
+        "  }\n",
+        "}\n",
+        "\n",
+    );
+
+    let events = parse_sse_events(input).unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].data,
+        "{\n  \"error\": {\n    \"message\": \"bad upstream\"\n  }\n}"
+    );
+}
+
+#[test]
+fn parse_sse_events_should_ignore_done_sentinel_without_event_type() {
     let events = parse_sse_events("data: [DONE]\r\n\r\n").unwrap();
 
-    assert_eq!(events[0].data, "[DONE]");
+    assert!(events.is_empty());
+}
+
+#[test]
+fn parse_sse_events_should_convert_non_sse_json_body_to_error_event() {
+    let events = parse_sse_events(r#"{"error":{"message":"not an SSE stream"}}"#).unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event.as_deref(), Some("error"));
+    let data: serde_json::Value = serde_json::from_str(&events[0].data).unwrap();
+    assert_eq!(data["error"]["code"], "non_sse_response");
+    assert_eq!(data["error"]["message"], "not an SSE stream");
+}
+
+#[test]
+fn parse_sse_events_should_reject_single_event_buffer_above_original_limit() {
+    let mut input = String::from("event: response.output_text.delta\ndata: ");
+    input.extend(std::iter::repeat_n('x', MAX_SSE_EVENT_BUFFER_BYTES));
+
+    let Err(error) = parse_sse_events(&input) else {
+        panic!("oversized SSE event was accepted");
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "SSE buffer exceeded 67108864 bytes — aborting stream"
+    );
 }
 
 #[test]

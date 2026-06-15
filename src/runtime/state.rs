@@ -1,22 +1,25 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
 use crate::admin::{
     client_keys::service::ApiKeyService,
-    session::{repository::AdminAuthRepository, service::AdminAuthService},
+    session::{
+        repository::AdminAuthRepository,
+        service::{AdminAuthDependencies, AdminAuthService},
+    },
     settings::SettingsService,
 };
 use crate::codex::accounts::cookies::repository::CookieRepository;
 use crate::codex::accounts::{
     pool::{AccountPool, AccountPoolOptions, RotationStrategy},
     repository::{AccountRepository, AccountRepositoryResult, AccountUsageRepository},
-    service::AccountService,
+    service::{AccountService, AccountServiceDependencies},
 };
 use crate::codex::gateway::fingerprint::model::Fingerprint;
-use crate::codex::gateway::oauth::{OAuthClient, PkceSessionStore, TokenRefresher};
-use crate::codex::gateway::transport::websocket::CodexWebSocketPool;
+use crate::codex::gateway::oauth::{OAuthClient, OAuthConfig, PkceSessionStore, TokenRefresher};
+use crate::codex::gateway::transport::websocket::{CodexWebSocketPool, CodexWebSocketPoolConfig};
 use crate::codex::models::repository::ModelSnapshotRepository;
 use crate::codex::models::service::ModelService;
 use crate::codex::serving::dispatch::affinity::{
@@ -175,6 +178,25 @@ impl AppState {
         )
     }
 
+    pub fn with_pool_secret_api_key_hasher_and_fingerprint(
+        config: AppConfig,
+        pool: SqlitePool,
+        secret_box: SecretBox,
+        api_key_hasher: ApiKeyHasher,
+        fingerprint: Fingerprint,
+    ) -> Self {
+        Self::from_dependencies(
+            config,
+            AppStateDependencies {
+                pool: Some(pool),
+                secret_box: Some(secret_box),
+                api_key_hasher: Some(api_key_hasher),
+                fingerprint: Some(fingerprint),
+                ..AppStateDependencies::default()
+            },
+        )
+    }
+
     pub fn with_pool_secret_api_key_hasher_oauth_client_and_fingerprint<C>(
         config: AppConfig,
         pool: SqlitePool,
@@ -246,48 +268,41 @@ impl AppState {
         let pool_ref = pool.as_ref();
         let secret_box_ref = secret_box.as_ref();
         let account_pool = account_pool_from_config(&config);
-        let websocket_pool = Arc::new(CodexWebSocketPool::with_default_max_age());
+        let websocket_pool = websocket_pool_from_config(&config);
         let oauth_sessions = Arc::new(Mutex::new(PkceSessionStore::default()));
         let api_keys = api_key_service(pool_ref, api_key_hasher.as_ref());
         let config = Arc::new(config);
         let logs = log_service(&config, pool_ref);
         let usage = usage_service(pool_ref);
+        let fingerprint = fingerprint.unwrap_or_else(Fingerprint::default_codex_desktop);
         let settings = SettingsService::new(
             config.clone(),
             local_config_path.unwrap_or_else(|| PathBuf::from("local.yaml")),
         );
-        let diagnostics = DiagnosticsService::new(config.clone());
+        let diagnostics = DiagnosticsService::new(config.clone(), fingerprint.clone());
         let service_context = ServiceBuildContext {
             config: config.clone(),
             pool: pool_ref,
             secret_box: secret_box_ref,
-            account_pool: account_pool.clone(),
-            websocket_pool: websocket_pool.clone(),
+            account_pool,
+            websocket_pool,
         };
         let accounts = account_service(
-            config.clone(),
-            account_repository(pool_ref, secret_box_ref),
-            pool_ref,
-            secret_box_ref,
+            &service_context,
             token_refresher.clone(),
-            account_pool.clone(),
-            websocket_pool,
+            fingerprint.clone(),
         );
         let admin_auth = admin_auth_service(
-            config.clone(),
-            pool_ref,
-            secret_box_ref,
-            account_pool,
+            &service_context,
             oauth_client,
             oauth_sessions,
             accounts.clone(),
         );
-        let fingerprint = fingerprint.unwrap_or_else(Fingerprint::default_codex_desktop);
         let V1Services {
             chat,
             responses,
             models,
-        } = v1_services(service_context, logs.clone(), token_refresher, fingerprint);
+        } = v1_services(service_context, logs.clone(), fingerprint);
         Self {
             services: Arc::new(AppServices {
                 config,
@@ -321,6 +336,15 @@ fn account_pool_from_config(config: &AppConfig) -> Arc<Mutex<AccountPool>> {
     })))
 }
 
+fn websocket_pool_from_config(config: &AppConfig) -> Arc<CodexWebSocketPool> {
+    Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        enabled: config.ws_pool.enabled,
+        max_age: Duration::from_millis(config.ws_pool.max_age_ms),
+        max_per_account: config.ws_pool.max_per_account,
+        ..CodexWebSocketPoolConfig::default()
+    }))
+}
+
 struct V1Services {
     chat: ChatService,
     responses: ResponsesService,
@@ -339,15 +363,15 @@ struct ServiceBuildContext<'a> {
 fn v1_services(
     context: ServiceBuildContext<'_>,
     logs: LogService,
-    token_refresher: Option<Arc<dyn TokenRefresher>>,
     fingerprint: Fingerprint,
 ) -> V1Services {
-    let upstream = codex_upstream_service(&context, logs, token_refresher, fingerprint);
+    let upstream = codex_upstream_service(&context, logs, fingerprint.clone());
     let models = model_service(
         context.config.clone(),
         context.pool,
         context.secret_box,
         context.account_pool,
+        fingerprint,
     );
     let model_config = context.config.model.clone();
     V1Services {
@@ -362,59 +386,60 @@ fn model_service(
     pool: Option<&SqlitePool>,
     secret_box: Option<&SecretBox>,
     account_pool: Arc<Mutex<AccountPool>>,
+    fingerprint: Fingerprint,
 ) -> ModelService {
     ModelService::new(
         config,
         pool.cloned().map(ModelSnapshotRepository::new),
         account_repository(pool, secret_box),
         account_pool,
+        fingerprint,
     )
 }
 
 fn admin_auth_service(
-    config: Arc<AppConfig>,
-    pool: Option<&SqlitePool>,
-    secret_box: Option<&SecretBox>,
-    account_pool: Arc<Mutex<AccountPool>>,
+    context: &ServiceBuildContext<'_>,
     oauth_client: Option<Arc<dyn OAuthClient>>,
     oauth_sessions: Arc<Mutex<PkceSessionStore>>,
     accounts: AccountService,
 ) -> AdminAuthService {
+    let config = context.config.clone();
     AdminAuthService::new(
         config,
-        pool.cloned().map(AdminAuthRepository::new),
-        account_repository(pool, secret_box),
-        account_pool,
-        oauth_client,
-        oauth_sessions,
-        accounts,
+        AdminAuthDependencies {
+            auth_repository: context.pool.cloned().map(AdminAuthRepository::new),
+            account_repository: account_repository(context.pool, context.secret_box),
+            account_pool: context.account_pool.clone(),
+            oauth_config: OAuthConfig::from_auth_config(&context.config.auth),
+            oauth_client,
+            oauth_sessions,
+            accounts,
+        },
     )
 }
 
 fn account_service(
-    config: Arc<AppConfig>,
-    repository: Option<AccountRepository>,
-    pool: Option<&SqlitePool>,
-    secret_box: Option<&SecretBox>,
+    context: &ServiceBuildContext<'_>,
     token_refresher: Option<Arc<dyn TokenRefresher>>,
-    account_pool: Arc<Mutex<AccountPool>>,
-    websocket_pool: Arc<CodexWebSocketPool>,
+    fingerprint: Fingerprint,
 ) -> AccountService {
     AccountService::new(
-        config,
-        repository,
-        pool.cloned().map(AccountUsageRepository::new),
-        cookie_repository(pool, secret_box),
-        token_refresher,
-        account_pool,
-        websocket_pool,
+        context.config.clone(),
+        AccountServiceDependencies {
+            repository: account_repository(context.pool, context.secret_box),
+            usage_repository: context.pool.cloned().map(AccountUsageRepository::new),
+            cookie_repository: cookie_repository(context.pool, context.secret_box),
+            token_refresher,
+            account_pool: context.account_pool.clone(),
+            websocket_pool: context.websocket_pool.clone(),
+            fingerprint,
+        },
     )
 }
 
 fn codex_upstream_service(
     context: &ServiceBuildContext<'_>,
     logs: LogService,
-    token_refresher: Option<Arc<dyn TokenRefresher>>,
     fingerprint: Fingerprint,
 ) -> CodexUpstreamService {
     CodexUpstreamService::new(
@@ -426,7 +451,6 @@ fn codex_upstream_service(
             session_affinity: context.pool.cloned().map(SessionAffinityRepository::new),
         },
         logs,
-        token_refresher,
         fingerprint,
         context.websocket_pool.clone(),
     )

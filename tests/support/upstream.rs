@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use codex_proxy_rs::{
+    codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::oauth::{RefreshFailure, TokenPair, TokenRefresher},
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
@@ -88,6 +89,9 @@ pub fn test_config(database_url: String, base_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -108,6 +112,7 @@ pub fn test_config(database_url: String, base_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
@@ -149,6 +154,34 @@ pub async fn build_imported_app_with_accounts_and_config(
     accounts: &[ImportAccount],
     configure: impl FnOnce(&mut AppConfig),
 ) -> ImportedApp {
+    build_imported_app_with_accounts_config_and_fingerprint(base_url, accounts, configure, None)
+        .await
+}
+
+pub async fn build_imported_app_with_fingerprint(
+    base_url: String,
+    fingerprint: Fingerprint,
+) -> ImportedApp {
+    build_imported_app_with_accounts_config_and_fingerprint(
+        base_url,
+        &[ImportAccount {
+            id: "acct_imported",
+            account_id: "chatgpt-account",
+            token: "access-secret",
+            refresh_token: "refresh-secret",
+        }],
+        |_| {},
+        Some(fingerprint),
+    )
+    .await
+}
+
+async fn build_imported_app_with_accounts_config_and_fingerprint(
+    base_url: String,
+    accounts: &[ImportAccount],
+    configure: impl FnOnce(&mut AppConfig),
+    fingerprint: Option<Fingerprint>,
+) -> ImportedApp {
     let tempdir = tempfile::tempdir().unwrap();
     let db = tempdir.path().join("v1-upstream.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -163,12 +196,22 @@ pub async fn build_imported_app_with_accounts_and_config(
         .unwrap();
     let mut config = test_config(url, base_url);
     configure(&mut config);
-    let app = build_router(AppState::with_pool_secret_and_api_key_hasher(
-        config,
-        pool.clone(),
-        secret_box.clone(),
-        hasher,
-    ));
+    let state = match fingerprint {
+        Some(fingerprint) => AppState::with_pool_secret_api_key_hasher_and_fingerprint(
+            config,
+            pool.clone(),
+            secret_box.clone(),
+            hasher,
+            fingerprint,
+        ),
+        None => AppState::with_pool_secret_and_api_key_hasher(
+            config,
+            pool.clone(),
+            secret_box.clone(),
+            hasher,
+        ),
+    };
+    let app = build_router(state);
     let accounts = accounts
         .iter()
         .map(|account| {

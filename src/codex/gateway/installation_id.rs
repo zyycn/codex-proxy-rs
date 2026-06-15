@@ -4,7 +4,7 @@
 //! 用于路由/亲和性提示，使上游可以将客户端固定到同一后端实例以保持提示缓存温暖。
 //!
 //! 查找顺序：
-//! 1. `~/.codex/installation_id`（兼容真实 Codex Desktop）
+//! 1. `~/.codex/installation_id`（真实 Codex Desktop 位置）
 //! 2. `<database_dir>/installation_id`（之前持久化的）
 //! 3. 生成新 UUID 并持久化到 `<database_dir>/installation_id`
 

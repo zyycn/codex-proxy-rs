@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -12,11 +13,15 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use codex_proxy_rs::codex::gateway::oauth::{RefreshFailure, TokenPair};
+use codex_proxy_rs::codex::gateway::{
+    fingerprint::model::Fingerprint,
+    oauth::{RefreshFailure, TokenPair, TokenRefresher},
+};
 
 use crate::support::{
     admin_accounts::{
-        admin_accounts_test_app, admin_accounts_test_app_with_base_url,
+        admin_accounts_test_app, admin_accounts_test_app_with_base_url_and_fingerprint,
+        admin_accounts_test_app_with_base_url_and_refresher,
         admin_accounts_test_app_with_refresher, import_test_account, test_jwt,
         FailingTokenRefresher, StaticTokenRefresher,
     },
@@ -312,6 +317,9 @@ async fn admin_account_reset_usage_should_clear_local_counters_and_pool_last_use
 #[tokio::test]
 async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secrets() {
     let server = MockServer::start().await;
+    let fingerprint = quota_test_fingerprint();
+    let expected_user_agent = fingerprint.user_agent();
+    let expected_sec_ch_ua = fingerprint.sec_ch_ua();
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
         .and(header("authorization", "Bearer access-acct_quota"))
@@ -340,8 +348,13 @@ async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secre
         .expect(1)
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir) =
-        admin_accounts_test_app_with_base_url("admin-account-quota.sqlite", 31, server.uri()).await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_base_url_and_fingerprint(
+        "admin-account-quota.sqlite",
+        31,
+        server.uri(),
+        fingerprint,
+    )
+    .await;
     import_test_account(&app, "session_1", "acct_quota").await;
 
     let response = app
@@ -375,6 +388,30 @@ async fn admin_account_quota_should_fetch_usage_store_quota_and_not_return_secre
         .unwrap();
     assert!(stored.0.contains("\"remaining_percent\":75"));
     assert!(!stored.0.contains("access-acct_quota"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok()),
+        Some(expected_user_agent.as_str())
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("sec-ch-ua")
+            .and_then(|value| value.to_str().ok()),
+        Some(expected_sec_ch_ua.as_str())
+    );
+}
+
+fn quota_test_fingerprint() -> Fingerprint {
+    Fingerprint {
+        app_version: "27.111.222".to_string(),
+        build_number: "9001".to_string(),
+        chromium_version: "155".to_string(),
+        ..Fingerprint::default_for_tests()
+    }
 }
 
 #[tokio::test]
@@ -483,36 +520,24 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
 }
 
 #[tokio::test]
-async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accounts() {
+async fn admin_accounts_health_check_should_refresh_oauth_without_touching_codex_backend() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
-        .and(header("authorization", "Bearer access-acct_health_alive"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plan_type": "plus",
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": null,
-                "secondary_window": null
-            },
-            "code_review_rate_limit": null
-        })))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .and(header("authorization", "Bearer access-acct_health_dead"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
-            "error": {"message": "invalid token"}
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let (app, _state, pool, _dir) =
-        admin_accounts_test_app_with_base_url("admin-account-health.sqlite", 32, server.uri())
-            .await;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_base_url_and_refresher(
+        "admin-account-health.sqlite",
+        32,
+        server.uri(),
+        HealthCheckTokenRefresher {
+            calls: calls.clone(),
+        },
+    )
+    .await;
     import_test_account(&app, "session_1", "acct_health_alive").await;
     import_test_account(&app, "session_1", "acct_health_dead").await;
 
@@ -542,6 +567,15 @@ async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accou
     assert_eq!(body["data"]["summary"]["alive"], 1);
     assert_eq!(body["data"]["summary"]["dead"], 1);
     assert_eq!(body["data"]["summary"]["skipped"], 0);
+    let mut refresh_calls = calls.lock().await.clone();
+    refresh_calls.sort();
+    assert_eq!(
+        refresh_calls,
+        vec![
+            "refresh-acct_health_alive".to_string(),
+            "refresh-acct_health_dead".to_string(),
+        ]
+    );
     let serialized = serde_json::to_string(&body).unwrap();
     assert!(!serialized.contains("access-acct_health_alive"));
     assert!(!serialized.contains("access-acct_health_dead"));
@@ -554,9 +588,9 @@ async fn admin_accounts_health_check_should_probe_backend_and_mark_invalid_accou
 }
 
 #[tokio::test]
-async fn admin_accounts_health_check_should_reject_removed_stagger_ms_field() {
+async fn admin_accounts_health_check_should_reject_unsupported_stagger_ms_field() {
     let (app, _state, _pool, _dir) =
-        admin_accounts_test_app("admin-account-health-removed-field.sqlite", 32).await;
+        admin_accounts_test_app("admin-account-health-unsupported-field.sqlite", 32).await;
 
     let response = app
         .oneshot(
@@ -574,4 +608,24 @@ async fn admin_accounts_health_check_should_reject_removed_stagger_ms_field() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response_json(response).await;
     assert_eq!(body["code"], 40001);
+}
+
+#[derive(Clone)]
+struct HealthCheckTokenRefresher {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl TokenRefresher for HealthCheckTokenRefresher {
+    async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        self.calls.lock().await.push(refresh_token.to_string());
+        match refresh_token {
+            "refresh-acct_health_alive" => Ok(TokenPair {
+                access_token: "new-health-access".to_string(),
+                refresh_token: Some("new-health-refresh".to_string()),
+            }),
+            "refresh-acct_health_dead" => Err(RefreshFailure::InvalidGrant),
+            _ => Err(RefreshFailure::Transport),
+        }
+    }
 }

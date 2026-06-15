@@ -135,9 +135,9 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
 }
 
 #[tokio::test]
-async fn admin_accounts_import_should_reject_sub2api_oauth_export() {
+async fn admin_accounts_import_should_reject_non_native_export_shape() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("admin-sub2api.sqlite");
+    let db = dir.path().join("admin-external-import.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
@@ -147,31 +147,20 @@ async fn admin_accounts_import_should_reject_sub2api_oauth_export() {
         SecretBox::new([14u8; 32]),
     ));
     let import_body = json!({
-        "type": "sub2api-data",
+        "type": "external-data",
         "version": 1,
-        "proxies": [],
+        "legacy": [],
         "accounts": [
             {
-                "name": "Sub2API Team",
                 "platform": "openai",
                 "type": "oauth",
                 "credentials": {
-                    "access_token": "Bearer sub2api-access-secret",
-                    "refresh_token": "rt_sub2api",
+                    "access_token": "Bearer external-access-secret",
+                    "refresh_token": "rt_external",
                     "email": "team@example.com",
                     "chatgpt_account_id": "chatgpt-account",
                     "chatgpt_user_id": "chatgpt-user",
                     "plan_type": "team"
-                },
-                "concurrency": 0,
-                "priority": 0
-            },
-            {
-                "name": "Other Provider",
-                "platform": "anthropic",
-                "type": "oauth",
-                "credentials": {
-                    "access_token": "ignored-secret"
                 }
             }
         ]
@@ -184,7 +173,7 @@ async fn admin_accounts_import_should_reject_sub2api_oauth_export() {
                 .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_sub2api")
+                .header("x-request-id", "req_external_import")
                 .body(Body::from(import_body.to_string()))
                 .unwrap(),
         )
@@ -202,9 +191,9 @@ async fn admin_accounts_import_should_reject_sub2api_oauth_export() {
 }
 
 #[tokio::test]
-async fn admin_accounts_import_should_reject_native_payload_with_removed_proxy_fields() {
+async fn admin_accounts_import_should_reject_native_payload_with_unknown_account_fields() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("admin-sub2api-native.sqlite");
+    let db = dir.path().join("admin-native-unknown-field.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
@@ -215,24 +204,16 @@ async fn admin_accounts_import_should_reject_native_payload_with_removed_proxy_f
     ));
     let import_body = json!({
         "accounts": [{
-            "id": "acct_sub2api_native",
+            "id": "acct_native_unknown",
             "token": "native-access-secret",
             "refreshToken": "native-refresh-secret",
             "email": "native@example.com",
             "accountId": "native-account",
             "userId": "native-user",
-            "label": "Native Sub2API",
+            "label": "Native Unknown",
             "planType": "plus",
-            "proxyApiKey": "ignored-proxy-secret",
-            "status": "active",
-            "usage": {
-                "request_count": 1,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0
-            },
-            "cachedQuota": null,
-            "quotaVerifyRequired": false
+            "legacyField": "ignored-secret",
+            "status": "active"
         }]
     });
 
@@ -243,7 +224,53 @@ async fn admin_accounts_import_should_reject_native_payload_with_removed_proxy_f
                 .uri("/api/admin/accounts/import")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_sub2api_native")
+                .header("x-request-id", "req_native_unknown")
+                .body(Body::from(import_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(import_response).await;
+    assert_eq!(body["message"], "No importable accounts found");
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_reject_native_payload_with_unknown_container_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-native-container-field.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    let app = build_router(AppState::with_pool_and_secret_box(
+        test_config(url),
+        pool,
+        SecretBox::new([15u8; 32]),
+    ));
+    let import_body = json!({
+        "accounts": [{
+            "id": "acct_native_extra_container",
+            "token": "native-access-secret",
+            "refreshToken": "native-refresh-secret",
+            "email": "native@example.com",
+            "accountId": "native-account",
+            "userId": "native-user",
+            "label": "Native",
+            "planType": "plus",
+            "status": "active"
+        }],
+        "legacyContainer": true
+    });
+
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_native_container")
                 .body(Body::from(import_body.to_string()))
                 .unwrap(),
         )
@@ -284,13 +311,13 @@ async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_fil
         body["data"]["accounts"][0]["refreshToken"],
         "refresh-acct_export_a"
     );
-    assert!(body["data"]["accounts"][0].get("proxyApiKey").is_none());
+    assert!(body["data"]["accounts"][0].get("legacyField").is_none());
 
     let invalid = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/export?format=proxy")
+                .uri("/api/admin/accounts/export?format=external")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -301,15 +328,15 @@ async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_fil
 }
 
 #[tokio::test]
-async fn admin_accounts_export_should_reject_removed_sub2api_format() {
+async fn admin_accounts_export_should_reject_unsupported_external_format() {
     let (app, _state, _pool, _dir) =
-        admin_accounts_test_app("admin-account-export-sub2api.sqlite", 25).await;
+        admin_accounts_test_app("admin-account-export-external.sqlite", 25).await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/export?format=sub2api")
+                .uri("/api/admin/accounts/export?format=external")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -320,7 +347,7 @@ async fn admin_accounts_export_should_reject_removed_sub2api_format() {
 }
 
 #[tokio::test]
-async fn admin_accounts_export_should_reject_removed_full_format_alias() {
+async fn admin_accounts_export_should_reject_unsupported_full_format() {
     let (app, _state, _pool, _dir) =
         admin_accounts_test_app("admin-account-export-full-alias.sqlite", 25).await;
 

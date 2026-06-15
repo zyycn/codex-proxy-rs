@@ -17,6 +17,7 @@ use codex_proxy_rs::{
         model::{Account, AccountStatus},
         repository::{AccountRepository, NewAccount},
     },
+    codex::gateway::fingerprint::model::Fingerprint,
     codex::models::repository::ModelSnapshotRepository,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
@@ -53,6 +54,9 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -73,6 +77,7 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
@@ -123,6 +128,9 @@ async fn admin_refresh_models_should_require_admin_session_cookie() {
 #[tokio::test]
 async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans() {
     let server = MockServer::start().await;
+    let fingerprint = models_test_fingerprint();
+    let expected_user_agent = fingerprint.user_agent();
+    let expected_sec_ch_ua = fingerprint.sec_ch_ua();
     Mock::given(method("GET"))
         .and(path("/codex/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -157,11 +165,12 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
     insert_account(&account_repo, "acct_plus_a", "plus", "access-plus-a").await;
     insert_account(&account_repo, "acct_plus_b", "plus", "access-plus-b").await;
     insert_account(&account_repo, "acct_team", "team", "access-team").await;
-    let state = AppState::with_pool_secret_and_api_key_hasher(
+    let state = AppState::with_pool_secret_api_key_hasher_and_fingerprint(
         test_config(url, server.uri()),
         pool.clone(),
         secret_box,
         hasher,
+        fingerprint,
     );
     state
         .services
@@ -205,6 +214,26 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
         .unwrap();
     assert_eq!(snapshots.len(), 2);
     assert_eq!(snapshots[0].models[0].id, "gpt-refresh");
+    let requests = server.received_requests().await.unwrap();
+    let model_requests = requests
+        .iter()
+        .filter(|request| request.url.path() == "/codex/models")
+        .collect::<Vec<_>>();
+    assert_eq!(model_requests.len(), 2);
+    assert!(model_requests.iter().all(|request| {
+        request
+            .headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok())
+            == Some(expected_user_agent.as_str())
+    }));
+    assert!(model_requests.iter().all(|request| {
+        request
+            .headers
+            .get("sec-ch-ua")
+            .and_then(|value| value.to_str().ok())
+            == Some(expected_sec_ch_ua.as_str())
+    }));
 
     let catalog_response = app
         .oneshot(
@@ -228,6 +257,15 @@ async fn admin_refresh_models_should_fetch_snapshots_for_distinct_account_plans(
         .await
         .unwrap();
     assert_ne!(acquired.plan_type.as_deref(), Some("free"));
+}
+
+fn models_test_fingerprint() -> Fingerprint {
+    Fingerprint {
+        app_version: "27.333.444".to_string(),
+        build_number: "9002".to_string(),
+        chromium_version: "156".to_string(),
+        ..Fingerprint::default_for_tests()
+    }
 }
 
 async fn insert_account(

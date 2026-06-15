@@ -306,7 +306,7 @@ Validation:
 - `rotationStrategy` must be `least_used`, `round_robin`, or `sticky`.
 - Count/capacity/retention fields that represent concurrency, capacity, intervals, or retention must be greater than zero where zero would disable required service behavior.
 - Quota warning thresholds must be between `0` and `100`.
-- Removed settings such as `proxyUrl`, `openaiApiKey`, `ollama`, provider settings, proxy API key settings, and Electron/self-update settings return HTTP `400` with body code `40001`.
+- Unknown settings fields return HTTP `400` with body code `40001`.
 
 ### `GET /api/admin/logs`
 
@@ -602,7 +602,7 @@ Success response:
 
 ### `POST /api/admin/accounts/import`
 
-Imports accounts into encrypted SQLite storage. The request body uses the native Rust import format. The only supported shape is an object with `accounts`; Sub2API payloads, proxy/runtime fields, `credentials`/`tokens` wrappers, snake_case token fields, and other removed old-project aliases are rejected by producing no importable accounts.
+Imports accounts into encrypted SQLite storage. The request body uses the native Rust import format. The only supported shape is an object with `accounts`; unknown container or account fields are rejected by producing no importable accounts.
 
 Request:
 
@@ -641,7 +641,7 @@ Success response:
 
 ### `GET /api/admin/accounts/export`
 
-Exports native Rust account backups. The default format is native; `format=native` is the only explicit format accepted. Removed aliases such as `format=full` and removed external formats such as `format=sub2api` return HTTP `400`.
+Exports native Rust account backups. The default format is native; `format=native` is the only explicit format accepted. Any other format returns HTTP `400`.
 
 Optional query:
 

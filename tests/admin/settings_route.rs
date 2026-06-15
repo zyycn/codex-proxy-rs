@@ -45,6 +45,9 @@ fn test_config(database_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: vec!["team".to_string(), "plus".to_string()],
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -65,6 +68,7 @@ fn test_config(database_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
@@ -208,10 +212,6 @@ async fn admin_settings_patch_should_persist_retained_fields_to_local_yaml() {
         json!([75, 90])
     );
 
-    let local_yaml = fs::read_to_string(dir.path().join("local.yaml")).unwrap();
-    assert!(!local_yaml.contains("proxyUrl"));
-    assert!(!local_yaml.contains("openaiApiKey"));
-    assert!(!local_yaml.contains("ollama"));
     let reloaded = AppConfig::load_from_dir(dir.path()).unwrap();
     assert_eq!(reloaded.model.default_model, "gpt-6");
     assert_eq!(
@@ -240,7 +240,7 @@ async fn admin_settings_patch_should_persist_retained_fields_to_local_yaml() {
 }
 
 #[tokio::test]
-async fn admin_settings_patch_should_reject_removed_or_invalid_fields() {
+async fn admin_settings_patch_should_reject_unsupported_or_invalid_fields() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-settings-patch-invalid.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -264,7 +264,7 @@ async fn admin_settings_patch_should_reject_removed_or_invalid_fields() {
                 .header("x-request-id", "req_settings_patch_invalid")
                 .body(Body::from(
                     json!({
-                        "proxyUrl": "http://127.0.0.1:8080",
+                        "unknownSetting": true,
                         "rotationStrategy": "random"
                     })
                     .to_string(),
@@ -333,17 +333,4 @@ async fn admin_settings_should_return_only_in_scope_runtime_fields() {
             "usageHistoryRetentionDays": 30
         })
     );
-    for removed_key in [
-        "proxyUrl",
-        "openaiApiKey",
-        "ollama",
-        "provider",
-        "proxyApiKey",
-        "autoUpdate",
-    ] {
-        assert!(
-            body["data"].get(removed_key).is_none(),
-            "{removed_key} must stay out of the Rust settings API"
-        );
-    }
 }

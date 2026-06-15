@@ -1114,6 +1114,6 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 - Extract v1 services before admin services because v1 is the core proxy path.
 - Keep admin and v1 public response contracts separate.
 - Treat local `cpr_` API key management as a Rust-local admin utility, not TypeScript
-  provider-key parity.
+  local client key parity.
 - Do not add proxy pools, non-OpenAI providers, frontend/Electron flows, or workspace
   crate boundaries as part of this cleanup.

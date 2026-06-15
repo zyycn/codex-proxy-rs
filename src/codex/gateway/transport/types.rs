@@ -18,12 +18,20 @@ pub struct CodexResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<Value>,
+    #[serde(skip)]
+    pub tuple_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    #[serde(skip)]
+    pub explicit_prompt_cache_key: bool,
+    #[serde(skip)]
+    pub client_conversation_id: Option<String>,
+    #[serde(skip)]
+    pub variant_identity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,9 +73,13 @@ impl CodexResponsesRequest {
             tool_choice: None,
             parallel_tool_calls: None,
             text: None,
+            tuple_schema: None,
             service_tier: None,
             previous_response_id: None,
             prompt_cache_key: None,
+            explicit_prompt_cache_key: false,
+            client_conversation_id: None,
+            variant_identity: None,
             include: None,
             client_metadata: None,
             use_websocket: false,
@@ -81,4 +93,19 @@ impl CodexResponsesRequest {
             parent_thread_id: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexCompactRequest {
+    pub model: String,
+    pub input: Vec<Value>,
+    pub instructions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<Value>,
 }

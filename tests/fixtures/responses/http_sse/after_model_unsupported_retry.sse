@@ -1,0 +1,2 @@
+event: response.completed
+data: {"response":{"id":"resp_after_model_unsupported_retry","object":"response","usage":{"input_tokens":8,"output_tokens":2}}}

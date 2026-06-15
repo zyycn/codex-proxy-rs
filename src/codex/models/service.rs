@@ -25,6 +25,7 @@ pub struct ModelService {
     snapshot_repository: Option<ModelSnapshotRepository>,
     account_repository: Option<AccountRepository>,
     account_pool: Arc<Mutex<AccountPool>>,
+    fingerprint: Fingerprint,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -52,12 +53,14 @@ impl ModelService {
         snapshot_repository: Option<ModelSnapshotRepository>,
         account_repository: Option<AccountRepository>,
         account_pool: Arc<Mutex<AccountPool>>,
+        fingerprint: Fingerprint,
     ) -> Self {
         Self {
             config,
             snapshot_repository,
             account_repository,
             account_pool,
+            fingerprint,
         }
     }
 
@@ -105,7 +108,7 @@ impl ModelService {
                 CodexBackendClient::new(
                     client,
                     self.config.api.base_url.clone(),
-                    Fingerprint::default_codex_desktop(),
+                    self.fingerprint.clone(),
                 )
             })
             .map_err(|_| ModelServiceError::BuildClient)?;

@@ -12,6 +12,7 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
+    codex::gateway::conversation_identity::build_conversation_identity,
     config::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
@@ -34,6 +35,7 @@ const CHAT_PARALLEL_TOOLS_SUCCESS_SSE: &str =
 const CHAT_TOOL_REASONING_COMPLETE_SSE: &str =
     include_str!("../fixtures/chat/tool_reasoning_complete.sse");
 const CHAT_TOOL_STREAM_SSE: &str = include_str!("../fixtures/chat/tool_stream.sse");
+const CHAT_TUPLE_OBJECT_SSE: &str = include_str!("../fixtures/chat/tuple_object.sse");
 
 struct ImportedApp {
     app: axum::Router,
@@ -69,6 +71,9 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
@@ -89,6 +94,7 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
+        ws_pool: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
@@ -185,6 +191,56 @@ async fn single_upstream_post_body(server: &MockServer) -> Value {
     assert_eq!(post_requests.len(), 1);
     assert_eq!(requests.len(), 1);
     serde_json::from_slice(&post_requests[0].body).unwrap()
+}
+
+#[tokio::test]
+async fn chat_completions_should_use_user_as_client_conversation_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CHAT_NON_STREAM_TEXT_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "user": "chat-client-session",
+                        "messages": [
+                            {"role": "user", "content": "Say ok"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let upstream_body = single_upstream_post_body(&server).await;
+    let identity = build_conversation_identity(Some("chat-client-session"), None, "acct_chat");
+    assert_eq!(
+        upstream_body["prompt_cache_key"],
+        identity.conversation_id.unwrap()
+    );
 }
 
 #[tokio::test]
@@ -332,6 +388,75 @@ async fn chat_completions_translates_messages_and_returns_openai_response() {
 }
 
 #[tokio::test]
+async fn chat_completions_should_convert_and_reconvert_tuple_schema() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CHAT_TUPLE_OBJECT_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "messages": [{"role": "user", "content": "Return JSON"}],
+                        "response_format": {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "TupleAnswer",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "point": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                                {"type": "number"},
+                                                {"type": "number"}
+                                            ]
+                                        }
+                                    }
+                                },
+                                "strict": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "{\"point\":[1,2]}"
+    );
+    let upstream_body = single_upstream_post_body(&server).await;
+    let schema = &upstream_body["text"]["format"]["schema"];
+    assert!(schema["properties"]["point"].get("prefixItems").is_none());
+    assert_eq!(schema["properties"]["point"]["type"], "object");
+}
+
+#[tokio::test]
 async fn chat_completions_streams_openai_chunks_from_codex_sse() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -394,6 +519,78 @@ async fn chat_completions_streams_openai_chunks_from_codex_sse() {
     assert_eq!(
         chunks[3]["usage"]["prompt_tokens_details"]["cached_tokens"],
         4
+    );
+}
+
+#[tokio::test]
+async fn chat_completions_stream_should_reconvert_tuple_schema() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CHAT_TUPLE_OBJECT_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": true,
+                        "messages": [{"role": "user", "content": "Return JSON"}],
+                        "response_format": {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "TupleAnswer",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "point": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                                {"type": "number"},
+                                                {"type": "number"}
+                                            ]
+                                        }
+                                    }
+                                },
+                                "strict": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let frames = response_sse_data(response).await;
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        chunks[1]["choices"][0]["delta"]["content"],
+        "{\"point\":[1,2]}"
     );
 }
 

@@ -16,9 +16,10 @@ use codex_proxy_rs::{
             model::AccountStatus,
             pool::AccountPool,
             repository::{AccountRepository, AccountUsageRepository, NewAccount, TokenUpdate},
-            service::AccountService,
+            service::{AccountService, AccountServiceDependencies},
         },
         gateway::{
+            fingerprint::model::Fingerprint,
             oauth::{RefreshFailure, TokenPair, TokenRefresher},
             transport::websocket::CodexWebSocketPool,
         },
@@ -57,12 +58,15 @@ async fn account_service_refresh_should_retry_with_latest_disk_refresh_token_aft
     };
     let service = AccountService::new(
         Arc::new(test_config(url)),
-        Some(repo),
-        Some(AccountUsageRepository::new(pool)),
-        None,
-        Some(Arc::new(refresher)),
-        Arc::new(Mutex::new(AccountPool::default())),
-        Arc::new(CodexWebSocketPool::with_default_max_age()),
+        AccountServiceDependencies {
+            repository: Some(repo),
+            usage_repository: Some(AccountUsageRepository::new(pool)),
+            cookie_repository: None,
+            token_refresher: Some(Arc::new(refresher)),
+            account_pool: Arc::new(Mutex::new(AccountPool::default())),
+            websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
+            fingerprint: Fingerprint::default_for_tests(),
+        },
     );
 
     let result = service.refresh_account("acct_stale").await.unwrap();
@@ -74,11 +78,66 @@ async fn account_service_refresh_should_retry_with_latest_disk_refresh_token_aft
     );
 }
 
+#[tokio::test]
+async fn account_service_refresh_probe_should_not_persist_permanent_status_on_first_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts_scheduler.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let repo = AccountRepository::new(pool.clone(), SecretBox::new([20u8; 32]));
+    repo.insert(NewAccount {
+        id: "acct_scheduler".to_string(),
+        email: None,
+        account_id: None,
+        user_id: None,
+        label: None,
+        plan_type: None,
+        access_token: SecretString::new("access-old".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-old".to_string().into())),
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+    })
+    .await
+    .unwrap();
+    let service = AccountService::new(
+        Arc::new(test_config(url)),
+        AccountServiceDependencies {
+            repository: Some(repo.clone()),
+            usage_repository: Some(AccountUsageRepository::new(pool)),
+            cookie_repository: None,
+            token_refresher: Some(Arc::new(AlwaysFailingRefresher)),
+            account_pool: Arc::new(Mutex::new(AccountPool::default())),
+            websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
+            fingerprint: Fingerprint::default_for_tests(),
+        },
+    );
+
+    let result = service
+        .probe_account_refresh("acct_scheduler")
+        .await
+        .unwrap();
+
+    assert_eq!(result.outcome.as_str(), "dead");
+    assert!(result.status.is_none());
+    let stored = repo.get("acct_scheduler").await.unwrap().unwrap();
+    assert_eq!(stored.status, AccountStatus::Active);
+}
+
 #[derive(Clone)]
 struct DiskRotatingRefresher {
     repo: AccountRepository,
     calls: Arc<Mutex<Vec<String>>>,
     first_call_seen: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct AlwaysFailingRefresher;
+
+#[async_trait]
+impl TokenRefresher for AlwaysFailingRefresher {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        Err(RefreshFailure::InvalidGrant)
+    }
 }
 
 #[async_trait]

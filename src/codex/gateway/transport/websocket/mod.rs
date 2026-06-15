@@ -1,12 +1,13 @@
-use std::{pin::Pin, sync::Arc, time::Instant};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use thiserror::Error;
-use tokio::sync::Mutex;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{
-        client::IntoClientRequest, http::Request as WsRequest, Error as WsError, Message,
-    },
+use tokio::{sync::Mutex, time::timeout};
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest, http::Request as WsRequest, Error as WsError, Message,
 };
 
 use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
@@ -18,18 +19,22 @@ use crate::codex::gateway::transport::{
 };
 
 mod codec;
+mod opening;
 mod pool;
 
 use codec::{
     classify_ws_error_frame, codex_websocket_transport_error, is_internal_websocket_event,
     is_terminal_websocket_event, retry_after_seconds_from_body, websocket_event_type,
     websocket_message_text, websocket_request_body, websocket_sse_chunk,
+    WebSocketErrorClassificationProfile,
 };
 use pool::{
     CodexWebSocketConnectionMetadata, CodexWsStream, PooledWebSocketConnection,
     WebSocketPoolAcquire,
 };
 pub use pool::{CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey};
+
+const WEBSOCKET_OPEN_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexTransport {
@@ -52,6 +57,8 @@ pub enum CodexWebSocketError {
     InvalidRequest(#[from] tokio_tungstenite::tungstenite::http::Error),
     #[error("websocket transport error: {0}")]
     Transport(#[source] WsError),
+    #[error("websocket handshake timed out after {timeout:?}")]
+    OpenTimeout { timeout: Duration },
     #[error("websocket handshake returned status {status}: {body}")]
     Upstream {
         status: StatusCode,
@@ -99,6 +106,14 @@ struct WebSocketPoolReturn {
 }
 
 impl ActiveWebSocket {
+    fn error_classification_profile(&self) -> WebSocketErrorClassificationProfile {
+        if self.pool_return.is_some() {
+            WebSocketErrorClassificationProfile::Pooled
+        } else {
+            WebSocketErrorClassificationProfile::OneShot
+        }
+    }
+
     async fn finish(self) {
         let Self {
             websocket,
@@ -288,7 +303,8 @@ async fn create_response_via_websocket_stream_inner(
                 capture_internal_rate_limit_event(&raw, &rate_limit_updates).await;
                 continue;
             }
-            if let Some(classified) = classify_ws_error_frame(&raw) {
+            let classification_profile = active.error_classification_profile();
+            if let Some(classified) = classify_ws_error_frame(&raw, classification_profile) {
                 if classified.connection_fatal {
                     active.discard().await;
                 } else {
@@ -406,10 +422,24 @@ async fn connect_websocket(
     base_url: &str,
     headers: HeaderMap,
 ) -> Result<(CodexWsStream, CodexWebSocketConnectionMetadata), CodexWebSocketError> {
+    connect_websocket_with_timeout(base_url, headers, WEBSOCKET_OPEN_TIMEOUT).await
+}
+
+async fn connect_websocket_with_timeout(
+    base_url: &str,
+    headers: HeaderMap,
+    open_timeout: Duration,
+) -> Result<(CodexWsStream, CodexWebSocketConnectionMetadata), CodexWebSocketError> {
     let ws_request = build_ws_request(base_url, headers)?;
-    let (websocket, handshake_response) = connect_async(ws_request)
-        .await
-        .map_err(codex_websocket_transport_error)?;
+    let (websocket, handshake_response) = timeout(
+        open_timeout,
+        opening::connect_with_original_opening_handshake(ws_request),
+    )
+    .await
+    .map_err(|_| CodexWebSocketError::OpenTimeout {
+        timeout: open_timeout,
+    })?
+    .map_err(codex_websocket_transport_error)?;
     Ok((
         websocket,
         CodexWebSocketConnectionMetadata::from_headers(handshake_response.headers()),
@@ -502,5 +532,36 @@ pub async fn append_rate_limit_updates(
     let updates = updates.lock().await;
     for update in updates.iter() {
         headers.extend(rate_limits_to_header_pairs(update));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::header::HeaderMap;
+    use tokio::{net::TcpListener, time::Duration};
+
+    use super::{connect_websocket_with_timeout, CodexWebSocketError};
+
+    #[tokio::test]
+    async fn connect_websocket_with_timeout_should_fail_when_handshake_stalls() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        let result = connect_websocket_with_timeout(
+            &format!("http://{addr}"),
+            HeaderMap::new(),
+            Duration::from_millis(10),
+        )
+        .await;
+
+        let Err(CodexWebSocketError::OpenTimeout { timeout }) = result else {
+            panic!("expected websocket open timeout");
+        };
+        assert_eq!(timeout, Duration::from_millis(10));
+        server.abort();
     }
 }

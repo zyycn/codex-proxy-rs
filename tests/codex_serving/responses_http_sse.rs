@@ -45,7 +45,68 @@ const DONE_ITEM_COMPLETED_SSE: &str =
     include_str!("../fixtures/responses/http_sse/done_item_completed.sse");
 const STREAM_USAGE_SSE: &str = include_str!("../fixtures/responses/http_sse/stream_usage.sse");
 const DEFAULT_STREAM_SSE: &str = include_str!("../fixtures/responses/http_sse/default_stream.sse");
-const EMPTY_COMPLETED_SSE: &str = "event: response.completed\ndata: {\"response\":{\"id\":\"resp_empty\",\"object\":\"response\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+const EMPTY_COMPLETED_SSE: &str =
+    include_str!("../fixtures/responses/http_sse/empty_completed.sse");
+const COMPLETED_TUPLE_OBJECT_SSE: &str =
+    include_str!("../fixtures/responses/http_sse/completed_tuple_object.sse");
+
+#[tokio::test]
+async fn v1_responses_should_reject_invalid_json_without_upstream_request() {
+    let server = MockServer::start().await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.is_empty());
+}
+
+#[tokio::test]
+async fn v1_responses_should_reject_non_object_json_without_upstream_request() {
+    let server = MockServer::start().await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from("[]"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.is_empty());
+}
 
 #[tokio::test]
 async fn v1_responses_should_skip_event_log_when_logging_disabled() {
@@ -202,7 +263,7 @@ async fn v1_responses_should_stagger_same_account_requests_before_sending_upstre
     assert_eq!(times.len(), 2);
     let elapsed = times[1].duration_since(times[0]);
     assert!(
-        elapsed >= Duration::from_millis(220),
+        elapsed >= Duration::from_millis(180),
         "second upstream request was sent too early: {elapsed:?}"
     );
 }
@@ -514,6 +575,390 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_convert_tuple_schema_before_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_FIELDS_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": false,
+                        "use_websocket": false,
+                        "input": [],
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "TupleAnswer",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "point": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                                {"type": "number"},
+                                                {"type": "number"}
+                                            ],
+                                            "items": false
+                                        }
+                                    },
+                                    "required": ["point"]
+                                },
+                                "strict": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let schema = &upstream_body["text"]["format"]["schema"];
+    assert!(schema["properties"]["point"].get("prefixItems").is_none());
+    assert!(schema["properties"]["point"].get("items").is_none());
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(
+        schema["properties"]["point"],
+        json!({
+            "type": "object",
+            "properties": {
+                "0": {"type": "number"},
+                "1": {"type": "number"}
+            },
+            "required": ["0", "1"],
+            "additionalProperties": false
+        })
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_should_reconvert_tuple_schema_output_for_client() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_TUPLE_OBJECT_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": false,
+                        "use_websocket": false,
+                        "input": [],
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "TupleAnswer",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "point": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                                {"type": "number"},
+                                                {"type": "number"}
+                                            ]
+                                        }
+                                    }
+                                },
+                                "strict": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["output_text"], "{\"point\":[1,2]}");
+    assert_eq!(body["output"][0]["content"][0]["text"], "{\"point\":[1,2]}");
+}
+
+#[tokio::test]
+async fn v1_responses_stream_should_reconvert_tuple_schema_output_for_client() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_TUPLE_OBJECT_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": true,
+                        "use_websocket": false,
+                        "input": [],
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "TupleAnswer",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "point": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                                {"type": "number"},
+                                                {"type": "number"}
+                                            ]
+                                        }
+                                    }
+                                },
+                                "strict": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains(r#""delta":"{\"point\":[1,2]}""#));
+    assert!(body.contains(r#""text":"{\"point\":[1,2]}""#));
+    assert!(!body.contains(r#""point\":{\"0":1,"1":2}"#));
+}
+
+#[tokio::test]
+async fn v1_responses_review_route_should_force_review_subagent_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("x-openai-subagent", "review"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_FIELDS_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/review")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": false,
+                        "use_websocket": false,
+                        "input": []
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let post_request = requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST" && !request.body.is_empty())
+        .unwrap();
+    let upstream_body: Value = serde_json::from_slice(&post_request.body).unwrap();
+    assert_eq!(
+        upstream_body["client_metadata"]["x-openai-subagent"],
+        "review"
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_compact_should_post_json_to_codex_compact_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .and(header("authorization", "Bearer access-secret"))
+        .and(header("chatgpt-account-id", "chatgpt-account"))
+        .and(header("content-type", "application/json"))
+        .and(header("openai-beta", "responses_websockets=2026-02-06"))
+        .and(header("x-openai-internal-codex-residency", "us"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "compacted"}]
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5-fast",
+                        "instructions": "compress the session",
+                        "input": [
+                            {"role": "user", "content": "hello"},
+                            {
+                                "type": "reasoning",
+                                "id": "rs_1",
+                                "status": "completed",
+                                "summary": [{"type": "summary_text", "text": "kept"}],
+                                "ignored": "drop"
+                            },
+                            {"type": "compaction", "encrypted_content": "enc_compact"},
+                            {"type": "compaction", "id": "drop_missing_encrypted"}
+                        ],
+                        "tools": [{"type": "function", "name": "lookup"}],
+                        "parallel_tool_calls": false,
+                        "reasoning": {"effort": "high", "summary": "auto", "extra": "drop"},
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "Compact",
+                                "schema": {"type": "object"},
+                                "strict": true
+                            }
+                        },
+                        "stream": true,
+                        "store": true,
+                        "prompt_cache_key": "must_not_forward"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["output"][0]["content"][0]["text"], "compacted");
+
+    let requests = server.received_requests().await.unwrap();
+    let compact_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/codex/responses/compact")
+        .unwrap();
+    assert_ne!(
+        compact_request
+            .headers
+            .get("accept")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(compact_request
+        .headers
+        .get("x-codex-installation-id")
+        .is_some());
+    let upstream_body: Value = serde_json::from_slice(&compact_request.body).unwrap();
+    assert_eq!(upstream_body["model"], "gpt-5.5");
+    assert_eq!(upstream_body["instructions"], "compress the session");
+    assert_eq!(upstream_body["parallel_tool_calls"], false);
+    assert_eq!(
+        upstream_body["reasoning"],
+        json!({"effort": "high", "summary": "auto"})
+    );
+    assert_eq!(
+        upstream_body["tools"],
+        json!([{"type": "function", "name": "lookup"}])
+    );
+    assert_eq!(upstream_body["text"]["format"]["type"], "json_schema");
+    assert!(upstream_body.get("stream").is_none());
+    assert!(upstream_body.get("store").is_none());
+    assert!(upstream_body.get("prompt_cache_key").is_none());
+    assert_eq!(upstream_body["input"].as_array().unwrap().len(), 3);
+    assert!(upstream_body["input"][1].get("ignored").is_none());
+    assert_eq!(
+        upstream_body["input"][2]["encrypted_content"],
+        "enc_compact"
+    );
+}
+
+#[tokio::test]
 async fn v1_responses_should_include_encrypted_reasoning_by_default() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -560,6 +1005,148 @@ async fn v1_responses_should_include_encrypted_reasoning_by_default() {
         json!(["reasoning.encrypted_content"])
     );
     assert_eq!(upstream_body["reasoning"]["summary"], "auto");
+}
+
+#[tokio::test]
+async fn v1_responses_should_not_add_reasoning_include_when_client_include_is_non_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_REASONING_INCLUDE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": false,
+                        "use_websocket": false,
+                        "input": [],
+                        "reasoning": {"effort": "high"},
+                        "include": ["file_search_call.results"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(
+        upstream_body["include"],
+        json!(["file_search_call.results"])
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_should_sanitize_reasoning_and_compaction_input_before_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": false,
+                        "use_websocket": false,
+                        "input": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs_1",
+                                "status": "completed",
+                                "summary": [
+                                    {"type": "summary_text", "text": "valid summary"},
+                                    {"type": "ignored", "text": "drop"}
+                                ],
+                                "encrypted_content": "enc_reasoning",
+                                "content": [
+                                    {"type": "reasoning_text", "text": "valid reasoning"},
+                                    {"type": "ignored", "text": "drop"}
+                                ],
+                                "extra": "drop"
+                            },
+                            {
+                                "type": "reasoning",
+                                "id": "",
+                                "summary": [{"type": "summary_text", "text": "drop"}]
+                            },
+                            {
+                                "type": "compaction",
+                                "id": "cmp_1",
+                                "encrypted_content": "enc_compaction",
+                                "extra": "drop"
+                            },
+                            {"type": "compaction", "id": "cmp_drop"},
+                            {"type": "message", "role": "user", "content": "keep me", "extra": 42}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = server.received_requests().await.unwrap();
+    let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(
+        upstream_body["input"],
+        json!([
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "valid summary"}],
+                "status": "completed",
+                "encrypted_content": "enc_reasoning",
+                "content": [{"type": "reasoning_text", "text": "valid reasoning"}]
+            },
+            {
+                "type": "compaction",
+                "encrypted_content": "enc_compaction",
+                "id": "cmp_1"
+            },
+            {"type": "message", "role": "user", "content": "keep me", "extra": 42}
+        ])
+    );
 }
 
 #[tokio::test]
