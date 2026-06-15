@@ -324,6 +324,7 @@ select
   added_at,
   updated_at,
   quota_limit_reached,
+  quota_verify_required,
   quota_cooldown_until,
   cloudflare_cooldown_until,
   coalesce(account_usage.request_count, 0) as usage_request_count,
@@ -529,6 +530,7 @@ impl AccountRepository {
                 access_token_expires_at: stored.access_token_expires_at,
                 status: stored.status,
                 quota_limit_reached: row.get::<i64, _>("quota_limit_reached") != 0,
+                quota_verify_required: row.get::<i64, _>("quota_verify_required") != 0,
                 quota_cooldown_until: parse_optional_rfc3339(
                     row.get::<Option<String>, _>("quota_cooldown_until"),
                 )?,

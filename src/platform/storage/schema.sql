@@ -55,6 +55,7 @@ create table if not exists accounts (
   quota_json text,
   quota_fetched_at text,
   quota_limit_reached integer not null default 0 check (quota_limit_reached in (0, 1)),
+  quota_verify_required integer not null default 0 check (quota_verify_required in (0, 1)),
   quota_cooldown_until text,
   cloudflare_cooldown_until text,
   added_at text not null,

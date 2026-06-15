@@ -323,6 +323,27 @@ async fn account_repository_should_restore_window_usage_into_runtime_pool_accoun
 }
 
 #[tokio::test]
+async fn account_repository_should_restore_quota_verify_required_into_runtime_pool_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("accounts.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let secret_box = SecretBox::new([34u8; 32]);
+    let repo = AccountRepository::new(pool.clone(), secret_box.clone());
+
+    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    sqlx::query("update accounts set quota_verify_required = 1 where id = ?")
+        .bind("acct_a")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let account = repo.list_pool_accounts().await.unwrap().remove(0);
+
+    assert!(account.quota_verify_required);
+}
+
+#[tokio::test]
 async fn account_repository_should_exclude_refresh_lease_until_expiry() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("accounts.sqlite");

@@ -196,6 +196,7 @@ impl AccountService {
             access_token_expires_at,
             status,
             quota_limit_reached: false,
+            quota_verify_required: false,
             quota_cooldown_until: None,
             cloudflare_cooldown_until: None,
             request_count: 0,

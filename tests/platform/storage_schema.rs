@@ -49,6 +49,23 @@ async fn sqlite_schema_should_persist_account_usage_window_columns() {
 }
 
 #[tokio::test]
+async fn sqlite_schema_should_persist_quota_verify_required_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('accounts') where name = 'quota_verify_required'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row, Some(("quota_verify_required".to_string(),)));
+}
+
+#[tokio::test]
 async fn sqlite_schema_should_persist_session_affinity_function_call_ids() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
@@ -169,9 +186,15 @@ async fn sqlite_schema_should_reject_non_boolean_flags() {
     )
     .execute(&pool)
     .await;
+    let quota_verify_result = sqlx::query(
+        "insert into accounts (id, access_token_cipher, status, quota_verify_required, added_at, updated_at) values ('acct_verify_bad', 'cipher', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await;
 
     assert!(api_key_result.is_err());
     assert!(account_result.is_err());
+    assert!(quota_verify_result.is_err());
 }
 
 #[tokio::test]
