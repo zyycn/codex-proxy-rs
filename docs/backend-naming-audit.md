@@ -337,7 +337,6 @@
 │   │       │   ├── after_403.sse
 │   │       │   ├── after_429.sse
 │   │       │   ├── after_cloudflare_403.sse
-│   │       │   ├── after_refresh.sse
 │   │       │   ├── completed_fields.sse
 │   │       │   ├── completed_reasoning_include.sse
 │   │       │   ├── completed_usage.sse
@@ -346,7 +345,6 @@
 │   │       │   ├── error_event.sse
 │   │       │   ├── failed_event.sse
 │   │       │   ├── stream_after_429.sse
-│   │       │   ├── stream_after_refresh.sse
 │   │       │   ├── stream_error_event.sse
 │   │       │   ├── stream_failed_event.sse
 │   │       │   ├── stream_usage.sse
