@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "No available Codex accounts",
+    "type": "server_error",
+    "param": null,
+    "code": "no_available_accounts"
+  }
+}

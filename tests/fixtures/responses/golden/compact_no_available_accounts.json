@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "server_error",
+    "code": "no_available_accounts",
+    "message": "No available accounts. All accounts are expired or rate-limited."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "All accounts exhausted (1 rate-limited). Codex upstream error: {\"error\":{\"message\":\"rate limited\"}}",
+    "type": "server_error",
+    "param": null,
+    "code": "upstream_error"
+  }
+}
