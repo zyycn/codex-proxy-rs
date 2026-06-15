@@ -27,7 +27,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 
 最高优先级未对齐项：
 - 安全模拟仍缺 TLS 指纹证明；WS permessage-deflate offer、协商响应和服务端压缩 frame 解码已补齐测试与实现。
-- response 转换和错误恢复仍缺完整 golden 覆盖与副作用 transition 集中化；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback、Responses/compact 最终错误外壳、集中 `UpstreamRecoveryAction` 分类入口已补齐。
+- response 转换仍缺完整 golden 覆盖；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、显式 `previous_response_id` 的 429 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback、Responses/compact 最终错误外壳、集中 `UpstreamRecoveryAction` 分类入口、request/account recovery transition 边界已补齐。
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
 明确不移植：非 OpenAI upstream family 的兼容路由、translator、cache usage hint 估算及其 `clientConversationId` 来源不属于本项目目标；后续只按 OpenAI `/v1/responses`、`/v1/responses/compact` 与 `/v1/chat/completions` 链路核对。
@@ -425,6 +425,8 @@ Rust 证据：
 - 本轮修正后，`src/codex/serving/responses.rs` non-streaming 请求前错误与 mid-SSE `error`/`response.failed` 都会进入集中 `UpstreamRecoveryAction` 分类；显式 `previous_response_id` 遇到可分类账号错误不再有专用 hold 分支，会进入同一 fallback 状态机。
 - 本轮修正后，`src/codex/serving/dispatch/mod.rs` 的 HTTP SSE streaming 与 WebSocket streaming 请求建立失败也会先尝试 request-level recovery，`previous_response_not_found` 可同账号 strip-and-retry。
 - 本轮修正后，`src/codex/serving/dispatch/fallback.rs` 抽出集中 `UpstreamRecoveryAction` 分类入口，单元测试覆盖 request recovery 优先于 account retry、request recovery 只使用一次后委派给账号 retry、model unsupported 只重试一次；`src/codex/serving/responses.rs`、HTTP SSE streaming 和 WebSocket streaming 请求建立/collect 错误路径已复用该入口。
+- 本轮修正后，`src/codex/serving/dispatch/transition.rs` 抽出 `execute_upstream_request_recovery_transition_with_deps()` 与 `execute_upstream_account_recovery_transition_with_deps()`：request recovery 统一负责 forget stale affinity、restore implicit resume snapshot、清除 `previous_response_id`/`turn_state` 与审计日志；account recovery 统一负责账号状态副作用、fallback account acquire 与 account exhaustion message 合成。
+- 本轮修正后，`src/codex/serving/dispatch/fallback.rs` 不再直接 acquire fallback account，只保留错误分类、fallback response message、账号状态/cooldown/cookie/WS eviction 副作用；`tests/architecture/serving_boundary.rs::serving_dispatch_has_dedicated_recovery_transition_boundary` 约束 transition 文件边界和 fallback 不再直接 acquire。
 - 本轮修正后，`src/codex/serving/dispatch/mod.rs` 在 non-streaming、HTTP SSE streaming、WebSocket streaming 的上游 request attempt 外层加入 `retry_upstream_5xx()`：仅对 `CodexClientError::Upstream` 的 5xx 做同账号最多 2 次重试，退避为 1000ms、2000ms，与原版 `withRetry()` 默认策略一致。
 - 本轮修正后，`src/codex/serving/dispatch/fallback.rs` 识别 4xx `model not supported`、`model_not_supported`、`model not available`、`model_not_available`，只允许一次备用账号 retry，不标记账号状态，也不驱逐 WebSocket pool。
 - 本轮修正后，`src/codex/serving/dispatch/stream.rs` 会把 non-streaming collect 得到的 `response.failed` `model_not_supported`/`model_not_available` 合成为 400 上游错误，使它进入同一 model fallback 状态机。
@@ -453,12 +455,13 @@ Rust 证据：
 - Rust 的 Cloudflare challenge 处理比原版更持久：会把 cooldown 写入数据库，并清理对应账号 cookies。
 - 显式 `previous_response_id` 的账号级错误恢复已对齐原版：不降级 HTTP SSE，仍通过 WebSocket 向备用账号重试；若备用账号无法识别该 server-side history，再由 `previous_response_not_found` strip-and-retry 恢复。
 - retry 分类优先级已集中：`UpstreamRecoveryAction` 先处理 implicit/stale history recovery，再处理账号级 retry/fallback，最后返回错误，避免 request recovery 与 account retry 在不同入口各自判断。
+- recovery transition 边界已补齐：request-level stale history 恢复和 account-level fallback acquire/account exhaustion response 已由 `dispatch/transition.rs` 统一执行；Responses non-streaming、compact、Chat、HTTP SSE streaming、WebSocket streaming 均复用同一 account recovery transition。
 
 未完全对齐：
-- recovery 副作用 transition 仍分散在 non-streaming、HTTP SSE streaming、WebSocket streaming 和 compact 各自分支中；本轮已集中分类优先级，但 release、fallback acquire、response formatting 等副作用还没有抽成原版同等的 transition 层。
+- response/SSE/WS 最终输出格式仍需要完整 golden fixture 矩阵防回归。当前 transition 已集中 request recovery 与 account fallback acquire/account exhaustion；各入口仍按自身协议生成最终 `Response`/SSE chunk，这是 Rust 侧保持 HTTP JSON、Chat 兼容、Responses passthrough 三类外壳差异的边界。
 
 缺口/后续动作：
-- 继续抽出 recovery transition 层：把 release、restore implicit resume、fallback acquire、account exhaustion response 组合成明确的执行单元，进一步贴近原版 `proxy-error-retry-transition.ts` / `proxy-fallback-account-retry.ts`。
+- 继续补 response/SSE/WS golden fixture：覆盖最终错误外壳、streaming premature close、tuple schema reconvert、reasoning replay 与 fallback exhausted message 的格式细节。
 
 ## 9. rate-limit、usage、quota、cookie 持久化
 

@@ -24,6 +24,7 @@ use crate::{
     codex::serving::dispatch::{
         classify_upstream_account_retry, no_available_accounts_response,
         normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,
+        UpstreamAccountRecoveryTransition,
     },
     codex::serving::http::errors::{
         codex_client_error_message, codex_client_error_response,
@@ -136,14 +137,15 @@ impl ChatService {
                         if retry.is_model_unsupported() {
                             model_unsupported_retry_used = true;
                         }
-                        let fallback = self
+                        let transition = self
                             .upstream
-                            .apply_retry_and_acquire_fallback(
+                            .apply_account_recovery_transition(
                                 &acquired.account,
                                 retry,
                                 &codex_request.model,
                                 &mut excluded_account_ids,
                                 false,
+                                codex_client_error_message(&error),
                             )
                             .await;
                         self.upstream
@@ -155,32 +157,29 @@ impl ChatService {
                                 retry.metadata(client_stream),
                             )
                             .await;
-                        if let Some(fallback) = fallback {
-                            log_context = log_context.with_account(&fallback.account.id);
-                            acquired = fallback;
-                            continue;
+                        match transition {
+                            UpstreamAccountRecoveryTransition::Retry(fallback) => {
+                                log_context = log_context.with_account(&fallback.account.id);
+                                acquired = *fallback;
+                                continue;
+                            }
+                            UpstreamAccountRecoveryTransition::Respond { status, message } => {
+                                let error_response =
+                                    codex_client_error_response_with_status_and_message(
+                                        error, status, &message,
+                                    );
+                                self.upstream
+                                    .log_response(
+                                        &log_context,
+                                        error_response.0,
+                                        EventLevel::Error,
+                                        "v1 chat completions fallback 已耗尽",
+                                        json!({"stream": client_stream}),
+                                    )
+                                    .await;
+                                return error_response.into_response();
+                            }
                         }
-                        let retry_message =
-                            retry.fallback_response_message(codex_client_error_message(&error));
-                        let message = self
-                            .upstream
-                            .fallback_exhausted_message(&retry_message)
-                            .await;
-                        let error_response = codex_client_error_response_with_status_and_message(
-                            error,
-                            retry.status(),
-                            &message,
-                        );
-                        self.upstream
-                            .log_response(
-                                &log_context,
-                                error_response.0,
-                                EventLevel::Error,
-                                "v1 chat completions fallback 已耗尽",
-                                json!({"stream": client_stream}),
-                            )
-                            .await;
-                        return error_response.into_response();
                     }
                     if self
                         .upstream

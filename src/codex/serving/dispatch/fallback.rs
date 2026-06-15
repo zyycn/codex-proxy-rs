@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::codex::{
     accounts::{
         model::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, AccountPoolStatusSummary, AcquiredAccount},
+        pool::AccountPoolStatusSummary,
     },
     gateway::transport::{http_client::CodexClientError, rate_limits::cooldown_with_jitter},
 };
@@ -337,22 +337,6 @@ fn is_cloudflare_challenge(body: &str) -> bool {
         || lower.contains("cf_chl")
         || lower.contains("attention required")
         || lower.contains("just a moment")
-}
-
-pub(super) async fn apply_upstream_retry_and_acquire_fallback_with_deps(
-    deps: &CodexUpstreamDependencies,
-    account: &Account,
-    retry: UpstreamAccountRetry,
-    model: &str,
-    excluded_account_ids: &mut Vec<String>,
-    image_generation_requested: bool,
-) -> Option<AcquiredAccount> {
-    apply_upstream_account_retry_with_deps(deps, account, retry, image_generation_requested).await;
-    excluded_account_ids.push(account.id.clone());
-    deps.account_pool.lock().await.acquire_with(
-        AccountAcquireRequest::new(model, Utc::now())
-            .with_exclude_account_ids(excluded_account_ids.iter().cloned()),
-    )
 }
 
 pub(super) async fn apply_upstream_account_retry_with_deps(
