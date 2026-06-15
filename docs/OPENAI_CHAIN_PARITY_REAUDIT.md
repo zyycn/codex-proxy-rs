@@ -494,11 +494,12 @@ Rust 证据：
 - usage input/output/cached token 的成功路径持久化、窗口统计和重启恢复已对齐到可用水平。
 - SSE usage 提取已对齐原版最终 usage 语义，不再对多个事件里重复出现的同一份 usage 做累计；`extract_sse_usage_should_use_completed_response_usage_without_merging_earlier_usage` 覆盖该行为。
 - least_used 依赖的 request_count、window_reset_at、quota_limited 字段已经进入运行时调度和数据库恢复路径。
+- account retry decision 的失败请求持久 request_count 已对齐原版 release 语义：进入 429/402/403/401/model unsupported/Cloudflare 等账号 fallback/hold 处理时会写入一次无 token 的 request attempt；`v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_account` 覆盖 402 fallback 失败账号计数。
 
 未完全对齐：
 - image_generation usage 未对齐。原版记录 image input/output tokens、image request success/failure 和对应窗口计数；Rust `TokenUsage` 只有 input/output/cached/total，没有解析或持久化 `tool_usage.image_gen`。
 - dirty quota verification 缺失。原版离线 reset cachedQuota 后设置 `quotaVerifyRequired`，下一次请求会先调用 `/usage` 验证；Rust 只在本地窗口到期后清除 cooldown/推进窗口，没有等价 dirty 标记和请求前最多 5 次 upstream usage 校验。
-- 失败请求的持久 request_count 语义不一致。原版 release 时默认记录 request_count，错误 release 也计数；Rust runtime acquire 会计运行时 request_count，但数据库只在成功 usage、429 `record_request_attempt()`、empty response 等路径写入，部分 transport/5xx/403/402 fallback 失败尝试重启后不会体现在持久 request_count 中。
+- 非 account retry decision 的失败请求持久 request_count 仍需确认。Rust 已覆盖账号 fallback/hold 分类错误，但纯 transport error、最终 5xx exhausted 等不进入 `UpstreamAccountRetry` 的失败是否应按原版 release 计数，还需要单独 golden test 决策。
 - Cookie domain/path 语义不同。原版 CookieJar 是 per-account 简单 map，不按 domain/path 过滤；Rust 按 domain/path 存储和匹配。对 `chatgpt.com` 主链路更严格，但不是原版逐字行为。
 - quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at` 并可能标记 quotaVerifyRequired；Rust 设置 `window_started_at`，没有 `window_counters_reset_at` 字段，也不触发 quotaVerifyRequired。
 - passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
@@ -506,7 +507,7 @@ Rust 证据：
 缺口/后续动作：
 - 补 `TokenUsage` 的 image_generation 字段与数据库/运行时窗口字段，或明确 Rust 不支持 image_generation usage 统计。
 - 增加 dirty quota verification 机制：窗口离线 reset 后标记需要校验，请求前调用 usage endpoint，失败时保留 dirty 标记并限制放大次数。
-- 统一持久 request_count 计数点，决定是否像原版一样在 release/attempt 维度记录所有真实上游尝试；至少补 transport/5xx/403/402 exhausted 的测试。
+- 继续统一非 account retry decision 的持久 request_count 计数点；至少补 transport/5xx exhausted 的测试。
 - 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
 
