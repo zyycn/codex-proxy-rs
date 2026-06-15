@@ -133,7 +133,7 @@ impl ResponsesService {
         codex_request.include_timing_metrics = body
             .include_timing_metrics
             .or_else(|| header_string(&headers, "x-responsesapi-include-timing-metrics"));
-        codex_request.version = header_string(&headers, "version");
+        codex_request.version = body.version.or_else(|| header_string(&headers, "version"));
         codex_request.codex_window_id = body
             .codex_window_id
             .or_else(|| header_string(&headers, "x-codex-window-id"));
@@ -934,6 +934,7 @@ struct ResponsesBody {
     turn_state: Option<String>,
     turn_metadata: Option<String>,
     beta_features: Option<String>,
+    version: Option<String>,
     include_timing_metrics: Option<String>,
     codex_window_id: Option<String>,
     parent_thread_id: Option<String>,
@@ -975,6 +976,7 @@ fn parse_responses_body(body: &[u8], default_model: String) -> Option<ResponsesB
     parsed.turn_state = take_non_empty_string(&mut body, "turnState");
     parsed.turn_metadata = take_non_empty_string(&mut body, "turnMetadata");
     parsed.beta_features = take_non_empty_string(&mut body, "betaFeatures");
+    parsed.version = take_non_empty_string(&mut body, "version");
     parsed.include_timing_metrics = take_non_empty_string(&mut body, "includeTimingMetrics");
     parsed.codex_window_id = take_non_empty_string(&mut body, "codexWindowId");
     parsed.parent_thread_id = take_non_empty_string(&mut body, "parentThreadId");
@@ -1031,6 +1033,7 @@ fn default_body(default_model: String) -> ResponsesBody {
         turn_state: None,
         turn_metadata: None,
         beta_features: None,
+        version: None,
         include_timing_metrics: None,
         codex_window_id: None,
         parent_thread_id: None,

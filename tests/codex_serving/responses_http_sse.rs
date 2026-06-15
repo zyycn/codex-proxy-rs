@@ -625,11 +625,11 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
         .and(header("authorization", "Bearer access-secret"))
         .and(header("chatgpt-account-id", "chatgpt-account"))
         .and(header("x-codex-turn-state", "turn-body"))
-        .and(header("x-codex-turn-metadata", "meta-header"))
-        .and(header("x-codex-beta-features", "beta-header"))
+        .and(header("x-codex-turn-metadata", "meta-body"))
+        .and(header("x-codex-beta-features", "beta-body"))
         .and(header("x-responsesapi-include-timing-metrics", "true"))
         .and(header("version", "2026-06-12"))
-        .and(header("x-codex-parent-thread-id", "parent-1"))
+        .and(header("x-codex-parent-thread-id", "parent-body"))
         .and(header("x-openai-subagent", "review"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -654,10 +654,8 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
                 .header("x-codex-turn-state", "turn-header")
                 .header("x-codex-turn-metadata", "meta-header")
                 .header("x-codex-beta-features", "beta-header")
-                .header("x-responsesapi-include-timing-metrics", "true")
-                .header("version", "2026-06-12")
-                .header("x-codex-window-id", "window-1")
-                .header("x-codex-parent-thread-id", "parent-1")
+                .header("x-codex-window-id", "window-header")
+                .header("x-codex-parent-thread-id", "parent-header")
                 .header("x-openai-subagent", "review")
                 .body(Body::from(
                     json!({
@@ -685,6 +683,12 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
                             "safe": "yes"
                         },
                         "turnState": "turn-body",
+                        "turnMetadata": "meta-body",
+                        "betaFeatures": "beta-body",
+                        "includeTimingMetrics": "true",
+                        "version": "2026-06-12",
+                        "codexWindowId": "window-body",
+                        "parentThreadId": "parent-body",
                         "use_websocket": false
                     })
                     .to_string(),
@@ -700,7 +704,8 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let identity = build_conversation_identity(Some("pcache"), Some("window-1"), "acct_imported");
+    let identity =
+        build_conversation_identity(Some("pcache"), Some("window-body"), "acct_imported");
     assert_eq!(
         upstream_body["prompt_cache_key"],
         identity.conversation_id.unwrap()
@@ -718,17 +723,28 @@ async fn v1_responses_should_forward_parity_fields_and_context_headers() {
     );
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-turn-metadata"],
-        "meta-header"
+        "meta-body"
     );
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-parent-thread-id"],
-        "parent-1"
+        "parent-body"
     );
     let installation_id = upstream_body["client_metadata"]["x-codex-installation-id"]
         .as_str()
         .unwrap();
     assert!(uuid::Uuid::parse_str(installation_id).is_ok());
-    assert!(upstream_body.get("use_websocket").is_none());
+    for local_field in [
+        "turnState",
+        "turnMetadata",
+        "betaFeatures",
+        "includeTimingMetrics",
+        "version",
+        "codexWindowId",
+        "parentThreadId",
+        "use_websocket",
+    ] {
+        assert!(upstream_body.get(local_field).is_none());
+    }
 }
 
 #[tokio::test]
