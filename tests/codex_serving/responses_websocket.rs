@@ -51,6 +51,16 @@ const WEBSOCKET_INVALID_ENCRYPTED_CONTENT: &str =
     include_str!("../fixtures/responses/websocket/invalid_encrypted_content.json");
 const WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY: &str =
     include_str!("../fixtures/responses/websocket/completed_with_reasoning_replay.json");
+const REASONING_REPLAY_REQUEST_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/reasoning_replay_request.json");
+const WEBSOCKET_RATE_LIMIT_FALLBACK_EXHAUSTED_STREAM_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/websocket_rate_limit_fallback_exhausted_stream.sse");
+const QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/quota_exhausted_no_fallback_stream.sse");
+const MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/model_unsupported_no_fallback_stream.sse");
+const PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/path_block_no_fallback_stream.sse");
 
 #[expect(
     clippy::result_large_err,
@@ -700,6 +710,19 @@ async fn v1_responses_websocket_should_implicitly_resume_full_history_continuati
     );
     assert_eq!(second_request["input"][1]["content"], "continue");
     assert_eq!(second_request["input"].as_array().unwrap().len(), 2);
+
+    let mut replay_request = second_request;
+    replay_request
+        .as_object_mut()
+        .unwrap()
+        .remove("prompt_cache_key");
+    replay_request
+        .as_object_mut()
+        .unwrap()
+        .remove("client_metadata");
+    let expected_replay_request: Value =
+        serde_json::from_str(REASONING_REPLAY_REQUEST_GOLDEN).unwrap();
+    assert_eq!(replay_request, expected_replay_request);
 }
 
 #[tokio::test]
@@ -2123,7 +2146,20 @@ async fn v1_responses_websocket_without_history_should_mark_expired_after_fallba
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = response_text(response).await;
+    assert!(body.contains("event: response.failed"));
+    assert!(body.contains("\"type\":\"invalid_request_error\""));
+    assert!(body.contains("\"code\":\"authentication_error\""));
+    assert!(body.contains("All accounts exhausted"));
+    assert!(body.contains("token_revoked"));
     server.await.unwrap();
     let account_b_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_b")
@@ -2204,7 +2240,17 @@ async fn v1_responses_websocket_without_history_should_return_429_when_fallback_
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    let expected = format!("{WEBSOCKET_RATE_LIMIT_FALLBACK_EXHAUSTED_STREAM_GOLDEN}\n");
+    assert_eq!(body, expected);
     server.await.unwrap();
     let usage_a: (i64,) =
         sqlx::query_as("select request_count from account_usage where account_id = ?")
@@ -2220,6 +2266,191 @@ async fn v1_responses_websocket_without_history_should_return_429_when_fallback_
             .await
             .unwrap();
     assert_eq!(usage_b.0, 1);
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_without_history_should_return_stream_error_when_402_has_no_fallback(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        reject_next_websocket_upgrade(
+            &listener,
+            "Bearer access-a",
+            402,
+            "Payment Required",
+            None,
+            r#"{"error":{"message":"quota reached"}}"#,
+        )
+        .await;
+    });
+    let imported = build_imported_app_with_accounts(
+        format!("http://{addr}"),
+        &[ImportAccount {
+            id: "acct_ws_402_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    let expected = format!("{QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN}\n");
+    assert_eq!(body, expected);
+    server.await.unwrap();
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_ws_402_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "quota_exhausted");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_without_history_should_return_stream_error_when_model_unsupported_has_no_fallback(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        reject_next_websocket_upgrade(
+            &listener,
+            "Bearer access-a",
+            400,
+            "Bad Request",
+            None,
+            r#"{"error":{"code":"model_not_available","message":"Model gpt-5.5 is not available on this account plan"}}"#,
+        )
+        .await;
+    });
+    let imported = build_imported_app_with_accounts(
+        format!("http://{addr}"),
+        &[ImportAccount {
+            id: "acct_ws_model_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    let expected = format!("{MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN}\n");
+    assert_eq!(body, expected);
+    server.await.unwrap();
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_ws_model_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
+}
+
+#[tokio::test]
+async fn v1_responses_websocket_with_history_should_return_stream_error_when_path_block_has_no_fallback(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        reject_next_websocket_upgrade(&listener, "Bearer access-a", 404, "Not Found", None, "")
+            .await;
+    });
+    let imported = build_imported_app_with_accounts(
+        format!("http://{addr}"),
+        &[ImportAccount {
+            id: "acct_ws_path_block_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"previous_response_id":"resp_prev"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    let expected = format!("{PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN}\n");
+    assert_eq!(body, expected);
+    server.await.unwrap();
 }
 
 async fn reject_next_websocket_upgrade(
@@ -2308,6 +2539,23 @@ fn websocket_completed_function_call_response(response_id: &str, call_id: &str) 
     value["response"]["usage"]["input_tokens"] = json!(6);
     value["response"]["usage"]["output_tokens"] = json!(1);
     value.to_string()
+}
+
+fn redact_proxy_response_ids(body: &str) -> String {
+    let mut redacted = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(index) = rest.find("resp_proxy_") {
+        redacted.push_str(&rest[..index]);
+        redacted.push_str("resp_proxy_REDACTED");
+        rest = &rest[index + "resp_proxy_".len()..];
+        let id_len = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric())
+            .count();
+        rest = &rest[id_len..];
+    }
+    redacted.push_str(rest);
+    redacted
 }
 
 async fn read_http_upgrade_request(stream: &mut TcpStream) -> String {

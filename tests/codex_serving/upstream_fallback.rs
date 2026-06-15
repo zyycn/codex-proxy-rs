@@ -31,6 +31,8 @@ const STREAM_AFTER_401_FALLBACK_SSE: &str =
     include_str!("../fixtures/responses/http_sse/stream_after_401_fallback.sse");
 const SSE_RESPONSE_FAILED_QUOTA: &str =
     include_str!("../fixtures/responses/http_sse/response_failed_quota.sse");
+const SSE_RESPONSE_FAILED_TOKEN_INVALID: &str =
+    include_str!("../fixtures/responses/http_sse/response_failed_token_invalid.sse");
 const SSE_RESPONSE_FAILED_MODEL_UNSUPPORTED: &str =
     include_str!("../fixtures/responses/http_sse/response_failed_model_unsupported.sse");
 const SSE_PREVIOUS_RESPONSE_NOT_FOUND: &str =
@@ -43,6 +45,28 @@ const STREAM_AFTER_5XX_RETRY_SSE: &str =
     include_str!("../fixtures/responses/http_sse/stream_after_5xx_retry.sse");
 const AFTER_MODEL_UNSUPPORTED_RETRY_SSE: &str =
     include_str!("../fixtures/responses/http_sse/after_model_unsupported_retry.sse");
+const RESPONSE_FAILED_AUTH_RECOVERY_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/response_failed_auth_recovery.json");
+const CLOUDFLARE_CHALLENGE_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/cloudflare_challenge_no_fallback.json");
+const TOKEN_INVALID_NO_FALLBACK_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/token_invalid_no_fallback.json");
+const TOKEN_INVALID_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
+    include_str!("../fixtures/responses/golden/token_invalid_no_fallback_stream.sse"),
+    "\n"
+);
+const QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
+    include_str!("../fixtures/responses/golden/quota_exhausted_no_fallback_stream.sse"),
+    "\n"
+);
+const MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
+    include_str!("../fixtures/responses/golden/model_unsupported_no_fallback_stream.sse"),
+    "\n"
+);
+const PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN: &str = concat!(
+    include_str!("../fixtures/responses/golden/path_block_no_fallback_stream.sse"),
+    "\n"
+);
 
 #[tokio::test]
 async fn v1_responses_should_retry_next_account_after_429_retry_after() {
@@ -1178,10 +1202,9 @@ async fn v1_responses_should_return_502_when_cloudflare_challenge_has_no_fallbac
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let body = response_json(response).await;
-    assert_eq!(
-        body["error"]["message"],
-        "No accounts available. Upstream blocked the request (Cloudflare challenge)"
-    );
+    let expected: serde_json::Value =
+        serde_json::from_str(CLOUDFLARE_CHALLENGE_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]
@@ -1528,6 +1551,81 @@ async fn v1_responses_should_mark_expired_after_401_and_retry_next_account_non_s
 }
 
 #[tokio::test]
+async fn v1_responses_should_recover_auth_failure_from_response_failed_event() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(SSE_RESPONSE_FAILED_TOKEN_INVALID),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-b"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(AFTER_401_FALLBACK_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[
+            ImportAccount {
+                id: "acct_response_failed_auth_a",
+                account_id: "chatgpt-a",
+                token: "access-a",
+                refresh_token: "refresh-a",
+            },
+            ImportAccount {
+                id: "acct_response_failed_auth_b",
+                account_id: "chatgpt-b",
+                token: "access-b",
+                refresh_token: "refresh-b",
+            },
+        ],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let expected: serde_json::Value =
+        serde_json::from_str(RESPONSE_FAILED_AUTH_RECOVERY_GOLDEN).unwrap();
+    assert_eq!(body, expected);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_response_failed_auth_a")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "expired");
+}
+
+#[tokio::test]
 async fn v1_responses_should_mark_expired_after_401_and_retry_next_account_stream() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1657,14 +1755,251 @@ async fn v1_responses_should_mark_expired_and_return_401_when_401_has_no_fallbac
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let body = response_json(response).await;
-    assert_eq!(
-        body["error"]["message"],
-        "All accounts exhausted (1 expired). Codex upstream error: {\"error\":{\"code\":\"token_revoked\",\"message\":\"token revoked\"}}"
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    assert_eq!(body, TOKEN_INVALID_NO_FALLBACK_STREAM_GOLDEN);
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_401_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "expired");
+}
+
+#[tokio::test]
+async fn v1_responses_should_mark_quota_exhausted_and_return_stream_error_when_402_has_no_fallback()
+{
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {"message": "quota reached"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_402_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    assert_eq!(body, QUOTA_EXHAUSTED_NO_FALLBACK_STREAM_GOLDEN);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_402_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "quota_exhausted");
+}
+
+#[tokio::test]
+async fn v1_responses_should_return_stream_error_when_model_unsupported_has_no_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": "Model gpt-5.5 is not available on this account plan",
+                "code": "model_not_available"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_model_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    assert_eq!(body, MODEL_UNSUPPORTED_NO_FALLBACK_STREAM_GOLDEN);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_model_single")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
+}
+
+#[tokio::test]
+async fn v1_responses_should_return_stream_error_when_cloudflare_path_block_has_no_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_path_block_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+    let cookie_repo = CookieRepository::new(imported.pool.clone(), imported.secret_box.clone());
+    cookie_repo
+        .set_cookie_header("acct_path_block_single", "cf_clearance=old")
+        .await
+        .unwrap();
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/event-stream"));
+    let body = redact_proxy_response_ids(&response_text(response).await);
+    assert_eq!(body, PATH_BLOCK_NO_FALLBACK_STREAM_GOLDEN);
+    assert_eq!(
+        cookie_repo
+            .cookie_header("acct_path_block_single", "chatgpt.com")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn v1_responses_non_stream_should_mark_expired_and_return_401_when_401_has_no_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "token_revoked", "message": "token revoked"}
+        })))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_401_single_non_stream",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_401_no_fallback_non_stream")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = response_json(response).await;
+    let expected: serde_json::Value =
+        serde_json::from_str(TOKEN_INVALID_NO_FALLBACK_GOLDEN).unwrap();
+    assert_eq!(body, expected);
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_401_single_non_stream")
         .fetch_one(&imported.pool)
         .await
         .unwrap();
@@ -1705,7 +2040,7 @@ async fn v1_responses_should_mark_banned_when_401_says_account_deactivated() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"use_websocket":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1719,4 +2054,21 @@ async fn v1_responses_should_mark_banned_when_401_says_account_deactivated() {
         .await
         .unwrap();
     assert_eq!(account_status.0, "banned");
+}
+
+fn redact_proxy_response_ids(body: &str) -> String {
+    let mut redacted = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(index) = rest.find("resp_proxy_") {
+        redacted.push_str(&rest[..index]);
+        redacted.push_str("resp_proxy_REDACTED");
+        rest = &rest[index + "resp_proxy_".len()..];
+        let id_len = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric())
+            .count();
+        rest = &rest[id_len..];
+    }
+    redacted.push_str(rest);
+    redacted
 }

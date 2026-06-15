@@ -69,7 +69,6 @@ use crate::{
 
 use crate::codex::serving::http::errors::{
     codex_client_error_message, codex_client_error_response,
-    codex_client_error_response_with_status_and_message,
 };
 
 pub(crate) use self::{
@@ -98,7 +97,7 @@ use self::{
     limits::apply_rate_limit_headers_with_deps,
     stream::{
         completed_response_metadata, ensure_stream_metadata, has_terminal_sse_event,
-        premature_close_failed_event, TupleStreamReconverter,
+        premature_close_failed_event, responses_stream_error_event, TupleStreamReconverter,
     },
     usage::{record_empty_response_with_deps, record_request_attempt, record_usage_with_deps},
 };
@@ -831,20 +830,16 @@ async fn responses_http_sse_stream(
                                 continue;
                             }
                             UpstreamAccountRecoveryTransition::Respond { status, message } => {
-                                let error_response =
-                                    codex_client_error_response_with_status_and_message(
-                                        error, status, &message,
-                                    );
                                 log_codex_upstream_response_with_deps(
                                     &deps,
                                     &log_context,
-                                    error_response.0,
+                                    status,
                                     EventLevel::Error,
                                     "v1 responses stream fallback 已耗尽",
                                     json!({"stream": true}),
                                 )
                                 .await;
-                                return error_response.into_response();
+                                return responses_stream_error_response(status, &message);
                             }
                         }
                     }
@@ -1078,6 +1073,24 @@ fn append_premature_close_failed_event(collected: &mut Vec<u8>, detail: Option<&
         output.push_str(&failure);
         output
     }
+}
+
+fn responses_stream_error_response(status: StatusCode, message: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from(responses_stream_error_event(status, message)))
+        .unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(openai_error(
+                    "Failed to build stream error response",
+                    "stream_response_error",
+                )),
+            )
+                .into_response()
+        })
 }
 
 fn sse_event_boundary_prefix(collected: &[u8]) -> &'static str {
@@ -1580,20 +1593,16 @@ async fn responses_websocket_stream(
                                 continue;
                             }
                             UpstreamAccountRecoveryTransition::Respond { status, message } => {
-                                let error_response =
-                                    codex_client_error_response_with_status_and_message(
-                                        error, status, &message,
-                                    );
                                 log_codex_upstream_response_with_deps(
                                     &deps,
                                     &log_context,
-                                    error_response.0,
+                                    status,
                                     EventLevel::Error,
                                     "v1 responses WebSocket stream fallback 已耗尽",
                                     json!({"stream": true, "transport": "websocket"}),
                                 )
                                 .await;
-                                return error_response.into_response();
+                                return responses_stream_error_response(status, &message);
                             }
                         }
                     }

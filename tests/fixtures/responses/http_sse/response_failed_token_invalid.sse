@@ -1,0 +1,2 @@
+event: response.failed
+data: {"response":{"id":"resp_sse_token_invalid","object":"response","status":"failed","error":{"code":"token_invalid","message":"access token is invalid"}}}

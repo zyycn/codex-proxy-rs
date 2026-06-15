@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "server_error",
+    "code": "codex_api_error",
+    "message": "All accounts exhausted (1 expired). Codex upstream error: {\"error\":{\"code\":\"token_revoked\",\"message\":\"token revoked\"}}"
+  }
+}

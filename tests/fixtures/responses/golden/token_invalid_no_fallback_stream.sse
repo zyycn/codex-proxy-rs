@@ -1,0 +1,2 @@
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_proxy_REDACTED","status":"failed","error":{"type":"invalid_request_error","code":"authentication_error","message":"All accounts exhausted (1 expired). Codex upstream error: {\"error\":{\"code\":\"token_revoked\",\"message\":\"token revoked\"}}"}},"error":{"type":"invalid_request_error","code":"authentication_error","message":"All accounts exhausted (1 expired). Codex upstream error: {\"error\":{\"code\":\"token_revoked\",\"message\":\"token revoked\"}}"}}
