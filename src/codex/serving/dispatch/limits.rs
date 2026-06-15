@@ -17,12 +17,23 @@ pub(super) async fn apply_rate_limit_headers_with_deps(
 
     let existing_quota = existing_quota_json(deps, account_id).await;
     let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
+    deps.account_pool
+        .lock()
+        .await
+        .set_quota_verify_required(account_id, false);
     if let Some(repo) = deps.account_repository.as_ref() {
         if let Err(error) = repo.update_quota_json(account_id, &quota.to_string()).await {
             tracing::warn!(
                 error = %error,
                 account_id = %account_id,
                 "被动同步 quota 缓存失败"
+            );
+        }
+        if let Err(error) = repo.set_quota_verify_required(account_id, false).await {
+            tracing::warn!(
+                error = %error,
+                account_id = %account_id,
+                "清理被动 quota dirty 标记失败"
             );
         }
     }

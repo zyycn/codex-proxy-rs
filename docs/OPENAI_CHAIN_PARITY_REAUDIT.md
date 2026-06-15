@@ -480,6 +480,7 @@ Rust 证据：
 - `src/codex/accounts/pool.rs:403-441` acquire 时更新运行时 `request_count`、`window_request_count`、`last_used_at`，并在已知窗口长度但无窗口开始时间时推导窗口 reset。
 - `src/codex/accounts/pool.rs:502-571` 运行时会在窗口到期时重置窗口计数、清除过期 quota cooldown，并推进下一窗口 reset。
 - 本轮修正后，`src/codex/accounts/pool.rs` 在本地解除 `quota_limit_reached` 时会设置 `quota_verify_required=true`，避免本地窗口推断后直接把账号当成干净账号使用；`acquire_should_refresh_expired_cooldowns_before_selecting_account` 覆盖该标记。
+- 本轮修正后，`CodexUpstreamService::acquire_account_for_request()` 会在 dirty 账号真正进入 `/codex/responses` 前调用 `/api/codex/usage`/`/codex/usage` 校验；若 upstream 仍返回 `limit_reached`，会清理 dirty、同步 quota/window/cooldown、释放当前 slot、排除该账号并最多重试 5 个账号；`acquire_account_for_request_should_verify_dirty_quota_and_try_next_account` 覆盖该行为。passive rate-limit headers 成功更新 quota 时也会清理 dirty 标记，`v1_responses_should_passively_cache_rate_limit_headers` 覆盖该行为。
 - 本轮修正后，`src/codex/gateway/transport/usage_events.rs` 的 SSE usage 提取按原版 Responses passthrough 语义优先使用 `response.completed.response.usage`，不会把 `response.created`/中间事件中的重复 usage 累加；若没有 completed usage，才回退到最后一份可见 usage。
 - `tests/codex_accounts/repository.rs:230-326` 覆盖 window usage 持久化与恢复。
 - `tests/codex_serving/responses_http_sse.rs:279-350` 覆盖 passive rate-limit headers 缓存 quota、窗口字段和 cooldown。
@@ -499,18 +500,16 @@ Rust 证据：
 - account retry decision 的失败请求持久 request_count 已对齐原版 release 语义：进入 429/402/403/401/model unsupported/Cloudflare 等账号 fallback/hold 处理时会写入一次无 token 的 request attempt；`v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_account` 覆盖 402 fallback 失败账号计数。
 - 非 account retry decision 的最终失败请求持久 request_count 已对齐到原版 release 语义：未进入账号 fallback/hold 的最终错误会写入一次无 token 的 request attempt；`v1_responses_should_record_request_count_when_5xx_retries_are_exhausted` 覆盖 5xx 内部重试 3 次但持久 request_count 只计 1 次。
 - transport error 的最终失败请求持久 request_count 已有覆盖；`v1_responses_should_record_request_count_when_http_transport_fails` 证明 HTTP transport 失败也会按原版 release 语义写入一次无 token 的 request attempt。
-- dirty quota verification 的状态层已补齐：`quota_verify_required` 进入 schema、runtime `Account` 和启动恢复路径；本地解除 quota 限制时会把账号标成 dirty，等待请求前 `/usage` 校验。
+- dirty quota verification 已对齐原版主语义：`quota_verify_required` 进入 schema、runtime `Account` 和启动恢复路径；本地解除 quota 限制时会把账号标成 dirty；请求前会用 upstream `/usage` 校验 dirty 账号，仍限流时释放并切换账号，最多 5 次，校验失败时保留 dirty 标记并继续当前账号。
 
 未完全对齐：
 - image_generation usage 未对齐。原版记录 image input/output tokens、image request success/failure 和对应窗口计数；Rust `TokenUsage` 只有 input/output/cached/total，没有解析或持久化 `tool_usage.image_gen`。
-- dirty quota verification 请求前校验尚未对齐。状态字段和本地 dirty 标记已经存在，但 Rust 还未在下一次请求前最多 5 次调用 `/usage` 验证 dirty 账号。
 - Cookie domain/path 语义不同。原版 CookieJar 是 per-account 简单 map，不按 domain/path 过滤；Rust 按 domain/path 存储和匹配。对 `chatgpt.com` 主链路更严格，但不是原版逐字行为。
-- quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at` 并可能标记 quotaVerifyRequired；Rust 设置 `window_started_at`，没有 `window_counters_reset_at` 字段，也不触发 quotaVerifyRequired。
+- quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at`；Rust 设置 `window_started_at` 并触发 `quota_verify_required`，但没有 `window_counters_reset_at` 字段。
 - passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
 
 缺口/后续动作：
 - 补 `TokenUsage` 的 image_generation 字段与数据库/运行时窗口字段，或明确 Rust 不支持 image_generation usage 统计。
-- 继续补 dirty quota verification 请求前校验：调用 usage endpoint，失败时保留 dirty 标记并限制放大次数。
 - 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
 

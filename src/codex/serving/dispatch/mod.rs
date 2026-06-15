@@ -37,6 +37,7 @@ use crate::{
         model::Account,
         pool::{AccountAcquireRequest, AccountPool, AcquiredAccount},
         repository::AccountRepository,
+        service::quota::quota_from_usage,
     },
     codex::events::{
         event::{EventLevel, EventLog},
@@ -114,6 +115,7 @@ struct CodexUpstreamDependencies {
 
 const MAX_UPSTREAM_5XX_RETRIES: u8 = 2;
 const UPSTREAM_5XX_RETRY_BASE_DELAY_MS: u64 = 1_000;
+const MAX_DIRTY_QUOTA_VERIFY_ATTEMPTS: usize = 5;
 
 #[derive(Clone)]
 pub(crate) struct CodexUpstreamService {
@@ -195,6 +197,7 @@ impl CodexUpstreamService {
     pub(crate) async fn acquire_account_for_request(
         &self,
         request: &CodexResponsesRequest,
+        request_id: &str,
     ) -> Option<AcquiredAccount> {
         let preferred_account_id = match request.previous_response_id.as_deref() {
             Some(previous_response_id) => {
@@ -205,15 +208,60 @@ impl CodexUpstreamService {
             }
             None => None,
         };
-        let mut acquire_request = AccountAcquireRequest::new(&request.model, Utc::now());
-        if let Some(preferred_account_id) = preferred_account_id {
-            acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
+        let mut excluded_account_ids = Vec::new();
+        let mut verify_attempts = 0;
+
+        loop {
+            let mut acquire_request = AccountAcquireRequest::new(&request.model, Utc::now())
+                .with_exclude_account_ids(excluded_account_ids.iter().cloned());
+            if let Some(preferred_account_id) = preferred_account_id.as_ref() {
+                acquire_request =
+                    acquire_request.with_preferred_account_id(preferred_account_id.clone());
+            }
+            let mut acquired = self
+                .deps
+                .account_pool
+                .lock()
+                .await
+                .acquire_with(acquire_request)?;
+            if !acquired.account.quota_verify_required {
+                return Some(acquired);
+            }
+
+            match verify_dirty_quota_with_deps(&self.deps, &acquired.account, request_id).await {
+                Ok(verification) if verification.limit_reached => {
+                    let account_id = acquired.account.id.clone();
+                    self.deps.account_pool.lock().await.release(&account_id);
+                    excluded_account_ids.push(account_id.clone());
+                    verify_attempts += 1;
+                    tracing::warn!(
+                        account_id = %account_id,
+                        verify_attempts,
+                        max_verify_attempts = MAX_DIRTY_QUOTA_VERIFY_ATTEMPTS,
+                        "dirty quota 校验确认账号仍被限流，改用备用账号"
+                    );
+                    if verify_attempts >= MAX_DIRTY_QUOTA_VERIFY_ATTEMPTS {
+                        tracing::warn!(
+                            max_verify_attempts = MAX_DIRTY_QUOTA_VERIFY_ATTEMPTS,
+                            "dirty quota 校验达到最大次数，停止放大 upstream usage 请求"
+                        );
+                        return None;
+                    }
+                }
+                Ok(_) => {
+                    acquired.account.quota_verify_required = false;
+                    return Some(acquired);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        account_id = %acquired.account.id,
+                        "dirty quota 校验失败，保留 dirty 标记并继续当前账号"
+                    );
+                    return Some(acquired);
+                }
+            }
         }
-        self.deps
-            .account_pool
-            .lock()
-            .await
-            .acquire_with(acquire_request)
     }
 
     pub(crate) async fn release_account(&self, account_id: &str) {
@@ -394,6 +442,154 @@ async fn record_failed_request_attempt_with_deps(
             "记录上游最终失败请求尝试失败"
         );
     }
+}
+
+struct DirtyQuotaVerification {
+    limit_reached: bool,
+}
+
+async fn verify_dirty_quota_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account: &Account,
+    request_id: &str,
+) -> Result<DirtyQuotaVerification, CodexClientError> {
+    let usage = fetch_dirty_account_usage_with_deps(deps, account, request_id).await?;
+    let quota = quota_from_usage(&usage);
+    let limit_reached = quota_primary_limit_reached(&quota);
+    persist_verified_quota_with_deps(deps, account, &quota).await;
+    if limit_reached {
+        apply_verified_quota_limit_with_deps(deps, account, &quota).await;
+    }
+    Ok(DirtyQuotaVerification { limit_reached })
+}
+
+async fn fetch_dirty_account_usage_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account: &Account,
+    request_id: &str,
+) -> Result<Value, CodexClientError> {
+    let request_domain = request_domain(&deps.config.api.base_url);
+    let cookie_header = match (deps.cookie_repository.as_ref(), request_domain.as_deref()) {
+        (Some(repo), Some(domain)) => repo.cookie_header(&account.id, domain).await.ok().flatten(),
+        _ => None,
+    };
+    let client = CodexBackendClient::new(
+        build_reqwest_client(deps.config.tls.force_http11)?,
+        deps.config.api.base_url.clone(),
+        deps.fingerprint.clone(),
+    );
+    client
+        .fetch_usage(CodexRequestContext {
+            access_token: &account.access_token,
+            account_id: account.account_id.as_deref(),
+            request_id,
+            turn_state: None,
+            turn_metadata: None,
+            beta_features: None,
+            include_timing_metrics: None,
+            version: None,
+            codex_window_id: None,
+            parent_thread_id: None,
+            cookie_header: cookie_header.as_deref(),
+            installation_id: None,
+            session_id: None,
+        })
+        .await
+}
+
+async fn persist_verified_quota_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account: &Account,
+    quota: &Value,
+) {
+    deps.account_pool
+        .lock()
+        .await
+        .set_quota_verify_required(&account.id, false);
+    if let Some(repo) = deps.account_repository.as_ref() {
+        if let Err(error) = repo
+            .update_quota_json(&account.id, &quota.to_string())
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                account_id = %account.id,
+                "持久化 dirty quota 校验结果失败"
+            );
+        }
+        if let Err(error) = repo.set_quota_verify_required(&account.id, false).await {
+            tracing::warn!(
+                error = %error,
+                account_id = %account.id,
+                "清理 dirty quota 持久化标记失败"
+            );
+        }
+    }
+}
+
+async fn apply_verified_quota_limit_with_deps(
+    deps: &CodexUpstreamDependencies,
+    account: &Account,
+    quota: &Value,
+) {
+    let Some(reset_at) = quota_primary_reset_at(quota) else {
+        return;
+    };
+    let limit_window_seconds = quota_primary_limit_window_seconds(quota);
+    {
+        let mut pool = deps.account_pool.lock().await;
+        pool.sync_rate_limit_window(&account.id, reset_at, limit_window_seconds);
+        if reset_at > Utc::now() {
+            pool.mark_quota_limited_until(&account.id, reset_at);
+        }
+    }
+    if let Some(repo) = deps.account_repository.as_ref() {
+        if let Err(error) = repo
+            .sync_rate_limit_window(&account.id, reset_at, limit_window_seconds)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                account_id = %account.id,
+                window_reset_at = %reset_at,
+                "持久化 dirty quota window 失败"
+            );
+        }
+        if reset_at > Utc::now() {
+            if let Err(error) = repo.set_quota_cooldown_until(&account.id, reset_at).await {
+                tracing::warn!(
+                    error = %error,
+                    account_id = %account.id,
+                    cooldown_until = %reset_at,
+                    "持久化 dirty quota cooldown 失败"
+                );
+            }
+        }
+    }
+    if reset_at > Utc::now() {
+        deps.websocket_pool.evict_account(&account.id).await;
+    }
+}
+
+fn quota_primary_limit_reached(quota: &Value) -> bool {
+    quota
+        .pointer("/rate_limit/limit_reached")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn quota_primary_reset_at(quota: &Value) -> Option<DateTime<Utc>> {
+    let reset_at = quota
+        .pointer("/rate_limit/reset_at")
+        .and_then(Value::as_i64)?;
+    DateTime::<Utc>::from_timestamp(reset_at, 0)
+}
+
+fn quota_primary_limit_window_seconds(quota: &Value) -> Option<u64> {
+    quota
+        .pointer("/rate_limit/limit_window_seconds")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0)
 }
 
 async fn apply_implicit_resume_with_deps(
@@ -1653,7 +1849,37 @@ async fn log_codex_upstream_response_with_deps(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_premature_close_failed_event, jitter_request_interval_ms_with_factor};
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use serde_json::json;
+    use tokio::sync::Mutex;
+    use wiremock::{
+        matchers::{header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use super::{
+        append_premature_close_failed_event, jitter_request_interval_ms_with_factor,
+        CodexUpstreamRepositories, CodexUpstreamService,
+    };
+    use crate::{
+        codex::{
+            accounts::{
+                model::{Account, AccountStatus},
+                pool::AccountPool,
+            },
+            events::service::LogService,
+            gateway::{
+                fingerprint::model::Fingerprint,
+                transport::{types::CodexResponsesRequest, websocket::CodexWebSocketPool},
+            },
+        },
+        config::{
+            AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig,
+            ModelConfig, QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig,
+            TlsConfig, UsageStatsConfig,
+        },
+    };
 
     #[test]
     fn jitter_request_interval_ms_with_factor_should_match_original_bounds() {
@@ -1674,5 +1900,129 @@ mod tests {
         let failure = super::stream::responses_sse_failure(&body).unwrap();
         let metadata = failure.unwrap().metadata(true);
         assert_eq!(metadata["upstreamCode"], "stream_disconnected");
+    }
+
+    #[tokio::test]
+    async fn acquire_account_for_request_should_verify_dirty_quota_and_try_next_account() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .and(header("authorization", "Bearer dirty-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "allowed": true,
+                    "limit_reached": true,
+                    "primary_window": {
+                        "used_percent": 100,
+                        "reset_at": chrono::Utc::now().timestamp() + 300,
+                        "limit_window_seconds": 300
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let mut dirty = Account::test("acct_a", AccountStatus::Active);
+        dirty.access_token = "dirty-access".to_string();
+        dirty.account_id = Some("chatgpt-dirty".to_string());
+        dirty.quota_verify_required = true;
+        let mut clean = Account::test("acct_b", AccountStatus::Active);
+        clean.access_token = "clean-access".to_string();
+        clean.account_id = Some("chatgpt-clean".to_string());
+        let mut pool = AccountPool::default();
+        pool.insert(dirty);
+        pool.insert(clean);
+        let service = test_upstream_service(server.uri(), pool);
+        let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+
+        let acquired = service
+            .acquire_account_for_request(&request, "req_dirty_quota")
+            .await
+            .unwrap();
+
+        assert_eq!(acquired.account.id, "acct_b");
+    }
+
+    fn test_upstream_service(base_url: String, account_pool: AccountPool) -> CodexUpstreamService {
+        CodexUpstreamService::new(
+            Arc::new(test_app_config(base_url)),
+            Arc::new(Mutex::new(account_pool)),
+            CodexUpstreamRepositories {
+                account: None,
+                cookie: None,
+                session_affinity: None,
+            },
+            LogService::new(test_logging_config(), None),
+            Fingerprint::default_for_tests(),
+            Arc::new(CodexWebSocketPool::default()),
+        )
+    }
+
+    fn test_app_config(base_url: String) -> AppConfig {
+        AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 0,
+            },
+            api: ApiConfig { base_url },
+            model: ModelConfig {
+                default_model: "gpt-5.5".to_string(),
+                default_reasoning_effort: None,
+                service_tier: None,
+                aliases: BTreeMap::new(),
+            },
+            auth: AuthConfig {
+                refresh_margin_seconds: 300,
+                refresh_enabled: true,
+                refresh_concurrency: 2,
+                max_concurrent_per_account: 3,
+                request_interval_ms: 50,
+                rotation_strategy: "least_used".to_string(),
+                tier_priority: Vec::new(),
+                oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+                oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+                oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
+            },
+            quota: QuotaConfig {
+                refresh_interval_minutes: 5,
+                warning_thresholds: QuotaWarningThresholds {
+                    primary: vec![80, 90],
+                    secondary: vec![80, 90],
+                },
+                skip_exhausted: true,
+            },
+            usage_stats: UsageStatsConfig {
+                history_retention_days: None,
+            },
+            database: DatabaseConfig {
+                url: "sqlite::memory:".to_string(),
+            },
+            security: SecurityConfig {
+                master_key_file: "data/master.key".to_string(),
+                api_key_pepper_file: "data/api-key-pepper.key".to_string(),
+            },
+            tls: TlsConfig {
+                force_http11: false,
+            },
+            ws_pool: Default::default(),
+            admin: AdminConfig {
+                session_ttl_minutes: 1440,
+                session_cleanup_interval_secs: 3600,
+                default_username: "admin".to_string(),
+                default_password: "admin".to_string(),
+            },
+            logging: test_logging_config(),
+        }
+    }
+
+    fn test_logging_config() -> LoggingConfig {
+        LoggingConfig {
+            directory: "logs".to_string(),
+            retention_days: 14,
+            enabled: false,
+            capacity: 2_000,
+            capture_body: false,
+        }
     }
 }

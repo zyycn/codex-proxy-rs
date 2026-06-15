@@ -154,7 +154,7 @@ impl ResponsesService {
             .await;
         let Some(mut acquired) = self
             .upstream
-            .acquire_account_for_request(&codex_request)
+            .acquire_account_for_request(&codex_request, request_id)
             .await
         else {
             return no_available_accounts_response().into_response();
