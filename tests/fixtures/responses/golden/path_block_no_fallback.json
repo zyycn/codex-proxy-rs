@@ -1,8 +1,0 @@
-{
-  "type": "error",
-  "error": {
-    "type": "server_error",
-    "code": "codex_api_error",
-    "message": "No accounts available. Upstream blocked the request (Cloudflare path-block)"
-  }
-}

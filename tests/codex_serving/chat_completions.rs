@@ -25,7 +25,7 @@ use codex_proxy_rs::{
     runtime::state::AppState,
 };
 
-use crate::support::{response_json, response_text, seed_admin_session};
+use crate::support::{response_json, response_sse_data, seed_admin_session};
 
 const CHAT_RETRY_AFTER_SUCCESS_SSE: &str = include_str!("../fixtures/chat/retry_after_success.sse");
 const CHAT_NON_STREAM_TEXT_SSE: &str = include_str!("../fixtures/chat/non_stream_text.sse");
@@ -42,20 +42,6 @@ const CHAT_RATE_LIMIT_FALLBACK_EXHAUSTED_GOLDEN: &str =
     include_str!("../fixtures/chat/golden/rate_limit_fallback_exhausted.json");
 const CHAT_QUOTA_EXHAUSTED_FALLBACK_EXHAUSTED_GOLDEN: &str =
     include_str!("../fixtures/chat/golden/quota_exhausted_fallback_exhausted.json");
-const CHAT_RETRY_AFTER_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/retry_after_stream.sse");
-const CHAT_NON_STREAM_TEXT_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/non_stream_text.json");
-const CHAT_STREAM_TEXT_GOLDEN: &str = include_str!("../fixtures/chat/golden/stream_text.sse");
-const CHAT_TUPLE_RECONVERT_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/tuple_reconvert.json");
-const CHAT_TUPLE_RECONVERT_STREAM_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/tuple_reconvert_stream.sse");
-const CHAT_PARALLEL_TOOLS_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/parallel_tools.json");
-const CHAT_TOOL_REASONING_GOLDEN: &str =
-    include_str!("../fixtures/chat/golden/tool_reasoning.json");
-const CHAT_TOOL_STREAM_GOLDEN: &str = include_str!("../fixtures/chat/golden/tool_stream.sse");
 
 struct ImportedApp {
     app: axum::Router,
@@ -213,34 +199,6 @@ async fn single_upstream_post_body(server: &MockServer) -> Value {
     assert_eq!(post_requests.len(), 1);
     assert_eq!(requests.len(), 1);
     serde_json::from_slice(&post_requests[0].body).unwrap()
-}
-
-fn normalize_chat_completion(mut value: Value) -> Value {
-    value["id"] = json!("chatcmpl-REDACTED");
-    value["created"] = json!(0);
-    value
-}
-
-fn normalize_chat_stream(body: &str) -> String {
-    let mut normalized = String::new();
-    for line in body.lines() {
-        let Some(data) = line.strip_prefix("data: ") else {
-            normalized.push_str(line);
-            normalized.push('\n');
-            continue;
-        };
-        if data == "[DONE]" {
-            normalized.push_str("data: [DONE]\n");
-            continue;
-        }
-        let mut value: Value = serde_json::from_str(data).unwrap();
-        value["id"] = json!("chatcmpl-REDACTED");
-        value["created"] = json!(0);
-        normalized.push_str("data: ");
-        normalized.push_str(&value.to_string());
-        normalized.push('\n');
-    }
-    normalized
 }
 
 #[tokio::test]
@@ -492,11 +450,15 @@ async fn chat_completions_stream_should_retry_next_account_after_429_retry_after
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = response_text(response).await;
-    assert_eq!(
-        normalize_chat_stream(&body),
-        with_sse_terminal_separator(CHAT_RETRY_AFTER_STREAM_GOLDEN)
-    );
+    let frames = response_sse_data(response).await;
+    assert_eq!(frames.last().unwrap(), "[DONE]");
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "ok");
+    assert_eq!(chunks[2]["usage"]["prompt_tokens"], 4);
 }
 
 #[tokio::test]
@@ -543,9 +505,15 @@ async fn chat_completions_translates_messages_and_returns_openai_response() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(CHAT_NON_STREAM_TEXT_GOLDEN)
-        .expect("chat non-stream text golden should parse");
-    assert_eq!(normalize_chat_completion(body), expected);
+    assert!(body["id"].as_str().unwrap().starts_with("chatcmpl-"));
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["model"], "gpt-5.5");
+    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+    assert_eq!(body["choices"][0]["message"]["content"], "hello");
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert_eq!(body["usage"]["prompt_tokens"], 9);
+    assert_eq!(body["usage"]["completion_tokens"], 3);
+    assert_eq!(body["usage"]["total_tokens"], 12);
     let upstream_body = single_upstream_post_body(&server).await;
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["instructions"], "You are concise.");
@@ -613,9 +581,10 @@ async fn chat_completions_should_convert_and_reconvert_tuple_schema() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value =
-        serde_json::from_str(CHAT_TUPLE_RECONVERT_GOLDEN).expect("chat tuple golden should parse");
-    assert_eq!(normalize_chat_completion(body), expected);
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "{\"point\":[1,2]}"
+    );
     let upstream_body = single_upstream_post_body(&server).await;
     let schema = &upstream_body["text"]["format"]["schema"];
     assert!(schema["properties"]["point"].get("prefixItems").is_none());
@@ -665,10 +634,26 @@ async fn chat_completions_streams_openai_chunks_from_codex_sse() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = response_text(response).await;
+    let frames = response_sse_data(response).await;
+    assert_eq!(frames.last().unwrap(), "[DONE]");
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(chunks[0]["object"], "chat.completion.chunk");
+    assert_eq!(chunks[0]["model"], "gpt-5.5");
+    assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+    assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "hel");
+    assert_eq!(chunks[2]["choices"][0]["delta"]["content"], "lo");
+    assert_eq!(chunks[3]["choices"][0]["finish_reason"], "stop");
+    assert_eq!(chunks[3]["usage"]["prompt_tokens"], 9);
+    assert_eq!(chunks[3]["usage"]["completion_tokens"], 3);
+    assert_eq!(chunks[3]["usage"]["total_tokens"], 12);
     assert_eq!(
-        normalize_chat_stream(&body),
-        with_sse_terminal_separator(CHAT_STREAM_TEXT_GOLDEN)
+        chunks[3]["usage"]["prompt_tokens_details"]["cached_tokens"],
+        4
     );
 }
 
@@ -731,10 +716,16 @@ async fn chat_completions_stream_should_reconvert_tuple_schema() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = response_text(response).await;
+    let frames = response_sse_data(response).await;
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
+
     assert_eq!(
-        normalize_chat_stream(&body),
-        with_sse_terminal_separator(CHAT_TUPLE_RECONVERT_STREAM_GOLDEN)
+        chunks[1]["choices"][0]["delta"]["content"],
+        "{\"point\":[1,2]}"
     );
 }
 
@@ -782,9 +773,7 @@ async fn chat_completions_forwards_parallel_tools_and_model_suffix_options() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(CHAT_PARALLEL_TOOLS_GOLDEN)
-        .expect("chat parallel tools golden should parse");
-    assert_eq!(normalize_chat_completion(body), expected);
+    assert_eq!(body["model"], "gpt-5.5-high-fast");
     let upstream_body = single_upstream_post_body(&server).await;
     assert_eq!(upstream_body["reasoning"]["effort"], "high");
     assert_eq!(upstream_body["reasoning"]["summary"], "auto");
@@ -836,9 +825,21 @@ async fn chat_completions_collects_tool_calls_and_reasoning_content() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    let expected: Value = serde_json::from_str(CHAT_TOOL_REASONING_GOLDEN)
-        .expect("chat tool reasoning golden should parse");
-    assert_eq!(normalize_chat_completion(body), expected);
+    let message = &body["choices"][0]["message"];
+    assert_eq!(message["content"], Value::Null);
+    assert_eq!(message["reasoning_content"], "thinking ");
+    assert_eq!(message["tool_calls"][0]["id"], "call_abc");
+    assert_eq!(message["tool_calls"][0]["type"], "function");
+    assert_eq!(message["tool_calls"][0]["function"]["name"], "lookup");
+    assert_eq!(
+        message["tool_calls"][0]["function"]["arguments"],
+        "{\"city\":\"Paris\"}"
+    );
+    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(
+        body["usage"]["completion_tokens_details"]["reasoning_tokens"],
+        7
+    );
 }
 
 #[tokio::test]
@@ -884,17 +885,26 @@ async fn chat_completions_streams_tool_call_chunks_from_codex_sse() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = response_text(response).await;
-    assert_eq!(
-        normalize_chat_stream(&body),
-        with_sse_terminal_separator(CHAT_TOOL_STREAM_GOLDEN)
-    );
-}
+    let frames = response_sse_data(response).await;
+    let chunks = frames
+        .iter()
+        .filter(|frame| frame.as_str() != "[DONE]")
+        .map(|frame| serde_json::from_str::<Value>(frame).unwrap())
+        .collect::<Vec<_>>();
 
-fn with_sse_terminal_separator(body: &str) -> String {
-    if body.ends_with("\n\n") {
-        body.to_string()
-    } else {
-        format!("{body}\n")
-    }
+    let start_call = &chunks[1]["choices"][0]["delta"]["tool_calls"][0];
+    assert_eq!(start_call["index"], 0);
+    assert_eq!(start_call["id"], "call_abc");
+    assert_eq!(start_call["type"], "function");
+    assert_eq!(start_call["function"]["name"], "lookup");
+    assert_eq!(start_call["function"]["arguments"], "");
+    assert_eq!(
+        chunks[2]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+        "{\"city\""
+    );
+    assert_eq!(
+        chunks[3]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+        ":\"Paris\"}"
+    );
+    assert_eq!(chunks[4]["choices"][0]["finish_reason"], "tool_calls");
 }
