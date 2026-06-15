@@ -2,6 +2,7 @@ use chrono::Utc;
 
 use codex_proxy_rs::{
     codex::accounts::cookies::{jar::CookieJar, repository::CookieRepository},
+    codex::tasks::cookie_cleanup::CookieCleanupScheduler,
     platform::crypto::SecretBox,
     platform::storage::db::connect_sqlite,
 };
@@ -132,6 +133,68 @@ async fn cookie_repository_should_not_replay_expired_cookies() {
         repo.cookie_header("acct_a", "chatgpt.com").await.unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn cookie_repository_cleanup_expired_cookies_should_delete_only_expired_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("cleanup-expired-cookies.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_account(&pool, "acct_a").await;
+    let repo = CookieRepository::new(pool.clone(), SecretBox::new([29u8; 32]));
+
+    repo.capture_set_cookie(
+        "acct_a",
+        "cf_clearance=expired; Domain=.chatgpt.com; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT",
+    )
+    .await
+    .unwrap();
+    repo.set_cookie_header("acct_a", "__cf_bm=active")
+        .await
+        .unwrap();
+
+    let deleted = repo.cleanup_expired(Utc::now()).await.unwrap();
+    let stored_count: (i64,) =
+        sqlx::query_as("select count(*) from account_cookies where account_id = ?")
+            .bind("acct_a")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(deleted, 1);
+    assert_eq!(stored_count.0, 1);
+    assert_eq!(
+        repo.cookie_header("acct_a", "chatgpt.com").await.unwrap(),
+        Some("__cf_bm=active".to_string())
+    );
+}
+
+#[tokio::test]
+async fn cookie_cleanup_scheduler_should_delete_expired_cookie_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("scheduled-cookie-cleanup.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    seed_account(&pool, "acct_a").await;
+    let repo = CookieRepository::new(pool.clone(), SecretBox::new([31u8; 32]));
+
+    repo.capture_set_cookie(
+        "acct_a",
+        "cf_clearance=expired; Domain=.chatgpt.com; Path=/; Max-Age=0",
+    )
+    .await
+    .unwrap();
+
+    let scheduler = CookieCleanupScheduler::new(repo);
+    let deleted = scheduler.cleanup_once().await.unwrap();
+    let stored_count: (i64,) = sqlx::query_as("select count(*) from account_cookies")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(deleted, 1);
+    assert_eq!(stored_count.0, 0);
 }
 
 #[tokio::test]

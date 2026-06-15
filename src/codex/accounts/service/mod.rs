@@ -281,6 +281,10 @@ impl AccountService {
         self.repository.is_some()
     }
 
+    pub fn cookie_cleanup_repository(&self) -> Option<CookieRepository> {
+        self.cookie_repository.clone()
+    }
+
     pub async fn list(
         &self,
         cursor: Option<String>,

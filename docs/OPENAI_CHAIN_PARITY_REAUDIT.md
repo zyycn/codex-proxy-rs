@@ -30,7 +30,7 @@ Rust 仓库：`/home/zyy/Codes/codex-proxy-rs`
 - `/v1/responses` 请求构造仍存在非 `/v1` alias route、`use_websocket:false` 本地扩展等差异；`/v1/responses/review` 强制 review subagent 和 `/v1/responses/compact` 已补齐。
 - response 转换和错误恢复仍缺最终错误外壳对齐；tuple schema request conversion/reconvert、streaming premature close 合成、reasoning replay、implicit resume failure restore、`response.failed`/`error` 的 429/402/403 分类、账号 fallback、`previous_response_not_found`/unanswered function call strip-and-retry、5xx same-account retry、CF path-block 404、model unsupported fallback、401 token invalid fallback 已补齐。
 - session affinity 的显式续链、implicit resume 主路径、implicit resume failure restore、reasoning replay cache、function call continuation 预检、variant_hash 基础算法、variant identity 和 OpenAI chat `user` conversation identity 已接入。
-- rate-limit/usage/cookie 持久化主路径已接近，但 image_generation usage、dirty quota verification、失败请求持久计数和 cookie 过期清理仍有差异。
+- rate-limit/usage/cookie 持久化主路径已接近，但 image_generation usage、dirty quota verification 和失败请求持久计数仍有差异。
 
 明确不纳入缺口：IP 代理、VPN、本地代理探测、`HttpsProxyAgent`、账号代理池。
 
@@ -468,6 +468,7 @@ Rust 证据：
 Rust 证据：
 - `src/codex/accounts/cookies/repository.rs:1-111` cookie 存在 SQLite `account_cookies`，value 加密，唯一键为 `(account_id, domain, name, path)`；自动捕获白名单只有 `cf_clearance`。
 - `src/codex/accounts/cookies/repository.rs:70-102` 构造 Cookie header 时按 domain 过滤并跳过过期 cookie；`delete_account_cookies()` 支持按账号清理。
+- 本轮修正后，`src/codex/accounts/cookies/repository.rs` 提供 `cleanup_expired(now)`，会按现有 RFC2822/RFC3339 过期解析规则持久删除过期 cookie；`src/codex/tasks/cookie_cleanup.rs` 每 5 分钟运行一次清理，并在 `src/runtime/tasks/coordinator.rs` 中随后台任务启动。
 - `src/platform/storage/schema.sql:68-83` `account_usage` 已持久化 `window_request_count`、`window_input_tokens`、`window_output_tokens`、`window_cached_tokens`、`window_started_at`、`window_reset_at`、`limit_window_seconds`、`last_used_at`。
 - `src/codex/accounts/repository/usage.rs:12-44` `record_usage()` 会累计 total/window request 和 token 计数，并设置 `last_used_at`。
 - `src/codex/accounts/repository/usage.rs:63-99` `sync_rate_limit_window()` 会在 reset_at 漂移超过窗口 50% 或默认 3600 秒时重置窗口计数，否则只同步 reset_at/limit_window_seconds。
@@ -487,6 +488,7 @@ Rust 证据：
 - 之前审计中提到的窗口统计字段已经不再缺失：Rust schema、repository、runtime pool 和测试都覆盖了 window request/token/reset/limit_window_seconds。
 - Cookie 自动捕获白名单与原版一致，只自动保存 `cf_clearance`，不会保存 `__cf_bm`。
 - Rust 使用 SQLite + AES 加密保存 cookie，比原版 JSON 文件更适合当前数据库架构；主请求链路能注入 Cookie 并捕获 `Set-Cookie`。
+- Cookie 过期清理已对齐原版长期运行语义：读取时跳过过期 cookie，同时后台调度器每 5 分钟持久删除过期行；`cookie_repository_cleanup_expired_cookies_should_delete_only_expired_rows` 与 `cookie_cleanup_scheduler_should_delete_expired_cookie_rows` 覆盖 repository 和 scheduler 两层。
 - primary/secondary/code_review rate-limit header 和 `codex.rate_limits` event 的解析与 quota 归一化主路径基本对齐，并能保留已有 credits。
 - usage input/output/cached token 的成功路径持久化、窗口统计和重启恢复已对齐到可用水平。
 - least_used 依赖的 request_count、window_reset_at、quota_limited 字段已经进入运行时调度和数据库恢复路径。
@@ -495,7 +497,6 @@ Rust 证据：
 - image_generation usage 未对齐。原版记录 image input/output tokens、image request success/failure 和对应窗口计数；Rust `TokenUsage` 只有 input/output/cached/total，没有解析或持久化 `tool_usage.image_gen`。
 - dirty quota verification 缺失。原版离线 reset cachedQuota 后设置 `quotaVerifyRequired`，下一次请求会先调用 `/usage` 验证；Rust 只在本地窗口到期后清除 cooldown/推进窗口，没有等价 dirty 标记和请求前最多 5 次 upstream usage 校验。
 - 失败请求的持久 request_count 语义不一致。原版 release 时默认记录 request_count，错误 release 也计数；Rust runtime acquire 会计运行时 request_count，但数据库只在成功 usage、429 `record_request_attempt()`、empty response 等路径写入，部分 transport/5xx/403/402 fallback 失败尝试重启后不会体现在持久 request_count 中。
-- Cookie 过期清理语义不一致。Rust 读取时会跳过过期 cookie，但没有原版每 5 分钟清理并持久删除的后台任务；长期运行时数据库中可能保留过期 cookie 行。
 - Cookie domain/path 语义不同。原版 CookieJar 是 per-account 简单 map，不按 domain/path 过滤；Rust 按 domain/path 存储和匹配。对 `chatgpt.com` 主链路更严格，但不是原版逐字行为。
 - quota window reset 细节不完全一致。原版 reset 后设置 `window_counters_reset_at` 并可能标记 quotaVerifyRequired；Rust 设置 `window_started_at`，没有 `window_counters_reset_at` 字段，也不触发 quotaVerifyRequired。
 - passive header 文档提到 `x-codex-active-limit`，原版和 Rust 当前都没有实际解析该 header；如果 Codex Desktop 当前依赖 active-limit，这两边都需要重新确认。
@@ -505,7 +506,6 @@ Rust 证据：
 - 补 `TokenUsage` 的 image_generation 字段与数据库/运行时窗口字段，或明确 Rust 不支持 image_generation usage 统计。
 - 增加 dirty quota verification 机制：窗口离线 reset 后标记需要校验，请求前调用 usage endpoint，失败时保留 dirty 标记并限制放大次数。
 - 统一持久 request_count 计数点，决定是否像原版一样在 release/attempt 维度记录所有真实上游尝试；至少补 transport/5xx/403/402 exhausted 的测试。
-- 为 `account_cookies` 增加过期清理任务或在读取时顺手删除过期行。
 - 明确 cookie domain/path 精细化是 Rust 新架构选择还是需要回到原版 per-account map；如果保留，应补 domain/path 行为测试。
 - 为 usage merge 增加测试，覆盖多个 event 带 usage 时是否重复累计。
 - 若 OpenAI/Codex 当前返回 `x-codex-active-limit`，补解析和 quota_json 存储；否则将其记录为双方未使用字段。
