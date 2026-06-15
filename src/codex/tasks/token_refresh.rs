@@ -394,6 +394,7 @@ impl RefreshScheduler {
                     error = %error,
                     "token 刷新重试次数已耗尽"
                 );
+                self.restore_account_for_recovery(account_id).await;
                 self.schedule_recovery(
                     account_id.to_string(),
                     Duration::from_millis(RECOVERY_DELAY_MS),
@@ -407,6 +408,34 @@ impl RefreshScheduler {
         }
 
         Ok(())
+    }
+
+    async fn restore_account_for_recovery(&self, account_id: &str) {
+        match self
+            .account_service
+            .update_status(account_id, "active")
+            .await
+        {
+            Ok(Some(_)) => {
+                info!(
+                    account_id = %account_id,
+                    "临时 refresh 失败后已恢复账号状态"
+                );
+            }
+            Ok(None) => {
+                warn!(
+                    account_id = %account_id,
+                    "临时 refresh 失败后恢复账号状态失败：账号不存在"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %account_id,
+                    error = ?error,
+                    "临时 refresh 失败后恢复账号状态失败"
+                );
+            }
+        }
     }
 
     /// 解析 JWT 获取过期时间
@@ -589,6 +618,70 @@ mod tests {
         assert_eq!(stored.status, AccountStatus::Expired);
     }
 
+    #[tokio::test]
+    async fn do_refresh_inner_should_restore_refreshing_account_after_transient_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("refresh-scheduler-recovery.sqlite");
+        let url = format!("sqlite://{}", db.display());
+        let pool = connect_sqlite(&url).await.unwrap();
+        let repo = AccountRepository::new(pool.clone(), SecretBox::new([42u8; 32]));
+        repo.insert(NewAccount {
+            id: "acct_recovery".to_string(),
+            email: None,
+            account_id: None,
+            user_id: None,
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new("access-old".to_string().into()),
+            refresh_token: Some(SecretString::new("refresh-old".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Refreshing,
+        })
+        .await
+        .unwrap();
+        let refresher = AlwaysTransportFailingRefresher::default();
+        let config = test_config(url);
+        let account_service = Arc::new(AccountService::new(
+            Arc::new(config.clone()),
+            AccountServiceDependencies {
+                repository: Some(repo.clone()),
+                usage_repository: Some(AccountUsageRepository::new(pool)),
+                cookie_repository: None,
+                token_refresher: Some(Arc::new(refresher.clone())),
+                account_pool: Arc::new(Mutex::new(AccountPool::default())),
+                websocket_pool: Arc::new(CodexWebSocketPool::with_default_max_age()),
+                fingerprint: Fingerprint::default_for_tests(),
+            },
+        ));
+        let scheduler = RefreshScheduler::new(account_service, config);
+        tokio::time::pause();
+        let running_scheduler = scheduler.clone();
+        let refresh =
+            tokio::spawn(async move { running_scheduler.do_refresh_inner("acct_recovery").await });
+
+        for delay in [
+            Duration::from_secs(5),
+            Duration::from_secs(15),
+            Duration::from_secs(45),
+            Duration::from_secs(135),
+        ] {
+            tokio::task::yield_now().await;
+            tokio::time::advance(delay).await;
+        }
+
+        let result = refresh.await.unwrap();
+
+        assert!(result.is_err());
+        assert_eq!(
+            refresher.calls.load(Ordering::SeqCst),
+            MAX_ATTEMPTS as usize
+        );
+        let stored = repo.get("acct_recovery").await.unwrap().unwrap();
+        assert_eq!(stored.status, AccountStatus::Active);
+        assert!(scheduler.timers.read().await.contains_key("acct_recovery"));
+        scheduler.destroy().await;
+    }
+
     #[derive(Clone)]
     struct AlwaysInvalidGrantRefresher {
         repo: AccountRepository,
@@ -610,6 +703,19 @@ mod tests {
                 .status;
             self.observed_statuses.lock().await.push(status);
             Err(RefreshFailure::InvalidGrant)
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct AlwaysTransportFailingRefresher {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl TokenRefresher for AlwaysTransportFailingRefresher {
+        async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(RefreshFailure::Transport)
         }
     }
 
