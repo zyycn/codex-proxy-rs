@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use axum::http::StatusCode;
+use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -96,7 +97,12 @@ fn status_for_failure_code(code: &str) -> StatusCode {
     if lower.contains("rate_limit") || lower.contains("usage_limit") {
         return StatusCode::TOO_MANY_REQUESTS;
     }
-    if lower.contains("unauthorized") || lower.contains("invalid_api_key") {
+    if lower.contains("unauthorized")
+        || lower.contains("invalid_api_key")
+        || lower == "token_invalid"
+        || lower == "token_expired"
+        || lower == "account_deactivated"
+    {
         return StatusCode::UNAUTHORIZED;
     }
     if lower.contains("forbidden") || lower.contains("banned") {
@@ -379,27 +385,94 @@ pub(super) fn premature_close_failed_event(detail: Option<&str>) -> String {
         Some(detail) => format!("Upstream stream closed before response.completed: {detail}"),
         None => "Upstream stream closed before response.completed".to_string(),
     };
+    response_failed_event(ResponsesStreamError {
+        kind: "server_error",
+        code: "stream_disconnected",
+        message: &message,
+    })
+}
+
+pub(super) fn responses_stream_error_event(status: StatusCode, message: &str) -> String {
+    let clean_message = message
+        .strip_prefix("Codex API error (")
+        .and_then(|tail| tail.split_once("): "))
+        .map_or(message, |(_, clean)| clean);
+    let lower = clean_message.to_ascii_lowercase();
+    let error = if status == StatusCode::TOO_MANY_REQUESTS {
+        ResponsesStreamError {
+            kind: "rate_limit_error",
+            code: "rate_limit_exceeded",
+            message: clean_message,
+        }
+    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        ResponsesStreamError {
+            kind: "invalid_request_error",
+            code: "authentication_error",
+            message: clean_message,
+        }
+    } else if lower.contains("error sending request") {
+        ResponsesStreamError {
+            kind: "server_error",
+            code: "upstream_transport_error",
+            message: clean_message,
+        }
+    } else {
+        ResponsesStreamError {
+            kind: if status.is_client_error() {
+                "invalid_request_error"
+            } else {
+                "server_error"
+            },
+            code: "codex_api_error",
+            message: clean_message,
+        }
+    };
+    response_failed_event(error)
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct ResponsesStreamError<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    code: &'static str,
+    message: &'a str,
+}
+
+#[derive(Serialize)]
+struct ResponseFailedData<'a> {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    response: ResponseFailedResponse<'a>,
+    error: ResponsesStreamError<'a>,
+}
+
+#[derive(Serialize)]
+struct ResponseFailedResponse<'a> {
+    id: String,
+    status: &'static str,
+    error: ResponsesStreamError<'a>,
+}
+
+fn response_failed_event(error: ResponsesStreamError<'_>) -> String {
     let response_id_suffix: String = Uuid::new_v4()
         .simple()
         .to_string()
         .chars()
         .take(24)
         .collect();
-    let error = json!({
-        "type": "server_error",
-        "code": "stream_disconnected",
-        "message": message,
-    });
-    let data = json!({
-        "type": "response.failed",
-        "response": {
-            "id": format!("resp_proxy_{response_id_suffix}"),
-            "status": "failed",
-            "error": error,
+    let data = ResponseFailedData {
+        event_type: "response.failed",
+        response: ResponseFailedResponse {
+            id: format!("resp_proxy_{response_id_suffix}"),
+            status: "failed",
+            error,
         },
-        "error": error,
-    });
-    encode_sse_event("response.failed", &data.to_string())
+        error,
+    };
+    encode_sse_event(
+        "response.failed",
+        &serde_json::to_string(&data).expect("response.failed event should serialize"),
+    )
 }
 
 fn collect_response_function_call_ids(value: &Value, function_call_ids: &mut BTreeSet<String>) {

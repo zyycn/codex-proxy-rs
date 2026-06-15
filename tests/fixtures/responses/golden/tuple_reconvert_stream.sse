@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"{\"point\":[1,2]}","type":"response.output_text.delta"}
+
+event: response.completed
+data: {"response":{"id":"resp_tuple","object":"response","output":[{"content":[{"text":"{\"point\":[1,2]}","type":"output_text"}],"role":"assistant","type":"message"}],"output_text":"{\"point\":[1,2]}","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}

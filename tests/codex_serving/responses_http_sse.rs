@@ -8,6 +8,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -51,6 +52,12 @@ const EMPTY_COMPLETED_SSE: &str =
     include_str!("../fixtures/responses/http_sse/empty_completed.sse");
 const COMPLETED_TUPLE_OBJECT_SSE: &str =
     include_str!("../fixtures/responses/http_sse/completed_tuple_object.sse");
+const TUPLE_RECONVERT_RESPONSE_GOLDEN: &str =
+    include_str!("../fixtures/responses/golden/tuple_reconvert_response.json");
+const TUPLE_RECONVERT_STREAM_GOLDEN: &str = concat!(
+    include_str!("../fixtures/responses/golden/tuple_reconvert_stream.sse"),
+    "\n"
+);
 
 #[tokio::test]
 async fn v1_responses_should_reject_invalid_json_without_upstream_request() {
@@ -926,8 +933,8 @@ async fn v1_responses_should_reconvert_tuple_schema_output_for_client() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["output_text"], "{\"point\":[1,2]}");
-    assert_eq!(body["output"][0]["content"][0]["text"], "{\"point\":[1,2]}");
+    let expected: Value = serde_json::from_str(TUPLE_RECONVERT_RESPONSE_GOLDEN).unwrap();
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]
@@ -991,9 +998,7 @@ async fn v1_responses_stream_should_reconvert_tuple_schema_output_for_client() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
-    assert!(body.contains(r#""delta":"{\"point\":[1,2]}""#));
-    assert!(body.contains(r#""text":"{\"point\":[1,2]}""#));
-    assert!(!body.contains(r#""point\":{\"0":1,"1":2}"#));
+    assert_eq!(body, TUPLE_RECONVERT_STREAM_GOLDEN);
 }
 
 #[tokio::test]
@@ -1590,6 +1595,65 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
 }
 
 #[tokio::test]
+async fn v1_responses_stream_should_close_http_sse_upstream_when_client_disconnects() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _request = read_http_request(&mut stream).await;
+        write_chunked_http_sse_headers(&mut stream).await;
+        write_http_chunk(
+            &mut stream,
+            b"event: response.output_text.delta\ndata: {\"delta\":\"hello\"}\n\n",
+        )
+        .await;
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_http_sse_upstream_disconnect(&mut stream),
+        )
+        .await
+        .is_ok()
+    });
+    let imported = build_imported_app(format!("http://{addr}")).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body().into_data_stream();
+    let first_chunk = tokio::time::timeout(Duration::from_secs(1), body.next())
+        .await
+        .expect("first SSE chunk should arrive before disconnect")
+        .expect("stream should yield a first chunk")
+        .expect("chunk should be readable");
+    let first_sse = String::from_utf8(first_chunk.to_vec()).unwrap();
+    assert!(first_sse.contains("event: response.output_text.delta"));
+
+    drop(body);
+    assert!(
+        server.await.unwrap(),
+        "dropping the downstream stream should close the HTTP SSE upstream socket"
+    );
+}
+
+#[tokio::test]
 async fn v1_responses_should_default_to_streaming_when_stream_is_omitted() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1668,4 +1732,33 @@ async fn write_http_sse_response(stream: &mut TcpStream, body: &str) {
         body.len()
     );
     stream.write_all(response.as_bytes()).await.unwrap();
+}
+
+async fn write_chunked_http_sse_headers(stream: &mut TcpStream) {
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+        )
+        .await
+        .unwrap();
+}
+
+async fn write_http_chunk(stream: &mut TcpStream, chunk: &[u8]) {
+    stream
+        .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+        .await
+        .unwrap();
+    stream.write_all(chunk).await.unwrap();
+    stream.write_all(b"\r\n").await.unwrap();
+    stream.flush().await.unwrap();
+}
+
+async fn wait_for_http_sse_upstream_disconnect(stream: &mut TcpStream) {
+    let mut buffer = [0u8; 1024];
+    loop {
+        match stream.read(&mut buffer).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
 }

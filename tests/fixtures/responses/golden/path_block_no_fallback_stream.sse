@@ -1,0 +1,2 @@
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_proxy_REDACTED","status":"failed","error":{"type":"server_error","code":"codex_api_error","message":"No accounts available. Upstream blocked the request (Cloudflare path-block)"}},"error":{"type":"server_error","code":"codex_api_error","message":"No accounts available. Upstream blocked the request (Cloudflare path-block)"}}

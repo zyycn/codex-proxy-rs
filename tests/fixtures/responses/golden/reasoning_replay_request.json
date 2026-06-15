@@ -1,0 +1,28 @@
+{
+  "type": "response.create",
+  "model": "gpt-5.5",
+  "instructions": "answer briefly",
+  "input": [
+    {
+      "type": "reasoning",
+      "id": "rs_implicit_resume",
+      "status": "completed",
+      "summary": [
+        {
+          "type": "summary_text",
+          "text": "cached reasoning"
+        }
+      ],
+      "encrypted_content": "enc_reasoning_replay"
+    },
+    {
+      "role": "user",
+      "content": "continue"
+    }
+  ],
+  "stream": true,
+  "store": false,
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "previous_response_id": "resp_implicit_resume_first"
+}
