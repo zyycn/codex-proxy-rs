@@ -27,7 +27,7 @@ use crate::{
     },
     codex::serving::http::errors::{
         codex_client_error_message, codex_client_error_response,
-        codex_client_error_response_with_message, model_not_found_response,
+        codex_client_error_response_with_status_and_message, model_not_found_response,
     },
     config::ModelConfig,
 };
@@ -159,12 +159,17 @@ impl ChatService {
                             acquired = fallback;
                             continue;
                         }
+                        let retry_message =
+                            retry.fallback_response_message(codex_client_error_message(&error));
                         let message = self
                             .upstream
-                            .fallback_exhausted_message(&codex_client_error_message(&error))
+                            .fallback_exhausted_message(&retry_message)
                             .await;
-                        let error_response =
-                            codex_client_error_response_with_message(error, &message);
+                        let error_response = codex_client_error_response_with_status_and_message(
+                            error,
+                            retry.status(),
+                            &message,
+                        );
                         self.upstream
                             .log_response(
                                 &log_context,

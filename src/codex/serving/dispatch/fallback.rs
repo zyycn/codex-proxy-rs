@@ -44,7 +44,7 @@ impl UpstreamAccountRetry {
             Self::ModelUnsupported { status } => status,
             Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::QuotaExhausted => StatusCode::PAYMENT_REQUIRED,
-            Self::CloudflareChallenge { .. } => StatusCode::FORBIDDEN,
+            Self::CloudflareChallenge { .. } => StatusCode::BAD_GATEWAY,
             Self::CloudflarePathBlock => StatusCode::BAD_GATEWAY,
             Self::TokenInvalid { .. } => StatusCode::UNAUTHORIZED,
             Self::Banned => StatusCode::FORBIDDEN,
@@ -102,6 +102,18 @@ impl UpstreamAccountRetry {
 
     pub(crate) fn preserve_history_account_affinity(self) -> bool {
         !self.is_model_unsupported()
+    }
+
+    pub(crate) fn fallback_response_message(self, upstream_message: String) -> String {
+        match self {
+            Self::CloudflareChallenge { .. } => {
+                "Upstream blocked the request (Cloudflare challenge)".to_string()
+            }
+            Self::CloudflarePathBlock => {
+                "Upstream blocked the request (Cloudflare path-block)".to_string()
+            }
+            _ => upstream_message,
+        }
     }
 }
 

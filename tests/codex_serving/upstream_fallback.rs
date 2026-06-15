@@ -855,6 +855,55 @@ async fn v1_responses_should_mark_banned_after_403_and_retry_next_account() {
 }
 
 #[tokio::test]
+async fn v1_responses_should_return_502_when_cloudflare_challenge_has_no_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-a"))
+        .respond_with(ResponseTemplate::new(403).set_body_string(
+            "<html><title>Just a moment...</title><body>cf_chl challenge</body></html>",
+        ))
+        .mount(&server)
+        .await;
+    let imported = build_imported_app_with_accounts(
+        server.uri(),
+        &[ImportAccount {
+            id: "acct_cf_single",
+            account_id: "chatgpt-a",
+            token: "access-a",
+            refresh_token: "refresh-a",
+        }],
+    )
+    .await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["error"]["message"],
+        "No accounts available. Upstream blocked the request (Cloudflare challenge)"
+    );
+}
+
+#[tokio::test]
 async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
     let started_at = Utc::now();
     let server = MockServer::start().await;

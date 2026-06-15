@@ -63,7 +63,7 @@ use crate::{
 
 use crate::codex::serving::http::errors::{
     codex_client_error_message, codex_client_error_response,
-    codex_client_error_response_with_message,
+    codex_client_error_response_with_status_and_message,
 };
 
 pub(crate) use self::{
@@ -597,12 +597,14 @@ async fn responses_http_sse_stream(
                         acquired = fallback;
                         continue;
                     }
-                    let message = fallback_exhausted_message_with_deps(
-                        &deps,
-                        &codex_client_error_message(&error),
-                    )
-                    .await;
-                    let error_response = codex_client_error_response_with_message(error, &message);
+                    let retry_message =
+                        retry.fallback_response_message(codex_client_error_message(&error));
+                    let message = fallback_exhausted_message_with_deps(&deps, &retry_message).await;
+                    let error_response = codex_client_error_response_with_status_and_message(
+                        error,
+                        retry.status(),
+                        &message,
+                    );
                     log_codex_upstream_response_with_deps(
                         &deps,
                         &log_context,
@@ -1359,13 +1361,15 @@ async fn responses_websocket_stream(
                             acquired = fallback;
                             continue;
                         }
-                        let message = fallback_exhausted_message_with_deps(
-                            &deps,
-                            &codex_client_error_message(&error),
-                        )
-                        .await;
-                        let error_response =
-                            codex_client_error_response_with_message(error, &message);
+                        let retry_message =
+                            retry.fallback_response_message(codex_client_error_message(&error));
+                        let message =
+                            fallback_exhausted_message_with_deps(&deps, &retry_message).await;
+                        let error_response = codex_client_error_response_with_status_and_message(
+                            error,
+                            retry.status(),
+                            &message,
+                        );
                         log_codex_upstream_response_with_deps(
                             &deps,
                             &log_context,

@@ -13,11 +13,11 @@ pub(crate) fn codex_client_error_response(error: CodexClientError) -> (StatusCod
     (status, Json(openai_error(&message, code)))
 }
 
-pub(crate) fn codex_client_error_response_with_message(
+pub(crate) fn codex_client_error_response_with_status_and_message(
     error: CodexClientError,
+    status: StatusCode,
     message: &str,
 ) -> (StatusCode, Json<Value>) {
-    let status = codex_client_error_status(&error);
     let code = codex_client_error_code(&error);
     (status, Json(openai_error(message, code)))
 }
