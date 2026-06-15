@@ -22,7 +22,10 @@ use crate::{
         websocket_history_retry_metadata, CodexRequestLogContext, CodexUpstreamService,
         CollectedResponse, ImplicitResumeSnapshot, UpstreamRequestRecovery,
     },
-    codex::serving::http::errors::codex_client_error_response,
+    codex::serving::http::errors::{
+        codex_client_error_message, codex_client_error_response,
+        codex_client_error_response_with_message,
+    },
     config::ModelConfig,
 };
 
@@ -325,6 +328,24 @@ impl ResponsesService {
                                         acquired = fallback;
                                         continue;
                                     }
+                                    let message = self
+                                        .upstream
+                                        .fallback_exhausted_message(&codex_client_error_message(
+                                            &error,
+                                        ))
+                                        .await;
+                                    let error_response =
+                                        codex_client_error_response_with_message(error, &message);
+                                    self.upstream
+                                        .log_response(
+                                            &log_context,
+                                            error_response.0,
+                                            EventLevel::Error,
+                                            "v1 responses 上游 SSE fallback 已耗尽",
+                                            failure.metadata(false),
+                                        )
+                                        .await;
+                                    return error_response.into_response();
                                 }
                             }
                             let error_response = codex_client_error_response(error);
@@ -403,6 +424,22 @@ impl ResponsesService {
                                 acquired = fallback;
                                 continue;
                             }
+                            let message = self
+                                .upstream
+                                .fallback_exhausted_message(&codex_client_error_message(&error))
+                                .await;
+                            let error_response =
+                                codex_client_error_response_with_message(error, &message);
+                            self.upstream
+                                .log_response(
+                                    &log_context,
+                                    error_response.0,
+                                    EventLevel::Error,
+                                    "v1 responses 上游请求 fallback 已耗尽",
+                                    json!({"stream": false}),
+                                )
+                                .await;
+                            return error_response.into_response();
                         }
                     }
                     let error_response = codex_client_error_response(error);
@@ -718,6 +755,22 @@ impl ResponsesService {
                                 acquired = fallback;
                                 continue;
                             }
+                            let message = self
+                                .upstream
+                                .fallback_exhausted_message(&codex_client_error_message(&error))
+                                .await;
+                            let error_response =
+                                codex_client_error_response_with_message(error, &message);
+                            self.upstream
+                                .log_response(
+                                    &log_context,
+                                    error_response.0,
+                                    EventLevel::Error,
+                                    "v1 responses compact fallback 已耗尽",
+                                    json!({"stream": false, "compact": true}),
+                                )
+                                .await;
+                            return error_response.into_response();
                         }
                     }
                     let error_response = codex_client_error_response(error);

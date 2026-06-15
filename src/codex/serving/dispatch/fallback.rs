@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::codex::{
     accounts::{
         model::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, AcquiredAccount},
+        pool::{AccountAcquireRequest, AccountPoolStatusSummary, AcquiredAccount},
     },
     gateway::transport::{http_client::CodexClientError, rate_limits::cooldown_with_jitter},
 };
@@ -320,6 +320,36 @@ pub(crate) fn websocket_history_retry_metadata(retry: UpstreamAccountRetry, stre
             "reason": "banned",
             "accountAffinity": "previousResponseId",
         }),
+    }
+}
+
+pub(super) fn build_account_exhaustion_detail(
+    summary: AccountPoolStatusSummary,
+    message: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if summary.rate_limited > 0 {
+        parts.push(format!("{} rate-limited", summary.rate_limited));
+    }
+    if summary.expired > 0 {
+        parts.push(format!("{} expired", summary.expired));
+    }
+    if summary.banned > 0 {
+        parts.push(format!("{} banned", summary.banned));
+    }
+    if summary.disabled > 0 {
+        parts.push(format!("{} disabled", summary.disabled));
+    }
+    if summary.quota_exhausted > 0 {
+        parts.push(format!("{} quota-exhausted", summary.quota_exhausted));
+    }
+    if summary.refreshing > 0 {
+        parts.push(format!("{} refreshing", summary.refreshing));
+    }
+    if parts.is_empty() {
+        format!("No accounts available. {message}")
+    } else {
+        format!("All accounts exhausted ({}). {message}", parts.join(", "))
     }
 }
 

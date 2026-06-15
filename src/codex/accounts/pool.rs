@@ -86,6 +86,18 @@ pub struct AccountCapacitySummary {
     pub available_slots: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AccountPoolStatusSummary {
+    pub total: usize,
+    pub active: usize,
+    pub expired: usize,
+    pub quota_exhausted: usize,
+    pub rate_limited: usize,
+    pub refreshing: usize,
+    pub disabled: usize,
+    pub banned: usize,
+}
+
 #[derive(Debug)]
 pub struct AccountPool {
     accounts: BTreeMap<String, Account>,
@@ -306,6 +318,29 @@ impl AccountPool {
             used_slots,
             available_slots: total_slots.saturating_sub(used_slots),
         }
+    }
+
+    pub fn status_summary(&mut self, now: DateTime<Utc>) -> AccountPoolStatusSummary {
+        self.cleanup_stale_slots(now);
+        self.refresh_account_statuses(now);
+        let mut summary = AccountPoolStatusSummary {
+            total: self.accounts.len(),
+            ..AccountPoolStatusSummary::default()
+        };
+        for account in self.accounts.values() {
+            match account.status {
+                AccountStatus::Active if !self.is_quota_available(account, now) => {
+                    summary.rate_limited += 1;
+                }
+                AccountStatus::Active => summary.active += 1,
+                AccountStatus::Expired => summary.expired += 1,
+                AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
+                AccountStatus::Refreshing => summary.refreshing += 1,
+                AccountStatus::Disabled => summary.disabled += 1,
+                AccountStatus::Banned => summary.banned += 1,
+            }
+        }
+        summary
     }
 
     /// 获取所有配额锁定的账户ID列表（用于主动配额刷新）

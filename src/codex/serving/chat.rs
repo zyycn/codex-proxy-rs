@@ -25,7 +25,10 @@ use crate::{
         classify_upstream_account_retry, no_available_accounts_response,
         normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,
     },
-    codex::serving::http::errors::{codex_client_error_response, model_not_found_response},
+    codex::serving::http::errors::{
+        codex_client_error_message, codex_client_error_response,
+        codex_client_error_response_with_message, model_not_found_response,
+    },
     config::ModelConfig,
 };
 
@@ -156,6 +159,22 @@ impl ChatService {
                             acquired = fallback;
                             continue;
                         }
+                        let message = self
+                            .upstream
+                            .fallback_exhausted_message(&codex_client_error_message(&error))
+                            .await;
+                        let error_response =
+                            codex_client_error_response_with_message(error, &message);
+                        self.upstream
+                            .log_response(
+                                &log_context,
+                                error_response.0,
+                                EventLevel::Error,
+                                "v1 chat completions fallback 已耗尽",
+                                json!({"stream": client_stream}),
+                            )
+                            .await;
+                        return error_response.into_response();
                     }
                     let error_response = codex_client_error_response(error);
                     self.upstream
