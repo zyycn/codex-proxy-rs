@@ -21,6 +21,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 
+use super::deflate::PerMessageDeflateStream;
 use super::pool::CodexWsStream;
 
 const MAX_OPENING_RESPONSE_BYTES: usize = 64 * 1024;
@@ -74,9 +75,11 @@ pub(super) async fn connect_with_original_opening_handshake(
         return Err(WsError::Http(Box::new(response)));
     }
     verify_accept_key(&request, &response)?;
+    let permessage_deflate = response_accepts_permessage_deflate(&response);
 
+    let stream = PerMessageDeflateStream::new(stream, permessage_deflate, buffered);
     let websocket =
-        WebSocketStream::from_partially_read(stream, buffered, Role::Client, None).await;
+        WebSocketStream::from_partially_read(stream, Vec::new(), Role::Client, None).await;
     Ok((websocket, response))
 }
 
@@ -371,4 +374,17 @@ fn verify_accept_key(request: &WsRequest<()>, response: &WsResponse) -> Result<(
     } else {
         Err(ProtocolError::SecWebSocketAcceptKeyMismatch.into())
     }
+}
+
+fn response_accepts_permessage_deflate(response: &WsResponse) -> bool {
+    response
+        .headers()
+        .get_all("sec-websocket-extensions")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| {
+            value
+                .split(',')
+                .any(|extension| extension.trim_start().starts_with("permessage-deflate"))
+        })
 }

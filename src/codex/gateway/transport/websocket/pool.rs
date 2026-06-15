@@ -12,6 +12,7 @@ use tokio_tungstenite::{
 };
 
 use super::codec::{rate_limit_headers, set_cookie_headers, turn_state};
+use super::deflate::PerMessageDeflateStream;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CodexWebSocketPoolKey {
@@ -356,7 +357,7 @@ struct WebSocketPoolState {
     shutting_down: bool,
 }
 
-pub(super) type CodexWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(super) type CodexWsStream = WebSocketStream<PerMessageDeflateStream<MaybeTlsStream<TcpStream>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodexWebSocketConnectionMetadata {

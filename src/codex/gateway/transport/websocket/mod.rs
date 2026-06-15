@@ -19,6 +19,7 @@ use crate::codex::gateway::transport::{
 };
 
 mod codec;
+mod deflate;
 mod opening;
 mod pool;
 

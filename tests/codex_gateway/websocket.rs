@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use flate2::{Compress, Compression, FlushCompress};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::{
@@ -11,6 +12,7 @@ use tokio::{
 use tokio_tungstenite::{
     accept_async, accept_hdr_async,
     tungstenite::{
+        handshake::derive_accept_key,
         handshake::server::{Request as WsRequest, Response as WsResponse},
         Message,
     },
@@ -490,6 +492,49 @@ async fn websocket_handshake_should_offer_original_permessage_deflate_extension(
             "x-client-request-id: req_ws_extensions\r\n",
         ],
     );
+}
+
+#[tokio::test]
+async fn websocket_should_decode_permessage_deflate_response_frame_when_server_accepts_extension() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_upgrade_request(&mut stream).await;
+        let accept_key = websocket_accept_key(&request);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\n\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             Sec-WebSocket-Accept: {accept_key}\r\n\
+             Sec-WebSocket-Extensions: permessage-deflate\r\n\
+             \r\n"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        let _client_request = read_client_websocket_frame(&mut stream).await;
+        let payload = websocket_completed_response("resp_ws_deflate", 5, 2);
+        let compressed_frame = compressed_server_text_frame(&payload);
+        stream.write_all(&compressed_frame).await.unwrap();
+        sleep(Duration::from_millis(50)).await;
+    });
+
+    let client = CodexBackendClient::new(
+        build_reqwest_client(false).unwrap(),
+        format!("http://{addr}"),
+        codex_proxy_rs::codex::gateway::fingerprint::model::Fingerprint::default_for_tests(),
+    );
+    let mut request = base_request();
+    request.previous_response_id = Some("resp_deflate_prev".to_string());
+
+    let response = client
+        .create_response(&request, request_context("req_ws_deflate", None))
+        .await
+        .unwrap();
+
+    server.await.unwrap();
+    assert!(response.body.contains("event: response.completed"));
+    assert!(response.body.contains("\"id\":\"resp_ws_deflate\""));
+    assert_eq!(response.usage.unwrap().input_tokens, 5);
 }
 
 #[tokio::test]
@@ -1036,6 +1081,72 @@ async fn read_http_upgrade_request(stream: &mut tokio::net::TcpStream) -> String
         }
     }
     String::from_utf8(request).unwrap()
+}
+
+async fn read_client_websocket_frame(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    let mut header = [0_u8; 2];
+    stream.read_exact(&mut header).await.unwrap();
+    let mut payload_len = u64::from(header[1] & 0x7f);
+    if payload_len == 126 {
+        let mut extended = [0_u8; 2];
+        stream.read_exact(&mut extended).await.unwrap();
+        payload_len = u64::from(u16::from_be_bytes(extended));
+    } else if payload_len == 127 {
+        let mut extended = [0_u8; 8];
+        stream.read_exact(&mut extended).await.unwrap();
+        payload_len = u64::from_be_bytes(extended);
+    }
+    let mut mask = [0_u8; 4];
+    if header[1] & 0x80 != 0 {
+        stream.read_exact(&mut mask).await.unwrap();
+    }
+    let mut payload = vec![0_u8; payload_len as usize];
+    stream.read_exact(&mut payload).await.unwrap();
+    if header[1] & 0x80 != 0 {
+        for (index, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[index % mask.len()];
+        }
+    }
+    payload
+}
+
+fn websocket_accept_key(raw_request: &str) -> String {
+    let key = raw_request
+        .lines()
+        .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+        .expect("raw websocket request should contain Sec-WebSocket-Key");
+    derive_accept_key(key.as_bytes())
+}
+
+fn compressed_server_text_frame(text: &str) -> Vec<u8> {
+    let mut compressor = Compress::new(Compression::fast(), false);
+    let mut payload = Vec::with_capacity(text.len() + 32);
+    compressor
+        .compress_vec(text.as_bytes(), &mut payload, FlushCompress::Sync)
+        .unwrap();
+    if payload.ends_with(&[0x00, 0x00, 0xff, 0xff]) {
+        payload.truncate(payload.len() - 4);
+    }
+    encode_server_frame(0x1, true, &payload)
+}
+
+fn encode_server_frame(opcode: u8, rsv1: bool, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::new();
+    let first = 0x80 | if rsv1 { 0x40 } else { 0 } | opcode;
+    frame.push(first);
+    match payload.len() {
+        len @ 0..=125 => frame.push(len as u8),
+        len @ 126..=65_535 => {
+            frame.push(126);
+            frame.extend_from_slice(&(len as u16).to_be_bytes());
+        }
+        len => {
+            frame.push(127);
+            frame.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+    }
+    frame.extend_from_slice(payload);
+    frame
 }
 
 fn assert_headers_appear_in_order(raw_request: &str, expected_headers: &[&str]) {
