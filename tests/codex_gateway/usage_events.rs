@@ -113,9 +113,38 @@ fn extract_usage_reads_codex_token_usage_shape() {
             input_tokens: 12,
             output_tokens: 5,
             cached_tokens: 3,
+            image_input_tokens: 0,
+            image_output_tokens: 0,
             total_tokens: 17,
         }
     );
+}
+
+#[test]
+fn extract_usage_reads_image_generation_tool_usage_separately() {
+    let body = json!({
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "input_tokens_details": {
+                "cached_tokens": 3
+            }
+        },
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 31,
+                "output_tokens": 9
+            }
+        }
+    });
+
+    let usage = extract_usage(&body).unwrap();
+    let serialized = serde_json::to_value(usage).unwrap();
+
+    assert_eq!(serialized["imageInputTokens"], 31);
+    assert_eq!(serialized["imageOutputTokens"], 9);
+    assert_eq!(serialized["inputTokens"], 12);
+    assert_eq!(serialized["outputTokens"], 5);
 }
 
 #[test]
@@ -134,6 +163,8 @@ fn extract_usage_reads_openai_token_usage_shape_and_merges() {
         input_tokens: 1,
         output_tokens: 2,
         cached_tokens: 0,
+        image_input_tokens: 0,
+        image_output_tokens: 0,
         total_tokens: 3,
     };
 
@@ -143,6 +174,8 @@ fn extract_usage_reads_openai_token_usage_shape_and_merges() {
             input_tokens: 9,
             output_tokens: 6,
             cached_tokens: 2,
+            image_input_tokens: 0,
+            image_output_tokens: 0,
             total_tokens: 15,
         }
     );
@@ -165,7 +198,20 @@ fn extract_sse_usage_should_use_completed_response_usage_without_merging_earlier
             input_tokens: 3,
             output_tokens: 5,
             cached_tokens: 1,
+            image_input_tokens: 0,
+            image_output_tokens: 0,
             total_tokens: 8,
         }
     );
+}
+
+#[test]
+fn extract_sse_usage_should_read_completed_image_generation_tool_usage() {
+    let body = include_str!("../fixtures/responses/http_sse/completed_image_usage.sse");
+
+    let usage = extract_sse_usage(body).unwrap().unwrap();
+    let serialized = serde_json::to_value(usage).unwrap();
+
+    assert_eq!(serialized["imageInputTokens"], 31);
+    assert_eq!(serialized["imageOutputTokens"], 9);
 }

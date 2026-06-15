@@ -69,9 +69,14 @@ impl StreamAudit {
         let mut metadata = match extract_sse_usage(&body) {
             Ok(usage) => {
                 if let Some(usage) = usage {
-                    if record_usage_with_deps(&self.deps, &self.context.account_id, usage)
-                        .await
-                        .is_err()
+                    if record_usage_with_deps(
+                        &self.deps,
+                        &self.context.account_id,
+                        usage,
+                        self.request.expects_image_generation(),
+                    )
+                    .await
+                    .is_err()
                     {
                         level = EventLevel::Warn;
                         message = "v1 responses stream 已完成但 usage 存储失败";
@@ -196,9 +201,14 @@ impl WebSocketStreamAudit {
         let mut message = "v1 responses WebSocket stream 已完成";
         let mut metadata = match usage_result {
             Ok(Some(usage)) => {
-                if record_usage_with_deps(&self.deps, &self.context.account_id, usage)
-                    .await
-                    .is_err()
+                if record_usage_with_deps(
+                    &self.deps,
+                    &self.context.account_id,
+                    usage,
+                    self.request.expects_image_generation(),
+                )
+                .await
+                .is_err()
                 {
                     level = EventLevel::Warn;
                     message = "v1 responses WebSocket stream 已完成但 usage 存储失败";

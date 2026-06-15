@@ -204,7 +204,10 @@ impl ResponsesService {
                         Ok(CollectedResponse::Empty) => {
                             if self
                                 .upstream
-                                .record_empty_response(&acquired.account.id)
+                                .record_empty_response(
+                                    &acquired.account.id,
+                                    codex_request.expects_image_generation(),
+                                )
                                 .await
                                 .is_err()
                             {
@@ -292,7 +295,11 @@ impl ResponsesService {
                                     && retry.preserve_history_account_affinity()
                                 {
                                     self.upstream
-                                        .apply_account_retry(&acquired.account, retry)
+                                        .apply_account_retry(
+                                            &acquired.account,
+                                            retry,
+                                            codex_request.expects_image_generation(),
+                                        )
                                         .await;
                                     self.upstream
                                         .log_response(
@@ -311,6 +318,7 @@ impl ResponsesService {
                                             retry,
                                             &codex_request.model,
                                             &mut excluded_account_ids,
+                                            codex_request.expects_image_generation(),
                                         )
                                         .await;
                                     self.upstream
@@ -355,7 +363,10 @@ impl ResponsesService {
                             }
                             if self
                                 .upstream
-                                .record_request_attempt(&acquired.account.id)
+                                .record_request_attempt(
+                                    &acquired.account.id,
+                                    codex_request.expects_image_generation(),
+                                )
                                 .await
                                 .is_err()
                             {
@@ -410,7 +421,11 @@ impl ResponsesService {
                         {
                             // previous_response_id history is account-affine upstream.
                             self.upstream
-                                .apply_account_retry(&acquired.account, retry)
+                                .apply_account_retry(
+                                    &acquired.account,
+                                    retry,
+                                    codex_request.expects_image_generation(),
+                                )
                                 .await;
                             self.upstream
                                 .log_response(
@@ -429,6 +444,7 @@ impl ResponsesService {
                                     retry,
                                     &codex_request.model,
                                     &mut excluded_account_ids,
+                                    codex_request.expects_image_generation(),
                                 )
                                 .await;
                             self.upstream
@@ -471,7 +487,10 @@ impl ResponsesService {
                     }
                     if self
                         .upstream
-                        .record_request_attempt(&acquired.account.id)
+                        .record_request_attempt(
+                            &acquired.account.id,
+                            codex_request.expects_image_generation(),
+                        )
                         .await
                         .is_err()
                     {
@@ -526,7 +545,11 @@ impl ResponsesService {
         if let Some(usage) = response.usage {
             if self
                 .upstream
-                .record_usage(&acquired.account.id, usage)
+                .record_usage(
+                    &acquired.account.id,
+                    usage,
+                    codex_request.expects_image_generation(),
+                )
                 .await
                 .is_err()
             {
@@ -575,7 +598,10 @@ impl ResponsesService {
             Ok(CollectedResponse::Empty) => {
                 if self
                     .upstream
-                    .record_empty_response(&acquired.account.id)
+                    .record_empty_response(
+                        &acquired.account.id,
+                        codex_request.expects_image_generation(),
+                    )
                     .await
                     .is_err()
                 {
@@ -782,6 +808,7 @@ impl ResponsesService {
                                     retry,
                                     &compact_request.model,
                                     &mut excluded_account_ids,
+                                    false,
                                 )
                                 .await;
                             self.upstream
@@ -824,7 +851,7 @@ impl ResponsesService {
                     }
                     if self
                         .upstream
-                        .record_request_attempt(&acquired.account.id)
+                        .record_request_attempt(&acquired.account.id, false)
                         .await
                         .is_err()
                     {

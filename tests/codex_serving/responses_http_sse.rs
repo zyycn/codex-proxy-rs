@@ -35,6 +35,8 @@ use crate::support::{
 
 const COMPLETED_USAGE_SSE: &str =
     include_str!("../fixtures/responses/http_sse/completed_usage.sse");
+const COMPLETED_IMAGE_USAGE_SSE: &str =
+    include_str!("../fixtures/responses/http_sse/completed_image_usage.sse");
 const COMPLETED_FIELDS_SSE: &str =
     include_str!("../fixtures/responses/http_sse/completed_fields.sse");
 const COMPLETED_REASONING_INCLUDE_SSE: &str =
@@ -334,6 +336,97 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
     assert_eq!(event.3, 200);
     assert_eq!(event.4["stream"], false);
     assert_eq!(event.4["usage"]["inputTokens"], 7);
+}
+
+#[tokio::test]
+async fn v1_responses_should_record_image_generation_usage_when_tool_succeeds() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_IMAGE_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"tools":[{"type":"image_generation"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let usage: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) =
+        sqlx::query_as(
+            "select request_count, input_tokens, output_tokens, cached_tokens, image_input_tokens, image_output_tokens, image_request_count, image_request_failed_count, window_image_input_tokens, window_image_output_tokens, window_image_request_count, window_image_request_failed_count from account_usage where account_id = ?",
+        )
+        .bind("acct_imported")
+        .fetch_one(&imported.pool)
+        .await
+        .unwrap();
+
+    assert_eq!(usage, (1, 7, 4, 2, 31, 9, 1, 0, 31, 9, 1, 0));
+}
+
+#[tokio::test]
+async fn v1_responses_should_record_failed_image_generation_attempt_when_tool_has_no_output() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_USAGE_SSE),
+        )
+        .mount(&server)
+        .await;
+    let imported = build_imported_app(server.uri()).await;
+
+    let response = imported
+        .app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", imported.client_api_key),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"tools":[{"type":"image_generation"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let usage: (i64, i64, i64, i64) = sqlx::query_as(
+        "select image_request_count, image_request_failed_count, window_image_request_count, window_image_request_failed_count from account_usage where account_id = ?",
+    )
+    .bind("acct_imported")
+    .fetch_one(&imported.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(usage, (0, 1, 0, 1));
 }
 
 #[tokio::test]

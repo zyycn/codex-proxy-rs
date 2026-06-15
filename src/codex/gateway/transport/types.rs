@@ -93,6 +93,14 @@ impl CodexResponsesRequest {
             parent_thread_id: None,
         }
     }
+
+    pub fn expects_image_generation(&self) -> bool {
+        self.tools.as_deref().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation"))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

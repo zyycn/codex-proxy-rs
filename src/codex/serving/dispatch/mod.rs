@@ -308,6 +308,7 @@ impl CodexUpstreamService {
         retry: UpstreamAccountRetry,
         model: &str,
         excluded_account_ids: &mut Vec<String>,
+        image_generation_requested: bool,
     ) -> Option<AcquiredAccount> {
         apply_upstream_retry_and_acquire_fallback_with_deps(
             &self.deps,
@@ -315,6 +316,7 @@ impl CodexUpstreamService {
             retry,
             model,
             excluded_account_ids,
+            image_generation_requested,
         )
         .await
     }
@@ -323,8 +325,19 @@ impl CodexUpstreamService {
         fallback_exhausted_message_with_deps(&self.deps, message).await
     }
 
-    pub(crate) async fn apply_account_retry(&self, account: &Account, retry: UpstreamAccountRetry) {
-        apply_upstream_account_retry_with_deps(&self.deps, account, retry).await;
+    pub(crate) async fn apply_account_retry(
+        &self,
+        account: &Account,
+        retry: UpstreamAccountRetry,
+        image_generation_requested: bool,
+    ) {
+        apply_upstream_account_retry_with_deps(
+            &self.deps,
+            account,
+            retry,
+            image_generation_requested,
+        )
+        .await;
     }
 
     pub(crate) async fn responses_stream(
@@ -360,16 +373,29 @@ impl CodexUpstreamService {
         persist_upstream_cookies_with_deps(&self.deps, account_id, set_cookie_headers).await
     }
 
-    pub(crate) async fn record_usage(&self, account_id: &str, usage: TokenUsage) -> Result<(), ()> {
-        record_usage_with_deps(&self.deps, account_id, usage).await
+    pub(crate) async fn record_usage(
+        &self,
+        account_id: &str,
+        usage: TokenUsage,
+        image_generation_requested: bool,
+    ) -> Result<(), ()> {
+        record_usage_with_deps(&self.deps, account_id, usage, image_generation_requested).await
     }
 
-    pub(crate) async fn record_empty_response(&self, account_id: &str) -> Result<(), ()> {
-        record_empty_response_with_deps(&self.deps, account_id).await
+    pub(crate) async fn record_empty_response(
+        &self,
+        account_id: &str,
+        image_generation_requested: bool,
+    ) -> Result<(), ()> {
+        record_empty_response_with_deps(&self.deps, account_id, image_generation_requested).await
     }
 
-    pub(crate) async fn record_request_attempt(&self, account_id: &str) -> Result<(), ()> {
-        record_request_attempt(&self.deps, account_id).await
+    pub(crate) async fn record_request_attempt(
+        &self,
+        account_id: &str,
+        image_generation_requested: bool,
+    ) -> Result<(), ()> {
+        record_request_attempt(&self.deps, account_id, image_generation_requested).await
     }
 
     pub(crate) async fn record_response_affinity(
@@ -434,8 +460,9 @@ async fn fallback_exhausted_message_with_deps(
 async fn record_failed_request_attempt_with_deps(
     deps: &CodexUpstreamDependencies,
     account_id: &str,
+    image_generation_requested: bool,
 ) {
-    if let Err(error) = record_request_attempt(deps, account_id).await {
+    if let Err(error) = record_request_attempt(deps, account_id, image_generation_requested).await {
         tracing::warn!(
             error = ?error,
             account_id = %account_id,
@@ -794,6 +821,7 @@ async fn responses_http_sse_stream(
                         retry,
                         &request.model,
                         &mut excluded_account_ids,
+                        request.expects_image_generation(),
                     )
                     .await;
                     log_codex_upstream_response_with_deps(
@@ -829,7 +857,12 @@ async fn responses_http_sse_stream(
                     .await;
                     return error_response.into_response();
                 }
-                record_failed_request_attempt_with_deps(&deps, &acquired.account.id).await;
+                record_failed_request_attempt_with_deps(
+                    &deps,
+                    &acquired.account.id,
+                    request.expects_image_generation(),
+                )
+                .await;
                 let error_response = codex_client_error_response(error);
                 log_codex_upstream_response_with_deps(
                     &deps,
@@ -1541,8 +1574,13 @@ async fn responses_websocket_stream(
                         && retry.preserve_history_account_affinity()
                     {
                         // previous_response_id 的历史由上游账号持有，换账号会静默丢失会话上下文。
-                        apply_upstream_account_retry_with_deps(&deps, &acquired.account, retry)
-                            .await;
+                        apply_upstream_account_retry_with_deps(
+                            &deps,
+                            &acquired.account,
+                            retry,
+                            request.expects_image_generation(),
+                        )
+                        .await;
                         log_codex_upstream_response_with_deps(
                             &deps,
                             &log_context,
@@ -1559,6 +1597,7 @@ async fn responses_websocket_stream(
                             retry,
                             &request.model,
                             &mut excluded_account_ids,
+                            request.expects_image_generation(),
                         )
                         .await;
                         log_codex_upstream_response_with_deps(
@@ -1596,7 +1635,12 @@ async fn responses_websocket_stream(
                         return error_response.into_response();
                     }
                 }
-                record_failed_request_attempt_with_deps(&deps, &acquired.account.id).await;
+                record_failed_request_attempt_with_deps(
+                    &deps,
+                    &acquired.account.id,
+                    request.expects_image_generation(),
+                )
+                .await;
                 let error_response = codex_client_error_response(error);
                 log_codex_upstream_response_with_deps(
                     &deps,

@@ -17,22 +17,38 @@ insert into account_usage (
   input_tokens,
   output_tokens,
   cached_tokens,
+  image_input_tokens,
+  image_output_tokens,
+  image_request_count,
+  image_request_failed_count,
   window_request_count,
   window_input_tokens,
   window_output_tokens,
   window_cached_tokens,
+  window_image_input_tokens,
+  window_image_output_tokens,
+  window_image_request_count,
+  window_image_request_failed_count,
   last_used_at
-) values (?, 1, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+) values (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 on conflict(account_id) do update set
   request_count = request_count + 1,
   empty_response_count = empty_response_count + excluded.empty_response_count,
   input_tokens = input_tokens + excluded.input_tokens,
   output_tokens = output_tokens + excluded.output_tokens,
   cached_tokens = cached_tokens + excluded.cached_tokens,
+  image_input_tokens = image_input_tokens + excluded.image_input_tokens,
+  image_output_tokens = image_output_tokens + excluded.image_output_tokens,
+  image_request_count = image_request_count + excluded.image_request_count,
+  image_request_failed_count = image_request_failed_count + excluded.image_request_failed_count,
   window_request_count = window_request_count + 1,
   window_input_tokens = window_input_tokens + excluded.window_input_tokens,
   window_output_tokens = window_output_tokens + excluded.window_output_tokens,
   window_cached_tokens = window_cached_tokens + excluded.window_cached_tokens,
+  window_image_input_tokens = window_image_input_tokens + excluded.window_image_input_tokens,
+  window_image_output_tokens = window_image_output_tokens + excluded.window_image_output_tokens,
+  window_image_request_count = window_image_request_count + excluded.window_image_request_count,
+  window_image_request_failed_count = window_image_request_failed_count + excluded.window_image_request_failed_count,
   window_started_at = case
     when account_usage.window_started_at is null
       and (account_usage.window_reset_at is not null or account_usage.limit_window_seconds is not null)
@@ -49,10 +65,18 @@ select
   input_tokens,
   output_tokens,
   cached_tokens,
+  image_input_tokens,
+  image_output_tokens,
+  image_request_count,
+  image_request_failed_count,
   window_request_count,
   window_input_tokens,
   window_output_tokens,
   window_cached_tokens,
+  window_image_input_tokens,
+  window_image_output_tokens,
+  window_image_request_count,
+  window_image_request_failed_count,
   window_started_at,
   window_reset_at,
   limit_window_seconds,
@@ -74,15 +98,23 @@ insert into account_usage (
   window_input_tokens,
   window_output_tokens,
   window_cached_tokens,
+  window_image_input_tokens,
+  window_image_output_tokens,
+  window_image_request_count,
+  window_image_request_failed_count,
   window_started_at,
   window_reset_at,
   limit_window_seconds
-) values (?, 0, 0, 0, 0, ?, ?, ?)
+) values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?, ?)
 on conflict(account_id) do update set
   window_request_count = 0,
   window_input_tokens = 0,
   window_output_tokens = 0,
   window_cached_tokens = 0,
+  window_image_input_tokens = 0,
+  window_image_output_tokens = 0,
+  window_image_request_count = 0,
+  window_image_request_failed_count = 0,
   window_started_at = excluded.window_started_at,
   window_reset_at = excluded.window_reset_at,
   limit_window_seconds = coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds)";
@@ -105,24 +137,40 @@ insert into account_usage (
   input_tokens,
   output_tokens,
   cached_tokens,
+  image_input_tokens,
+  image_output_tokens,
+  image_request_count,
+  image_request_failed_count,
   window_request_count,
   window_input_tokens,
   window_output_tokens,
   window_cached_tokens,
+  window_image_input_tokens,
+  window_image_output_tokens,
+  window_image_request_count,
+  window_image_request_failed_count,
   window_started_at,
   window_reset_at,
   last_used_at
-) values (?, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null)
+) values (?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null)
 on conflict(account_id) do update set
   request_count = 0,
   empty_response_count = 0,
   input_tokens = 0,
   output_tokens = 0,
   cached_tokens = 0,
+  image_input_tokens = 0,
+  image_output_tokens = 0,
+  image_request_count = 0,
+  image_request_failed_count = 0,
   window_request_count = 0,
   window_input_tokens = 0,
   window_output_tokens = 0,
   window_cached_tokens = 0,
+  window_image_input_tokens = 0,
+  window_image_output_tokens = 0,
+  window_image_request_count = 0,
+  window_image_request_failed_count = 0,
   window_started_at = null,
   window_reset_at = null,
   last_used_at = null";
@@ -138,6 +186,10 @@ select
   account_usage.input_tokens,
   account_usage.output_tokens,
   account_usage.cached_tokens,
+  account_usage.image_input_tokens,
+  account_usage.image_output_tokens,
+  account_usage.image_request_count,
+  account_usage.image_request_failed_count,
   account_usage.last_used_at
 from account_usage
 left join accounts on accounts.id = account_usage.account_id
@@ -160,6 +212,10 @@ select
   account_usage.input_tokens,
   account_usage.output_tokens,
   account_usage.cached_tokens,
+  account_usage.image_input_tokens,
+  account_usage.image_output_tokens,
+  account_usage.image_request_count,
+  account_usage.image_request_failed_count,
   account_usage.last_used_at
 from account_usage
 left join accounts on accounts.id = account_usage.account_id
@@ -173,7 +229,11 @@ select
   coalesce(sum(empty_response_count), 0) as empty_response_count,
   coalesce(sum(input_tokens), 0) as input_tokens,
   coalesce(sum(output_tokens), 0) as output_tokens,
-  coalesce(sum(cached_tokens), 0) as cached_tokens
+  coalesce(sum(cached_tokens), 0) as cached_tokens,
+  coalesce(sum(image_input_tokens), 0) as image_input_tokens,
+  coalesce(sum(image_output_tokens), 0) as image_output_tokens,
+  coalesce(sum(image_request_count), 0) as image_request_count,
+  coalesce(sum(image_request_failed_count), 0) as image_request_failed_count
 from account_usage";
 
 impl AccountRepository {
@@ -189,9 +249,17 @@ impl AccountRepository {
             .bind(usage.input_tokens)
             .bind(usage.output_tokens)
             .bind(usage.cached_tokens)
+            .bind(usage.image_input_tokens)
+            .bind(usage.image_output_tokens)
+            .bind(usage.image_request_count)
+            .bind(usage.image_request_failed_count)
             .bind(usage.input_tokens)
             .bind(usage.output_tokens)
             .bind(usage.cached_tokens)
+            .bind(usage.image_input_tokens)
+            .bind(usage.image_output_tokens)
+            .bind(usage.image_request_count)
+            .bind(usage.image_request_failed_count)
             .bind(now)
             .execute(&self.pool)
             .await?;
@@ -321,6 +389,10 @@ impl AccountUsageRepository {
             input_tokens: row.get("input_tokens"),
             output_tokens: row.get("output_tokens"),
             cached_tokens: row.get("cached_tokens"),
+            image_input_tokens: row.get("image_input_tokens"),
+            image_output_tokens: row.get("image_output_tokens"),
+            image_request_count: row.get("image_request_count"),
+            image_request_failed_count: row.get("image_request_failed_count"),
         })
     }
 
@@ -341,10 +413,18 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> AccountRepositoryResult<Acco
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        image_input_tokens: row.get("image_input_tokens"),
+        image_output_tokens: row.get("image_output_tokens"),
+        image_request_count: row.get("image_request_count"),
+        image_request_failed_count: row.get("image_request_failed_count"),
         window_request_count: row.get("window_request_count"),
         window_input_tokens: row.get("window_input_tokens"),
         window_output_tokens: row.get("window_output_tokens"),
         window_cached_tokens: row.get("window_cached_tokens"),
+        window_image_input_tokens: row.get("window_image_input_tokens"),
+        window_image_output_tokens: row.get("window_image_output_tokens"),
+        window_image_request_count: row.get("window_image_request_count"),
+        window_image_request_failed_count: row.get("window_image_request_failed_count"),
         window_started_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("window_started_at"),
         )?,
@@ -367,6 +447,10 @@ fn usage_list_from_row(
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        image_input_tokens: row.get("image_input_tokens"),
+        image_output_tokens: row.get("image_output_tokens"),
+        image_request_count: row.get("image_request_count"),
+        image_request_failed_count: row.get("image_request_failed_count"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
     })
 }

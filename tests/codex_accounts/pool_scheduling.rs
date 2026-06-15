@@ -3,7 +3,10 @@ use std::collections::BTreeMap;
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::codex::accounts::{
     model::{Account, AccountStatus},
-    pool::{AccountAcquireRequest, AccountPool, AccountPoolOptions, RotationStrategy},
+    pool::{
+        AccountAcquireRequest, AccountPool, AccountPoolOptions, AccountWindowUsageDelta,
+        RotationStrategy,
+    },
 };
 
 use crate::support::admin_accounts::test_jwt;
@@ -473,7 +476,15 @@ fn record_window_token_usage_should_accumulate_runtime_window_tokens() {
     let mut pool = AccountPool::default();
     pool.insert(Account::test("acct_a", AccountStatus::Active));
 
-    pool.record_window_token_usage("acct_a", 7, 4, 2);
+    pool.record_window_token_usage(
+        "acct_a",
+        AccountWindowUsageDelta {
+            input_tokens: 7,
+            output_tokens: 4,
+            cached_tokens: 2,
+            ..AccountWindowUsageDelta::default()
+        },
+    );
     let acquired = pool
         .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();

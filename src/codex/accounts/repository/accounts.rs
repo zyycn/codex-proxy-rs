@@ -88,11 +88,15 @@ pub struct StoredAccountMetadata {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct UsageDelta {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
     pub empty_response_count: i64,
 }
 
@@ -104,10 +108,18 @@ pub struct AccountUsageRecord {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
     pub window_request_count: i64,
     pub window_input_tokens: i64,
     pub window_output_tokens: i64,
     pub window_cached_tokens: i64,
+    pub window_image_input_tokens: i64,
+    pub window_image_output_tokens: i64,
+    pub window_image_request_count: i64,
+    pub window_image_request_failed_count: i64,
     pub window_started_at: Option<DateTime<Utc>>,
     pub window_reset_at: Option<DateTime<Utc>>,
     pub limit_window_seconds: Option<u64>,
@@ -125,6 +137,10 @@ pub struct AccountUsageListRecord {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
@@ -144,6 +160,10 @@ pub struct AccountUsageSummary {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
 }
 
 #[derive(Clone)]
@@ -329,10 +349,18 @@ select
   cloudflare_cooldown_until,
   coalesce(account_usage.request_count, 0) as usage_request_count,
   coalesce(account_usage.empty_response_count, 0) as usage_empty_response_count,
+  coalesce(account_usage.image_input_tokens, 0) as usage_image_input_tokens,
+  coalesce(account_usage.image_output_tokens, 0) as usage_image_output_tokens,
+  coalesce(account_usage.image_request_count, 0) as usage_image_request_count,
+  coalesce(account_usage.image_request_failed_count, 0) as usage_image_request_failed_count,
   coalesce(account_usage.window_request_count, 0) as usage_window_request_count,
   coalesce(account_usage.window_input_tokens, 0) as usage_window_input_tokens,
   coalesce(account_usage.window_output_tokens, 0) as usage_window_output_tokens,
   coalesce(account_usage.window_cached_tokens, 0) as usage_window_cached_tokens,
+  coalesce(account_usage.window_image_input_tokens, 0) as usage_window_image_input_tokens,
+  coalesce(account_usage.window_image_output_tokens, 0) as usage_window_image_output_tokens,
+  coalesce(account_usage.window_image_request_count, 0) as usage_window_image_request_count,
+  coalesce(account_usage.window_image_request_failed_count, 0) as usage_window_image_request_failed_count,
   account_usage.window_started_at as usage_window_started_at,
   account_usage.window_reset_at as usage_window_reset_at,
   account_usage.limit_window_seconds as usage_limit_window_seconds,
@@ -539,6 +567,18 @@ impl AccountRepository {
                 )?,
                 request_count: row.get::<i64, _>("usage_request_count").max(0) as u64,
                 empty_response_count: row.get::<i64, _>("usage_empty_response_count").max(0) as u64,
+                image_input_tokens: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_image_input_tokens"),
+                ),
+                image_output_tokens: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_image_output_tokens"),
+                ),
+                image_request_count: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_image_request_count"),
+                ),
+                image_request_failed_count: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_image_request_failed_count"),
+                ),
                 window_request_count: nonnegative_i64_to_u64(
                     row.get::<i64, _>("usage_window_request_count"),
                 ),
@@ -550,6 +590,18 @@ impl AccountRepository {
                 ),
                 window_cached_tokens: nonnegative_i64_to_u64(
                     row.get::<i64, _>("usage_window_cached_tokens"),
+                ),
+                window_image_input_tokens: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_window_image_input_tokens"),
+                ),
+                window_image_output_tokens: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_window_image_output_tokens"),
+                ),
+                window_image_request_count: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_window_image_request_count"),
+                ),
+                window_image_request_failed_count: nonnegative_i64_to_u64(
+                    row.get::<i64, _>("usage_window_image_request_failed_count"),
                 ),
                 window_started_at: parse_optional_rfc3339(
                     row.get::<Option<String>, _>("usage_window_started_at"),

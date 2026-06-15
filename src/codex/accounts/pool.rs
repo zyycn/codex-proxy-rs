@@ -87,6 +87,17 @@ pub struct AccountCapacitySummary {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AccountWindowUsageDelta {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_tokens: u64,
+    pub image_input_tokens: u64,
+    pub image_output_tokens: u64,
+    pub image_request_succeeded: bool,
+    pub image_request_failed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccountPoolStatusSummary {
     pub total: usize,
     pub active: usize,
@@ -171,10 +182,18 @@ impl AccountPool {
         account.last_used_at = None;
         account.request_count = 0;
         account.empty_response_count = 0;
+        account.image_input_tokens = 0;
+        account.image_output_tokens = 0;
+        account.image_request_count = 0;
+        account.image_request_failed_count = 0;
         account.window_request_count = 0;
         account.window_input_tokens = 0;
         account.window_output_tokens = 0;
         account.window_cached_tokens = 0;
+        account.window_image_input_tokens = 0;
+        account.window_image_output_tokens = 0;
+        account.window_image_request_count = 0;
+        account.window_image_request_failed_count = 0;
         account.window_started_at = None;
         account.window_reset_at = None;
         true
@@ -228,16 +247,47 @@ impl AccountPool {
     pub fn record_window_token_usage(
         &mut self,
         account_id: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-        cached_tokens: u64,
+        usage: AccountWindowUsageDelta,
     ) -> bool {
         let Some(account) = self.accounts.get_mut(account_id) else {
             return false;
         };
-        account.window_input_tokens = account.window_input_tokens.saturating_add(input_tokens);
-        account.window_output_tokens = account.window_output_tokens.saturating_add(output_tokens);
-        account.window_cached_tokens = account.window_cached_tokens.saturating_add(cached_tokens);
+        account.image_input_tokens = account
+            .image_input_tokens
+            .saturating_add(usage.image_input_tokens);
+        account.image_output_tokens = account
+            .image_output_tokens
+            .saturating_add(usage.image_output_tokens);
+        if usage.image_request_succeeded {
+            account.image_request_count = account.image_request_count.saturating_add(1);
+        }
+        if usage.image_request_failed {
+            account.image_request_failed_count =
+                account.image_request_failed_count.saturating_add(1);
+        }
+        account.window_input_tokens = account
+            .window_input_tokens
+            .saturating_add(usage.input_tokens);
+        account.window_output_tokens = account
+            .window_output_tokens
+            .saturating_add(usage.output_tokens);
+        account.window_cached_tokens = account
+            .window_cached_tokens
+            .saturating_add(usage.cached_tokens);
+        account.window_image_input_tokens = account
+            .window_image_input_tokens
+            .saturating_add(usage.image_input_tokens);
+        account.window_image_output_tokens = account
+            .window_image_output_tokens
+            .saturating_add(usage.image_output_tokens);
+        if usage.image_request_succeeded {
+            account.window_image_request_count =
+                account.window_image_request_count.saturating_add(1);
+        }
+        if usage.image_request_failed {
+            account.window_image_request_failed_count =
+                account.window_image_request_failed_count.saturating_add(1);
+        }
         true
     }
 
@@ -601,6 +651,10 @@ fn reset_window_counters(account: &mut Account) {
     account.window_input_tokens = 0;
     account.window_output_tokens = 0;
     account.window_cached_tokens = 0;
+    account.window_image_input_tokens = 0;
+    account.window_image_output_tokens = 0;
+    account.window_image_request_count = 0;
+    account.window_image_request_failed_count = 0;
 }
 
 fn next_window_reset_at(
