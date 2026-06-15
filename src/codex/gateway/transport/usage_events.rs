@@ -72,7 +72,7 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
 
 pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
     let events = parse_sse_events(body)?;
-    let mut usage: Option<TokenUsage> = None;
+    let mut fallback_usage: Option<TokenUsage> = None;
     for event in events {
         if event.data == "[DONE]" {
             continue;
@@ -80,16 +80,18 @@ pub fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
             continue;
         };
-        let event_usage =
-            extract_usage(&value).or_else(|| value.get("response").and_then(extract_usage));
+        let event_usage = value
+            .get("response")
+            .and_then(extract_usage)
+            .or_else(|| extract_usage(&value));
         if let Some(event_usage) = event_usage {
-            usage = Some(match usage {
-                Some(current) => current.merged(event_usage),
-                None => event_usage,
-            });
+            if event.event.as_deref() == Some("response.completed") {
+                return Ok(Some(event_usage));
+            }
+            fallback_usage = Some(event_usage);
         }
     }
-    Ok(usage)
+    Ok(fallback_usage)
 }
 
 fn number_field(value: &Value, field: &str) -> Option<u64> {
