@@ -29,6 +29,8 @@ pub struct ImportedApp {
     pub app: axum::Router,
     pub pool: sqlx::SqlitePool,
     pub secret_box: SecretBox,
+    pub api_key_hasher: ApiKeyHasher,
+    pub config: AppConfig,
     pub client_api_key: String,
     _tempdir: tempfile::TempDir,
 }
@@ -196,19 +198,20 @@ async fn build_imported_app_with_accounts_config_and_fingerprint(
         .unwrap();
     let mut config = test_config(url, base_url);
     configure(&mut config);
+    let state_config = config.clone();
     let state = match fingerprint {
         Some(fingerprint) => AppState::with_pool_secret_api_key_hasher_and_fingerprint(
-            config,
+            state_config,
             pool.clone(),
             secret_box.clone(),
-            hasher,
+            hasher.clone(),
             fingerprint,
         ),
         None => AppState::with_pool_secret_and_api_key_hasher(
-            config,
+            state_config,
             pool.clone(),
             secret_box.clone(),
-            hasher,
+            hasher.clone(),
         ),
     };
     let app = build_router(state);
@@ -245,6 +248,8 @@ async fn build_imported_app_with_accounts_config_and_fingerprint(
         app,
         pool,
         secret_box,
+        api_key_hasher: hasher,
+        config,
         client_api_key: generated.plaintext,
         _tempdir: tempdir,
     }
@@ -304,12 +309,13 @@ where
         .insert_generated("test", &generated)
         .await
         .unwrap();
+    let config = test_config(url, base_url);
     let app = build_router(
         AppState::with_pool_secret_api_key_hasher_and_token_refresher(
-            test_config(url, base_url),
+            config.clone(),
             pool.clone(),
             secret_box.clone(),
-            hasher,
+            hasher.clone(),
             token_refresher,
         ),
     );
@@ -346,6 +352,8 @@ where
         app,
         pool,
         secret_box,
+        api_key_hasher: hasher,
+        config,
         client_api_key: generated.plaintext,
         _tempdir: tempdir,
     }
