@@ -15,17 +15,17 @@ const open = defineModel<boolean>({ default: false })
 <template>
   <Teleport to="body">
     <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
-      <div class="absolute inset-0 bg-[var(--cp-overlay-scrim)]" @click="open = false" />
+      <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="open = false" />
       <section
-        class="relative w-[min(560px,100%)] rounded-[22px] bg-[var(--cp-bg-surface)] shadow-[var(--cp-shadow-popover)]"
+        class="relative w-[min(560px,100%)] rounded-[22px] bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
       >
         <header class="flex justify-between gap-4 p-6 pb-0">
           <div>
-            <h2 class="m-0 text-lg font-[760] text-[var(--cp-text-primary)]">{{ title }}</h2>
-            <p v-if="description" class="mt-2 mb-0 text-[13px] font-semibold leading-tight text-[var(--cp-text-secondary)]">
+            <h2 class="m-0 text-lg font-[760] text-(--cp-text-primary)">{{ title }}</h2>
+            <p v-if="description" class="mt-2 mb-0 text-[13px] font-semibold leading-tight text-(--cp-text-secondary)">
               {{ description }}
             </p>
           </div>

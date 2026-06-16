@@ -22,21 +22,21 @@ const props = withDefaults(defineProps<{
 const sizeClasses: Record<ButtonSize, string> = {
   large: 'h-10 px-4 text-[13px]',
   default: 'h-8 px-3.5 text-[13px]',
-  small: 'h-6 rounded-[var(--cp-button-radius-small)] px-2.5 text-xs',
+  small: 'h-6 rounded-(--cp-button-radius-small) px-2.5 text-xs',
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  default: 'bg-[var(--cp-default-bg)] text-[var(--cp-default-text)] hover:bg-[var(--cp-default-bg-hover)]',
-  primary: 'bg-[var(--cp-info)] text-[var(--cp-info-on)] hover:bg-[var(--cp-info-hover)]',
-  success: 'bg-[var(--cp-success-bg)] text-[var(--cp-success-text)] hover:bg-[var(--cp-success-bg-hover)]',
-  warning: 'bg-[var(--cp-warning-bg)] text-[var(--cp-warning-text)] hover:bg-[var(--cp-warning-bg-hover)]',
-  danger: 'bg-[var(--cp-danger-bg)] text-[var(--cp-danger-text)] hover:bg-[var(--cp-danger-bg-hover)]',
-  plain: 'bg-[var(--cp-info-bg)] text-[var(--cp-info-text)] hover:bg-[var(--cp-info-bg-hover)]',
-  text: 'h-auto bg-transparent p-0 text-[var(--cp-info-text)] hover:text-[var(--cp-info-hover)]',
+  default: 'bg-(--cp-default-bg) text-(--cp-default-text) hover:bg-(--cp-default-bg-hover)',
+  primary: 'bg-(--cp-info) text-(--cp-info-on) hover:bg-(--cp-info-hover)',
+  success: 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)',
+  warning: 'bg-(--cp-warning-bg) text-(--cp-warning-text) hover:bg-(--cp-warning-bg-hover)',
+  danger: 'bg-(--cp-danger-bg) text-(--cp-danger-text) hover:bg-(--cp-danger-bg-hover)',
+  plain: 'bg-(--cp-info-bg) text-(--cp-info-text) hover:bg-(--cp-info-bg-hover)',
+  text: 'h-auto bg-transparent p-0 text-(--cp-info-text) hover:text-(--cp-info-hover)',
 }
 
 const buttonClasses = computed(() => [
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--cp-button-radius-base)] border-0 font-bold leading-none transition-colors disabled:cursor-not-allowed disabled:bg-[var(--cp-disabled-bg)] disabled:text-[var(--cp-disabled-text)]',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-(--cp-button-radius-base) border-0 font-bold leading-none transition-colors disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text)',
   sizeClasses[props.size],
   variantClasses[props.variant],
 ])

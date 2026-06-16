@@ -19,19 +19,19 @@ const eventLogColumns = [
 ]
 
 const levelToneClasses: Record<SemanticTone, string> = {
-  normal: 'bg-[var(--cp-normal-bg)] text-[var(--cp-normal-text)]',
-  info: 'bg-[var(--cp-info-bg)] text-[var(--cp-info-text)]',
-  success: 'bg-[var(--cp-success-bg)] text-[var(--cp-success-text)]',
-  warning: 'bg-[var(--cp-warning-bg)] text-[var(--cp-warning-text)]',
-  danger: 'bg-[var(--cp-danger-bg)] text-[var(--cp-danger-text)]',
+  normal: 'bg-(--cp-normal-bg) text-(--cp-normal-text)',
+  info: 'bg-(--cp-info-bg) text-(--cp-info-text)',
+  success: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+  warning: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
+  danger: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
 }
 
 const statusToneClasses: Record<SemanticTone, string> = {
-  normal: 'text-[var(--cp-normal-text)]',
-  info: 'text-[var(--cp-success-text)]',
-  success: 'text-[var(--cp-success-text)]',
-  warning: 'text-[var(--cp-warning-text)]',
-  danger: 'text-[var(--cp-danger-text)]',
+  normal: 'text-(--cp-normal-text)',
+  info: 'text-(--cp-success-text)',
+  success: 'text-(--cp-success-text)',
+  warning: 'text-(--cp-warning-text)',
+  danger: 'text-(--cp-danger-text)',
 }
 
 function rowTone(row: object) {
@@ -43,16 +43,16 @@ function rowTone(row: object) {
   <BaseCard as="article" :padded="false" class="h-[350px] w-full px-7 pt-6">
     <header class="flex items-start justify-between">
       <div>
-        <h2 class="m-0 text-[20px] leading-[1.15] font-[760] text-[var(--cp-text-primary)]">事件日志</h2>
-        <p class="mt-[7px] mb-0 text-[13px] leading-[1.15] font-[650] text-[var(--cp-text-secondary)]">最近 50 条事件</p>
+        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">事件日志</h2>
+        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">最近 50 条事件</p>
       </div>
 
-      <div class="grid h-9 w-[206px] grid-cols-[62px_58px_58px] gap-1 rounded-xl bg-[var(--cp-bg-muted)] p-1">
+      <div class="grid h-9 w-[206px] grid-cols-[62px_58px_58px] gap-1 rounded-xl bg-(--cp-bg-muted) p-1">
         <button
           v-for="filter in filters"
           :key="filter"
-          class="h-7 rounded-[9px] border-0 text-[12px] leading-[1.15] font-[650]"
-          :class="filter === '全部' ? 'bg-white text-[var(--cp-text-primary)] shadow-[var(--cp-shadow-control)]' : 'bg-transparent text-[var(--cp-text-secondary)]'"
+          class="h-7 rounded-[9px] border-0 text-xs leading-[1.15] font-[650]"
+          :class="filter === '全部' ? 'bg-white text-(--cp-text-primary) shadow-(--cp-shadow-control)' : 'bg-transparent text-(--cp-text-secondary)'"
           type="button"
         >
           {{ filter }}
@@ -60,23 +60,23 @@ function rowTone(row: object) {
       </div>
     </header>
 
-    <div class="mt-[17px] flex h-[240px] w-full justify-between overflow-hidden">
+    <div class="mt-[17px] flex h-60 w-full justify-between overflow-hidden">
       <BaseTable
         class="min-w-0 flex-1"
         :columns="eventLogColumns"
         :rows="rows"
         table-class="min-w-full"
-        header-row-class="h-10 rounded-xl bg-[var(--cp-bg-subtle)] text-[12px] leading-[1.15] font-bold text-[var(--cp-text-secondary)]"
-        body-row-class="h-14 rounded-[10px] transition-[background-color,transform] duration-200 hover:-translate-y-px hover:bg-[var(--cp-bg-subtle)] active:translate-y-0"
-        header-cell-class="min-w-0 overflow-hidden bg-[var(--cp-bg-subtle)] px-5 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl"
-        body-cell-class="min-w-0 overflow-hidden px-5 text-ellipsis whitespace-nowrap text-[12px] leading-[1.15] font-[650] text-[var(--cp-text-primary)] first:rounded-l-[10px] last:rounded-r-[10px]"
+        header-row-class="h-10 rounded-xl bg-(--cp-bg-subtle) text-xs leading-[1.15] font-bold text-(--cp-text-secondary)"
+        body-row-class="h-14 rounded-[10px] transition-colors duration-200 hover:bg-(--cp-bg-subtle)"
+        header-cell-class="min-w-0 overflow-hidden bg-(--cp-bg-subtle) px-5 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl"
+        body-cell-class="min-w-0 overflow-hidden px-5 text-ellipsis whitespace-nowrap text-xs leading-[1.15] font-[650] text-(--cp-text-primary) first:rounded-l-[10px] last:rounded-r-[10px]"
       >
         <template #time="{ value }">
           <span class="font-mono tabular-nums">{{ value }}</span>
         </template>
 
         <template #level="{ row, value }">
-          <span class="inline-flex h-6 w-[58px] items-center justify-center rounded-full text-[12px] leading-[1.15] font-bold" :class="levelToneClasses[rowTone(row)]">{{ value }}</span>
+          <span class="inline-flex h-6 w-[58px] items-center justify-center rounded-full text-xs leading-[1.15] font-bold" :class="levelToneClasses[rowTone(row)]">{{ value }}</span>
         </template>
 
         <template #requestId="{ value }">

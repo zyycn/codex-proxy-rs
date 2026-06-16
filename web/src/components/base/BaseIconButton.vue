@@ -11,10 +11,10 @@ withDefaults(defineProps<{
 
 <template>
   <button
-    class="inline-flex items-center justify-center border-0 bg-[var(--cp-bg-surface)] text-[var(--cp-text-secondary)] shadow-[var(--cp-shadow-control)] transition-colors hover:bg-[var(--cp-default-bg-hover)] hover:text-[var(--cp-normal)]"
+    class="inline-flex items-center justify-center border-0 bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) transition-colors hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal)"
     :class="[
       size === 'large' ? 'h-11 w-11 rounded-xl' : 'h-9 w-9 rounded-xl',
-      active ? 'bg-[var(--cp-default-bg-hover)] text-[var(--cp-normal)]' : '',
+      active ? 'bg-(--cp-default-bg-hover) text-(--cp-normal)' : '',
     ]"
     :aria-label="label"
     :title="label"
