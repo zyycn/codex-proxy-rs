@@ -24752,6 +24752,650 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "ezRqM",
+      "x": 16020,
+      "y": 0,
+      "name": "登录页 - Route Chamber",
+      "clip": true,
+      "width": 1920,
+      "height": 1080,
+      "fill": {
+        "type": "gradient",
+        "gradientType": "linear",
+        "enabled": true,
+        "rotation": 115,
+        "size": {
+          "height": 1
+        },
+        "colors": [
+          {
+            "color": "#F8FAFC",
+            "position": 0
+          },
+          {
+            "color": "#FFFFFF",
+            "position": 0.46
+          },
+          {
+            "color": "#F1F7FF",
+            "position": 1
+          }
+        ]
+      },
+      "gap": 88,
+      "padding": [
+        72,
+        96
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "fptiY",
+          "name": "左侧律动区域",
+          "width": 980,
+          "height": "fill_container",
+          "fill": "#00000000",
+          "stroke": "#00000000",
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "enabled": false,
+            "color": "#000000"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "hGhiA",
+              "x": 44,
+              "y": 42,
+              "name": "左侧品牌",
+              "width": 420,
+              "height": 52,
+              "fill": "#00000000",
+              "gap": 13,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "k88pD",
+                  "name": "左侧品牌图标底",
+                  "width": 44,
+                  "height": 44,
+                  "fill": "#111827",
+                  "cornerRadius": 13,
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "inEW3",
+                      "x": 11,
+                      "y": 11,
+                      "name": "左侧品牌图标",
+                      "width": 22,
+                      "height": 22,
+                      "icon": "square-terminal",
+                      "library": "lucide",
+                      "fill": "#FFFFFF"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XNdOV",
+                  "name": "左侧品牌文字",
+                  "height": 42,
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "PMXVU",
+                      "name": "左侧品牌名称",
+                      "fill": "#0E1726",
+                      "content": "Codex Proxy RS",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 17,
+                      "fontWeight": "760"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ImuER",
+                      "name": "左侧品牌版本",
+                      "fill": "#64748B",
+                      "content": "Proxy RS · v0.1.0",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "650"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ffamL",
+              "x": 56,
+              "y": 744,
+              "name": "左侧短文案",
+              "width": 580,
+              "height": 128,
+              "fill": "#00000000",
+              "layout": "vertical",
+              "gap": 14,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "VNWwS",
+                  "name": "左侧标题",
+                  "fill": "#0E1726",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "安静进入控制台。",
+                  "lineHeight": 1.08,
+                  "fontFamily": "Inter",
+                  "fontSize": 38,
+                  "fontWeight": "780"
+                },
+                {
+                  "type": "text",
+                  "id": "cRXIR",
+                  "name": "左侧说明",
+                  "fill": "#64748B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "几条请求轨迹，连接账号池、模型目录与管理入口。",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "path",
+              "id": "i0RKwl",
+              "x": 8,
+              "y": 264,
+              "name": "信号谱线 蓝主线",
+              "geometry": "M0 134c154-104 304-80 440-18 152 70 286 62 470-62",
+              "viewBox": [
+                0,
+                0,
+                910,
+                238
+              ],
+              "fill": "#00000000",
+              "width": 910,
+              "height": 238,
+              "stroke": "#2563EB",
+              "strokeWidth": 2.2,
+              "strokeLinejoin": "round",
+              "strokeLinecap": "round"
+            },
+            {
+              "type": "path",
+              "id": "t7Obu",
+              "x": 24,
+              "y": 356,
+              "name": "信号谱线 青主线",
+              "geometry": "M0 62c138 88 286 92 424 32 156-68 284-46 446 56",
+              "viewBox": [
+                0,
+                0,
+                870,
+                210
+              ],
+              "fill": "#00000000",
+              "width": 870,
+              "height": 210,
+              "stroke": "#0F9F9A",
+              "strokeWidth": 2,
+              "strokeLinejoin": "round",
+              "strokeLinecap": "round"
+            },
+            {
+              "type": "path",
+              "id": "Ih3hQ",
+              "x": 42,
+              "y": 304,
+              "name": "信号谱线 轻回声一",
+              "geometry": "M0 118c132-64 266-42 392 6 148 54 274 32 428-38",
+              "viewBox": [
+                0,
+                0,
+                820,
+                210
+              ],
+              "fill": "#00000000",
+              "width": 820,
+              "height": 210,
+              "stroke": "#93C5FD66",
+              "strokeWidth": 1.2,
+              "strokeLinejoin": "round",
+              "strokeLinecap": "round"
+            },
+            {
+              "type": "path",
+              "id": "SlACI",
+              "x": 60,
+              "y": 460,
+              "name": "信号谱线 轻回声二",
+              "geometry": "M0 78c118-36 224 40 352 0 148-46 280 18 428-16",
+              "viewBox": [
+                0,
+                0,
+                780,
+                178
+              ],
+              "fill": "#00000000",
+              "width": 780,
+              "height": 178,
+              "stroke": "#99F6E466",
+              "strokeWidth": 1.2,
+              "strokeLinejoin": "round",
+              "strokeLinecap": "round"
+            },
+            {
+              "type": "path",
+              "id": "dgWuE",
+              "x": 96,
+              "y": 574,
+              "name": "信号谱线 静默底线",
+              "geometry": "M0 62c108 26 192-32 316-4 126 28 232-16 364 8",
+              "viewBox": [
+                0,
+                0,
+                680,
+                130
+              ],
+              "fill": "#00000000",
+              "width": 680,
+              "height": 130,
+              "stroke": "#CBD5E180",
+              "strokeWidth": 1.1,
+              "strokeLinejoin": "round",
+              "strokeLinecap": "round"
+            },
+            {
+              "type": "ellipse",
+              "id": "wgWMY",
+              "x": 446,
+              "y": 378,
+              "name": "谱线节点 蓝",
+              "fill": "#2563EB",
+              "width": 7,
+              "height": 7,
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#2563EB66",
+                "blur": 14
+              }
+            },
+            {
+              "type": "ellipse",
+              "id": "D17Lp",
+              "x": 602,
+              "y": 448,
+              "name": "谱线节点 青",
+              "fill": "#0F9F9A",
+              "width": 7,
+              "height": 7,
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0F9F9A66",
+                "blur": 14
+              }
+            },
+            {
+              "type": "ellipse",
+              "id": "TxcTy",
+              "x": 262,
+              "y": 338,
+              "name": "谱线节点 淡",
+              "fill": "#94A3B8",
+              "width": 4,
+              "height": 4
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "fmwBG",
+          "name": "右侧登录区",
+          "width": 520,
+          "height": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "gap": 22,
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "LBb4m",
+              "name": "登录表单",
+              "width": 480,
+              "fill": "#FFFFFF",
+              "cornerRadius": 22,
+              "stroke": "#E2E8F0",
+              "strokeWidth": 1,
+              "effect": [
+                {
+                  "type": "shadow",
+                  "shadowType": "outer",
+                  "color": "#0E17261F",
+                  "offset": {
+                    "x": 0,
+                    "y": 12
+                  },
+                  "blur": 26,
+                  "spread": -18
+                },
+                {
+                  "type": "shadow",
+                  "shadowType": "outer",
+                  "color": "#0E172629",
+                  "offset": {
+                    "x": 0,
+                    "y": 34
+                  },
+                  "blur": 70,
+                  "spread": -40
+                }
+              ],
+              "layout": "vertical",
+              "gap": 22,
+              "padding": 36,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Vh4qO",
+                  "name": "登录表单头部",
+                  "width": "fill_container",
+                  "height": 84,
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 10,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "WKbRM",
+                      "name": "登录标题",
+                      "fill": "#0E1726",
+                      "content": "登录控制台",
+                      "lineHeight": 1.12,
+                      "fontFamily": "Inter",
+                      "fontSize": 34,
+                      "fontWeight": "800"
+                    },
+                    {
+                      "type": "text",
+                      "id": "azMth",
+                      "name": "登录说明",
+                      "fill": "#64748B",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "使用管理员账号和访问密钥进入 Codex Proxy RS。",
+                      "lineHeight": 1.55,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Rre6N",
+                  "name": "管理员账号",
+                  "width": "fill_container",
+                  "height": 72,
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OGamD",
+                      "name": "管理员账号 标签",
+                      "fill": "#0E1726",
+                      "content": "管理员账号",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "alIMQ",
+                      "name": "管理员账号 输入框",
+                      "width": "fill_container",
+                      "height": 46,
+                      "fill": "#EEF2F7",
+                      "cornerRadius": 12,
+                      "gap": 10,
+                      "padding": [
+                        0,
+                        14
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "Y2gc9C",
+                          "name": "管理员账号 图标",
+                          "width": 17,
+                          "height": 17,
+                          "icon": "mail",
+                          "library": "lucide",
+                          "fill": "#64748B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "DrsCN",
+                          "name": "管理员账号 值",
+                          "fill": "#0E1726",
+                          "content": "admin@example.com",
+                          "lineHeight": 1.1,
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uOcjS",
+                  "name": "访问密钥",
+                  "width": "fill_container",
+                  "height": 72,
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "GQaue",
+                      "name": "访问密钥 标签",
+                      "fill": "#0E1726",
+                      "content": "访问密钥",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ZTZ2u",
+                      "name": "访问密钥 输入框",
+                      "width": "fill_container",
+                      "height": 46,
+                      "fill": "#EEF2F7",
+                      "cornerRadius": 12,
+                      "gap": 10,
+                      "padding": [
+                        0,
+                        14
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "BWHck",
+                          "name": "访问密钥 图标",
+                          "width": 17,
+                          "height": 17,
+                          "icon": "key-round",
+                          "library": "lucide",
+                          "fill": "#64748B"
+                        },
+                        {
+                          "type": "text",
+                          "id": "U168Qy",
+                          "name": "访问密钥 值",
+                          "fill": "#94A3B8",
+                          "content": "输入会话密钥",
+                          "lineHeight": 1.1,
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Z8uAB",
+                  "name": "表单选项",
+                  "width": "fill_container",
+                  "height": 30,
+                  "fill": "#00000000",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "V6QXQ",
+                      "name": "保持登录",
+                      "height": 22,
+                      "fill": "#00000000",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "XqPpK",
+                          "name": "保持登录勾选框",
+                          "width": 16,
+                          "height": 16,
+                          "fill": "#FFFFFF",
+                          "cornerRadius": 5,
+                          "stroke": "#CBD5E1",
+                          "strokeWidth": 1
+                        },
+                        {
+                          "type": "text",
+                          "id": "fqCp3",
+                          "name": "保持登录文字",
+                          "fill": "#64748B",
+                          "content": "保持登录",
+                          "lineHeight": 1.1,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "650"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "rVrLI",
+                      "name": "忘记密钥",
+                      "fill": "#2563EB",
+                      "content": "忘记密钥",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Q2vJi",
+                  "name": "登录按钮",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": "#2563EB",
+                  "cornerRadius": 12,
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "#2563EB66",
+                    "offset": {
+                      "x": 0,
+                      "y": 12
+                    },
+                    "blur": 24,
+                    "spread": -16
+                  },
+                  "gap": 10,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ka5Jn",
+                      "name": "登录按钮文字",
+                      "fill": "#FFFFFF",
+                      "content": "登录",
+                      "lineHeight": 1.1,
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "760"
+                    },
+                    {
+                      "type": "icon",
+                      "id": "j7l5g",
+                      "name": "登录按钮图标",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "arrow-right",
+                      "library": "lucide",
+                      "fill": "#FFFFFF"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "dZM17",
+                  "name": "登录安全说明",
+                  "fill": "#64748B",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "本地会话将加密保存，仅用于当前管理端。",
+                  "lineHeight": 1.35,
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {
