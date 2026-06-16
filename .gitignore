@@ -17,3 +17,5 @@
 *.codegraph
 */node_modules
 */dist
+.agents
+.cargo
