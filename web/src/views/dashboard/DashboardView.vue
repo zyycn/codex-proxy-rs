@@ -19,13 +19,13 @@ const {
 </script>
 
 <template>
-  <div class="w-full min-w-[1180px] px-7 pt-[34px] pb-[34px]">
-    <header class="flex h-[68px] items-start justify-between">
+  <div class="w-full min-w-295 p-7">
+    <header class="flex h-17 items-start justify-between">
       <div>
-        <h1 class="mt-0 text-[34px] leading-[1.15] font-[800] mb-0 text-[var(--cp-text-primary)]">
+        <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
           系统概览
         </h1>
-        <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-[var(--cp-text-secondary)]">
+        <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
           生产环境 · 14:32 更新 · 自动刷新 30s
         </p>
       </div>
@@ -33,7 +33,7 @@ const {
       <AppTopbar class="mt-0.5" />
     </header>
 
-    <section class="mt-6 grid grid-cols-[repeat(4,minmax(0,1fr))] gap-6" aria-label="核心指标">
+    <section class="mt-6 grid grid-cols-4 gap-6" aria-label="核心指标">
       <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
     </section>
 

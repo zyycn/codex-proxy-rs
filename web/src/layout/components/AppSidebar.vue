@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { gsap } from 'gsap'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   Box,
   ChartColumn,
@@ -37,6 +37,8 @@ defineEmits<{
 }>()
 
 const sidebarEl = ref<HTMLElement | null>(null)
+const brandLabelEl = ref<HTMLElement | null>(null)
+const brandLabelVisible = shallowRef(!props.collapsed)
 
 function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -65,6 +67,51 @@ function animateSidebarLabels(collapsed: boolean) {
     stagger: collapsed ? 0 : 0.018,
     overwrite: true,
   })
+}
+
+function hideBrandLabel() {
+  const label = brandLabelEl.value
+
+  if (label) {
+    gsap.killTweensOf(label)
+    gsap.set(label, {
+      opacity: 0,
+      x: -6,
+    })
+  }
+
+  brandLabelVisible.value = false
+}
+
+function animateBrandLabelEnter() {
+  const label = brandLabelEl.value
+
+  if (!label) {
+    return
+  }
+
+  if (prefersReducedMotion()) {
+    gsap.set(label, {
+      opacity: 1,
+      x: 0,
+    })
+    return
+  }
+
+  gsap.fromTo(
+    label,
+    {
+      opacity: 0,
+      x: -6,
+    },
+    {
+      opacity: 1,
+      x: 0,
+      duration: 0.2,
+      ease: 'power3.out',
+      overwrite: true,
+    },
+  )
 }
 
 function animateSidebarWidth(collapsed: boolean) {
@@ -102,15 +149,33 @@ onMounted(() => {
     width: props.collapsed ? 88 : 256,
     flexBasis: props.collapsed ? 88 : 256,
   })
+  if (props.collapsed) {
+    hideBrandLabel()
+  }
+  else {
+    gsap.set(brandLabelEl.value, {
+      opacity: 1,
+      x: 0,
+    })
+  }
   animateSidebarLabels(Boolean(props.collapsed))
 })
 
 watch(
   () => props.collapsed,
   async (collapsed) => {
+    if (collapsed) {
+      hideBrandLabel()
+    }
+    else {
+      brandLabelVisible.value = true
+    }
     animateSidebarLabels(Boolean(collapsed))
     animateSidebarWidth(Boolean(collapsed))
     await nextTick()
+    if (!collapsed) {
+      animateBrandLabelEnter()
+    }
     animateSidebarLabels(Boolean(collapsed))
   },
 )
@@ -119,36 +184,36 @@ watch(
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-white shadow-[var(--cp-shadow-sidebar)] min-[961px]:flex"
-    :class="collapsed ? 'w-[88px] basis-[88px] items-center' : 'w-[256px] basis-[256px]'"
+    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-white shadow-(--cp-shadow-sidebar) min-[961px]:flex"
+    :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
   >
     <div
-      class="mt-[31px] grid h-[46px] grid-cols-[46px_minmax(0,1fr)] gap-2.5"
-      :class="collapsed ? 'w-[46px]' : 'ml-6 w-[188px] self-start'"
+      class="mt-7.75 grid h-11.5 grid-cols-[46px_minmax(0,1fr)] gap-2.5"
+      :class="collapsed ? 'w-11.5' : 'ml-6 w-47 self-start'"
     >
-      <span class="inline-flex size-[46px] items-center justify-center rounded-[13px] bg-[#111827] text-white shadow-[0_8px_18px_-16px_#0E172614]">
+      <span class="inline-flex size-11.5 items-center justify-center rounded-[13px] bg-gray-900 text-white shadow-[0_8px_18px_-16px_#0E172614]">
         <SquareTerminal :size="24" />
       </span>
-      <span class="sidebar-label grid min-w-[132px] content-center overflow-hidden transition-[opacity,transform] duration-200" :class="collapsed ? 'pointer-events-none w-0' : 'w-auto'">
-        <strong class="text-[17px] leading-[1.1] font-[720] text-[#111827]">Codex</strong>
-        <span class="mt-1 text-[12px] leading-[1.1] font-semibold text-[#64748B]">Proxy RS · v0.1.0</span>
+      <span v-show="brandLabelVisible" ref="brandLabelEl" class="grid min-w-33 content-center overflow-hidden">
+        <strong class="text-[17px] leading-[1.1] font-[720] text-gray-900">Codex</strong>
+        <span class="mt-1 text-xs leading-[1.1] font-semibold text-slate-500">Proxy RS · v0.1.0</span>
       </span>
     </div>
 
     <nav
-      class="mt-[35px] grid gap-3"
+      class="mt-8.75 grid gap-3"
       :class="collapsed ? '' : 'ml-6 self-start'"
       aria-label="主导航"
     >
       <a
         v-for="item in navItems"
         :key="item.label"
-        class="inline-flex h-[46px] items-center rounded-xl text-[14px] leading-[1.15] no-underline transition-[background-color,color,transform] duration-200 hover:-translate-y-px active:translate-y-0"
+        class="inline-flex h-11.5 items-center rounded-xl text-sm leading-[1.15] no-underline transition-colors duration-200"
         :class="[
-          collapsed ? 'w-[46px] justify-center' : 'w-[208px] gap-3 pl-[22px]',
+          collapsed ? 'w-11.5 justify-center' : 'w-52 gap-3 pl-5.5',
           item.active
-            ? 'bg-[#E9EEF5] font-bold text-[#111827]'
-            : 'bg-transparent font-semibold text-[#64748B] hover:bg-[#F8FAFC]',
+            ? 'bg-[#E9EEF5] font-bold text-gray-900'
+            : 'bg-transparent font-semibold text-slate-500 hover:bg-slate-50',
         ]"
         href="#"
       >
@@ -158,8 +223,8 @@ watch(
     </nav>
 
     <button
-      class="mt-auto mb-8 inline-flex items-center justify-center rounded-xl border-0 text-[#64748B] transition-[background-color,transform,color] duration-200 hover:-translate-y-px active:translate-y-0"
-      :class="collapsed ? 'h-9 w-11 bg-transparent' : 'mr-6 size-9 self-end bg-[#F8FAFC]'"
+      class="mt-auto mb-8 inline-flex items-center justify-center rounded-xl border-0 text-slate-500 transition-colors duration-200"
+      :class="collapsed ? 'h-9 w-11 bg-transparent' : 'mr-6 size-9 self-end bg-slate-50'"
       type="button"
       data-sidebar-toggle
       :aria-label="collapsed ? '展开侧边栏' : '收缩侧边栏'"

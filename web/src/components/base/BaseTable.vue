@@ -18,11 +18,11 @@ withDefaults(defineProps<{
   bodyCellClass?: string
   striped?: boolean
 }>(), {
-  tableClass: 'min-w-[620px]',
-  headerRowClass: 'h-10 rounded-xl bg-[var(--cp-bg-subtle)] text-[11px] font-bold text-[var(--cp-text-muted)]',
-  bodyRowClass: 'h-[52px] rounded-[10px]',
-  headerCellClass: 'min-w-0 overflow-hidden bg-[var(--cp-bg-subtle)] px-3 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl',
-  bodyCellClass: 'min-w-0 overflow-hidden px-3 text-ellipsis whitespace-nowrap text-xs font-semibold text-[var(--cp-text-primary)] first:rounded-l-[10px] last:rounded-r-[10px]',
+  tableClass: 'min-w-155',
+  headerRowClass: 'h-10 rounded-xl bg-(--cp-bg-subtle) text-[11px] font-bold text-(--cp-text-muted)',
+  bodyRowClass: 'h-13 rounded-[10px]',
+  headerCellClass: 'min-w-0 overflow-hidden bg-(--cp-bg-subtle) px-3 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl',
+  bodyCellClass: 'min-w-0 overflow-hidden px-3 text-ellipsis whitespace-nowrap text-xs font-semibold text-(--cp-text-primary) first:rounded-l-[10px] last:rounded-r-[10px]',
   striped: true,
 })
 
@@ -52,7 +52,7 @@ function alignClass(column: TableColumn) {
 }
 
 function rowSurfaceClass(index: number, striped: boolean) {
-  return striped && index % 2 === 1 ? 'bg-[var(--cp-bg-subtle)]' : 'bg-[var(--cp-bg-surface)]'
+  return striped && index % 2 === 1 ? 'bg-(--cp-bg-subtle)' : 'bg-(--cp-bg-surface)'
 }
 </script>
 

@@ -4,7 +4,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  base: '/admin/',
+  base: '/',
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {

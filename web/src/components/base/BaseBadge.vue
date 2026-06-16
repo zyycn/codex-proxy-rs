@@ -12,16 +12,16 @@ const props = withDefaults(defineProps<{
 })
 
 const variantClasses: Record<BadgeVariant, string> = {
-  default: 'bg-[var(--cp-default-bg)] text-[var(--cp-text-secondary)]',
-  normal: 'bg-[var(--cp-normal-bg)] text-[var(--cp-normal-text)]',
-  success: 'bg-[var(--cp-success-bg)] text-[var(--cp-success-text)]',
-  warning: 'bg-[var(--cp-warning-bg)] text-[var(--cp-warning-text)]',
-  danger: 'bg-[var(--cp-danger-bg)] text-[var(--cp-danger-text)]',
-  info: 'bg-[var(--cp-info-bg)] text-[var(--cp-info-text)]',
+  default: 'bg-(--cp-default-bg) text-(--cp-text-secondary)',
+  normal: 'bg-(--cp-normal-bg) text-(--cp-normal-text)',
+  success: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+  warning: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
+  danger: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
+  info: 'bg-(--cp-info-bg) text-(--cp-info-text)',
 }
 
 const badgeClasses = computed(() => [
-  'inline-flex min-h-[26px] items-center justify-center gap-[7px] whitespace-nowrap rounded-[var(--cp-tag-radius)] px-2.5 text-xs font-semibold leading-none',
+  'inline-flex min-h-[26px] items-center justify-center gap-[7px] whitespace-nowrap rounded-(--cp-tag-radius) px-2.5 text-xs font-semibold leading-none',
   variantClasses[props.variant],
 ])
 </script>
