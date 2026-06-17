@@ -49,6 +49,6 @@ admin:
 logging:
   directory: logs
   retention_days: 14
-  enabled: false
+  enabled: true
   capacity: 2000
   capture_body: false

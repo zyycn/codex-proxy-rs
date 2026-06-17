@@ -21,6 +21,13 @@ use codex_proxy_rs::{
     },
 };
 
+#[test]
+fn reqwest_http2_feature_should_be_enabled_for_fallback_parity() {
+    let builder = reqwest::Client::builder().http2_prior_knowledge();
+
+    drop(builder);
+}
+
 #[tokio::test]
 async fn codex_backend_client_should_send_desktop_headers_and_capture_response_metadata() {
     let server = MockServer::start().await;
@@ -61,10 +68,12 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
         server.uri(),
         Fingerprint::default_for_tests(),
     );
+    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
 
     let response = client
         .create_response(
-            &CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new()),
+            &request,
             CodexRequestContext {
                 access_token: "access-token",
                 account_id: Some("chatgpt-account"),

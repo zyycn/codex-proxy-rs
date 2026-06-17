@@ -109,10 +109,12 @@ async fn database_fingerprint_headers_should_match_expected_format() {
         server.uri(),
         db_fingerprint,
     );
+    let mut request = CodexResponsesRequest::new_http_sse("gpt-4", "", Vec::new());
+    request.force_http_sse = true;
 
     let response = client
         .create_response(
-            &CodexResponsesRequest::new_http_sse("gpt-4", "", Vec::new()),
+            &request,
             CodexRequestContext {
                 access_token: "test-token",
                 account_id: None,

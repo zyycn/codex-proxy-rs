@@ -11,7 +11,10 @@ use crate::{
         events::event::EventLevel,
         gateway::transport::{
             usage_events::extract_sse_usage,
-            websocket::{append_rate_limit_updates, SharedRateLimitUpdates},
+            websocket::{
+                append_rate_limit_updates, latest_turn_state, SharedRateLimitUpdates,
+                SharedTurnState,
+            },
         },
     },
 };
@@ -140,6 +143,7 @@ pub(super) struct WebSocketStreamAudit {
     turn_state: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     rate_limit_updates: SharedRateLimitUpdates,
+    turn_state_updates: SharedTurnState,
 }
 
 impl WebSocketStreamAudit {
@@ -156,6 +160,7 @@ impl WebSocketStreamAudit {
         turn_state: Option<String>,
         rate_limit_headers: Vec<(String, String)>,
         rate_limit_updates: SharedRateLimitUpdates,
+        turn_state_updates: SharedTurnState,
     ) -> Self {
         let account_slot = AccountSlotGuard::new(deps.account_pool.clone(), account_id);
         Self {
@@ -167,6 +172,7 @@ impl WebSocketStreamAudit {
             turn_state,
             rate_limit_headers,
             rate_limit_updates,
+            turn_state_updates,
         }
     }
 
@@ -186,12 +192,15 @@ impl WebSocketStreamAudit {
             Ok(usage) => *usage,
             Err(_) => None,
         };
+        let turn_state = latest_turn_state(&self.turn_state_updates)
+            .await
+            .or_else(|| self.turn_state.clone());
         record_response_affinity_with_deps(
             &self.deps,
             &self.request,
             &self.context.account_id,
             &body,
-            self.turn_state.as_deref(),
+            turn_state.as_deref(),
             response_usage,
         )
         .await;

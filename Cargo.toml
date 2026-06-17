@@ -24,7 +24,7 @@ hex = "0.4.3"
 hmac = "0.13.0"
 indexmap = { version = "2.0", features = ["serde"] }
 rand = "0.10.1"
-reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
 rustls = { version = "=0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
 rustls-pki-types = "1.14.1"

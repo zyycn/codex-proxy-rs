@@ -716,12 +716,8 @@ mod tests {
         let refresh =
             tokio::spawn(async move { running_scheduler.do_refresh_inner("acct_recovery").await });
 
-        for _ in 0..MAX_ATTEMPTS {
-            if refresher.calls.load(Ordering::SeqCst) >= MAX_ATTEMPTS as usize {
-                break;
-            }
-            tokio::task::yield_now().await;
-            tokio::time::advance(Duration::from_secs(300)).await;
+        for expected_calls in 1..=MAX_ATTEMPTS as usize {
+            wait_for_refresh_calls(&refresher.calls, expected_calls).await;
         }
 
         let result = refresh.await.unwrap();
@@ -735,6 +731,28 @@ mod tests {
         assert_eq!(stored.status, AccountStatus::Active);
         assert!(scheduler.timers.read().await.contains_key("acct_recovery"));
         scheduler.destroy().await;
+    }
+
+    async fn wait_for_refresh_calls(calls: &AtomicUsize, expected: usize) {
+        for _ in 0..160 {
+            if calls.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+            if calls.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            if calls.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::time::advance(Duration::from_secs(5)).await;
+        }
+        let actual = calls.load(Ordering::SeqCst);
+        assert!(
+            actual >= expected,
+            "expected at least {expected} refresh calls, got {actual}"
+        );
     }
 
     #[derive(Clone)]

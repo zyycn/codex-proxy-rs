@@ -112,7 +112,7 @@ async fn v1_responses_should_retry_next_account_after_429_retry_after() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -208,7 +208,7 @@ async fn v1_responses_stream_should_retry_next_account_after_429_retry_after() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -280,7 +280,7 @@ async fn v1_responses_should_retry_same_account_after_5xx_before_fallback() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -474,7 +474,7 @@ async fn v1_responses_stream_should_retry_same_account_after_5xx_before_fallback
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -565,7 +565,7 @@ async fn v1_responses_should_mark_quota_exhausted_after_402_and_retry_next_accou
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -645,7 +645,7 @@ async fn v1_responses_should_classify_non_stream_sse_failure_and_retry_next_acco
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1125,7 +1125,7 @@ async fn v1_responses_should_mark_banned_after_403_and_retry_next_account() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1262,7 +1262,7 @@ async fn v1_responses_should_cool_down_cloudflare_403_and_retry_next_account() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )

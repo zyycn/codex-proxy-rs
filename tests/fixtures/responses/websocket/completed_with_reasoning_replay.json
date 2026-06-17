@@ -19,7 +19,8 @@
     ],
     "usage": {
       "input_tokens": 8,
-      "output_tokens": 2
+      "output_tokens": 2,
+      "total_tokens": 10
     }
   }
 }

@@ -5,6 +5,7 @@
 /local.yml
 /.worktrees/
 /worktrees/
+/.codex-ws-audit/
 *.sqlite
 *.sqlite3
 *.db
