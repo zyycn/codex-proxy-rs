@@ -13,6 +13,7 @@ use tokio_tungstenite::{
 
 use super::codec::{rate_limit_headers, set_cookie_headers, turn_state};
 use super::deflate::PerMessageDeflateStream;
+use super::OpeningAuditSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CodexWebSocketPoolKey {
@@ -364,14 +365,16 @@ pub(super) struct CodexWebSocketConnectionMetadata {
     pub(super) turn_state: Option<String>,
     pub(super) set_cookie_headers: Vec<String>,
     pub(super) rate_limit_headers: Vec<(String, String)>,
+    pub(super) opening_audit: OpeningAuditSnapshot,
 }
 
 impl CodexWebSocketConnectionMetadata {
-    pub(super) fn from_headers(headers: &WsHeaderMap) -> Self {
+    pub(super) fn from_headers(headers: &WsHeaderMap, opening_audit: OpeningAuditSnapshot) -> Self {
         Self {
             turn_state: turn_state(headers),
             set_cookie_headers: set_cookie_headers(headers),
             rate_limit_headers: rate_limit_headers(headers),
+            opening_audit,
         }
     }
 }

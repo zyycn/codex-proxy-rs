@@ -264,6 +264,7 @@ pub(super) fn public_codex_error(error: &CodexClientError) -> String {
             format!("upstream returned status {}", status.as_u16())
         }
         CodexClientError::Http(_) => "upstream transport failed".to_string(),
+        CodexClientError::CustomCa(_) => "upstream TLS configuration failed".to_string(),
         CodexClientError::InvalidHeaderName(_) | CodexClientError::InvalidHeaderValue(_) => {
             "invalid upstream request headers".to_string()
         }

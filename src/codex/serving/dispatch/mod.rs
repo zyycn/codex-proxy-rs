@@ -60,9 +60,7 @@ use crate::{
         },
         types::{CodexCompactRequest, CodexResponsesRequest},
         usage_events::TokenUsage,
-        websocket::{
-            transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
-        },
+        websocket::{transport_for_request, CodexTransport, CodexWebSocketPool},
     },
     config::AppConfig,
 };
@@ -1039,18 +1037,7 @@ async fn responses_http_sse_stream(
 
 fn websocket_stream_error_allows_http_sse_fallback(error: &CodexClientError) -> bool {
     match error {
-        CodexClientError::WebSocket(
-            CodexWebSocketError::Transport(_)
-            | CodexWebSocketError::OpenTimeout { .. }
-            | CodexWebSocketError::EmptyResponse,
-        ) => true,
-        CodexClientError::Upstream { status, .. } => matches!(
-            *status,
-            StatusCode::NOT_FOUND
-                | StatusCode::METHOD_NOT_ALLOWED
-                | StatusCode::UPGRADE_REQUIRED
-                | StatusCode::NOT_IMPLEMENTED
-        ),
+        CodexClientError::Upstream { status, .. } => *status == StatusCode::UPGRADE_REQUIRED,
         _ => false,
     }
 }
@@ -1352,10 +1339,16 @@ where
 }
 
 fn is_retryable_upstream_5xx(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. } if status.is_server_error()
-    )
+    let CodexClientError::Upstream { status, body, .. } = error else {
+        return false;
+    };
+    if !status.is_server_error() {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return true;
+    };
+    !stream::contains_invalid_encrypted_content_signal(&value)
 }
 
 fn upstream_5xx_retry_delay(attempt: u8) -> StdDuration {
@@ -1667,6 +1660,7 @@ async fn responses_websocket_stream(
         stream_response.turn_state,
         stream_response.rate_limit_headers,
         stream_response.rate_limit_updates,
+        stream_response.turn_state_updates,
     );
     let upstream = stream_response.body_stream;
 
@@ -1868,6 +1862,7 @@ async fn log_codex_upstream_response_with_deps(
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
+    use axum::http::StatusCode;
     use serde_json::json;
     use tokio::sync::Mutex;
     use wiremock::{
@@ -1888,7 +1883,10 @@ mod tests {
             events::service::LogService,
             gateway::{
                 fingerprint::model::Fingerprint,
-                transport::{types::CodexResponsesRequest, websocket::CodexWebSocketPool},
+                transport::{
+                    http_client::CodexClientError, types::CodexResponsesRequest,
+                    websocket::CodexWebSocketPool,
+                },
             },
         },
         config::{
@@ -1917,6 +1915,26 @@ mod tests {
         let failure = super::stream::responses_sse_failure(&body).unwrap();
         let metadata = failure.unwrap().metadata(true);
         assert_eq!(metadata["upstreamCode"], "stream_disconnected");
+    }
+
+    #[test]
+    fn is_retryable_upstream_5xx_should_exclude_invalid_reasoning_replay() {
+        let error = CodexClientError::Upstream {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            retry_after_seconds: None,
+            body: json!({
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "code": "invalid_encrypted_content",
+                        "message": "Invalid encrypted content in reasoning replay"
+                    }
+                }
+            })
+            .to_string(),
+        };
+
+        assert!(!super::is_retryable_upstream_5xx(&error));
     }
 
     #[tokio::test]

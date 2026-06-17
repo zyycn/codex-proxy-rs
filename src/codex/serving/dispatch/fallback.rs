@@ -10,7 +10,10 @@ use crate::codex::{
     gateway::transport::{http_client::CodexClientError, rate_limits::cooldown_with_jitter},
 };
 
-use super::{usage::record_request_attempt, CodexUpstreamDependencies};
+use super::{
+    stream::contains_invalid_encrypted_content_signal, usage::record_request_attempt,
+    CodexUpstreamDependencies,
+};
 
 const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS: u64 = 60;
 const MAX_RATE_LIMIT_BACKOFF_SECONDS: u64 = 86_400 * 7;
@@ -49,6 +52,7 @@ pub(crate) struct UpstreamRecoveryState {
 pub(crate) enum HistoryRecoveryReason {
     PreviousResponseNotFound,
     UnansweredFunctionCall,
+    InvalidReasoningReplay,
 }
 
 impl UpstreamAccountRetry {
@@ -144,6 +148,7 @@ impl HistoryRecoveryReason {
         match self {
             Self::PreviousResponseNotFound => "previousResponseNotFound",
             Self::UnansweredFunctionCall => "unansweredFunctionCall",
+            Self::InvalidReasoningReplay => "invalidReasoningReplay",
         }
     }
 }
@@ -163,6 +168,11 @@ pub(crate) fn classify_upstream_request_recovery(
     if is_unanswered_function_call_error(error) {
         return Some(UpstreamRequestRecovery::StripPreviousResponse {
             reason: HistoryRecoveryReason::UnansweredFunctionCall,
+        });
+    }
+    if is_invalid_reasoning_replay_error(error) {
+        return Some(UpstreamRequestRecovery::StripPreviousResponse {
+            reason: HistoryRecoveryReason::InvalidReasoningReplay,
         });
     }
     None
@@ -277,6 +287,16 @@ fn is_unanswered_function_call_error(error: &CodexClientError) -> bool {
     }
     body.to_ascii_lowercase()
         .contains("no tool output found for function call")
+}
+
+fn is_invalid_reasoning_replay_error(error: &CodexClientError) -> bool {
+    let CodexClientError::Upstream { body, .. } = error else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    contains_invalid_encrypted_content_signal(&value)
 }
 
 fn error_code(body: &str) -> Option<String> {
@@ -550,6 +570,30 @@ mod tests {
             action,
             UpstreamRecoveryAction::Account(UpstreamAccountRetry::RateLimited {
                 retry_after_seconds: DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
+            })
+        );
+    }
+
+    #[test]
+    fn classify_upstream_recovery_action_should_strip_history_after_invalid_reasoning_replay() {
+        let error = upstream_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "invalid_encrypted_content",
+            "Invalid encrypted content in reasoning replay",
+        );
+
+        let action = classify_upstream_recovery_action(
+            &error,
+            UpstreamRecoveryState {
+                request_recovery_used: false,
+                model_unsupported_retry_used: false,
+            },
+        );
+
+        assert_eq!(
+            action,
+            UpstreamRecoveryAction::Request(UpstreamRequestRecovery::StripPreviousResponse {
+                reason: HistoryRecoveryReason::InvalidReasoningReplay,
             })
         );
     }

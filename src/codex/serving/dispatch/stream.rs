@@ -515,7 +515,7 @@ fn failure_code(value: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
-pub(super) fn contains_invalid_encrypted_content_signal(value: &Value) -> bool {
+pub(crate) fn contains_invalid_encrypted_content_signal(value: &Value) -> bool {
     visit_invalid_encrypted_content(value, 0)
 }
 

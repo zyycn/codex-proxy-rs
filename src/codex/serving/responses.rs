@@ -13,14 +13,15 @@ use crate::{
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::protocol::codex_to_openai::openai_error,
     codex::gateway::protocol::tuple_schema::prepare_schema,
+    codex::gateway::transport::http_client::CodexClientError,
     codex::gateway::transport::types::{CodexCompactRequest, CodexResponsesRequest},
     codex::models::service::ModelService,
     codex::serving::dispatch::{
         affinity::SessionAffinityRepositoryResult, classify_upstream_account_retry,
         classify_upstream_recovery_action, completed_response_json,
-        normalize_service_tier_for_upstream, CodexRequestLogContext, CodexUpstreamService,
-        CollectedResponse, UpstreamAccountRecoveryTransition, UpstreamRecoveryAction,
-        UpstreamRecoveryState,
+        normalize_service_tier_for_upstream, stream::contains_invalid_encrypted_content_signal,
+        CodexRequestLogContext, CodexUpstreamService, CollectedResponse,
+        UpstreamAccountRecoveryTransition, UpstreamRecoveryAction, UpstreamRecoveryState,
     },
     codex::serving::http::errors::{
         codex_client_error_message, responses_codex_client_error_response,
@@ -97,6 +98,7 @@ impl ResponsesService {
         codex_request.tool_choice = body.tool_choice;
         codex_request.parallel_tool_calls = body.parallel_tool_calls;
         codex_request.text = body.text;
+        codex_request.generate = body.generate;
         codex_request.tuple_schema = body.tuple_schema;
         codex_request.explicit_prompt_cache_key = body
             .prompt_cache_key
@@ -379,6 +381,11 @@ impl ResponsesService {
                     break (response, collected_response);
                 }
                 Err(error) => {
+                    if codex_client_error_invalid_reasoning_replay(&error) {
+                        self.upstream
+                            .evict_reasoning_replay(&codex_request, &acquired.account.id)
+                            .await;
+                    }
                     match classify_upstream_recovery_action(
                         &error,
                         UpstreamRecoveryState {
@@ -842,6 +849,16 @@ impl ResponsesService {
     }
 }
 
+fn codex_client_error_invalid_reasoning_replay(error: &CodexClientError) -> bool {
+    let CodexClientError::Upstream { body, .. } = error else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    contains_invalid_encrypted_content_signal(&value)
+}
+
 struct ResponsesBody {
     model: Option<String>,
     input: Option<Vec<Value>>,
@@ -852,6 +869,7 @@ struct ResponsesBody {
     tool_choice: Option<Value>,
     parallel_tool_calls: Option<bool>,
     text: Option<Value>,
+    generate: Option<bool>,
     tuple_schema: Option<Value>,
     prompt_cache_key: Option<String>,
     include: Option<Vec<String>>,
@@ -895,6 +913,7 @@ fn parse_responses_body(body: &[u8], default_model: String) -> Option<ResponsesB
     let prepared_text = take_prepared_text_format(&mut body);
     parsed.text = prepared_text.as_ref().map(|text| text.text.clone());
     parsed.tuple_schema = prepared_text.and_then(|text| text.tuple_schema);
+    parsed.generate = take_bool(&mut body, "generate");
     parsed.prompt_cache_key = take_string(&mut body, "prompt_cache_key");
     parsed.include = take_string_array(&mut body, "include");
     parsed.client_metadata = sanitize_client_metadata(body.remove("client_metadata"));
@@ -951,6 +970,7 @@ fn default_body(default_model: String) -> ResponsesBody {
         tool_choice: None,
         parallel_tool_calls: None,
         text: None,
+        generate: None,
         tuple_schema: None,
         prompt_cache_key: None,
         include: None,

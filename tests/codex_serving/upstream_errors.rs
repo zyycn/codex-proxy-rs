@@ -50,7 +50,7 @@ async fn v1_responses_non_stream_should_return_codex_api_error_when_sse_error_ev
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -94,7 +94,7 @@ async fn v1_responses_non_stream_should_return_rate_limit_error_when_response_fa
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -140,7 +140,7 @@ async fn v1_responses_stream_should_passthrough_error_event_and_log_failure() {
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_stream_error_event")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -184,7 +184,7 @@ async fn v1_responses_stream_should_passthrough_response_failed_and_log_failure(
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_stream_response_failed")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )

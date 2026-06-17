@@ -20,19 +20,22 @@ use uuid::Uuid;
 use crate::{
     codex::gateway::fingerprint::model::Fingerprint,
     codex::gateway::transport::{
+        custom_ca::{build_reqwest_client_with_custom_ca, custom_ca_env_cache_key, CustomCaError},
         endpoints::{
             endpoint_url, usage_endpoint_urls, CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH,
         },
         headers::build_ordered_codex_base_headers,
+        retry_after::retry_after_seconds_from_body,
         sse::SseError,
         types::{CodexCompactRequest, CodexResponsesRequest},
         usage_events::{extract_sse_usage, TokenUsage},
         websocket::{
             append_rate_limit_updates, create_response_via_websocket,
             create_response_via_websocket_stream, create_response_via_websocket_stream_with_pool,
-            transport_for_request, CodexTransport, CodexWebSocketError, CodexWebSocketPool,
-            CodexWebSocketPoolKey, CodexWebSocketSseStream, CodexWebSocketStreamResponse,
-            SharedRateLimitUpdates, WebSocketSupportError,
+            latest_turn_state, transport_for_request, CodexTransport, CodexWebSocketError,
+            CodexWebSocketPool, CodexWebSocketPoolKey, CodexWebSocketSseStream,
+            CodexWebSocketStreamResponse, SharedRateLimitUpdates, SharedTurnState,
+            WebSocketSupportError,
         },
     },
     codex::models::catalog::BackendModelEntry,
@@ -42,6 +45,8 @@ use crate::{
 pub enum CodexClientError {
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("custom CA transport error: {0}")]
+    CustomCa(#[from] CustomCaError),
     #[error("invalid request header name: {0}")]
     InvalidHeaderName(#[from] reqwest::header::InvalidHeaderName),
     #[error("invalid request header value: {0}")]
@@ -116,9 +121,12 @@ pub struct CodexBackendWebSocketStream {
     pub set_cookie_headers: Vec<String>,
     pub rate_limit_headers: Vec<(String, String)>,
     pub rate_limit_updates: SharedRateLimitUpdates,
+    pub turn_state_updates: SharedTurnState,
 }
 
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
+type ReqwestClientCacheKey = (bool, Option<String>);
+type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
 #[derive(Clone)]
 pub struct CodexBackendClient {
@@ -346,6 +354,7 @@ impl CodexBackendClient {
             set_cookie_headers: response.set_cookie_headers,
             rate_limit_headers: response.rate_limit_headers,
             rate_limit_updates: response.rate_limit_updates,
+            turn_state_updates: response.turn_state_updates,
         })
     }
 
@@ -699,6 +708,7 @@ async fn collect_websocket_stream_response(
         set_cookie_headers,
         mut rate_limit_headers,
         rate_limit_updates,
+        turn_state_updates,
     } = response;
     let mut body = String::new();
     while let Some(chunk) = body_stream.next().await {
@@ -708,6 +718,7 @@ async fn collect_websocket_stream_response(
         return Err(CodexWebSocketError::EmptyResponse);
     }
     append_rate_limit_updates(&mut rate_limit_headers, &rate_limit_updates).await;
+    let turn_state = latest_turn_state(&turn_state_updates).await.or(turn_state);
     Ok(
         crate::codex::gateway::transport::websocket::CodexWebSocketResponse {
             body,
@@ -830,13 +841,14 @@ fn insert_ordered_headers(
     Ok(())
 }
 
-pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error> {
-    static CLIENTS: OnceLock<Mutex<HashMap<bool, Client>>> = OnceLock::new();
+pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError> {
+    let cache_key = (force_http11, custom_ca_env_cache_key());
+    static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut clients = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(client) = clients.get(&force_http11) {
+    if let Some(client) = clients.get(&cache_key) {
         return Ok(client.clone());
     }
 
@@ -854,8 +866,8 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, reqwest::Error
     } else {
         builder
     };
-    let client = builder.build()?;
-    clients.insert(force_http11, client.clone());
+    let client = build_reqwest_client_with_custom_ca(builder)?;
+    clients.insert(cache_key, client.clone());
     Ok(client)
 }
 
@@ -910,44 +922,25 @@ fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {
         .or_else(|| body.and_then(retry_after_seconds_from_body))
 }
 
-fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
-    let value = serde_json::from_str::<Value>(body).ok()?;
-    let error = value
-        .pointer("/response/error")
-        .or_else(|| value.get("error"))
-        .unwrap_or(&value);
-    if let Some(seconds) = error
-        .get("resets_in_seconds")
-        .and_then(Value::as_u64)
-        .filter(|seconds| *seconds > 0)
-    {
-        return Some(seconds);
-    }
-    let resets_at = error.get("resets_at").and_then(Value::as_u64)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    (resets_at > now).then_some(resets_at - now)
-}
-
 fn truncate_for_error(body: &str) -> String {
     body.chars().take(200).collect()
 }
 
 fn websocket_error_allows_http_sse_fallback(error: &CodexWebSocketError) -> bool {
     match error {
-        CodexWebSocketError::Transport(_)
+        CodexWebSocketError::Upstream { status, .. } => *status == StatusCode::UPGRADE_REQUIRED,
+        CodexWebSocketError::InvalidRequest(_)
+        | CodexWebSocketError::Encode(_)
+        | CodexWebSocketError::Transport(_)
         | CodexWebSocketError::OpenTimeout { .. }
-        | CodexWebSocketError::EmptyResponse => true,
-        CodexWebSocketError::Upstream { status, .. } => matches!(
-            *status,
-            StatusCode::NOT_FOUND
-                | StatusCode::METHOD_NOT_ALLOWED
-                | StatusCode::UPGRADE_REQUIRED
-                | StatusCode::NOT_IMPLEMENTED
-        ),
-        CodexWebSocketError::InvalidRequest(_) | CodexWebSocketError::ClosedBeforeTerminal => false,
+        | CodexWebSocketError::SendIdleTimeout { .. }
+        | CodexWebSocketError::ReceiveIdleTimeout { .. }
+        | CodexWebSocketError::EmptyResponse
+        | CodexWebSocketError::UnexpectedBinaryEvent
+        | CodexWebSocketError::ClosedByServerBeforeCompleted
+        | CodexWebSocketError::StreamClosedBeforeCompleted
+        | CodexWebSocketError::IncompleteResponse { .. }
+        | CodexWebSocketError::InvalidCompletedResponse { .. } => false,
     }
 }
 

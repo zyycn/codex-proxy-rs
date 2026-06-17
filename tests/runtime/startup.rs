@@ -359,6 +359,7 @@ async fn accept_successful_websocket_response(
                     "usage": {
                         "input_tokens": 1,
                         "output_tokens": 1,
+                        "total_tokens": 2,
                         "input_tokens_details": {"cached_tokens": 0}
                     }
                 }

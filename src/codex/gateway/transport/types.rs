@@ -18,6 +18,8 @@ pub struct CodexResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generate: Option<bool>,
     #[serde(skip)]
     pub tuple_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,6 +75,7 @@ impl CodexResponsesRequest {
             tool_choice: None,
             parallel_tool_calls: None,
             text: None,
+            generate: None,
             tuple_schema: None,
             service_tier: None,
             previous_response_id: None,

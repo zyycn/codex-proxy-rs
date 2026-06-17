@@ -184,7 +184,7 @@ async fn v1_responses_should_skip_event_log_when_logging_disabled() {
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_logs_disabled")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -352,7 +352,7 @@ async fn v1_responses_should_use_imported_account_and_record_usage() {
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_non_stream")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -411,7 +411,7 @@ async fn v1_responses_should_record_image_generation_usage_when_tool_succeeds() 
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false,"tools":[{"type":"image_generation"}]}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false,"tools":[{"type":"image_generation"}]}"#,
                 ))
                 .unwrap(),
         )
@@ -457,7 +457,7 @@ async fn v1_responses_should_record_failed_image_generation_attempt_when_tool_ha
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false,"tools":[{"type":"image_generation"}]}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false,"tools":[{"type":"image_generation"}]}"#,
                 ))
                 .unwrap(),
         )
@@ -576,7 +576,7 @@ async fn v1_responses_should_passively_cache_rate_limit_headers() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -646,7 +646,7 @@ async fn v1_responses_should_record_empty_response_attempts() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1282,7 +1282,7 @@ async fn v1_responses_should_include_encrypted_reasoning_by_default() {
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","stream":false,"input":[],"reasoning":{"effort":"high"}}"#,
+                    r#"{"model":"gpt-5.5","stream":false,"use_websocket":false,"input":[],"reasoning":{"effort":"high"}}"#,
                 ))
                 .unwrap(),
         )
@@ -1473,7 +1473,7 @@ async fn v1_responses_should_reconstruct_non_stream_output_text_from_sse_deltas(
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1517,7 +1517,7 @@ async fn v1_responses_should_use_done_output_items_when_completed_output_is_empt
                 )
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":false}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":false,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1559,7 +1559,7 @@ async fn v1_responses_should_passthrough_stream_and_record_usage_and_log() {
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_stream")
                 .body(Body::from(
-                    r#"{"model":"gpt-5.5","input":[],"stream":true}"#,
+                    r#"{"model":"gpt-5.5","input":[],"stream":true,"use_websocket":false}"#,
                 ))
                 .unwrap(),
         )
@@ -1678,7 +1678,9 @@ async fn v1_responses_should_default_to_streaming_when_stream_is_omitted() {
                     format!("Bearer {}", imported.client_api_key),
                 )
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"gpt-5.5","input":[]}"#))
+                .body(Body::from(
+                    r#"{"model":"gpt-5.5","input":[],"use_websocket":false}"#,
+                ))
                 .unwrap(),
         )
         .await
