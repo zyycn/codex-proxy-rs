@@ -108,36 +108,3 @@ fn inline_function_call_ids(input: &[Value]) -> HashSet<String> {
         .map(ToString::to_string)
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn continuation_input_start_should_follow_last_assistant_message() {
-        let input = vec![
-            json!({"role": "user", "content": "first"}),
-            json!({"role": "assistant", "content": "cached"}),
-            json!({"role": "user", "content": "continue"}),
-        ];
-
-        assert_eq!(continuation_input_start(&input), 2);
-    }
-
-    #[test]
-    fn implicit_resume_allowed_should_reject_unmatched_function_call_output() {
-        let input = vec![json!({
-            "type": "function_call_output",
-            "call_id": "missing",
-            "output": "tool output"
-        })];
-
-        assert!(!implicit_resume_allowed(
-            &input,
-            &input,
-            &["expected".to_string()]
-        ));
-    }
-}

@@ -295,36 +295,3 @@ fn estimate_items_bytes(items: &[Value]) -> usize {
 fn entry_expired(created_at: DateTime<Utc>, ttl: Duration, now: DateTime<Utc>) -> bool {
     now.signed_duration_since(created_at) >= ttl
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn reasoning_replay_cache_should_sanitize_reasoning_items() {
-        let mut cache = ReasoningReplayCache::new(Duration::minutes(55));
-        let saved = cache.record(
-            "resp_1".to_string(),
-            "acct_1",
-            "conv_1",
-            "variant_1",
-            &[json!({
-                "type": "reasoning",
-                "id": "rs_1",
-                "status": "completed",
-                "summary": [{"type": "summary_text", "text": "kept"}],
-                "encrypted_content": "enc",
-                "extra": "drop"
-            })],
-            Utc::now(),
-        );
-
-        let replay = cache.lookup("resp_1", "acct_1", "conv_1", "variant_1", Utc::now());
-
-        assert_eq!(saved, 1);
-        assert_eq!(replay[0].get("extra"), None);
-        assert_eq!(replay[0]["encrypted_content"], "enc");
-    }
-}

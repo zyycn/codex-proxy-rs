@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"model stream fallback hello"}
+
+event: response.completed
+data: {"response":{"id":"resp_stream_after_model_unsupported","object":"response","status":"completed","usage":{"input_tokens":5,"output_tokens":2}}}

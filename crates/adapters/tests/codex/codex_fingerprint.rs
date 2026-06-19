@@ -1,0 +1,179 @@
+#[test]
+fn update_manifest_should_extract_version_and_build_number() {
+    let update = codex_proxy_adapters::codex::fingerprint::parse_update_manifest(
+        r#"{"version":"26.700.111","build_number":"5002"}"#,
+    )
+    .expect("manifest should parse");
+
+    assert_eq!(update.app_version, "26.700.111");
+    assert_eq!(update.build_number, "5002");
+}
+
+#[tokio::test]
+async fn fingerprint_repository_should_upsert_auto_update_record() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("fingerprints.sqlite");
+    let pool = codex_proxy_platform::storage::connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool.clone());
+
+    repo.upsert_auto_update("26.800.1", "6001", Some("147"))
+        .await
+        .expect("first upsert");
+    repo.upsert_auto_update("26.800.2", "6002", None)
+        .await
+        .expect("second upsert");
+
+    let stored = repo
+        .load_latest_auto_updated()
+        .await
+        .expect("load latest")
+        .expect("stored fingerprint");
+    let count: (i64,) =
+        sqlx::query_as("select count(*) from fingerprints where id = 'auto_updated'")
+            .fetch_one(&pool)
+            .await
+            .expect("count row");
+
+    assert_eq!(count.0, 1);
+    assert_eq!(stored.app_version, "26.800.2");
+    assert_eq!(stored.build_number, "6002");
+    assert_eq!(stored.chromium_version, "146");
+}
+
+#[tokio::test]
+async fn fingerprint_updater_should_fetch_manifest_and_persist_history() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/desktop/update.json"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"26.700.111","build_number":"5002"}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("fingerprints.sqlite");
+    let pool = codex_proxy_platform::storage::connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool);
+    let updater = codex_proxy_adapters::codex::fingerprint::FingerprintUpdater::new(
+        reqwest::Client::new(),
+        repo.clone(),
+        format!("{}/desktop/update.json", server.uri()),
+    );
+
+    updater.poll_once().await.expect("poll once");
+
+    let latest = repo
+        .latest()
+        .await
+        .expect("latest row")
+        .expect("stored history");
+    assert_eq!(latest.app_version, "26.700.111");
+    assert_eq!(latest.build_number, "5002");
+    assert_eq!(
+        latest.source,
+        codex_proxy_adapters::codex::fingerprint::CODEX_DESKTOP_UPDATE_SOURCE
+    );
+}
+
+#[tokio::test]
+async fn update_checker_should_report_available_update_from_appcast() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/appcast.xml"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+            r#"
+            <rss>
+              <channel>
+                <item>
+                  <enclosure url="https://example.invalid/download" sparkle:shortVersionString="26.900.1" sparkle:version="7001" />
+                </item>
+              </channel>
+            </rss>
+            "#,
+            "application/xml",
+        ))
+        .mount(&server)
+        .await;
+
+    let checker = codex_proxy_adapters::codex::fingerprint::UpdateChecker::with_client(
+        None,
+        reqwest::Client::new(),
+        format!("{}/appcast.xml", server.uri()),
+        tempfile::tempdir()
+            .expect("temp dir")
+            .path()
+            .join("extracted-fingerprint.json"),
+        "26.800.1",
+        "6001",
+    );
+
+    let state = checker.check_for_update().await.expect("update state");
+
+    assert!(state.update_available);
+    assert_eq!(state.latest_version.as_deref(), Some("26.900.1"));
+    assert_eq!(state.latest_build.as_deref(), Some("7001"));
+}
+
+#[tokio::test]
+async fn update_checker_should_apply_available_update_to_repository() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/appcast.xml"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+            r#"
+            <rss>
+              <channel>
+                <item>
+                  <enclosure url="https://example.invalid/download" sparkle:shortVersionString="26.900.1" sparkle:version="7001" />
+                </item>
+              </channel>
+            </rss>
+            "#,
+            "application/xml",
+        ))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("fingerprints.sqlite");
+    let pool = codex_proxy_platform::storage::connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool);
+    let extracted_path = dir.path().join("extracted-fingerprint.json");
+    std::fs::write(
+        &extracted_path,
+        r#"{"app_version":"26.900.1","build_number":"7001","chromium_version":"147"}"#,
+    )
+    .expect("write extracted fingerprint");
+
+    let checker = codex_proxy_adapters::codex::fingerprint::UpdateChecker::with_client(
+        Some(repo.clone()),
+        reqwest::Client::new(),
+        format!("{}/appcast.xml", server.uri()),
+        extracted_path,
+        "26.800.1",
+        "6001",
+    );
+
+    let applied = checker
+        .check_and_apply_update()
+        .await
+        .expect("apply update");
+    let stored = repo
+        .load_latest_auto_updated()
+        .await
+        .expect("load latest")
+        .expect("stored fingerprint");
+
+    assert!(applied);
+    assert_eq!(stored.app_version, "26.900.1");
+    assert_eq!(stored.build_number, "7001");
+    assert_eq!(stored.chromium_version, "147");
+}

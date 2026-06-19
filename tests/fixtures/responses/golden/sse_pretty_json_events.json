@@ -1,8 +1,0 @@
-[
-  {
-    "data": "{\n  \"error\": {\n    \"message\": \"bad upstream\"\n  }\n}",
-    "event": "error",
-    "id": null,
-    "retry": null
-  }
-]

@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"retry hello"}
+
+event: response.completed
+data: {"response":{"id":"resp_after_5xx_retry","object":"response","status":"completed","usage":{"input_tokens":4,"output_tokens":2}}}

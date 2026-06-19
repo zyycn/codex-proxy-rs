@@ -1,2 +1,0 @@
-event: response.completed
-data: {"response":{"id":"resp_after_401_fallback","object":"response","usage":{"input_tokens":3,"output_tokens":1}}}

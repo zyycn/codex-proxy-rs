@@ -1,8 +1,0 @@
-[
-  {
-    "data": "{\"error\":{\"code\":\"non_sse_response\",\"message\":\"not an SSE stream\",\"type\":\"error\"}}",
-    "event": "error",
-    "id": null,
-    "retry": null
-  }
-]

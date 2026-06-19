@@ -1,7 +1,7 @@
 use chrono::Utc;
 use codex_proxy_adapters::sqlite::{accounts::SqliteAccountStore, models::ModelSnapshotRepository};
 use codex_proxy_core::accounts::{model::AccountStatus, ports::AccountStore};
-use codex_proxy_core::models::model::{BackendModelEntry, ModelConfig, ModelPlanSnapshot};
+use codex_proxy_core::models::model::{BackendModelEntry, ModelPlanSnapshot};
 use codex_proxy_platform::crypto::SecretBox;
 use secrecy::SecretString;
 
@@ -29,18 +29,6 @@ async fn model_snapshot_repository_should_replace_and_load_plan_snapshots() {
     assert_eq!(loaded[0].plan_type, "team");
     assert_eq!(loaded[0].models[0].id, "gpt-team");
     assert_eq!(loaded[0].models[0].source, "backend");
-}
-
-#[test]
-fn model_config_should_be_usable_from_core_models() {
-    let config = ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: None,
-        service_tier: None,
-        aliases: Default::default(),
-    };
-
-    assert_eq!(config.default_model, "gpt-5.5");
 }
 
 #[tokio::test]

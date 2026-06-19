@@ -1,6 +1,0 @@
-event: response.output_text.delta
-data: {"delta":"pong"}
-
-event: response.completed
-data: {"response":{"id":"resp_stream","object":"response","usage":{"input_tokens":3,"output_tokens":5,"input_tokens_details":{"cached_tokens":1}}}}
-

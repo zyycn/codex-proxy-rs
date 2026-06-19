@@ -1,3 +1,0 @@
-event: response.completed
-data: {"response":{"id":"resp_image","object":"response","status":"completed","usage":{"input_tokens":7,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}},"tool_usage":{"image_gen":{"input_tokens":31,"output_tokens":9}}}}
-
