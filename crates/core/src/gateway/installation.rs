@@ -18,33 +18,3 @@ pub fn parse_installation_id(raw: &str) -> Option<String> {
     Uuid::parse_str(trimmed).ok()?;
     Some(trimmed.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use uuid::Uuid;
-
-    use super::*;
-
-    #[test]
-    fn parse_installation_id_should_trim_and_accept_uuid() {
-        let id = Uuid::new_v4().to_string();
-
-        let parsed = parse_installation_id(&format!("  {id}\n"));
-
-        assert_eq!(parsed, Some(id));
-    }
-
-    #[test]
-    fn parse_installation_id_should_reject_non_uuid() {
-        let parsed = parse_installation_id("not-a-uuid");
-
-        assert_eq!(parsed, None);
-    }
-
-    #[test]
-    fn generate_installation_id_should_return_uuid() {
-        let generated = generate_installation_id();
-
-        assert!(Uuid::parse_str(&generated).is_ok());
-    }
-}

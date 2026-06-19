@@ -1,3 +1,0 @@
-event: response.completed
-data: {"response":{"id":"resp_fields","object":"response","usage":{"input_tokens":1,"output_tokens":1}}}
-

@@ -1,5 +1,0 @@
-event: response.output_text.delta
-data: {"delta":"ok"}
-
-event: response.completed
-data: {"response":{"id":"resp_stream_after_401_fallback","object":"response","usage":{"input_tokens":4,"output_tokens":2}}}

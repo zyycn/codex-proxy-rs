@@ -1,2 +1,0 @@
-event: response.completed
-data: {"response":{"id":"resp_after_5xx_retry","object":"response","usage":{"input_tokens":7,"output_tokens":2}}}

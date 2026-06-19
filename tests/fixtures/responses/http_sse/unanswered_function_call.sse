@@ -1,3 +1,0 @@
-event: error
-data: {"error":{"code":"invalid_request","message":"No tool output found for function call call_missing"}}
-

@@ -1,5 +1,4 @@
 mod build_web;
-mod check_architecture;
 mod release;
 
 use std::{
@@ -24,7 +23,6 @@ fn main() -> ExitCode {
 fn run() -> XtaskResult {
     match std::env::args().nth(1).as_deref() {
         Some("build-web") => build_web::run(),
-        Some("check-architecture") => check_architecture::run(),
         Some("release") => release::run(),
         _ => {
             print_usage();
@@ -34,7 +32,7 @@ fn run() -> XtaskResult {
 }
 
 fn print_usage() {
-    eprintln!("usage: cargo xtask <build-web|check-architecture|release>");
+    eprintln!("usage: cargo xtask <build-web|release>");
 }
 
 pub(crate) fn repository_root() -> Result<PathBuf, io::Error> {

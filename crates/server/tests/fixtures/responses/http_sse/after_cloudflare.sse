@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"cloudflare fallback hello"}
+
+event: response.completed
+data: {"response":{"id":"resp_after_cloudflare","object":"response","status":"completed","usage":{"input_tokens":5,"output_tokens":2}}}

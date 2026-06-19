@@ -1,3 +1,0 @@
-event: response.completed
-data: {"response":{"id":"resp_after_403","object":"response","usage":{"input_tokens":6,"output_tokens":3}}}
-

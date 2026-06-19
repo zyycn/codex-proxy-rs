@@ -457,15 +457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-proxy-rs"
-version = "0.1.0"
-dependencies = [
- "codex-proxy-core",
- "codex-proxy-runtime",
- "codex-proxy-server",
-]
-
-[[package]]
 name = "codex-proxy-runtime"
 version = "0.1.0"
 dependencies = [

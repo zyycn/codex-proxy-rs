@@ -1,9 +1,0 @@
-event: response.output_text.delta
-data: {"delta":"hel"}
-
-event: response.output_text.delta
-data: {"delta":"lo"}
-
-event: response.completed
-data: {"response":{"id":"resp_chat","object":"response","status":"completed","usage":{"input_tokens":9,"output_tokens":3,"input_tokens_details":{"cached_tokens":4}}}}
-

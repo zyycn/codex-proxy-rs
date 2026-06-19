@@ -1,8 +1,0 @@
-{
-  "error": {
-    "message": "All accounts exhausted (1 quota-exhausted). Codex upstream error: {\"error\":{\"message\":\"quota reached\"}}",
-    "type": "server_error",
-    "param": null,
-    "code": "upstream_error"
-  }
-}

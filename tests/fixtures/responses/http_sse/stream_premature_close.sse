@@ -1,2 +1,0 @@
-event: response.output_text.delta
-data: {"delta":"partial"}

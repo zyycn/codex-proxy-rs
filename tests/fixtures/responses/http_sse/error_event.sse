@@ -1,3 +1,0 @@
-event: error
-data: {"error":{"message":"model overloaded","type":"server_error","code":"server_error"}}
-

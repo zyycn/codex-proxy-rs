@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"usage hello"}
+
+event: response.completed
+data: {"response":{"id":"resp_usage","object":"response","status":"completed","output_text":"usage hello","usage":{"input_tokens":7,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}}}}

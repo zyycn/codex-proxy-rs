@@ -1,5 +1,0 @@
-event: response.output_text.delta
-data: {"delta":"partial"}
-
-event: response.failed
-data: {"type":"response.failed","response":{"id":"resp_proxy_redacted","status":"failed","error":{"type":"server_error","code":"stream_disconnected","message":"Upstream stream closed before response.completed"}},"error":{"type":"server_error","code":"stream_disconnected","message":"Upstream stream closed before response.completed"}}

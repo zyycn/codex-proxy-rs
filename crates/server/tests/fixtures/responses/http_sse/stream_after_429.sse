@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"delta":"rate fallback hello"}
+
+event: response.completed
+data: {"response":{"id":"resp_stream_after_429","object":"response","status":"completed","usage":{"input_tokens":4,"output_tokens":1}}}
