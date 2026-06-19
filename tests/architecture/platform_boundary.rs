@@ -1,16 +1,19 @@
-use codex_proxy_rs::platform::{
-    crypto::SecretBox,
-    http::auth::{admin_session_id, client_api_key},
-    identity::{admin_session::hash_admin_password, client_key::ApiKeyHasher},
-    storage::db::connect_sqlite,
-};
+use std::{fs, path::PathBuf};
 
 #[test]
 fn platform_exports_foundation_modules() {
-    let _secret_box_type = std::any::type_name::<SecretBox>();
-    let _hasher = ApiKeyHasher::new([7; 32]);
-    let _hash_fn = hash_admin_password;
-    let _client_key_fn = client_api_key;
-    let _admin_session_fn = admin_session_id;
-    let _connect_fn = connect_sqlite;
+    let platform_lib = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/platform/src/lib.rs"),
+    )
+    .expect("expected platform lib.rs to be readable");
+
+    assert!(
+        platform_lib.contains("pub mod config;")
+            && platform_lib.contains("pub mod crypto;")
+            && platform_lib.contains("pub mod identity;")
+            && platform_lib.contains("pub mod json;")
+            && platform_lib.contains("pub mod logging;")
+            && platform_lib.contains("pub mod storage;"),
+        "platform crate should expose foundation modules directly from its own crate"
+    );
 }

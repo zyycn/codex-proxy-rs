@@ -1,0 +1,19 @@
+[package]
+name = "codex-proxy-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

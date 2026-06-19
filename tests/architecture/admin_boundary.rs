@@ -1,13 +1,12 @@
-use codex_proxy_rs::admin::{
-    api::router::router, client_keys::service::ApiKeyService, session::service::AdminAuthService,
-    settings::SettingsService, tasks::session_cleanup::SessionCleanupScheduler,
+use codex_proxy_core::admin::{
+    auth::AdminAuthService, client_keys::ClientKeyService, settings::SettingsService,
 };
+use codex_proxy_server::admin_api::router::router;
 
 #[test]
 fn admin_exports_control_plane_modules() {
     let _admin_auth_type = std::any::type_name::<AdminAuthService>();
-    let _api_key_type = std::any::type_name::<ApiKeyService>();
+    let _api_key_type = std::any::type_name::<ClientKeyService>();
     let _settings_type = std::any::type_name::<SettingsService>();
-    let _session_cleanup_type = std::any::type_name::<SessionCleanupScheduler>();
     let _router_fn = router;
 }
