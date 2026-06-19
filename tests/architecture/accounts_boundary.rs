@@ -1,7 +1,15 @@
-use codex_proxy_rs::codex::{accounts::cookies::jar::CookieJar, models::catalog::ModelCatalog};
+use codex_proxy_core::{
+    accounts::jwt::{jwt_expiry, JwtExpiry},
+    auth::oauth::{RefreshPolicy, RefreshTrigger},
+    gateway::conversation::{build_conversation_identity, ConversationIdentity},
+};
 
 #[test]
-fn accounts_exports_account_scoped_assets() {
-    let _cookie_jar_type = std::any::type_name::<CookieJar>();
-    let _model_catalog_type = std::any::type_name::<ModelCatalog>();
+fn core_exports_account_domain_helpers() {
+    let _expiry_type = std::any::type_name::<JwtExpiry>();
+    let _identity_type = std::any::type_name::<ConversationIdentity>();
+    let _refresh_policy_type = std::any::type_name::<RefreshPolicy>();
+    let _refresh_trigger_type = std::any::type_name::<RefreshTrigger>();
+    let _jwt_expiry_fn = jwt_expiry;
+    let _identity_fn = build_conversation_identity;
 }

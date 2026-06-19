@@ -32,10 +32,10 @@ quota:
 usage_stats:
   history_retention_days: null
 database:
-  url: sqlite://data/codex-proxy-rs.sqlite
+  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
 security:
-  master_key_file: data/master.key
-  api_key_pepper_file: data/api-key-pepper.key
+  master_key_file: .runtime/data/master.key
+  api_key_pepper_file: .runtime/data/api-key-pepper.key
 tls:
   force_http11: false
 ws_pool:
@@ -47,7 +47,7 @@ admin:
   default_username: admin
   default_password: admin
 logging:
-  directory: logs
+  directory: .runtime/logs
   retention_days: 14
   enabled: true
   capacity: 2000

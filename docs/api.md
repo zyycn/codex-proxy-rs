@@ -96,10 +96,7 @@ Success response:
   "paths": {
     "config": "config.yaml",
     "localConfig": "local.yaml",
-    "databaseUrl": "sqlite://data/codex-proxy.sqlite",
-    "logsDirectory": "logs",
-    "masterKeyFile": "data/master.key",
-    "apiKeyPepperFile": "data/api-key-pepper.key"
+    "databaseUrl": "sqlite://.runtime/data/codex-proxy-rs.sqlite"
   },
   "transport": {
     "backendBaseUrl": "https://chatgpt.com/backend-api",

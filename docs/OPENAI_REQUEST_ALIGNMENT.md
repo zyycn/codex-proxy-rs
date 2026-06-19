@@ -3,15 +3,15 @@
 本文档记录了 `codex-proxy-rs` (Rust) 与 `codex-proxy` (Node.js) 在 OpenAI 请求链路上的对比审查和修复工作。
 
 ## 审查日期
-2026-06-13
+2026-06-19
 
 ## 当前结论
 
-Rust 版已经补齐 OpenAI/Codex 主请求链路的核心路径：默认 WebSocket 上游、`previous_response_id` 账号亲和性、稳定 `prompt_cache_key`、关键安全 header、`client_metadata`、WS frame 到 SSE 的响应转换、usage/rate-limit 记录和 HTTP SSE fallback。
+Rust 版已经补齐 OpenAI/Codex 主请求链路的核心路径：默认 WebSocket 上游、`previous_response_id` 账号亲和性、稳定 `prompt_cache_key`、关键安全 header、`client_metadata`、WS frame 到 SSE 的响应转换、usage/rate-limit 记录、HTTP SSE fallback、implicit resume、strip-and-retry、reasoning replay。
 
 本轮改造后，直接影响 OpenAI 交互语义和请求发送行为的差异已补齐：自动 Cookie 捕获白名单、`Max-Age` 优先级、账号生命周期后的 WS pool 驱逐、`request_interval_ms` 发送前 stagger、`least_used` reset 缺失排序。
 
-仍不能宣称与 Node.js 原版 100% 一致，因为 Responses implicit resume、strip-and-retry、reasoning replay 这类更细的状态机尚未完整迁移。
+IP 代理/VPN、本地代理探测和 `HttpsProxyAgent` 不属于 Rust 版迁移目标。除此之外，当前审计没有保留的 OpenAI/Codex 请求链路迁移阻塞项。
 
 ## 本轮已对齐项
 
@@ -51,15 +51,16 @@ Rust 版已经补齐 OpenAI/Codex 主请求链路的核心路径：默认 WebSoc
 - `(Some(a), Some(b))` 且不相等时比较 reset
 - 任一侧缺失 reset 时继续比较 `request_count`
 
-## 仍未完全对齐项
+## 历史未对齐项（已关闭）
 
 ### Responses 隐式续接和 reasoning replay 状态机
 
-原版 shared handler 还包含 implicit resume、strip-and-retry、reasoning replay 等更细的 Responses 状态机。Rust 当前主请求链路已对齐默认 WS 和显式 `previous_response_id`，但这些边缘续接状态机尚未完整迁移。
+原版 shared handler 包含 implicit resume、strip-and-retry、reasoning replay 等更细的 Responses 状态机。这个缺口已经在当前 Rust workspace 中关闭：
 
-对齐要求：
-- 单独设计并测试 implicit resume/reasoning replay
-- 不在完成前把 OpenAI/Codex 链路标记为 100% 一致
+- `crates/core/src/serving/implicit_resume.rs` 保存纯策略；
+- `crates/core/src/serving/reasoning_replay.rs` 保存 replay 缓存策略；
+- `crates/runtime/src/services.rs` 在 Responses 非流式、HTTP SSE 流式、WebSocket 路径中接入恢复、驱逐和历史还原；
+- `crates/server/tests/openai_chat_upstream.rs` 覆盖 WebSocket implicit resume、SQLite 恢复后续接、跨 window 拒绝、自包含 function-call replay 拒绝、未匹配 function-call 输出拒绝、invalid encrypted reasoning replay 后驱逐、previous_response_not_found / unanswered_function_call strip-and-retry、SSE/WebSocket invalid reasoning replay strip-and-retry。
 
 ## 已修复的问题
 
@@ -236,9 +237,7 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 4. ✅ 实现 installation ID 持久化
 5. ✅ 所有测试通过
 6. ✅ 编译无错误
-
-仍需完成：
-1. implicit resume/reasoning replay 状态机
+7. ✅ implicit resume / strip-and-retry / reasoning replay 状态机已迁移并由 crate-local 测试覆盖
 
 ## 下一步建议
 
@@ -246,11 +245,10 @@ test codex::gateway::installation::tests::test_generate_and_persist ... ok
 2. **监控**：观察 `session_id` 和 `installation_id` 在日志中的出现，确保正确传递
 3. **性能验证**：确认 prompt cache 命中率是否提升（session affinity 的主要效果）
 4. **兼容性测试**：验证与真实 Codex Desktop 的 `~/.codex/installation_id` 共享是否正常
-5. **状态机补齐**：单独迁移 implicit resume/reasoning replay，并补充原版行为级测试
 
 ## 参考
 
 - Node.js 实现：`/home/zyy/桌面/Codes/codex-proxy/src/proxy/codex-api.ts`
-- Rust 实现：`/home/zyy/Codes/codex-proxy-rs/src/codex/`
+- Rust 实现：`/home/zyy/Codes/codex-proxy-rs/crates/{core,adapters,runtime,server}/`
 - Installation ID 规范：Node.js `src/proxy/installation-id.ts`
 - Identity 派生规范：Node.js `buildAccountScopedIdentity()` 方法

@@ -1,25 +1,46 @@
 [package]
 name = "codex-proxy-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "A lean Rust Codex proxy backed only by ChatGPT/Codex accounts."
+repository = "https://example.invalid/codex-proxy-rs"
+autobins = false
+
+[dev-dependencies]
+codex-proxy-core = { path = "crates/core" }
+codex-proxy-runtime = { path = "crates/runtime" }
+codex-proxy-server = { path = "crates/server" }
+
+[lints]
+workspace = true
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "A lean Rust Codex proxy backed only by ChatGPT/Codex accounts."
-repository = "https://example.invalid/codex-proxy-rs"
 rust-version = "1.95"
 
-[dependencies]
+[workspace.dependencies]
 aes-gcm = "0.10.3"
 anyhow = "1.0.102"
 argon2 = "0.5.3"
 async-trait = "0.1.89"
 axum = "0.8.9"
 base64 = "0.22.1"
+bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde", "clock"] }
 config = "0.15.23"
 dirs = "5.0.1"
-futures = "0.3.32"
 flate2 = "1.1.9"
+futures = "0.3.32"
 hex = "0.4.3"
 hmac = "0.13.0"
 indexmap = { version = "2.0", features = ["serde"] }
@@ -46,19 +67,19 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
 zeroize = "1.8.2"
 
-[dev-dependencies]
-insta = "1.47.2"
-pretty_assertions = "1.4.1"
-tempfile = "3.27.0"
-wiremock = "0.6.5"
-
-[lints.rust]
+[workspace.lints.rust]
 future_incompatible = { level = "warn", priority = -1 }
 nonstandard_style = { level = "deny", priority = -1 }
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = 10 }
 redundant_clone = { level = "deny", priority = 9 }
 large_enum_variant = { level = "warn", priority = 8 }
 needless_collect = { level = "deny", priority = 7 }
+
+[profile.dev]
+debug = true
+
+[profile.release]
+debug = true

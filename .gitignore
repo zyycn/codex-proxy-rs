@@ -1,22 +1,32 @@
+# Rust build output.
 /target/
-/data/
-/logs/
-/local.yaml
-/local.yml
-/.worktrees/
-/worktrees/
-/.codex-ws-audit/
+
+# Application runtime state.
+/.runtime/
 *.sqlite
 *.sqlite3
 *.db
 *.db-shm
 *.db-wal
 *.log
+
+# Local configuration.
+/local.yaml
+/local.yml
+
+# Local workspaces and tooling state.
+/.worktrees/
+/worktrees/
+/.codex-ws-audit/
+/.codegraph/
 *.tmp
 *.swp
 *~
 *.codegraph
-*/node_modules
-*/dist
-.agents
-.cargo
+/.agents/
+/.cargo/
+/.reasonix/
+
+# Frontend dependencies and build output.
+node_modules/
+dist/

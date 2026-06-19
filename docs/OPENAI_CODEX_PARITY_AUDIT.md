@@ -1,14 +1,14 @@
 # OpenAI Codex 原版链路对齐审计
 
-日期：2026-06-14
+日期：2026-06-19
 
 范围：对比原版 Node.js 仓库 `/home/zyy/桌面/Codes/codex-proxy`，审计 Rust 版的安全链路、请求链路、响应链路。这里的“代理”不包含 IP 代理、VPN、`HttpsProxyAgent`、本地代理探测等网络代理能力，这部分明确不移植。
 
 ## 结论
 
-当前 Rust 版已补齐关键安全模拟字段、默认 WebSocket 上游请求、稳定 `prompt_cache_key`、`previous_response_id` 账号亲和性、WS 首帧错误分类、WS 实时边收边转发、账号 + conversation 维度的 WS 连接复用。IP 代理/VPN 能力明确不移植。
+当前 Rust 版已补齐关键安全模拟字段、默认 WebSocket 上游请求、稳定 `prompt_cache_key`、`previous_response_id` 账号亲和性、WS 首帧错误分类、WS 实时边收边转发、账号 + conversation 维度的 WS 连接复用、implicit resume、strip-and-retry、reasoning replay。IP 代理/VPN 能力明确不移植。
 
-本轮已补齐请求发送细节和账号生命周期差异：自动 Cookie 捕获白名单、`Max-Age` 优先级、账号刷新/管理状态变化后的 WS pool 驱逐、`request_interval_ms` 发送前 stagger、`least_used` 的 reset 缺失排序。仍未达到 100% 对齐的项目是 Responses implicit resume/reasoning replay 状态机。
+本轮已补齐请求发送细节和账号生命周期差异：自动 Cookie 捕获白名单、`Max-Age` 优先级、账号刷新/管理状态变化后的 WS pool 驱逐、`request_interval_ms` 发送前 stagger、`least_used` 的 reset 缺失排序。当前没有保留的 OpenAI/Codex 请求链路迁移阻塞项；IP 代理/VPN 仍是明确非目标。
 
 ## 1. 安全链路和指纹
 
@@ -103,7 +103,9 @@ Rust 状态：
 
 Rust 状态：
 - 到位：显式 `previous_response_id` 会强制 WebSocket 并优先回到原账号。
-- 未对齐：implicit resume、strip-and-retry、reasoning replay 尚未完整迁移，应单独设计和测试。
+- 到位：implicit resume 会基于已记录 affinity/replay 条目续接同账号、同 conversation、同变体历史。
+- 到位：strip-and-retry 覆盖 `previous_response_not_found`、unanswered function call、invalid encrypted reasoning replay，并会在需要时恢复完整历史。
+- 到位：reasoning replay 缓存、记录、驱逐和 SQLite affinity restore 后续接均由 crate-local tests 覆盖。
 
 ## 9. 非目标：IP 代理/VPN
 
@@ -111,6 +113,7 @@ Rust 状态：
 
 ## 当前验证点
 
-- `tests/codex_gateway/websocket.rs` 覆盖默认 WS、forced HTTP SSE、WS 安全字段、握手错误、首帧错误分类、HTTP SSE 降级。
-- `tests/codex_serving/responses_websocket.rs` 覆盖默认 WS 上游、派生 `prompt_cache_key`、`client_metadata` 安全字段、`previous_response_id` 原账号亲和性、WS 首帧实时返回、同 conversation 连接复用、限流/刷新路径。
-- `tests/codex_serving/responses_http_sse.rs` 覆盖显式 HTTP SSE 兼容路径和 body/header 安全字段。
+- `crates/adapters/tests/codex.rs` 覆盖默认 WS、opening/header/payload 捕获、WS 安全字段、握手错误、首帧错误分类、deflate、ping、pool、idle timeout、rate-limit/metadata 捕获。
+- `crates/server/tests/openai_chat_upstream.rs` 覆盖默认 WS 上游、派生 `prompt_cache_key`、`client_metadata` 安全字段、`previous_response_id` 原账号亲和性、WS 首帧实时返回、同 conversation 连接复用、限流/刷新路径、implicit resume、strip-and-retry、reasoning replay。
+- `crates/core/tests/protocol.rs` 覆盖 WebSocket 纯协议转换、错误分类、Responses payload 顺序、事件形状校验和 replay 相关元数据抽取。
+- `crates/server/tests/openai_diagnostics_routes.rs` 覆盖 `/debug/diagnostics`、`/debug/fingerprint`、`/debug/upstream` 本地诊断和 secret redaction。
