@@ -15,7 +15,7 @@ use wiremock::{
 };
 
 #[test]
-fn quota_refresh_task_should_keep_old_default_request_spacing() {
+fn quota_refresh_task_should_expose_default_request_spacing() {
     assert_eq!(
         codex_proxy_runtime::tasks::quota_refresh::QuotaRefreshTask::default_request_spacing(),
         StdDuration::from_secs(3)

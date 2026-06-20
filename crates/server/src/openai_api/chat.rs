@@ -3,10 +3,7 @@
 use axum::{
     body::{Body, Bytes},
     extract::State,
-    http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
-        HeaderMap, StatusCode,
-    },
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Extension, Json,
 };
@@ -18,7 +15,7 @@ use codex_proxy_core::{
     serving::responses::apply_response_model_options,
 };
 use codex_proxy_runtime::{
-    services::{ChatDispatchError, ResponseDispatchError, ResponseDispatchStream},
+    services::{ResponseDispatchError, ResponseDispatchStream},
     state::AppState,
 };
 use futures::{stream as futures_stream, StreamExt};
@@ -27,7 +24,16 @@ use std::convert::Infallible;
 
 use crate::middleware::request_id::RequestId;
 
-use super::{auth::authorize_client_api_key, models::model_catalog_for_state};
+use super::{
+    auth::authorize_client_api_key,
+    error::{
+        chat_dispatch_error_response, chat_stream_dispatch_error_message,
+        invalid_chat_completion_request_response, missing_client_api_key_response,
+        model_not_found_response,
+    },
+    models::model_catalog_for_state,
+    sse::{event_stream_response, openai_sse_frame, SseResponseOptions},
+};
 
 /// `POST /v1/chat/completions`
 pub async fn chat_completions(
@@ -41,13 +47,7 @@ pub async fn chat_completions(
     }
 
     let Ok(chat_request) = serde_json::from_slice::<ChatCompletionRequest>(&body) else {
-        return openai_error_response(
-            StatusCode::BAD_REQUEST,
-            "Invalid chat completion request",
-            "invalid_request_error",
-            "invalid_request",
-        )
-        .into_response();
+        return invalid_chat_completion_request_response().into_response();
     };
     let model = chat_request.model.clone();
     let catalog = model_catalog_for_state(&state).await;
@@ -60,13 +60,7 @@ pub async fn chat_completions(
     let mut codex_request = match translate_chat_to_codex(chat_request) {
         Ok(request) => request,
         Err(_) => {
-            return openai_error_response(
-                StatusCode::BAD_REQUEST,
-                "Invalid chat completion request",
-                "invalid_request_error",
-                "invalid_request",
-            )
-            .into_response();
+            return invalid_chat_completion_request_response().into_response();
         }
     };
     apply_response_model_options(
@@ -111,165 +105,8 @@ pub async fn chat_completions(
         .await
     {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
-        Err(ChatDispatchError::NoActiveAccount | ChatDispatchError::AccountStore) => {
-            openai_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "No active upstream account is available",
-                "server_error",
-                "upstream_unavailable",
-            )
-            .into_response()
-        }
-        Err(ChatDispatchError::Upstream(_)) => openai_error_response(
-            StatusCode::BAD_GATEWAY,
-            "Upstream Codex request failed",
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::QuotaExhausted {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::PAYMENT_REQUIRED,
-            &format!(
-                "All accounts exhausted ({count} quota-exhausted). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::RateLimited {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            &format!(
-                "All accounts exhausted ({count} rate-limited). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::Expired {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::UNAUTHORIZED,
-            &format!(
-                "All accounts exhausted ({count} expired). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::Disabled {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::UNAUTHORIZED,
-            &format!(
-                "All accounts exhausted ({count} disabled). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::Banned {
-            count,
-            upstream_error,
-            status_code,
-        }) => openai_error_response(
-            StatusCode::from_u16(status_code).unwrap_or(StatusCode::FORBIDDEN),
-            &format!(
-                "All accounts exhausted ({count} banned). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::CloudflareChallenge {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::BAD_GATEWAY,
-            &format!(
-                "All accounts exhausted ({count} cloudflare-challenge). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::CloudflarePathBlocked {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::BAD_GATEWAY,
-            &format!(
-                "All accounts exhausted ({count} cloudflare-path-block). Codex upstream error: {upstream_error}"
-            ),
-            "server_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::ModelUnsupported {
-            count,
-            upstream_error,
-        }) => openai_error_response(
-            StatusCode::BAD_REQUEST,
-            &format!(
-                "All accounts exhausted ({count} model-unsupported). Codex upstream error: {upstream_error}"
-            ),
-            "invalid_request_error",
-            "upstream_error",
-        )
-        .into_response(),
-        Err(ChatDispatchError::InvalidSse(_) | ChatDispatchError::EmptyUpstreamResponse) => {
-            openai_error_response(
-                StatusCode::BAD_GATEWAY,
-                "Invalid upstream Codex response",
-                "server_error",
-                "invalid_upstream_response",
-            )
-            .into_response()
-        }
+        Err(error) => chat_dispatch_error_response(error),
     }
-}
-
-fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
-    openai_error_response(
-        StatusCode::UNAUTHORIZED,
-        "Missing client API key",
-        "invalid_request_error",
-        "invalid_api_key",
-    )
-}
-
-fn model_not_found_response() -> (StatusCode, Json<Value>) {
-    openai_error_response(
-        StatusCode::NOT_FOUND,
-        "Model not found",
-        "invalid_request_error",
-        "model_not_found",
-    )
-}
-
-fn openai_error_response(
-    status: StatusCode,
-    message: &str,
-    error_type: &str,
-    code: &str,
-) -> (StatusCode, Json<Value>) {
-    (
-        status,
-        Json(json!({
-            "error": {
-                "message": message,
-                "type": error_type,
-                "code": code
-            }
-        })),
-    )
 }
 
 fn live_chat_event_stream_response(
@@ -296,113 +133,33 @@ fn live_chat_event_stream_response(
                 Ok::<Bytes, Infallible>(Bytes::from(body))
             }));
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(CONTENT_TYPE, "text/event-stream")
-        .header(CACHE_CONTROL, "no-cache")
-        .header("connection", "keep-alive")
-        .header("x-accel-buffering", "no")
-        .body(Body::from_stream(body_stream))
-        .unwrap_or_else(|_| {
-            openai_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build stream response",
-                "server_error",
-                "stream_response_error",
-            )
-            .into_response()
-        })
+    event_stream_response(
+        Body::from_stream(body_stream),
+        SseResponseOptions::LIVE_CHAT,
+    )
 }
 
 fn response_dispatch_chat_stream_error_response(error: ResponseDispatchError) -> Response {
-    let message = match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
-            "No active upstream account is available".to_string()
-        }
-        ResponseDispatchError::Upstream(_) => "Upstream Codex request failed".to_string(),
-        ResponseDispatchError::QuotaExhausted {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} quota-exhausted). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::RateLimited {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} rate-limited). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::Expired {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} expired). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::Disabled {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} disabled). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::Banned {
-            count,
-            upstream_error,
-            ..
-        } => format!(
-            "All accounts exhausted ({count} banned). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::CloudflareChallenge {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} cloudflare-challenge). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::CloudflarePathBlocked {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} cloudflare-path-block). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::ModelUnsupported {
-            count,
-            upstream_error,
-        } => format!(
-            "All accounts exhausted ({count} model-unsupported). Codex upstream error: {upstream_error}"
-        ),
-        ResponseDispatchError::InvalidSse(_)
-        | ResponseDispatchError::MissingCompleted
-        | ResponseDispatchError::EmptyUpstreamResponse => "Invalid upstream Codex response".to_string(),
-        ResponseDispatchError::Failed(_) => "Upstream Codex response failed".to_string(),
-    };
+    let message = chat_stream_dispatch_error_message(&error);
     chat_stream_error_response(&message)
 }
 
 fn chat_stream_error_response(message: &str) -> Response {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(CONTENT_TYPE, "text/event-stream")
-        .header(CACHE_CONTROL, "no-cache")
-        .header("connection", "keep-alive")
-        .body(Body::from(chat_stream_error_sse_frame(message)))
-        .unwrap_or_else(|_| {
-            openai_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build stream response",
-                "server_error",
-                "stream_response_error",
-            )
-            .into_response()
-        })
+    event_stream_response(
+        Body::from(chat_stream_error_sse_frame(message)),
+        SseResponseOptions::CHAT_ERROR,
+    )
 }
 
 fn chat_stream_error_sse_frame(message: &str) -> String {
-    format!(
-        "data: {}\n\n",
-        json!({
+    openai_sse_frame(
+        "",
+        &json!({
             "error": {
                 "message": message,
                 "type": "stream_error",
             }
         })
+        .to_string(),
     )
 }

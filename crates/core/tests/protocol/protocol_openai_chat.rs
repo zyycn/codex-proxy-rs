@@ -53,6 +53,17 @@ fn sse_parser_should_combine_multiline_data_and_metadata() {
 }
 
 #[test]
+fn sse_body_has_done_should_detect_done_frame() {
+    assert!(sse_body_has_done(DONE_SSE_FRAME));
+    assert!(sse_body_has_done(
+        "event: response.completed\ndata: {}\n\ndata: [DONE]\r\n\r\n"
+    ));
+    assert!(!sse_body_has_done(
+        "event: response.completed\ndata: {}\n\n"
+    ));
+}
+
+#[test]
 fn chat_completion_from_codex_sse_should_convert_completed_response() {
     let body = concat!(
         "event: response.output_text.delta\n",

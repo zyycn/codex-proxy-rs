@@ -63,9 +63,6 @@ type PemSection = (SectionKind, Vec<u8>);
 type ReqwestClientCacheKey = (bool, Option<String>);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
-/// Codex HTTP 客户端类型。
-pub type HttpClient = Client;
-
 /// `/codex/responses`
 pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 /// `/codex/responses/compact`

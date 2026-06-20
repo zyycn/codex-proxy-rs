@@ -11,7 +11,11 @@ use serde_json::{json, Value};
 use codex_proxy_core::models::catalog::ModelCatalog;
 use codex_proxy_runtime::state::AppState;
 
-use super::{auth::authorize_client_api_key, diagnostics::is_local_debug_request};
+use super::{
+    auth::authorize_client_api_key,
+    diagnostics::{is_local_debug_request, local_debug_forbidden_response},
+    error::{missing_client_api_key_response, model_not_found_response},
+};
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
 
@@ -83,10 +87,7 @@ pub async fn model_info(
 /// `GET /debug/models`
 pub async fn debug_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if !is_local_debug_request(&headers) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "debug endpoint is local-only" })),
-        );
+        return local_debug_forbidden_response();
     }
 
     let catalog = model_catalog_for_state(&state).await;
@@ -104,30 +105,4 @@ fn openai_model_json(id: &str) -> Value {
         "created": MODEL_CREATED_TIMESTAMP,
         "owned_by": "openai"
     })
-}
-
-fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({
-            "error": {
-                "message": "Missing client API key",
-                "type": "invalid_request_error",
-                "code": "invalid_api_key"
-            }
-        })),
-    )
-}
-
-fn model_not_found_response() -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error": {
-                "message": "Model not found",
-                "type": "invalid_request_error",
-                "code": "model_not_found"
-            }
-        })),
-    )
 }

@@ -3,7 +3,7 @@
 pub mod auth;
 pub mod chat;
 pub mod diagnostics;
-pub mod error;
+mod error;
 pub mod models;
 pub mod responses;
 pub mod router;

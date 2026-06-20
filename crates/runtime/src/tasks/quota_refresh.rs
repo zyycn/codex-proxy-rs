@@ -49,7 +49,7 @@ impl QuotaRefreshTask {
         }
     }
 
-    /// 返回旧调度器用于错开连续 quota 请求的默认间隔。
+    /// 返回连续 quota 请求之间的默认错峰间隔。
     pub fn default_request_spacing() -> Duration {
         Duration::from_secs(DEFAULT_REQUEST_SPACING_SECS)
     }
