@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub tls: TlsConfig,
     /// WebSocket 连接池配置。
     pub ws_pool: WebSocketPoolConfig,
+    /// 上游请求指纹默认配置。
+    pub fingerprint: FingerprintConfig,
     /// 管理员初始化配置。
     pub admin: AdminConfig,
     /// 日志配置。
@@ -155,6 +157,94 @@ impl Default for WebSocketPoolConfig {
             enabled: true,
             max_age_ms: 3_300_000,
             max_per_account: 8,
+        }
+    }
+}
+
+/// 上游请求指纹默认配置。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FingerprintConfig {
+    /// 客户端来源名。
+    pub originator: String,
+    /// 应用版本。
+    pub app_version: String,
+    /// 构建号。
+    pub build_number: String,
+    /// 平台名。
+    pub platform: String,
+    /// 架构名。
+    pub arch: String,
+    /// Chromium 主版本。
+    pub chromium_version: String,
+    /// User-Agent 模板。
+    pub user_agent_template: String,
+    /// 默认请求头。
+    pub default_headers: Vec<FingerprintHeaderConfig>,
+    /// 请求头排序优先级。
+    pub header_order: Vec<String>,
+}
+
+impl Default for FingerprintConfig {
+    fn default() -> Self {
+        Self {
+            originator: "Codex Desktop".to_string(),
+            app_version: "26.519.81530".to_string(),
+            build_number: "3178".to_string(),
+            platform: "darwin".to_string(),
+            arch: "arm64".to_string(),
+            chromium_version: "146".to_string(),
+            user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
+            default_headers: vec![
+                FingerprintHeaderConfig::new("Accept-Encoding", "gzip, deflate, br, zstd"),
+                FingerprintHeaderConfig::new("Accept-Language", "en-US,en;q=0.9"),
+                FingerprintHeaderConfig::new("sec-ch-ua-mobile", "?0"),
+                FingerprintHeaderConfig::new("sec-ch-ua-platform", "\"macOS\""),
+                FingerprintHeaderConfig::new("sec-fetch-site", "same-origin"),
+                FingerprintHeaderConfig::new("sec-fetch-mode", "cors"),
+                FingerprintHeaderConfig::new("sec-fetch-dest", "empty"),
+            ],
+            header_order: vec![
+                "authorization".to_string(),
+                "chatgpt-account-id".to_string(),
+                "originator".to_string(),
+                "x-openai-internal-codex-residency".to_string(),
+                "x-client-request-id".to_string(),
+                "x-codex-installation-id".to_string(),
+                "x-codex-turn-state".to_string(),
+                "openai-beta".to_string(),
+                "user-agent".to_string(),
+                "sec-ch-ua".to_string(),
+                "sec-ch-ua-mobile".to_string(),
+                "sec-ch-ua-platform".to_string(),
+                "accept-encoding".to_string(),
+                "accept-language".to_string(),
+                "sec-fetch-site".to_string(),
+                "sec-fetch-mode".to_string(),
+                "sec-fetch-dest".to_string(),
+                "content-type".to_string(),
+                "accept".to_string(),
+                "cookie".to_string(),
+            ],
+        }
+    }
+}
+
+/// 指纹默认请求头配置项。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FingerprintHeaderConfig {
+    /// 请求头名称。
+    pub name: String,
+    /// 请求头值。
+    pub value: String,
+}
+
+impl FingerprintHeaderConfig {
+    fn new(name: &str, value: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            value: value.to_string(),
         }
     }
 }

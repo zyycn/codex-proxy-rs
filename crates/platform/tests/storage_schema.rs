@@ -1,7 +1,4 @@
-use std::str::FromStr;
-
 use codex_proxy_platform::storage::connect_sqlite;
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 
 #[tokio::test]
 async fn sqlite_schema_creates_accounts_and_event_tables() {
@@ -77,6 +74,26 @@ async fn sqlite_schema_should_persist_image_generation_usage_columns() {
 }
 
 #[tokio::test]
+async fn sqlite_schema_should_persist_token_total_usage_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('account_usage') where name in ('reasoning_tokens', 'total_tokens') order by name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        ["reasoning_tokens", "total_tokens"]
+    );
+}
+
+#[tokio::test]
 async fn sqlite_schema_should_persist_quota_verify_required_flag() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
@@ -91,6 +108,28 @@ async fn sqlite_schema_should_persist_quota_verify_required_flag() {
     .unwrap();
 
     assert_eq!(row, Some(("quota_verify_required".to_string(),)));
+}
+
+#[tokio::test]
+async fn sqlite_schema_should_enforce_unique_chatgpt_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("account-identity.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    sqlx::query(
+        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token_cipher, status, added_at, updated_at) values ('acct_a', 'chatgpt-account', 'chatgpt-user', 'cipher', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let result = sqlx::query(
+        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token_cipher, status, added_at, updated_at) values ('acct_b', 'chatgpt-account', 'chatgpt-user', 'cipher', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await;
+
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -111,58 +150,79 @@ async fn sqlite_schema_should_persist_session_affinity_function_call_ids() {
 }
 
 #[tokio::test]
-async fn connect_sqlite_should_not_patch_incomplete_existing_tables() {
+async fn sqlite_schema_should_persist_complete_current_fingerprint_columns() {
     let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("incomplete.sqlite");
+    let db = dir.path().join("fingerprints.sqlite");
     let url = format!("sqlite://{}", db.display());
-    let incomplete_options = SqliteConnectOptions::from_str(&url)
-        .unwrap()
-        .create_if_missing(true);
-    let incomplete_pool = SqlitePool::connect_with(incomplete_options).await.unwrap();
-    sqlx::raw_sql(
-        "
-        create table account_usage (
-          account_id text primary key,
-          request_count integer not null default 0,
-          input_tokens integer not null default 0,
-          output_tokens integer not null default 0,
-          cached_tokens integer not null default 0,
-          last_used_at text
-        );
-        create table session_affinities (
-          response_id text primary key,
-          account_id text not null,
-          conversation_id text not null,
-          turn_state text,
-          instructions_hash text,
-          input_tokens integer,
-          variant_hash text,
-          expires_at text not null,
-          created_at text not null
-        );
-        ",
-    )
-    .execute(&incomplete_pool)
-    .await
-    .unwrap();
-    incomplete_pool.close().await;
-
     let pool = connect_sqlite(&url).await.unwrap();
-    let window_column: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_usage') where name = 'window_request_count'",
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('fingerprints') where name in ('originator', 'app_version', 'build_number', 'platform', 'arch', 'chromium_version', 'user_agent_template', 'default_headers_json', 'header_order_json', 'source', 'created_at', 'updated_at') order by name",
     )
-    .fetch_optional(&pool)
+    .fetch_all(&pool)
     .await
     .unwrap();
-    let affinity_column: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('session_affinities') where name = 'function_call_ids_json'",
+
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        [
+            "app_version",
+            "arch",
+            "build_number",
+            "chromium_version",
+            "created_at",
+            "default_headers_json",
+            "header_order_json",
+            "originator",
+            "platform",
+            "source",
+            "updated_at",
+            "user_agent_template",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn sqlite_schema_should_persist_fingerprint_history_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("fingerprint-history.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "select name from sqlite_master where type = 'table' and name = 'fingerprint_update_history'",
     )
     .fetch_optional(&pool)
     .await
     .unwrap();
 
-    assert_eq!(window_column, None);
-    assert_eq!(affinity_column, None);
+    assert_eq!(row, Some(("fingerprint_update_history".to_string(),)));
+}
+
+#[tokio::test]
+async fn sqlite_schema_should_persist_structured_event_diagnostic_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("event-diagnostics.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('event_logs') where name in ('transport', 'attempt_index', 'upstream_status_code', 'failure_class', 'response_id', 'upstream_request_id') order by name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        [
+            "attempt_index",
+            "failure_class",
+            "response_id",
+            "transport",
+            "upstream_request_id",
+            "upstream_status_code",
+        ]
+    );
 }
 
 #[tokio::test]

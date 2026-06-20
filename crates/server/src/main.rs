@@ -9,6 +9,7 @@ use codex_proxy_platform::{
     storage::{connect_sqlite, ensure_data_dir, load_or_create_installation_id},
 };
 use codex_proxy_runtime::{
+    bootstrap::{fingerprint_from_config, load_runtime_fingerprint_from_pool},
     state::AppState,
     tasks::coordinator::{start_background_tasks, BackgroundTaskCoordinator},
 };
@@ -43,12 +44,16 @@ async fn build_application(
     let default_admin_password = config.admin.default_password.clone();
     let data_dir = ensure_data_dir()?;
     let installation_id = load_or_create_installation_id(Some(&data_dir))?;
-    let state = AppState::with_pool_secret_api_key_hasher_and_installation_id(
+    let default_fingerprint = fingerprint_from_config(&config.fingerprint);
+    let runtime_fingerprint =
+        load_runtime_fingerprint_from_pool(pool.clone(), &default_fingerprint).await?;
+    let state = AppState::with_pool_secret_api_key_hasher_fingerprint_and_installation_id(
         config,
         pool,
         secret_box,
         api_key_hasher,
-        installation_id,
+        runtime_fingerprint,
+        Some(installation_id),
     );
     let created_default_admin = state
         .services

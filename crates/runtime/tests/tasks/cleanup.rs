@@ -85,6 +85,8 @@ async fn session_affinity_cleanup_task_should_delete_only_expired_affinities() {
         .expect("sqlite pool");
     let store = SqliteSessionAffinityStore::new(pool.clone());
     let now = Utc::now();
+    insert_account(&pool, "expired-account").await;
+    insert_account(&pool, "active-account").await;
     store
         .upsert(
             "expired-response",

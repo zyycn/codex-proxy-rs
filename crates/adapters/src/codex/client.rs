@@ -1215,14 +1215,12 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
 }
 
 fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
-    let pairs = header_pairs(headers)
+    header_pairs(headers)
         .into_iter()
         .filter(|(name, _)| {
             !name.eq_ignore_ascii_case("content-type") && !name.eq_ignore_ascii_case("accept")
         })
-        .collect::<Vec<_>>();
-
-    pairs
+        .collect::<Vec<_>>()
 }
 
 fn websocket_exchange_error_to_client_error(

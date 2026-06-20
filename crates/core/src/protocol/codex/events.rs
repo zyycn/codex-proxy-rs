@@ -21,6 +21,8 @@ pub struct TokenUsage {
     pub output_tokens: u64,
     /// 命中缓存的输入 token 数。
     pub cached_tokens: u64,
+    /// 输出 token 中的 reasoning token 数。
+    pub reasoning_tokens: u64,
     /// 图片工具输入 token 数。
     pub image_input_tokens: u64,
     /// 图片工具输出 token 数。
@@ -36,6 +38,7 @@ impl TokenUsage {
             input_tokens,
             output_tokens,
             cached_tokens,
+            reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
             total_tokens: input_tokens + output_tokens,
@@ -48,6 +51,7 @@ impl TokenUsage {
             input_tokens: self.input_tokens + other.input_tokens,
             output_tokens: self.output_tokens + other.output_tokens,
             cached_tokens: self.cached_tokens + other.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens + other.reasoning_tokens,
             image_input_tokens: self.image_input_tokens + other.image_input_tokens,
             image_output_tokens: self.image_output_tokens + other.image_output_tokens,
             total_tokens: self.total_tokens + other.total_tokens,
@@ -74,6 +78,13 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         .or_else(|| nested_number_field(usage, &["prompt_tokens_details", "cached_tokens"]))
         .or_else(|| number_field(usage, "cached_tokens"))
         .unwrap_or_default();
+    let reasoning_tokens =
+        nested_number_field(usage, &["output_tokens_details", "reasoning_tokens"])
+            .or_else(|| {
+                nested_number_field(usage, &["completion_tokens_details", "reasoning_tokens"])
+            })
+            .or_else(|| number_field(usage, "reasoning_tokens"))
+            .unwrap_or_default();
     let image_input_tokens =
         nested_number_field(body, &["tool_usage", "image_gen", "input_tokens"]).unwrap_or_default();
     let image_output_tokens =
@@ -87,12 +98,15 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         "prompt_tokens",
         "completion_tokens",
         "cached_tokens",
+        "reasoning_tokens",
         "total_tokens",
     ]
     .iter()
     .any(|field| usage.get(*field).is_some())
         || usage.get("input_tokens_details").is_some()
         || usage.get("prompt_tokens_details").is_some()
+        || usage.get("output_tokens_details").is_some()
+        || usage.get("completion_tokens_details").is_some()
         || image_input_tokens > 0
         || image_output_tokens > 0;
 
@@ -100,6 +114,7 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
         input_tokens,
         output_tokens,
         cached_tokens,
+        reasoning_tokens,
         image_input_tokens,
         image_output_tokens,
         total_tokens,

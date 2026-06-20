@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
@@ -51,6 +52,18 @@ pub struct EventLogFilter {
     pub model: Option<String>,
     /// HTTP 状态码。
     pub status_code: Option<i64>,
+    /// 上游传输方式。
+    pub transport: Option<String>,
+    /// 同一请求内的上游尝试序号。
+    pub attempt_index: Option<i64>,
+    /// 上游 HTTP 状态码。
+    pub upstream_status_code: Option<i64>,
+    /// 失败分类。
+    pub failure_class: Option<String>,
+    /// 上游响应 ID。
+    pub response_id: Option<String>,
+    /// 上游请求 ID。
+    pub upstream_request_id: Option<String>,
     /// 搜索关键词。
     pub search: Option<String>,
 }
@@ -86,7 +99,7 @@ impl SqliteEventLogStore {
     ) -> SqliteEventLogStoreResult<Page<EventLog>> {
         let fetch_limit = i64::from(limit) + 1;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs",
+            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from event_logs",
         );
         push_filter(&mut builder, &filter, cursor.as_deref())?;
         builder.push(" order by created_at desc, id desc limit ");
@@ -114,7 +127,7 @@ impl SqliteEventLogStore {
     /// 按 ID 读取事件日志。
     pub async fn get(&self, id: &str) -> SqliteEventLogStoreResult<Option<EventLog>> {
         let row = sqlx::query(
-            "select id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at from event_logs where id = ?",
+            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from event_logs where id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -151,9 +164,76 @@ impl EventLogStore for SqliteEventLogStore {
     }
 }
 
+#[derive(Debug, Clone)]
+struct EventLogSummaryFields {
+    transport: Option<String>,
+    attempt_index: Option<i64>,
+    upstream_status_code: Option<i64>,
+    failure_class: Option<String>,
+    response_id: Option<String>,
+    upstream_request_id: Option<String>,
+}
+
+fn event_summary_fields(event: &EventLog) -> EventLogSummaryFields {
+    EventLogSummaryFields {
+        transport: event
+            .transport
+            .clone()
+            .or_else(|| metadata_string(&event.metadata, &["transport"])),
+        attempt_index: event
+            .attempt_index
+            .or_else(|| metadata_i64(&event.metadata, &["attemptIndex", "attempt_index"])),
+        upstream_status_code: event.upstream_status_code.or_else(|| {
+            metadata_i64(
+                &event.metadata,
+                &[
+                    "upstreamStatus",
+                    "upstreamStatusCode",
+                    "upstream_status_code",
+                ],
+            )
+        }),
+        failure_class: event
+            .failure_class
+            .clone()
+            .or_else(|| metadata_string(&event.metadata, &["failureClass", "failure_class"])),
+        response_id: event
+            .response_id
+            .clone()
+            .or_else(|| metadata_string(&event.metadata, &["responseId", "response_id"])),
+        upstream_request_id: event.upstream_request_id.clone().or_else(|| {
+            metadata_string(
+                &event.metadata,
+                &[
+                    "upstreamRequestId",
+                    "upstream_request_id",
+                    "openaiRequestId",
+                    "cfRay",
+                ],
+            )
+        }),
+    }
+}
+
+fn metadata_string(metadata: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| metadata.get(*key).and_then(Value::as_i64))
+}
+
 async fn append_event(pool: &SqlitePool, event: &EventLog) -> SqliteEventLogStoreResult<()> {
+    let summary = event_summary_fields(event);
     sqlx::query(
-        "insert into event_logs (id, request_id, kind, level, account_id, route, model, status_code, latency_ms, message, metadata_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into event_logs (id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&event.id)
     .bind(&event.request_id)
@@ -163,6 +243,12 @@ async fn append_event(pool: &SqlitePool, event: &EventLog) -> SqliteEventLogStor
     .bind(&event.route)
     .bind(&event.model)
     .bind(event.status_code)
+    .bind(summary.transport)
+    .bind(summary.attempt_index)
+    .bind(summary.upstream_status_code)
+    .bind(summary.failure_class)
+    .bind(summary.response_id)
+    .bind(summary.upstream_request_id)
     .bind(event.latency_ms)
     .bind(&event.message)
     .bind(event.metadata.to_string())
@@ -222,6 +308,30 @@ fn push_filter(
         separated.push("status_code = ");
         separated.push_bind_unseparated(status_code);
     }
+    if let Some(transport) = filter.transport.as_deref() {
+        separated.push("transport = ");
+        separated.push_bind_unseparated(transport);
+    }
+    if let Some(attempt_index) = filter.attempt_index {
+        separated.push("attempt_index = ");
+        separated.push_bind_unseparated(attempt_index);
+    }
+    if let Some(upstream_status_code) = filter.upstream_status_code {
+        separated.push("upstream_status_code = ");
+        separated.push_bind_unseparated(upstream_status_code);
+    }
+    if let Some(failure_class) = filter.failure_class.as_deref() {
+        separated.push("failure_class = ");
+        separated.push_bind_unseparated(failure_class);
+    }
+    if let Some(response_id) = filter.response_id.as_deref() {
+        separated.push("response_id = ");
+        separated.push_bind_unseparated(response_id);
+    }
+    if let Some(upstream_request_id) = filter.upstream_request_id.as_deref() {
+        separated.push("upstream_request_id = ");
+        separated.push_bind_unseparated(upstream_request_id);
+    }
     if let Some(search) = filter.search.as_deref() {
         let pattern = format!("%{search}%");
         separated.push("(message like ");
@@ -255,6 +365,12 @@ fn event_from_row(row: &sqlx::sqlite::SqliteRow) -> SqliteEventLogStoreResult<Ev
         route: row.get("route"),
         model: row.get("model"),
         status_code: row.get("status_code"),
+        transport: row.get("transport"),
+        attempt_index: row.get("attempt_index"),
+        upstream_status_code: row.get("upstream_status_code"),
+        failure_class: row.get("failure_class"),
+        response_id: row.get("response_id"),
+        upstream_request_id: row.get("upstream_request_id"),
         latency_ms: row.get("latency_ms"),
         message: row.get("message"),
         metadata: serde_json::from_str(&row.get::<String, _>("metadata_json"))?,

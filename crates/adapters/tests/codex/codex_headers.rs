@@ -153,40 +153,30 @@ fn websocket_connection_should_build_standard_opening_headers_around_business_he
 }
 
 #[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn websocket_execute_response_create_request_should_capture_handshake_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_hdr_async_with_config(
-            stream,
-            |_request: &WsRequest, mut response: WsResponse| {
-                response.headers_mut().insert(
-                    "sec-websocket-extensions",
-                    "permessage-deflate".parse().unwrap(),
-                );
-                response
-                    .headers_mut()
-                    .insert("x-codex-turn-state", "turn-from-handshake".parse().unwrap());
-                response.headers_mut().insert(
-                    "set-cookie",
-                    "cf_clearance=ws; Domain=.chatgpt.com; Path=/"
-                        .parse()
-                        .unwrap(),
-                );
-                response
-                    .headers_mut()
-                    .insert("x-ratelimit-remaining-requests", "41".parse().unwrap());
-                Ok(response)
-            },
-            Some(websocket_accept_config()),
-        )
-        .await
-        .unwrap();
+        let mut websocket = accept_codex_test_websocket_with(stream, |_request, response| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            response
+                .headers_mut()
+                .insert("x-codex-turn-state", "turn-from-handshake".parse().unwrap());
+            response.headers_mut().insert(
+                "set-cookie",
+                "cf_clearance=ws; Domain=.chatgpt.com; Path=/"
+                    .parse()
+                    .unwrap(),
+            );
+            response
+                .headers_mut()
+                .insert("x-ratelimit-remaining-requests", "41".parse().unwrap());
+        })
+        .await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -241,10 +231,6 @@ async fn websocket_execute_response_create_request_should_capture_handshake_head
 }
 
 #[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn codex_backend_client_websocket_should_forward_security_chain_headers_and_payload_fields() {
     let received_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -252,31 +238,24 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let headers_for_server = Arc::clone(&received_headers);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_hdr_async_with_config(
-            stream,
-            move |request: &WsRequest, response: WsResponse| {
-                let mut response = response;
-                response.headers_mut().insert(
-                    "sec-websocket-extensions",
-                    "permessage-deflate".parse().unwrap(),
-                );
-                let headers = request
-                    .headers()
-                    .iter()
-                    .map(|(name, value)| {
-                        (
-                            name.as_str().to_string(),
-                            value.to_str().unwrap_or_default().to_string(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                *headers_for_server.lock().unwrap() = headers;
-                Ok(response)
-            },
-            Some(websocket_accept_config()),
-        )
-        .await
-        .unwrap();
+        let mut websocket = accept_codex_test_websocket_with(stream, move |request, response| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            let headers = request
+                .headers()
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.as_str().to_string(),
+                        value.to_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            *headers_for_server.lock().unwrap() = headers;
+        })
+        .await;
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
             .expect("client payload should be json");
@@ -467,6 +446,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
             input_tokens: 2,
             output_tokens: 3,
             cached_tokens: 1,
+            reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
             total_tokens: 5,

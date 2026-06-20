@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
@@ -14,13 +15,11 @@ use codex_proxy_core::gateway::fingerprint::Fingerprint;
 
 /// 指纹历史记录的来源标识。
 pub const CODEX_DESKTOP_UPDATE_SOURCE: &str = "codex_desktop_update_source";
+/// 运行时当前指纹槽位。
+pub const CURRENT_FINGERPRINT_ID: &str = "current";
 
-const AUTO_UPDATED_FINGERPRINT_ID: &str = "auto_updated";
 const AUTO_UPDATE_SOURCE: &str = "auto_update";
-const AUTO_UPDATE_PLATFORM: &str = "darwin";
-const AUTO_UPDATE_ARCH: &str = "arm64";
-const AUTO_UPDATE_USER_AGENT_TEMPLATE: &str = "Codex Desktop/{version} ({platform}; {arch})";
-const DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION: &str = "146";
+const CONFIG_SEED_SOURCE: &str = "config_seed";
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 
@@ -99,6 +98,12 @@ pub struct StoredFingerprint {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredHeader {
+    name: String,
+    value: String,
+}
+
 /// 指纹自动更新状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateState {
@@ -132,20 +137,13 @@ impl FingerprintRepository {
 
     /// 插入一条指纹更新历史。
     pub async fn insert_update(&self, update: &FingerprintUpdate) -> Result<(), sqlx::Error> {
-        let mut fingerprint = Fingerprint::default_codex_desktop();
-        fingerprint.app_version.clone_from(&update.app_version);
-        fingerprint.build_number.clone_from(&update.build_number);
-
         sqlx::query(
-            "insert into fingerprints (id, app_version, build_number, platform, arch, chromium_version, user_agent_template, source, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "insert into fingerprint_update_history (id, current_fingerprint_id, app_version, build_number, source, created_at) values (?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
-        .bind(fingerprint.app_version)
-        .bind(fingerprint.build_number)
-        .bind(fingerprint.platform)
-        .bind(fingerprint.arch)
-        .bind(fingerprint.chromium_version)
-        .bind(fingerprint.user_agent_template)
+        .bind(CURRENT_FINGERPRINT_ID)
+        .bind(&update.app_version)
+        .bind(&update.build_number)
         .bind(CODEX_DESKTOP_UPDATE_SOURCE)
         .bind(Utc::now().to_rfc3339())
         .execute(&self.pool)
@@ -153,8 +151,58 @@ impl FingerprintRepository {
         Ok(())
     }
 
-    /// 更新自动应用的最新版本快照。
-    pub async fn upsert_auto_update(
+    /// 写入当前指纹默认值；如果当前槽位已存在，直接读取数据库值。
+    pub async fn ensure_current_seed(
+        &self,
+        default_fingerprint: &Fingerprint,
+    ) -> Result<Fingerprint, sqlx::Error> {
+        if let Some(fingerprint) = self.load_current().await? {
+            return Ok(fingerprint);
+        }
+
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            insert into fingerprints (
+              id,
+              originator,
+              app_version,
+              build_number,
+              platform,
+              arch,
+              chromium_version,
+              user_agent_template,
+              default_headers_json,
+              header_order_json,
+              source,
+              created_at,
+              updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(CURRENT_FINGERPRINT_ID)
+        .bind(&default_fingerprint.originator)
+        .bind(&default_fingerprint.app_version)
+        .bind(&default_fingerprint.build_number)
+        .bind(&default_fingerprint.platform)
+        .bind(&default_fingerprint.arch)
+        .bind(&default_fingerprint.chromium_version)
+        .bind(&default_fingerprint.user_agent_template)
+        .bind(encode_default_headers(
+            &default_fingerprint.default_headers,
+        )?)
+        .bind(encode_header_order(&default_fingerprint.header_order)?)
+        .bind(CONFIG_SEED_SOURCE)
+        .bind(&now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(default_fingerprint.clone())
+    }
+
+    /// 更新当前指纹中的自动更新版本字段。
+    pub async fn update_current_version(
         &self,
         app_version: &str,
         build_number: &str,
@@ -162,27 +210,76 @@ impl FingerprintRepository {
     ) -> Result<(), sqlx::Error> {
         let resolved_chromium_version = match chromium_version {
             Some(version) => version.to_string(),
-            None => sqlx::query_scalar::<_, String>(
-                "select chromium_version from fingerprints where id = ?",
-            )
-            .bind(AUTO_UPDATED_FINGERPRINT_ID)
-            .fetch_optional(&self.pool)
-            .await?
-            .unwrap_or_else(|| DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION.to_string()),
+            None => {
+                sqlx::query_scalar::<_, String>(
+                    "select chromium_version from fingerprints where id = ?",
+                )
+                .bind(CURRENT_FINGERPRINT_ID)
+                .fetch_one(&self.pool)
+                .await?
+            }
         };
 
-        sqlx::query(
-            "insert into fingerprints (id, app_version, build_number, platform, arch, chromium_version, user_agent_template, source, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             on conflict(id) do update set app_version = excluded.app_version, build_number = excluded.build_number, platform = excluded.platform, arch = excluded.arch, chromium_version = excluded.chromium_version, user_agent_template = excluded.user_agent_template, source = excluded.source, created_at = excluded.created_at",
+        let result = sqlx::query(
+            "update fingerprints set app_version = ?, build_number = ?, chromium_version = ?, source = ?, updated_at = ? where id = ?",
         )
-        .bind(AUTO_UPDATED_FINGERPRINT_ID)
         .bind(app_version)
         .bind(build_number)
-        .bind(AUTO_UPDATE_PLATFORM)
-        .bind(AUTO_UPDATE_ARCH)
         .bind(resolved_chromium_version)
-        .bind(AUTO_UPDATE_USER_AGENT_TEMPLATE)
         .bind(AUTO_UPDATE_SOURCE)
+        .bind(Utc::now().to_rfc3339())
+        .bind(CURRENT_FINGERPRINT_ID)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        Ok(())
+    }
+
+    /// 读取当前运行时指纹。
+    pub async fn load_current(&self) -> Result<Option<Fingerprint>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            select
+              originator,
+              app_version,
+              build_number,
+              platform,
+              arch,
+              chromium_version,
+              user_agent_template,
+              default_headers_json,
+              header_order_json
+            from fingerprints
+            where id = ?
+            "#,
+        )
+        .bind(CURRENT_FINGERPRINT_ID)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| fingerprint_from_row(&row)).transpose()
+    }
+
+    /// 记录自动更新历史。
+    pub async fn insert_update_history(
+        &self,
+        app_version: &str,
+        build_number: &str,
+        chromium_version: Option<&str>,
+        manifest_json: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "insert into fingerprint_update_history (id, current_fingerprint_id, app_version, build_number, chromium_version, source, manifest_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(CURRENT_FINGERPRINT_ID)
+        .bind(app_version)
+        .bind(build_number)
+        .bind(chromium_version)
+        .bind(AUTO_UPDATE_SOURCE)
+        .bind(manifest_json)
         .bind(Utc::now().to_rfc3339())
         .execute(&self.pool)
         .await?;
@@ -192,7 +289,7 @@ impl FingerprintRepository {
     /// 读取最新一条指纹历史记录。
     pub async fn latest(&self) -> Result<Option<StoredFingerprint>, sqlx::Error> {
         let row = sqlx::query(
-            "select app_version, build_number, source from fingerprints order by created_at desc, id desc limit 1",
+            "select app_version, build_number, source from fingerprint_update_history order by created_at desc, id desc limit 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -203,38 +300,53 @@ impl FingerprintRepository {
             source: row.get("source"),
         }))
     }
+}
 
-    /// 读取自动更新应用后的最新指纹。
-    pub async fn load_latest_auto_updated(&self) -> Result<Option<Fingerprint>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            select app_version, build_number, platform, arch, chromium_version, user_agent_template
-            from fingerprints
-            where source = ?
-            order by created_at desc
-            limit 1
-            "#,
-        )
-        .bind(AUTO_UPDATE_SOURCE)
-        .fetch_optional(&self.pool)
-        .await?;
+fn fingerprint_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Fingerprint, sqlx::Error> {
+    let default_headers_json = row.get::<String, _>("default_headers_json");
+    let header_order_json = row.get::<String, _>("header_order_json");
+    Ok(Fingerprint {
+        originator: row.get("originator"),
+        app_version: row.get("app_version"),
+        build_number: row.get("build_number"),
+        platform: row.get("platform"),
+        arch: row.get("arch"),
+        chromium_version: row.get("chromium_version"),
+        user_agent_template: row.get("user_agent_template"),
+        default_headers: decode_default_headers(&default_headers_json)?,
+        header_order: decode_header_order(&header_order_json)?,
+    })
+}
 
-        let Some(row) = row else {
-            return Ok(None);
-        };
+fn encode_default_headers(headers: &IndexMap<String, String>) -> Result<String, sqlx::Error> {
+    let headers = headers
+        .iter()
+        .map(|(name, value)| StoredHeader {
+            name: name.clone(),
+            value: value.clone(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&headers).map_err(json_error)
+}
 
-        Ok(Some(Fingerprint {
-            originator: "Codex Desktop".to_string(),
-            app_version: row.get("app_version"),
-            build_number: row.get("build_number"),
-            platform: row.get("platform"),
-            arch: row.get("arch"),
-            chromium_version: row.get("chromium_version"),
-            user_agent_template: row.get("user_agent_template"),
-            default_headers: Fingerprint::default_headers(),
-            header_order: Fingerprint::default_header_order(),
-        }))
-    }
+fn decode_default_headers(value: &str) -> Result<IndexMap<String, String>, sqlx::Error> {
+    let headers = serde_json::from_str::<Vec<StoredHeader>>(value).map_err(json_error)?;
+    Ok(headers
+        .into_iter()
+        .map(|header| (header.name, header.value))
+        .collect())
+}
+
+fn encode_header_order(header_order: &[String]) -> Result<String, sqlx::Error> {
+    serde_json::to_string(header_order).map_err(json_error)
+}
+
+fn decode_header_order(value: &str) -> Result<Vec<String>, sqlx::Error> {
+    serde_json::from_str(value).map_err(json_error)
+}
+
+fn json_error(error: serde_json::Error) -> sqlx::Error {
+    sqlx::Error::Decode(Box::new(error))
 }
 
 /// 通过 HTTP 拉取更新清单并写入历史记录。
@@ -420,7 +532,10 @@ impl UpdateChecker {
 
         if let Some(repository) = &self.repository {
             repository
-                .upsert_auto_update(version, build, chromium_version.as_deref())
+                .update_current_version(version, build, chromium_version.as_deref())
+                .await?;
+            repository
+                .insert_update_history(version, build, chromium_version.as_deref(), None)
                 .await?;
         }
 

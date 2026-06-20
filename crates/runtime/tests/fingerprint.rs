@@ -10,20 +10,23 @@ use codex_proxy_platform::config::{
 use codex_proxy_platform::crypto::SecretBox;
 
 #[tokio::test]
-async fn runtime_should_load_latest_auto_updated_fingerprint_when_present() {
+async fn runtime_should_seed_and_load_current_fingerprint() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("fingerprints.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.upsert_auto_update("26.900.1", "7001", Some("147"))
-        .await
-        .expect("insert fingerprint");
+    let default_fingerprint =
+        codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests();
 
-    let stored = codex_proxy_runtime::bootstrap::load_runtime_fingerprint(&repo).await;
+    let stored =
+        codex_proxy_runtime::bootstrap::load_runtime_fingerprint(&repo, &default_fingerprint)
+            .await
+            .expect("load runtime fingerprint");
 
-    assert_eq!(stored.app_version, "26.900.1");
+    assert_eq!(stored.app_version, default_fingerprint.app_version);
+    assert_eq!(stored.default_headers, default_fingerprint.default_headers);
 }
 
 #[tokio::test]
@@ -82,6 +85,7 @@ async fn runtime_should_build_state_with_model_service() {
                 force_http11: false,
             },
             ws_pool: Default::default(),
+            fingerprint: Default::default(),
             admin: AdminConfig {
                 session_ttl_minutes: 1440,
                 session_cleanup_interval_secs: 3600,
@@ -159,6 +163,7 @@ async fn runtime_state_should_expose_backend_model_snapshot_through_model_servic
             force_http11: false,
         },
         ws_pool: Default::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,

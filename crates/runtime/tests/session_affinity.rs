@@ -21,6 +21,7 @@ async fn app_state_should_restore_session_affinity_from_sqlite() {
     let store = SqliteSessionAffinityStore::new(pool.clone());
     let now = Utc.with_ymd_and_hms(2026, 6, 18, 12, 0, 0).unwrap();
 
+    insert_account(&pool, "acct_restore").await;
     store
         .upsert(
             "resp_restore",
@@ -55,6 +56,16 @@ async fn app_state_should_restore_session_affinity_from_sqlite() {
             .await,
         Some("acct_restore".to_string())
     );
+}
+
+async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {
+    sqlx::query(
+        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, 'cipher', 'active', '2026-06-18T12:00:00Z', '2026-06-18T12:00:00Z')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("account should be inserted");
 }
 
 fn test_config(database_url: String) -> AppConfig {
@@ -104,6 +115,7 @@ fn test_config(database_url: String) -> AppConfig {
             force_http11: false,
         },
         ws_pool: WebSocketPoolConfig::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,

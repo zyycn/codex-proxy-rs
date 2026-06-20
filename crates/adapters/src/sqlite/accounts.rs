@@ -20,8 +20,8 @@ const INSERT_ACCOUNT_SQL: &str = r"
 insert into accounts (
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id,
+  chatgpt_user_id,
   label,
   plan_type,
   access_token_cipher,
@@ -36,8 +36,8 @@ const SELECT_STORED_ACCOUNT_BY_ID_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_cipher,
@@ -54,8 +54,8 @@ const SELECT_STORED_ACCOUNT_BY_CHATGPT_IDENTITY_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_cipher,
@@ -66,8 +66,8 @@ select
   added_at,
   updated_at
 from accounts
-where account_id = ?
-  and ((user_id is null and ? is null) or user_id = ?)
+where chatgpt_account_id = ?
+  and ((chatgpt_user_id is null and ? is null) or chatgpt_user_id = ?)
 order by added_at asc
 limit 1";
 
@@ -75,8 +75,8 @@ const LIST_STORED_ACCOUNTS_AFTER_CURSOR_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_cipher,
@@ -96,8 +96,8 @@ const LIST_STORED_ACCOUNTS_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_cipher,
@@ -115,8 +115,8 @@ const LIST_ACCOUNT_METADATA_AFTER_CURSOR_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_expires_at,
@@ -133,8 +133,8 @@ const LIST_ACCOUNT_METADATA_SQL: &str = r"
 select
   id,
   email,
-  account_id,
-  user_id,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
   label,
   plan_type,
   access_token_expires_at,
@@ -149,8 +149,8 @@ const LIST_POOL_ACCOUNTS_SQL: &str = r"
 select
   a.id,
   a.email,
-  a.account_id,
-  a.user_id,
+  a.chatgpt_account_id as account_id,
+  a.chatgpt_user_id as user_id,
   a.label,
   a.plan_type,
   a.access_token_cipher,
@@ -189,8 +189,8 @@ const GET_POOL_ACCOUNT_SQL: &str = r"
 select
   a.id,
   a.email,
-  a.account_id,
-  a.user_id,
+  a.chatgpt_account_id as account_id,
+  a.chatgpt_user_id as user_id,
   a.label,
   a.plan_type,
   a.access_token_cipher,
@@ -233,6 +233,8 @@ insert into account_usage (
   input_tokens,
   output_tokens,
   cached_tokens,
+  reasoning_tokens,
+  total_tokens,
   image_input_tokens,
   image_output_tokens,
   image_request_count,
@@ -246,13 +248,15 @@ insert into account_usage (
   window_image_request_count,
   window_image_request_failed_count,
   last_used_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 on conflict(account_id) do update set
   request_count = request_count + excluded.request_count,
   empty_response_count = empty_response_count + excluded.empty_response_count,
   input_tokens = input_tokens + excluded.input_tokens,
   output_tokens = output_tokens + excluded.output_tokens,
   cached_tokens = cached_tokens + excluded.cached_tokens,
+  reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
+  total_tokens = total_tokens + excluded.total_tokens,
   image_input_tokens = image_input_tokens + excluded.image_input_tokens,
   image_output_tokens = image_output_tokens + excluded.image_output_tokens,
   image_request_count = image_request_count + excluded.image_request_count,
@@ -281,6 +285,8 @@ select
   input_tokens,
   output_tokens,
   cached_tokens,
+  reasoning_tokens,
+  total_tokens,
   image_input_tokens,
   image_output_tokens,
   image_request_count,
@@ -311,6 +317,8 @@ select
   au.input_tokens,
   au.output_tokens,
   au.cached_tokens,
+  au.reasoning_tokens,
+  au.total_tokens,
   au.image_input_tokens,
   au.image_output_tokens,
   au.image_request_count,
@@ -334,6 +342,8 @@ select
   au.input_tokens,
   au.output_tokens,
   au.cached_tokens,
+  au.reasoning_tokens,
+  au.total_tokens,
   au.image_input_tokens,
   au.image_output_tokens,
   au.image_request_count,
@@ -352,6 +362,8 @@ select
   coalesce(sum(input_tokens), 0) as input_tokens,
   coalesce(sum(output_tokens), 0) as output_tokens,
   coalesce(sum(cached_tokens), 0) as cached_tokens,
+  coalesce(sum(reasoning_tokens), 0) as reasoning_tokens,
+  coalesce(sum(total_tokens), 0) as total_tokens,
   coalesce(sum(image_input_tokens), 0) as image_input_tokens,
   coalesce(sum(image_output_tokens), 0) as image_output_tokens,
   coalesce(sum(image_request_count), 0) as image_request_count,
@@ -366,6 +378,8 @@ set
   input_tokens = 0,
   output_tokens = 0,
   cached_tokens = 0,
+  reasoning_tokens = 0,
+  total_tokens = 0,
   image_input_tokens = 0,
   image_output_tokens = 0,
   image_request_count = 0,
@@ -477,8 +491,8 @@ const UPDATE_ACCOUNT_CLAIMS_WITH_REFRESH_SQL: &str = r"
 update accounts
 set
   email = ?,
-  account_id = ?,
-  user_id = ?,
+  chatgpt_account_id = ?,
+  chatgpt_user_id = ?,
   plan_type = ?,
   access_token_cipher = ?,
   refresh_token_cipher = ?,
@@ -492,8 +506,8 @@ const UPDATE_ACCOUNT_CLAIMS_PRESERVING_REFRESH_SQL: &str = r"
 update accounts
 set
   email = ?,
-  account_id = ?,
-  user_id = ?,
+  chatgpt_account_id = ?,
+  chatgpt_user_id = ?,
   plan_type = ?,
   access_token_cipher = ?,
   access_token_expires_at = ?,
@@ -513,8 +527,8 @@ const UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL: &str = r"
 update accounts
 set
   email = ?,
-  account_id = ?,
-  user_id = ?,
+  chatgpt_account_id = ?,
+  chatgpt_user_id = ?,
   label = ?,
   plan_type = ?,
   access_token_cipher = ?,
@@ -533,8 +547,8 @@ const UPDATE_IMPORTED_ACCOUNT_PRESERVING_REFRESH_SQL: &str = r"
 update accounts
 set
   email = ?,
-  account_id = ?,
-  user_id = ?,
+  chatgpt_account_id = ?,
+  chatgpt_user_id = ?,
   label = ?,
   plan_type = ?,
   access_token_cipher = ?,
@@ -710,6 +724,10 @@ pub struct UsageDelta {
     pub output_tokens: i64,
     /// 缓存 token 增量。
     pub cached_tokens: i64,
+    /// reasoning token 增量。
+    pub reasoning_tokens: i64,
+    /// 上游返回的总 token 增量。
+    pub total_tokens: i64,
     /// 图片输入 token 增量。
     pub image_input_tokens: i64,
     /// 图片输出 token 增量。
@@ -729,6 +747,8 @@ impl Default for UsageDelta {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            reasoning_tokens: 0,
+            total_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
             image_request_count: 0,
@@ -753,6 +773,10 @@ pub struct AccountUsageRecord {
     pub output_tokens: i64,
     /// 缓存 token 数。
     pub cached_tokens: i64,
+    /// reasoning token 数。
+    pub reasoning_tokens: i64,
+    /// 上游返回的总 token 数。
+    pub total_tokens: i64,
     /// 图片输入 token 数。
     pub image_input_tokens: i64,
     /// 图片输出 token 数。
@@ -808,6 +832,10 @@ pub struct AccountUsageListRecord {
     pub output_tokens: i64,
     /// 缓存 token 数。
     pub cached_tokens: i64,
+    /// reasoning token 数。
+    pub reasoning_tokens: i64,
+    /// 上游返回的总 token 数。
+    pub total_tokens: i64,
     /// 图片输入 token 数。
     pub image_input_tokens: i64,
     /// 图片输出 token 数。
@@ -835,6 +863,10 @@ pub struct AccountUsageSummary {
     pub output_tokens: i64,
     /// 缓存 token 总数。
     pub cached_tokens: i64,
+    /// reasoning token 总数。
+    pub reasoning_tokens: i64,
+    /// 上游返回 token 总数。
+    pub total_tokens: i64,
     /// 图片输入 token 总数。
     pub image_input_tokens: i64,
     /// 图片输出 token 总数。
@@ -1235,6 +1267,8 @@ impl SqliteAccountStore {
             .bind(usage.input_tokens)
             .bind(usage.output_tokens)
             .bind(usage.cached_tokens)
+            .bind(usage.reasoning_tokens)
+            .bind(usage.total_tokens)
             .bind(usage.image_input_tokens)
             .bind(usage.image_output_tokens)
             .bind(usage.image_request_count)
@@ -1324,6 +1358,8 @@ impl SqliteAccountStore {
             input_tokens: row.get("input_tokens"),
             output_tokens: row.get("output_tokens"),
             cached_tokens: row.get("cached_tokens"),
+            reasoning_tokens: row.get("reasoning_tokens"),
+            total_tokens: row.get("total_tokens"),
             image_input_tokens: row.get("image_input_tokens"),
             image_output_tokens: row.get("image_output_tokens"),
             image_request_count: row.get("image_request_count"),
@@ -1762,6 +1798,8 @@ fn sqlite_usage_delta(usage: AccountUsageDelta) -> UsageDelta {
         input_tokens: u64_to_i64_saturating(usage.input_tokens),
         output_tokens: u64_to_i64_saturating(usage.output_tokens),
         cached_tokens: u64_to_i64_saturating(usage.cached_tokens),
+        reasoning_tokens: u64_to_i64_saturating(usage.reasoning_tokens),
+        total_tokens: u64_to_i64_saturating(usage.total_tokens),
         image_input_tokens: u64_to_i64_saturating(usage.image_input_tokens),
         image_output_tokens: u64_to_i64_saturating(usage.image_output_tokens),
         image_request_count: u64_to_i64_saturating(usage.image_requests),
@@ -1805,6 +1843,8 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> SqliteAccountStoreResult<Acc
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        reasoning_tokens: row.get("reasoning_tokens"),
+        total_tokens: row.get("total_tokens"),
         image_input_tokens: row.get("image_input_tokens"),
         image_output_tokens: row.get("image_output_tokens"),
         image_request_count: row.get("image_request_count"),
@@ -1841,6 +1881,8 @@ fn usage_list_from_row(
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
+        reasoning_tokens: row.get("reasoning_tokens"),
+        total_tokens: row.get("total_tokens"),
         image_input_tokens: row.get("image_input_tokens"),
         image_output_tokens: row.get("image_output_tokens"),
         image_request_count: row.get("image_request_count"),

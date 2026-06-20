@@ -98,26 +98,19 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_hdr_async_with_config(
-            stream,
-            |request: &WsRequest, response: WsResponse| {
-                let extensions = request
-                    .headers()
-                    .get("sec-websocket-extensions")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or_default();
-                assert!(extensions.contains("permessage-deflate"));
-                let mut response = response;
-                response.headers_mut().insert(
-                    "sec-websocket-extensions",
-                    "permessage-deflate".parse().unwrap(),
-                );
-                Ok(response)
-            },
-            Some(websocket_accept_config()),
-        )
-        .await
-        .unwrap();
+        let mut websocket = accept_codex_test_websocket_with(stream, |request, response| {
+            let extensions = request
+                .headers()
+                .get("sec-websocket-extensions")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            assert!(extensions.contains("permessage-deflate"));
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+        })
+        .await;
 
         let delta = json!({
             "type": "response.output_text.delta",
@@ -1175,40 +1168,30 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
 }
 
 #[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_present() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_hdr_async_with_config(
-            stream,
-            |_request: &WsRequest, mut response: WsResponse| {
-                response.headers_mut().insert(
-                    "sec-websocket-extensions",
-                    "permessage-deflate".parse().unwrap(),
-                );
-                response
-                    .headers_mut()
-                    .insert("x-codex-turn-state", "turn-ws-client".parse().unwrap());
-                response.headers_mut().insert(
-                    "set-cookie",
-                    "cf_clearance=client-ws; Domain=.chatgpt.com; Path=/"
-                        .parse()
-                        .unwrap(),
-                );
-                response
-                    .headers_mut()
-                    .insert("x-ratelimit-remaining-requests", "17".parse().unwrap());
-                Ok(response)
-            },
-            Some(websocket_accept_config()),
-        )
-        .await
-        .unwrap();
+        let mut websocket = accept_codex_test_websocket_with(stream, |_request, response| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            response
+                .headers_mut()
+                .insert("x-codex-turn-state", "turn-ws-client".parse().unwrap());
+            response.headers_mut().insert(
+                "set-cookie",
+                "cf_clearance=client-ws; Domain=.chatgpt.com; Path=/"
+                    .parse()
+                    .unwrap(),
+            );
+            response
+                .headers_mut()
+                .insert("x-ratelimit-remaining-requests", "17".parse().unwrap());
+        })
+        .await;
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
             .expect("client payload should be json");

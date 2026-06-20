@@ -157,6 +157,12 @@ async fn admin_auth_logout_should_clear_accounts_usage_cookies_and_runtime_pool(
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let secret_box = SecretBox::new([109u8; 32]);
+    let access_token = test_jwt(
+        "chatgpt-auth-logout",
+        Some("user-auth-logout"),
+        Some("logout@example.com"),
+        Some("plus"),
+    );
     let state = AppState::with_pool_secret_and_api_key_hasher(
         test_config(url),
         pool.clone(),
@@ -178,7 +184,7 @@ async fn admin_auth_logout_should_clear_accounts_usage_cookies_and_runtime_pool(
                             "id": "acct_auth_logout",
                             "email": "logout@example.com",
                             "planType": "plus",
-                            "token": "access-auth-logout",
+                            "token": access_token,
                             "refreshToken": "refresh-auth-logout",
                             "status": "active"
                         }]
@@ -426,11 +432,12 @@ async fn admin_auth_callback_should_exchange_code_and_redirect_to_return_host() 
         "http://codex.local:1455/"
     );
     assert_eq!(exchange_calls.lock().await[0].code, "callback-code");
-    let count: (i64,) = sqlx::query_as("select count(*) from accounts where account_id = ?")
-        .bind("callback-account")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("select count(*) from accounts where chatgpt_account_id = ?")
+            .bind("callback-account")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count.0, 1);
 }
 

@@ -46,7 +46,7 @@ async fn insert_account(pool: &sqlx::SqlitePool, secret_box: &SecretBox, id: &st
         .encrypt(&SecretString::new(format!("access-{id}").into()))
         .expect("access token should encrypt");
     sqlx::query(
-        "insert into accounts (id, email, account_id, user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(format!("{id}@example.com"))
@@ -109,6 +109,7 @@ fn test_config(database_url: String) -> AppConfig {
             force_http11: false,
         },
         ws_pool: WebSocketPoolConfig::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,

@@ -47,7 +47,9 @@ use tokio_tungstenite::{
     accept_hdr_async_with_config,
     tungstenite::{
         extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
-        handshake::server::{Callback, Request as WsRequest, Response as WsResponse},
+        handshake::server::{
+            Callback, ErrorResponse, Request as WsRequest, Response as WsResponse,
+        },
         protocol::WebSocketConfig,
         Error as WsError, Message,
     },
@@ -71,25 +73,35 @@ fn websocket_accept_config() -> WebSocketConfig {
 }
 
 async fn accept_async(stream: TcpStream) -> Result<WebSocketStream<TcpStream>, WsError> {
-    accept_hdr_async(stream, |_request: &WsRequest, response: WsResponse| {
-        Ok(response)
-    })
-    .await
+    accept_hdr_async(stream, |_request, _response| {}).await
 }
 
-async fn accept_hdr_async<C>(
+struct TestWebSocketCallback<F>(F);
+
+impl<F> Callback for TestWebSocketCallback<F>
+where
+    F: FnOnce(&WsRequest, &mut WsResponse) + Unpin,
+{
+    fn on_request(
+        self,
+        request: &WsRequest,
+        mut response: WsResponse,
+    ) -> Result<WsResponse, ErrorResponse> {
+        (self.0)(request, &mut response);
+        Ok(response)
+    }
+}
+
+async fn accept_hdr_async<F>(
     stream: TcpStream,
-    callback: C,
+    callback: F,
 ) -> Result<WebSocketStream<TcpStream>, WsError>
 where
-    C: Callback + Unpin,
+    F: FnOnce(&WsRequest, &mut WsResponse) + Unpin,
 {
     accept_hdr_async_with_config(
         stream,
-        move |request: &WsRequest, response: WsResponse| {
-            let response = callback.on_request(request, response)?;
-            Ok(response)
-        },
+        TestWebSocketCallback(callback),
         Some(websocket_accept_config()),
     )
     .await
@@ -524,7 +536,7 @@ async fn insert_account(pool: &SqlitePool, secret_box: &SecretBox) {
         .encrypt(&SecretString::new("access-secret".to_string().into()))
         .unwrap();
     sqlx::query(
-        "insert into accounts (id, email, account_id, user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("acct_chat")
     .bind("user@example.com")
@@ -553,7 +565,7 @@ async fn insert_named_account(
         ))
         .unwrap();
     sqlx::query(
-        "insert into accounts (id, email, account_id, user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(format!("{id}@example.com"))
@@ -617,10 +629,6 @@ struct HistoryRecoveryCapture {
     second_ws_payload: Value,
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn spawn_single_websocket_completed_upstream(
     response_id: &'static str,
 ) -> (String, tokio::task::JoinHandle<CapturedWebSocketRequest>) {
@@ -630,19 +638,15 @@ async fn spawn_single_websocket_completed_upstream(
         let (stream, _) = listener.accept().await.unwrap();
         let captured_headers = Arc::new(Mutex::new(Vec::new()));
         let captured_headers_for_callback = Arc::clone(&captured_headers);
-        let mut websocket = accept_hdr_async(
-            stream,
-            move |request: &WsRequest, mut response: WsResponse| {
-                *captured_headers_for_callback.lock().unwrap() = request_headers(request);
-                response
-                    .headers_mut()
-                    .insert("x-ratelimit-limit-requests", "55".parse().unwrap());
-                response
-                    .headers_mut()
-                    .insert("x-codex-primary-used-percent", "44".parse().unwrap());
-                Ok(response)
-            },
-        )
+        let mut websocket = accept_hdr_async(stream, move |request, response| {
+            *captured_headers_for_callback.lock().unwrap() = request_headers(request);
+            response
+                .headers_mut()
+                .insert("x-ratelimit-limit-requests", "55".parse().unwrap());
+            response
+                .headers_mut()
+                .insert("x-codex-primary-used-percent", "44".parse().unwrap());
+        })
         .await
         .unwrap();
         let message = websocket.next().await.unwrap().unwrap();
@@ -661,10 +665,6 @@ async fn spawn_single_websocket_completed_upstream(
     (base_url, server)
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn spawn_websocket_failure_then_websocket_success_upstream(
     failure: String,
 ) -> (String, tokio::task::JoinHandle<HistoryRecoveryCapture>) {
@@ -674,13 +674,9 @@ async fn spawn_websocket_failure_then_websocket_success_upstream(
         let (first_stream, _) = listener.accept().await.unwrap();
         let first_headers = Arc::new(Mutex::new(Vec::new()));
         let first_headers_for_callback = Arc::clone(&first_headers);
-        let mut first_websocket = accept_hdr_async(
-            first_stream,
-            move |request: &WsRequest, response: WsResponse| {
-                *first_headers_for_callback.lock().unwrap() = request_headers(request);
-                Ok(response)
-            },
-        )
+        let mut first_websocket = accept_hdr_async(first_stream, move |request, _response| {
+            *first_headers_for_callback.lock().unwrap() = request_headers(request);
+        })
         .await
         .unwrap();
         let first_message = first_websocket.next().await.unwrap().unwrap();
@@ -695,13 +691,9 @@ async fn spawn_websocket_failure_then_websocket_success_upstream(
         let (second_stream, _) = listener.accept().await.unwrap();
         let second_headers = Arc::new(Mutex::new(Vec::new()));
         let second_headers_for_callback = Arc::clone(&second_headers);
-        let mut second_websocket = accept_hdr_async(
-            second_stream,
-            move |request: &WsRequest, response: WsResponse| {
-                *second_headers_for_callback.lock().unwrap() = request_headers(request);
-                Ok(response)
-            },
-        )
+        let mut second_websocket = accept_hdr_async(second_stream, move |request, _response| {
+            *second_headers_for_callback.lock().unwrap() = request_headers(request);
+        })
         .await
         .unwrap();
         let second_message = second_websocket.next().await.unwrap().unwrap();
@@ -727,10 +719,6 @@ async fn spawn_websocket_failure_then_websocket_success_upstream(
     (base_url, server)
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn spawn_chunked_websocket_upstream() -> (
     String,
     oneshot::Receiver<()>,
@@ -745,13 +733,11 @@ async fn spawn_chunked_websocket_upstream() -> (
         let (stream, _) = listener.accept().await.unwrap();
         let captured_headers = Arc::new(Mutex::new(Vec::new()));
         let captured_headers_for_callback = Arc::clone(&captured_headers);
-        let mut websocket =
-            accept_hdr_async(stream, move |request: &WsRequest, response: WsResponse| {
-                *captured_headers_for_callback.lock().unwrap() = request_headers(request);
-                Ok(response)
-            })
-            .await
-            .unwrap();
+        let mut websocket = accept_hdr_async(stream, move |request, _response| {
+            *captured_headers_for_callback.lock().unwrap() = request_headers(request);
+        })
+        .await
+        .unwrap();
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
             .expect("websocket payload should be json");
@@ -902,15 +888,11 @@ async fn accept_websocket_response_with_authorization_and_message(
     payload
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn accept_websocket_with_authorization(
     stream: TcpStream,
     expected_authorization: &'static str,
 ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
-    accept_hdr_async(stream, move |request: &WsRequest, response: WsResponse| {
+    accept_hdr_async(stream, move |request, _response| {
         assert_eq!(
             request
                 .headers()
@@ -918,7 +900,6 @@ async fn accept_websocket_with_authorization(
                 .and_then(|value| value.to_str().ok()),
             Some(expected_authorization)
         );
-        Ok(response)
     })
     .await
     .unwrap()
@@ -1583,6 +1564,7 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             force_http11: false,
         },
         ws_pool: WebSocketPoolConfig::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,

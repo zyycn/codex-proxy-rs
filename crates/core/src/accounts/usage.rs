@@ -11,6 +11,10 @@ pub struct AccountUsageDelta {
     pub output_tokens: u64,
     /// 缓存 token 增量。
     pub cached_tokens: u64,
+    /// reasoning token 增量。
+    pub reasoning_tokens: u64,
+    /// 上游返回的总 token 增量。
+    pub total_tokens: u64,
     /// 空响应数增量。
     pub empty_responses: u64,
     /// 图片工具输入 token 增量。
@@ -31,6 +35,8 @@ impl AccountUsageDelta {
             input_tokens: self.input_tokens + other.input_tokens,
             output_tokens: self.output_tokens + other.output_tokens,
             cached_tokens: self.cached_tokens + other.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens + other.reasoning_tokens,
+            total_tokens: self.total_tokens + other.total_tokens,
             empty_responses: self.empty_responses + other.empty_responses,
             image_input_tokens: self.image_input_tokens + other.image_input_tokens,
             image_output_tokens: self.image_output_tokens + other.image_output_tokens,

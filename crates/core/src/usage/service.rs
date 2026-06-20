@@ -24,6 +24,8 @@ impl UsageService {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cached_tokens: usage.cached_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            total_tokens: usage.total_tokens,
             empty_responses: 0,
             image_input_tokens: usage.image_input_tokens,
             image_output_tokens: usage.image_output_tokens,

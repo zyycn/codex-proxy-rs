@@ -52,6 +52,10 @@ pub struct AdminUsageStatsData {
     pub output_tokens: i64,
     /// 缓存 token 数。
     pub cached_tokens: i64,
+    /// reasoning token 数。
+    pub reasoning_tokens: i64,
+    /// 上游返回的总 token 数。
+    pub total_tokens: i64,
     /// 图片输入 token 数。
     pub image_input_tokens: i64,
     /// 图片输出 token 数。
@@ -80,6 +84,10 @@ pub struct AdminUsageStatsSummaryData {
     pub output_tokens: i64,
     /// 缓存 token 总数。
     pub cached_tokens: i64,
+    /// reasoning token 总数。
+    pub reasoning_tokens: i64,
+    /// 上游返回 token 总数。
+    pub total_tokens: i64,
     /// 图片输入 token 总数。
     pub image_input_tokens: i64,
     /// 图片输出 token 总数。
@@ -159,6 +167,8 @@ impl From<AdminUsageRecord> for AdminUsageStatsData {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cached_tokens: usage.cached_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            total_tokens: usage.total_tokens,
             image_input_tokens: usage.image_input_tokens,
             image_output_tokens: usage.image_output_tokens,
             image_request_count: usage.image_request_count,
@@ -177,6 +187,8 @@ impl From<AdminUsageSummary> for AdminUsageStatsSummaryData {
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_tokens: summary.cached_tokens,
+            reasoning_tokens: summary.reasoning_tokens,
+            total_tokens: summary.total_tokens,
             image_input_tokens: summary.image_input_tokens,
             image_output_tokens: summary.image_output_tokens,
             image_request_count: summary.image_request_count,
