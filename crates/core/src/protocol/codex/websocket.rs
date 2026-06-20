@@ -1192,13 +1192,14 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
         Value::String("response.create".to_string()),
     );
     insert_value(&mut body, "model", Value::String(request.model.clone()));
-    if !request.instructions.is_empty() {
-        insert_value(
-            &mut body,
-            "instructions",
-            Value::String(request.instructions.clone()),
-        );
-    }
+    insert_value(
+        &mut body,
+        "instructions",
+        Value::String(request.instructions.clone()),
+    );
+    insert_value(&mut body, "input", Value::Array(request.input.clone()));
+    insert_value(&mut body, "store", Value::Bool(request.store));
+    insert_value(&mut body, "stream", Value::Bool(request.stream));
     if let Some(previous_response_id) = &request.previous_response_id {
         insert_value(
             &mut body,
@@ -1206,12 +1207,12 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
             Value::String(previous_response_id.clone()),
         );
     }
-    insert_value(&mut body, "input", Value::Array(request.input.clone()));
-    insert_value(
-        &mut body,
-        "tools",
-        Value::Array(request.tools.clone().unwrap_or_default()),
-    );
+    if let Some(reasoning) = &request.reasoning {
+        insert_value(&mut body, "reasoning", reasoning.clone());
+    }
+    if let Some(tools) = non_empty_tools(request) {
+        insert_value(&mut body, "tools", Value::Array(tools.to_vec()));
+    }
     insert_value(
         &mut body,
         "tool_choice",
@@ -1225,25 +1226,9 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
         "parallel_tool_calls",
         Value::Bool(request.parallel_tool_calls.unwrap_or(true)),
     );
-    insert_value(
-        &mut body,
-        "reasoning",
-        request.reasoning.clone().unwrap_or(Value::Null),
-    );
-    insert_value(&mut body, "store", Value::Bool(request.store));
-    insert_value(&mut body, "stream", Value::Bool(request.stream));
-    insert_value(
-        &mut body,
-        "include",
-        request
-            .include
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .map(Value::String)
-            .collect::<Vec<_>>()
-            .into(),
-    );
+    if let Some(text) = &request.text {
+        insert_value(&mut body, "text", text.clone());
+    }
     if let Some(service_tier) = &request.service_tier {
         insert_value(
             &mut body,
@@ -1258,11 +1243,17 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
             Value::String(prompt_cache_key.clone()),
         );
     }
-    if let Some(text) = &request.text {
-        insert_value(&mut body, "text", text.clone());
-    }
-    if let Some(generate) = request.generate {
-        insert_value(&mut body, "generate", Value::Bool(generate));
+    if let Some(include) = non_empty_include(request) {
+        insert_value(
+            &mut body,
+            "include",
+            include
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect::<Vec<_>>()
+                .into(),
+        );
     }
     if let Some(client_metadata) = &request.client_metadata {
         insert_value(&mut body, "client_metadata", client_metadata.clone());
@@ -1288,14 +1279,19 @@ impl Serialize for OrderedResponseCreatePayload<'_> {
         let mut map = serializer.serialize_map(Some(websocket_payload_keys(request).len()))?;
         map.serialize_entry("type", "response.create")?;
         map.serialize_entry("model", &request.model)?;
-        if !request.instructions.is_empty() {
-            map.serialize_entry("instructions", &request.instructions)?;
-        }
+        map.serialize_entry("instructions", &request.instructions)?;
+        map.serialize_entry("input", &request.input)?;
+        map.serialize_entry("store", &request.store)?;
+        map.serialize_entry("stream", &request.stream)?;
         if let Some(previous_response_id) = &request.previous_response_id {
             map.serialize_entry("previous_response_id", previous_response_id)?;
         }
-        map.serialize_entry("input", &request.input)?;
-        map.serialize_entry("tools", request.tools.as_deref().unwrap_or(&[]))?;
+        if let Some(reasoning) = &request.reasoning {
+            map.serialize_entry("reasoning", reasoning)?;
+        }
+        if let Some(tools) = non_empty_tools(request) {
+            map.serialize_entry("tools", tools)?;
+        }
         if let Some(tool_choice) = &request.tool_choice {
             map.serialize_entry("tool_choice", tool_choice)?;
         } else {
@@ -1305,25 +1301,17 @@ impl Serialize for OrderedResponseCreatePayload<'_> {
             "parallel_tool_calls",
             &request.parallel_tool_calls.unwrap_or(true),
         )?;
-        if let Some(reasoning) = &request.reasoning {
-            map.serialize_entry("reasoning", reasoning)?;
-        } else {
-            map.serialize_entry("reasoning", &Value::Null)?;
+        if let Some(text) = &request.text {
+            map.serialize_entry("text", text)?;
         }
-        map.serialize_entry("store", &request.store)?;
-        map.serialize_entry("stream", &request.stream)?;
-        map.serialize_entry("include", request.include.as_deref().unwrap_or(&[]))?;
         if let Some(service_tier) = &request.service_tier {
             map.serialize_entry("service_tier", service_tier)?;
         }
         if let Some(prompt_cache_key) = &request.prompt_cache_key {
             map.serialize_entry("prompt_cache_key", prompt_cache_key)?;
         }
-        if let Some(text) = &request.text {
-            map.serialize_entry("text", text)?;
-        }
-        if let Some(generate) = request.generate {
-            map.serialize_entry("generate", &generate)?;
+        if let Some(include) = non_empty_include(request) {
+            map.serialize_entry("include", include)?;
         }
         if let Some(client_metadata) = &request.client_metadata {
             map.serialize_entry("client_metadata", client_metadata)?;
@@ -1337,43 +1325,52 @@ fn insert_value(body: &mut Map<String, Value>, key: &str, value: Value) {
 }
 
 fn websocket_payload_keys(request: &CodexResponsesRequest) -> Vec<String> {
-    let mut keys = vec!["type".to_string(), "model".to_string()];
-    if !request.instructions.is_empty() {
-        keys.push("instructions".to_string());
-    }
+    let mut keys = vec![
+        "type".to_string(),
+        "model".to_string(),
+        "instructions".to_string(),
+        "input".to_string(),
+        "store".to_string(),
+        "stream".to_string(),
+    ];
     if request.previous_response_id.is_some() {
         keys.push("previous_response_id".to_string());
     }
-    keys.extend(
-        [
-            "input",
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "reasoning",
-            "store",
-            "stream",
-            "include",
-        ]
-        .into_iter()
-        .map(ToString::to_string),
-    );
+    if request.reasoning.is_some() {
+        keys.push("reasoning".to_string());
+    }
+    if non_empty_tools(request).is_some() {
+        keys.push("tools".to_string());
+    }
+    keys.push("tool_choice".to_string());
+    keys.push("parallel_tool_calls".to_string());
+    if request.text.is_some() {
+        keys.push("text".to_string());
+    }
     if request.service_tier.is_some() {
         keys.push("service_tier".to_string());
     }
     if request.prompt_cache_key.is_some() {
         keys.push("prompt_cache_key".to_string());
     }
-    if request.text.is_some() {
-        keys.push("text".to_string());
-    }
-    if request.generate.is_some() {
-        keys.push("generate".to_string());
+    if non_empty_include(request).is_some() {
+        keys.push("include".to_string());
     }
     if request.client_metadata.is_some() {
         keys.push("client_metadata".to_string());
     }
     keys
+}
+
+fn non_empty_tools(request: &CodexResponsesRequest) -> Option<&[Value]> {
+    request.tools.as_deref().filter(|tools| !tools.is_empty())
+}
+
+fn non_empty_include(request: &CodexResponsesRequest) -> Option<&[String]> {
+    request
+        .include
+        .as_deref()
+        .filter(|include| !include.is_empty())
 }
 
 fn redact_payload_body(body: Value) -> Value {

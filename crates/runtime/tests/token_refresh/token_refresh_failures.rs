@@ -127,7 +127,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_restore_active_status_after_transport_failure() {
+async fn token_refresh_task_should_not_retry_ambiguous_transport_failure() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-transport-failure.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -180,8 +180,9 @@ async fn token_refresh_task_should_restore_active_status_after_transport_failure
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(summary.failed, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 5]);
+    assert_eq!(observed_statuses, [AccountStatus::Refreshing]);
     assert_eq!(stored.status, AccountStatus::Active);
+    assert!(stored.next_refresh_at.is_some_and(|next| next > now));
     assert_eq!(
         stored.access_token.expose_secret(),
         old_access_token.as_str()
@@ -217,7 +218,7 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
         .await
         .expect("account should be inserted");
     let mut responses = Vec::new();
-    responses.extend((0..5).map(|_| Err(RefreshFailure::Transport)));
+    responses.extend((0..5).map(|_| Err(RefreshFailure::RetryableTransport)));
     responses.push(Ok(TokenPair {
         access_token: new_access_token.clone(),
         refresh_token: None,
@@ -270,7 +271,75 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account() {
+async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable_failure() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-stale-rt.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool, SecretBox::new([31u8; 32]));
+    let now = Utc.with_ymd_and_hms(2026, 6, 19, 16, 0, 0).unwrap();
+    let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
+    let rotated_access_token = test_jwt((now + Duration::hours(1)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-stale-rt".to_string(),
+            email: Some("stale-rt@example.com".to_string()),
+            account_id: Some("chatgpt-stale-rt".to_string()),
+            user_id: Some("user-stale-rt".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(old_access_token.into()),
+            refresh_token: Some(SecretString::new("refresh-stale-old".to_string().into())),
+            access_token_expires_at: Some(now + Duration::seconds(30)),
+            status: AccountStatus::Active,
+        })
+        .await
+        .expect("account should be inserted");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refresher = RefreshTokenRotatingRefresher {
+        store: store.clone(),
+        account_id: "acct-refresh-stale-rt".to_string(),
+        calls: calls.clone(),
+        access_token: rotated_access_token.clone(),
+    };
+    let task = codex_proxy_runtime::tasks::token_refresh::TokenRefreshTask::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher,
+    )
+    .with_retry_delays(vec![StdDuration::ZERO; 4]);
+
+    let summary = task
+        .refresh_due_accounts_once_at(now)
+        .await
+        .expect("stale refresh token should skip retry");
+    let stored = store
+        .get("acct-refresh-stale-rt")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        rotated_access_token.as_str()
+    );
+    assert_eq!(
+        stored
+            .refresh_token
+            .as_ref()
+            .map(|token| token.expose_secret()),
+        Some("refresh-rotated")
+    );
+}
+
+#[tokio::test]
+async fn token_refresh_task_should_confirm_invalid_grant_before_disabling_account() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-permanent-failure.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -329,7 +398,7 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account
 
     assert_eq!(summary.status_updated, 1);
     assert_eq!(observed_statuses, [AccountStatus::Refreshing; 2]);
-    assert_eq!(stored.status, AccountStatus::Expired);
+    assert_eq!(stored.status, AccountStatus::Disabled);
     assert_eq!(
         stored.access_token.expose_secret(),
         old_access_token.as_str()

@@ -160,6 +160,17 @@ impl FingerprintRepository {
         build_number: &str,
         chromium_version: Option<&str>,
     ) -> Result<(), sqlx::Error> {
+        let resolved_chromium_version = match chromium_version {
+            Some(version) => version.to_string(),
+            None => sqlx::query_scalar::<_, String>(
+                "select chromium_version from fingerprints where id = ?",
+            )
+            .bind(AUTO_UPDATED_FINGERPRINT_ID)
+            .fetch_optional(&self.pool)
+            .await?
+            .unwrap_or_else(|| DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION.to_string()),
+        };
+
         sqlx::query(
             "insert into fingerprints (id, app_version, build_number, platform, arch, chromium_version, user_agent_template, source, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?) \
              on conflict(id) do update set app_version = excluded.app_version, build_number = excluded.build_number, platform = excluded.platform, arch = excluded.arch, chromium_version = excluded.chromium_version, user_agent_template = excluded.user_agent_template, source = excluded.source, created_at = excluded.created_at",
@@ -169,7 +180,7 @@ impl FingerprintRepository {
         .bind(build_number)
         .bind(AUTO_UPDATE_PLATFORM)
         .bind(AUTO_UPDATE_ARCH)
-        .bind(chromium_version.unwrap_or(DEFAULT_AUTO_UPDATE_CHROMIUM_VERSION))
+        .bind(resolved_chromium_version)
         .bind(AUTO_UPDATE_USER_AGENT_TEMPLATE)
         .bind(AUTO_UPDATE_SOURCE)
         .bind(Utc::now().to_rfc3339())

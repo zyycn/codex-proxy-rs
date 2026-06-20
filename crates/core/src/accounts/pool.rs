@@ -189,6 +189,11 @@ impl AccountPool {
         self.accounts.insert(account.id.clone(), account);
     }
 
+    /// 获取账号池中的账号快照。
+    pub fn get(&self, account_id: &str) -> Option<Account> {
+        self.accounts.get(account_id).cloned()
+    }
+
     /// 移除账号及其在途槽位。
     pub fn remove(&mut self, account_id: &str) -> bool {
         let removed = self.accounts.remove(account_id).is_some();
@@ -289,6 +294,31 @@ impl AccountPool {
             return false;
         };
         account.quota_verify_required = required;
+        true
+    }
+
+    /// 应用已经验证过的配额状态。
+    pub fn apply_quota_state(
+        &mut self,
+        account_id: &str,
+        limit_reached: bool,
+        cooldown_until: Option<DateTime<Utc>>,
+    ) -> bool {
+        let Some(account) = self.accounts.get_mut(account_id) else {
+            return false;
+        };
+        account.quota_verify_required = false;
+        account.quota_limit_reached = limit_reached;
+        account.quota_cooldown_until = limit_reached.then_some(cooldown_until).flatten();
+        if let Some(cooldown_until) = account.quota_cooldown_until {
+            account.window_reset_at = account
+                .window_reset_at
+                .filter(|existing| *existing > cooldown_until)
+                .or(Some(cooldown_until));
+        }
+        if limit_reached {
+            self.slots.remove(account_id);
+        }
         true
     }
 

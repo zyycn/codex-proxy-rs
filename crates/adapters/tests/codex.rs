@@ -1,5 +1,4 @@
 use std::{
-    io::Write,
     process::Command,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -12,7 +11,6 @@ use codex_proxy_adapters::codex::{
     client,
     websocket::pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
 };
-use flate2::{write::DeflateEncoder, Compression};
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::{
@@ -21,12 +19,11 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{
-    accept_async, accept_hdr_async,
+    accept_hdr_async_with_config,
     tungstenite::{
-        handshake::{
-            derive_accept_key,
-            server::{Request as WsRequest, Response as WsResponse},
-        },
+        extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+        handshake::server::{Request as WsRequest, Response as WsResponse},
+        protocol::WebSocketConfig,
         Message,
     },
 };
@@ -42,44 +39,31 @@ mod codex_websocket;
 #[path = "codex/codex_websocket_pool.rs"]
 mod codex_websocket_pool;
 
-fn compressed_permessage_deflate_payload(payload: &[u8]) -> Vec<u8> {
-    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(payload).expect("payload should compress");
-    encoder.finish().expect("compressed payload")
+fn websocket_accept_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
 }
 
-fn server_websocket_frame(opcode: u8, rsv1: bool, payload: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::new();
-    frame.push(0x80 | if rsv1 { 0x40 } else { 0 } | opcode);
-    match payload.len() {
-        len @ 0..=125 => frame.push(len as u8),
-        len @ 126..=65_535 => {
-            frame.push(126);
-            frame.extend_from_slice(&(len as u16).to_be_bytes());
-        }
-        len => {
-            frame.push(127);
-            frame.extend_from_slice(&(len as u64).to_be_bytes());
-        }
-    }
-    frame.extend_from_slice(payload);
-    frame
-}
-
-fn server_websocket_payload(frame: &[u8]) -> &[u8] {
-    let len_marker = frame[1] & 0x7f;
-    let (offset, len) = match len_marker {
-        len @ 0..=125 => (2, usize::from(len)),
-        126 => (4, usize::from(u16::from_be_bytes([frame[2], frame[3]]))),
-        127 => {
-            let len = u64::from_be_bytes([
-                frame[2], frame[3], frame[4], frame[5], frame[6], frame[7], frame[8], frame[9],
-            ]) as usize;
-            (10, len)
-        }
-        _ => unreachable!("websocket length marker is masked to 7 bits"),
-    };
-    &frame[offset..offset + len]
+async fn accept_codex_test_websocket(
+    stream: TcpStream,
+) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+    accept_hdr_async_with_config(
+        stream,
+        |_request: &WsRequest, mut response: WsResponse| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            Ok(response)
+        },
+        Some(websocket_accept_config()),
+    )
+    .await
+    .unwrap()
 }
 
 fn read_header_names(request: &str) -> Vec<String> {
@@ -121,15 +105,6 @@ async fn read_http_request(stream: &mut TcpStream) -> String {
         }
     }
     String::from_utf8(request).unwrap()
-}
-
-fn websocket_opening_header(request: &str, name: &str) -> Option<String> {
-    request.lines().find_map(|line| {
-        let (header_name, value) = line.split_once(':')?;
-        header_name
-            .eq_ignore_ascii_case(name)
-            .then(|| value.trim().to_string())
-    })
 }
 
 async fn write_empty_http_response(stream: &mut TcpStream) {

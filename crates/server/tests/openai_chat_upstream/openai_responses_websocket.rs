@@ -462,7 +462,7 @@ async fn responses_websocket_stream_should_record_metadata_turn_state_for_contin
         let second_headers = second_headers.lock().unwrap().clone();
         (first_payload, second_payload, second_headers)
     });
-    let (app, api_key, _pool, _dir) = test_app_with_account_pool_config(base_url, |config| {
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_config(base_url, |config| {
         config.ws_pool.enabled = false;
     })
     .await;
@@ -492,6 +492,10 @@ async fn responses_websocket_stream_should_record_metadata_turn_state_for_contin
     let first_body = response_text(first_response).await;
     assert!(first_body.contains("\"id\":\"resp_metadata_turn_state\""));
     assert!(!first_body.contains("response.metadata"));
+    assert_eq!(
+        wait_for_session_affinity_turn_state(&pool, "resp_metadata_turn_state").await,
+        Some("turn-from-metadata".to_string())
+    );
 
     let second_response = app
         .oneshot(

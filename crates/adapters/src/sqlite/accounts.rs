@@ -43,6 +43,7 @@ select
   access_token_cipher,
   refresh_token_cipher,
   access_token_expires_at,
+  next_refresh_at,
   status,
   added_at,
   updated_at
@@ -60,6 +61,7 @@ select
   access_token_cipher,
   refresh_token_cipher,
   access_token_expires_at,
+  next_refresh_at,
   status,
   added_at,
   updated_at
@@ -80,6 +82,7 @@ select
   access_token_cipher,
   refresh_token_cipher,
   access_token_expires_at,
+  next_refresh_at,
   status,
   added_at,
   updated_at
@@ -100,6 +103,7 @@ select
   access_token_cipher,
   refresh_token_cipher,
   access_token_expires_at,
+  next_refresh_at,
   status,
   added_at,
   updated_at
@@ -152,6 +156,7 @@ select
   a.access_token_cipher,
   a.refresh_token_cipher,
   a.access_token_expires_at,
+  a.next_refresh_at,
   a.status,
   a.quota_limit_reached,
   a.quota_verify_required,
@@ -191,6 +196,7 @@ select
   a.access_token_cipher,
   a.refresh_token_cipher,
   a.access_token_expires_at,
+  a.next_refresh_at,
   a.status,
   a.quota_limit_reached,
   a.quota_verify_required,
@@ -395,6 +401,17 @@ set
   updated_at = ?
 where id = ?";
 
+const APPLY_QUOTA_SNAPSHOT_SQL: &str = r"
+update accounts
+set
+  quota_json = ?,
+  quota_fetched_at = ?,
+  quota_limit_reached = ?,
+  quota_verify_required = 0,
+  quota_cooldown_until = ?,
+  updated_at = ?
+where id = ?";
+
 const SELECT_RATE_LIMIT_WINDOW_SQL: &str = r"
 select
   window_reset_at,
@@ -466,6 +483,7 @@ set
   access_token_cipher = ?,
   refresh_token_cipher = ?,
   access_token_expires_at = ?,
+  next_refresh_at = ?,
   status = ?,
   updated_at = ?
 where id = ?";
@@ -479,7 +497,65 @@ set
   plan_type = ?,
   access_token_cipher = ?,
   access_token_expires_at = ?,
+  next_refresh_at = ?,
   status = ?,
+  updated_at = ?
+where id = ?";
+
+const SET_NEXT_REFRESH_AT_SQL: &str = r"
+update accounts
+set
+  next_refresh_at = ?,
+  updated_at = ?
+where id = ?";
+
+const UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL: &str = r"
+update accounts
+set
+  email = ?,
+  account_id = ?,
+  user_id = ?,
+  label = ?,
+  plan_type = ?,
+  access_token_cipher = ?,
+  refresh_token_cipher = ?,
+  access_token_expires_at = ?,
+  status = ?,
+  quota_json = coalesce(?, quota_json),
+  quota_fetched_at = case when ? is null then quota_fetched_at else ? end,
+  quota_limit_reached = 0,
+  quota_cooldown_until = null,
+  quota_verify_required = ?,
+  updated_at = ?
+where id = ?";
+
+const UPDATE_IMPORTED_ACCOUNT_PRESERVING_REFRESH_SQL: &str = r"
+update accounts
+set
+  email = ?,
+  account_id = ?,
+  user_id = ?,
+  label = ?,
+  plan_type = ?,
+  access_token_cipher = ?,
+  access_token_expires_at = ?,
+  status = ?,
+  quota_json = coalesce(?, quota_json),
+  quota_fetched_at = case when ? is null then quota_fetched_at else ? end,
+  quota_limit_reached = 0,
+  quota_cooldown_until = null,
+  quota_verify_required = ?,
+  updated_at = ?
+where id = ?";
+
+const APPLY_IMPORTED_QUOTA_STATE_SQL: &str = r"
+update accounts
+set
+  quota_json = coalesce(?, quota_json),
+  quota_fetched_at = case when ? is null then quota_fetched_at else ? end,
+  quota_limit_reached = 0,
+  quota_cooldown_until = null,
+  quota_verify_required = ?,
   updated_at = ?
 where id = ?";
 
@@ -548,8 +624,23 @@ pub struct AccountClaimsUpdate {
     pub refresh_token: Option<SecretString>,
     /// access token 过期时间。
     pub access_token_expires_at: Option<DateTime<Utc>>,
+    /// 下一次允许刷新 token 的时间。
+    pub next_refresh_at: Option<DateTime<Utc>>,
     /// 新状态。
     pub status: AccountStatus,
+}
+
+/// native 导入时用于覆盖已有账号的数据。
+#[derive(Debug)]
+pub struct ImportedAccountUpdate {
+    /// 账号基础信息和 token。
+    pub account: NewAccount,
+    /// 可选的配额快照 JSON。
+    pub quota_json: Option<String>,
+    /// 配额快照拉取时间。
+    pub quota_fetched_at: Option<DateTime<Utc>>,
+    /// 是否需要重新校验配额。
+    pub quota_verify_required: bool,
 }
 
 /// 已存储账号数据。
@@ -573,6 +664,8 @@ pub struct StoredAccount {
     pub refresh_token: Option<SecretString>,
     /// access token 过期时间。
     pub access_token_expires_at: Option<DateTime<Utc>>,
+    /// 下一次允许刷新 token 的时间。
+    pub next_refresh_at: Option<DateTime<Utc>>,
     /// 账号状态。
     pub status: AccountStatus,
     /// 创建时间。
@@ -858,6 +951,7 @@ impl SqliteAccountStore {
             update.access_token_expires_at,
         )?;
         let status = status_to_db(update.status);
+        let next_refresh_at = update.next_refresh_at.map(|value| value.to_rfc3339());
 
         let result = if let Some(refresh_token_cipher) = refresh_token_cipher {
             sqlx::query(UPDATE_ACCOUNT_CLAIMS_WITH_REFRESH_SQL)
@@ -868,6 +962,7 @@ impl SqliteAccountStore {
                 .bind(access_token_cipher)
                 .bind(refresh_token_cipher)
                 .bind(access_token_expires_at)
+                .bind(next_refresh_at.as_deref())
                 .bind(status)
                 .bind(updated_at)
                 .bind(id)
@@ -881,12 +976,95 @@ impl SqliteAccountStore {
                 .bind(update.plan_type)
                 .bind(access_token_cipher)
                 .bind(access_token_expires_at)
+                .bind(next_refresh_at.as_deref())
                 .bind(status)
                 .bind(updated_at)
                 .bind(id)
                 .execute(&self.pool)
                 .await?
         };
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 用 native 导入数据覆盖已有账号，并清理本地配额冷却状态。
+    pub async fn update_from_import(
+        &self,
+        update: ImportedAccountUpdate,
+    ) -> SqliteAccountStoreResult<bool> {
+        let account = update.account;
+        let TokenWrite {
+            access_token_cipher,
+            refresh_token_cipher,
+            access_token_expires_at,
+            updated_at,
+        } = self.prepare_token_write(
+            &account.access_token,
+            account.refresh_token.as_ref(),
+            account.access_token_expires_at,
+        )?;
+        let status = status_to_db(account.status);
+        let quota_fetched_at = update.quota_fetched_at.map(|value| value.to_rfc3339());
+        let quota_verify_required = if update.quota_verify_required { 1 } else { 0 };
+
+        let result = if let Some(refresh_token_cipher) = refresh_token_cipher {
+            sqlx::query(UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL)
+                .bind(account.email)
+                .bind(account.account_id)
+                .bind(account.user_id)
+                .bind(account.label)
+                .bind(account.plan_type)
+                .bind(access_token_cipher)
+                .bind(refresh_token_cipher)
+                .bind(access_token_expires_at)
+                .bind(status)
+                .bind(update.quota_json.as_deref())
+                .bind(quota_fetched_at.as_deref())
+                .bind(quota_fetched_at.as_deref())
+                .bind(quota_verify_required)
+                .bind(updated_at)
+                .bind(account.id)
+                .execute(&self.pool)
+                .await?
+        } else {
+            sqlx::query(UPDATE_IMPORTED_ACCOUNT_PRESERVING_REFRESH_SQL)
+                .bind(account.email)
+                .bind(account.account_id)
+                .bind(account.user_id)
+                .bind(account.label)
+                .bind(account.plan_type)
+                .bind(access_token_cipher)
+                .bind(access_token_expires_at)
+                .bind(status)
+                .bind(update.quota_json.as_deref())
+                .bind(quota_fetched_at.as_deref())
+                .bind(quota_fetched_at.as_deref())
+                .bind(quota_verify_required)
+                .bind(updated_at)
+                .bind(account.id)
+                .execute(&self.pool)
+                .await?
+        };
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 应用 native 导入中的配额快照，并清理本地配额冷却状态。
+    pub async fn apply_import_quota_state(
+        &self,
+        account_id: &str,
+        quota_json: Option<&str>,
+        quota_fetched_at: Option<DateTime<Utc>>,
+        quota_verify_required: bool,
+    ) -> SqliteAccountStoreResult<bool> {
+        let quota_fetched_at = quota_fetched_at.map(|value| value.to_rfc3339());
+        let result = sqlx::query(APPLY_IMPORTED_QUOTA_STATE_SQL)
+            .bind(quota_json)
+            .bind(quota_fetched_at.as_deref())
+            .bind(quota_fetched_at.as_deref())
+            .bind(if quota_verify_required { 1 } else { 0 })
+            .bind(Utc::now().to_rfc3339())
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -979,6 +1157,22 @@ impl SqliteAccountStore {
     ) -> SqliteAccountStoreResult<bool> {
         let result = sqlx::query("update accounts set status = ?, updated_at = ? where id = ?")
             .bind(status_to_db(status))
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新下一次允许刷新 token 的时间。
+    pub async fn set_next_refresh_at(
+        &self,
+        id: &str,
+        next_refresh_at: Option<DateTime<Utc>>,
+    ) -> SqliteAccountStoreResult<bool> {
+        let next_refresh_at = next_refresh_at.map(|value| value.to_rfc3339());
+        let result = sqlx::query(SET_NEXT_REFRESH_AT_SQL)
+            .bind(next_refresh_at.as_deref())
             .bind(Utc::now().to_rfc3339())
             .bind(id)
             .execute(&self.pool)
@@ -1173,6 +1367,27 @@ impl SqliteAccountStore {
         Ok(result.rows_affected() > 0)
     }
 
+    /// 应用已经验证过的账号配额快照。
+    pub async fn apply_quota_snapshot(
+        &self,
+        account_id: &str,
+        quota_json: &str,
+        limit_reached: bool,
+        cooldown_until: Option<DateTime<Utc>>,
+    ) -> SqliteAccountStoreResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(APPLY_QUOTA_SNAPSHOT_SQL)
+            .bind(quota_json)
+            .bind(&now)
+            .bind(if limit_reached { 1 } else { 0 })
+            .bind(cooldown_until.map(|value| value.to_rfc3339()))
+            .bind(now)
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// 标记账号进入配额冷却期。
     pub async fn mark_quota_limited_until(
         &self,
@@ -1284,6 +1499,9 @@ impl SqliteAccountStore {
             refresh_token,
             access_token_expires_at: parse_optional_rfc3339(
                 row.get::<Option<String>, _>("access_token_expires_at"),
+            )?,
+            next_refresh_at: parse_optional_rfc3339(
+                row.get::<Option<String>, _>("next_refresh_at"),
             )?,
             status: status_from_db(&row.get::<String, _>("status"))?,
             added_at: parse_rfc3339(&row.get::<String, _>("added_at"))?,
@@ -1397,6 +1615,24 @@ impl AccountStore for SqliteAccountStore {
             .map_err(map_account_store_error)
     }
 
+    async fn apply_quota_snapshot(
+        &self,
+        account_id: &str,
+        quota_json: &str,
+        limit_reached: bool,
+        cooldown_until: Option<DateTime<Utc>>,
+    ) -> AccountStoreResult<bool> {
+        SqliteAccountStore::apply_quota_snapshot(
+            self,
+            account_id,
+            quota_json,
+            limit_reached,
+            cooldown_until,
+        )
+        .await
+        .map_err(map_account_store_error)
+    }
+
     async fn sync_rate_limit_window(
         &self,
         account_id: &str,
@@ -1458,6 +1694,7 @@ fn pool_account_from_row(
         access_token_expires_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("access_token_expires_at"),
         )?,
+        next_refresh_at: parse_optional_rfc3339(row.get::<Option<String>, _>("next_refresh_at"))?,
         status: status_from_db(&row.get::<String, _>("status"))?,
         quota_limit_reached: row.get::<i64, _>("quota_limit_reached") != 0,
         quota_verify_required: row.get::<i64, _>("quota_verify_required") != 0,

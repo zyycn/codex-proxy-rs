@@ -1,10 +1,36 @@
 //! 配额检查策略。
 
+use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
 
 /// 判断配额百分比是否达到阈值。
 pub fn quota_reached(used_percent: f64, threshold: f64) -> bool {
     used_percent >= threshold
+}
+
+/// 判断配额快照的主 rate-limit 是否已经触顶。
+pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
+    quota
+        .pointer("/rate_limit/limit_reached")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// 从配额快照读取主 rate-limit 的 UTC 重置时间。
+pub fn quota_snapshot_reset_at(quota: &Value) -> Option<DateTime<Utc>> {
+    let reset_at = quota
+        .pointer("/rate_limit/reset_at")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)?;
+    DateTime::<Utc>::from_timestamp(reset_at, 0)
+}
+
+/// 从配额快照读取主 rate-limit 窗口大小。
+pub fn quota_snapshot_limit_window_seconds(quota: &Value) -> Option<u64> {
+    quota
+        .pointer("/rate_limit/limit_window_seconds")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
 }
 
 /// 从 Codex usage 响应中提取持久化配额快照。

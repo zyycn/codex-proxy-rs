@@ -57,8 +57,20 @@ where
     lease_owner: String,
     retry_delays: Vec<Duration>,
     in_flight: Arc<Mutex<HashSet<String>>>,
-    recovery_not_before: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
-    timers: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    timers: Arc<Mutex<HashMap<String, ScheduledRefreshTimer>>>,
+}
+
+struct ScheduledRefreshTimer {
+    scheduled_at: DateTime<Utc>,
+    trigger: RefreshTrigger,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleTimerResult {
+    Scheduled,
+    Replaced,
+    Unchanged,
 }
 
 impl<C> Clone for TokenRefreshTask<C>
@@ -75,7 +87,6 @@ where
             lease_owner: self.lease_owner.clone(),
             retry_delays: self.retry_delays.clone(),
             in_flight: self.in_flight.clone(),
-            recovery_not_before: self.recovery_not_before.clone(),
             timers: self.timers.clone(),
         }
     }
@@ -96,7 +107,6 @@ where
             lease_owner: refresh_lease_owner(),
             retry_delays: default_refresh_retry_delays(),
             in_flight: Arc::new(Mutex::new(HashSet::new())),
-            recovery_not_before: Arc::new(Mutex::new(HashMap::new())),
             timers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -117,7 +127,6 @@ where
             lease_owner: refresh_lease_owner(),
             retry_delays: default_refresh_retry_delays(),
             in_flight: Arc::new(Mutex::new(HashSet::new())),
-            recovery_not_before: Arc::new(Mutex::new(HashMap::new())),
             timers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -222,7 +231,12 @@ where
             let timer = match account.status {
                 AccountStatus::Refreshing => Some((Duration::ZERO, RefreshTrigger::Unauthorized)),
                 AccountStatus::Expired => {
-                    let delay = Duration::from_secs(30 + expired_recovery_index * 2);
+                    let delay = match account.next_refresh_at {
+                        Some(next_refresh_at) if next_refresh_at > now => {
+                            duration_until(now, next_refresh_at)
+                        }
+                        _ => Duration::from_secs(30 + expired_recovery_index * 2),
+                    };
                     expired_recovery_index += 1;
                     Some((delay, RefreshTrigger::Unauthorized))
                 }
@@ -252,11 +266,18 @@ where
             }
 
             let scheduled_at = scheduled_at_from_delay(now, delay);
-            if self
+            self.persist_next_refresh_at_if_changed(&account, Some(scheduled_at))
+                .await?;
+            let schedule_result = self
                 .schedule_account_timer(account.id.clone(), delay, trigger, scheduled_at)
-                .await
-            {
-                summary.replaced += 1;
+                .await;
+            match schedule_result {
+                ScheduleTimerResult::Unchanged => {
+                    summary.skipped += 1;
+                    continue;
+                }
+                ScheduleTimerResult::Replaced => summary.replaced += 1,
+                ScheduleTimerResult::Scheduled => {}
             }
 
             if account.status == AccountStatus::Expired {
@@ -292,7 +313,7 @@ where
         };
 
         for account in accounts {
-            if self.is_recovery_delayed(&account.id, now).await {
+            if account.next_refresh_at.is_some_and(|value| value > now) {
                 summary.skipped += 1;
                 continue;
             }
@@ -343,11 +364,11 @@ where
     }
 
     fn timer_delay_for_account(&self, account: &Account, now: DateTime<Utc>) -> Option<Duration> {
-        let expires_at = account
-            .access_token_expires_at
-            .or_else(|| jwt_expiration(&account.access_token))?;
-        let margin_seconds = self.refresh_margin_seconds.min(i64::MAX as u64) as i64;
-        let refresh_at = expires_at - chrono::Duration::seconds(margin_seconds);
+        if let Some(next_refresh_at) = account.next_refresh_at.filter(|value| *value > now) {
+            return Some(duration_until(now, next_refresh_at));
+        }
+
+        let refresh_at = self.computed_refresh_at(account)?;
 
         if refresh_at <= now {
             return Some(Duration::ZERO);
@@ -356,14 +377,42 @@ where
         (refresh_at - now).to_std().ok()
     }
 
+    fn computed_refresh_at(&self, account: &Account) -> Option<DateTime<Utc>> {
+        let expires_at = account
+            .access_token_expires_at
+            .or_else(|| jwt_expiration(&account.access_token))?;
+        let margin_seconds = self.refresh_margin_seconds.min(i64::MAX as u64) as i64;
+        Some(expires_at - chrono::Duration::seconds(margin_seconds))
+    }
+
+    async fn persist_next_refresh_at_if_changed(
+        &self,
+        account: &Account,
+        next_refresh_at: Option<DateTime<Utc>>,
+    ) -> TokenRefreshTaskResult<()> {
+        if same_refresh_time(account.next_refresh_at, next_refresh_at) {
+            return Ok(());
+        }
+        persist_next_refresh_at(&self.store, &account.id, next_refresh_at).await
+    }
+
     fn schedule_account_timer(
         &self,
         account_id: String,
         delay: Duration,
         trigger: RefreshTrigger,
         scheduled_at: DateTime<Utc>,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = ScheduleTimerResult> + Send + '_>> {
         Box::pin(async move {
+            {
+                let timers = self.timers.lock().await;
+                if timers.get(&account_id).is_some_and(|timer| {
+                    timer.scheduled_at == scheduled_at && timer.trigger == trigger
+                }) {
+                    return ScheduleTimerResult::Unchanged;
+                }
+            }
+
             let replaced = self.clear_scheduled_timer(&account_id).await;
             let task = self.clone();
             let timer_account_id = account_id.clone();
@@ -384,14 +433,25 @@ where
                 }
             });
 
-            self.timers.lock().await.insert(account_id, handle);
-            replaced
+            self.timers.lock().await.insert(
+                account_id,
+                ScheduledRefreshTimer {
+                    scheduled_at,
+                    trigger,
+                    handle,
+                },
+            );
+            if replaced {
+                ScheduleTimerResult::Replaced
+            } else {
+                ScheduleTimerResult::Scheduled
+            }
         })
     }
 
     async fn clear_scheduled_timer(&self, account_id: &str) -> bool {
-        if let Some(handle) = self.timers.lock().await.remove(account_id) {
-            handle.abort();
+        if let Some(timer) = self.timers.lock().await.remove(account_id) {
+            timer.handle.abort();
             true
         } else {
             false
@@ -400,8 +460,8 @@ where
 
     async fn clear_scheduled_timers(&self) {
         let mut timers = self.timers.lock().await;
-        for (_, handle) in timers.drain() {
-            handle.abort();
+        for (_, timer) in timers.drain() {
+            timer.handle.abort();
         }
     }
 
@@ -411,16 +471,15 @@ where
         trigger: RefreshTrigger,
         now: DateTime<Utc>,
     ) -> TokenRefreshTaskResult<TokenRefreshOutcome> {
-        if self.is_recovery_delayed(account_id, now).await {
-            return Ok(TokenRefreshOutcome::Skipped);
-        }
-
         let Some(account) = self.store.get(account_id).await? else {
             return Err(TokenRefreshTaskError::AccountNotFound(
                 account_id.to_string(),
             ));
         };
         let account = stored_account_to_refresh_account(account);
+        if account.next_refresh_at.is_some_and(|value| value > now) {
+            return Ok(TokenRefreshOutcome::Skipped);
+        }
 
         if !self.try_mark_in_flight(&account.id).await {
             return Ok(TokenRefreshOutcome::Skipped);
@@ -502,31 +561,33 @@ where
         trigger: RefreshTrigger,
         now: DateTime<Utc>,
     ) -> TokenRefreshTaskResult<TokenRefreshOutcome> {
-        let attempt = self.prepare_refresh_attempt(account).await?;
-
-        if attempt.refresh_token.is_none() {
-            persist_status(&self.store, &account.id, AccountStatus::Expired).await?;
-            self.clear_recovery_delay(&account.id).await;
-            return Ok(TokenRefreshOutcome::StatusUpdated);
-        }
-
         let max_attempts = self.retry_delays.len() + 1;
         let mut permanent_failures = 0;
 
         for attempt_index in 0..max_attempts {
+            let Some(attempt) = self.prepare_refresh_attempt(account, now).await? else {
+                return Ok(TokenRefreshOutcome::Skipped);
+            };
+
+            if attempt.refresh_token.is_none() {
+                persist_status(&self.store, &attempt.id, AccountStatus::Expired).await?;
+                persist_next_refresh_at(&self.store, &attempt.id, None).await?;
+                return Ok(TokenRefreshOutcome::StatusUpdated);
+            }
+
             match self
                 .scheduler
                 .refresh_account_at(&attempt, trigger, now)
                 .await
             {
-                Ok(mut updated) if account_requires_token_write(account, &updated) => {
+                Ok(mut updated) if account_requires_token_write(&attempt, &updated) => {
                     updated.access_token_expires_at =
                         jwt_expiration(&updated.access_token).or(updated.access_token_expires_at);
+                    updated.next_refresh_at = self.computed_refresh_at(&updated);
                     persist_token_update(&self.store, &updated).await?;
-                    self.clear_recovery_delay(&account.id).await;
                     return Ok(TokenRefreshOutcome::Refreshed(Box::new(updated)));
                 }
-                Ok(updated) if account.status != updated.status => {
+                Ok(updated) if attempt.status != updated.status => {
                     if is_permanent_refresh_status(updated.status) {
                         permanent_failures += 1;
                         if permanent_failures < PERMANENT_FAILURE_CONFIRMATION_THRESHOLD
@@ -536,17 +597,21 @@ where
                         }
                     }
 
-                    persist_status(&self.store, &account.id, updated.status).await?;
-                    self.clear_recovery_delay(&account.id).await;
+                    persist_status(&self.store, &attempt.id, updated.status).await?;
+                    persist_next_refresh_at(&self.store, &attempt.id, None).await?;
                     return Ok(TokenRefreshOutcome::StatusUpdated);
                 }
                 Ok(_) => return Ok(TokenRefreshOutcome::Skipped),
-                Err(RefreshError::Transport) if self.sleep_before_retry(attempt_index).await => {
+                Err(RefreshError::RetryableTransport)
+                    if self.sleep_before_retry(attempt_index).await =>
+                {
                     continue;
                 }
-                Err(RefreshError::Transport) => {
-                    persist_status(&self.store, &account.id, AccountStatus::Active).await?;
-                    self.schedule_recovery(&account.id, now).await;
+                Err(RefreshError::RetryableTransport) | Err(RefreshError::Transport) => {
+                    persist_status(&self.store, &attempt.id, AccountStatus::Active).await?;
+                    let next_refresh_at = now + chrono::Duration::seconds(RECOVERY_DELAY_SECONDS);
+                    persist_next_refresh_at(&self.store, &attempt.id, Some(next_refresh_at))
+                        .await?;
                     return Ok(TokenRefreshOutcome::Failed);
                 }
                 Err(error) => return Err(TokenRefreshTaskError::Refresh(error)),
@@ -556,14 +621,30 @@ where
         Ok(TokenRefreshOutcome::Skipped)
     }
 
-    async fn prepare_refresh_attempt(&self, account: &Account) -> TokenRefreshTaskResult<Account> {
-        if account.status != AccountStatus::Refreshing {
-            persist_status(&self.store, &account.id, AccountStatus::Refreshing).await?;
+    async fn prepare_refresh_attempt(
+        &self,
+        account: &Account,
+        now: DateTime<Utc>,
+    ) -> TokenRefreshTaskResult<Option<Account>> {
+        let Some(stored) = self.store.get(&account.id).await? else {
+            return Err(TokenRefreshTaskError::AccountNotFound(account.id.clone()));
+        };
+        let mut attempt = stored_account_to_refresh_account(stored);
+        if matches!(
+            attempt.status,
+            AccountStatus::Disabled | AccountStatus::Banned
+        ) || attempt.next_refresh_at.is_some_and(|value| value > now)
+            || attempt.refresh_token != account.refresh_token
+        {
+            return Ok(None);
         }
 
-        let mut attempt = account.clone();
+        if attempt.status != AccountStatus::Refreshing {
+            persist_status(&self.store, &attempt.id, AccountStatus::Refreshing).await?;
+        }
+
         attempt.status = AccountStatus::Active;
-        Ok(attempt)
+        Ok(Some(attempt))
     }
 
     async fn sleep_before_retry(&self, attempt_index: usize) -> bool {
@@ -583,31 +664,6 @@ where
 
     async fn release_in_flight(&self, account_id: &str) {
         self.in_flight.lock().await.remove(account_id);
-    }
-
-    async fn is_recovery_delayed(&self, account_id: &str, now: DateTime<Utc>) -> bool {
-        let mut recovery_not_before = self.recovery_not_before.lock().await;
-        let Some(not_before) = recovery_not_before.get(account_id).copied() else {
-            return false;
-        };
-
-        if now < not_before {
-            return true;
-        }
-
-        recovery_not_before.remove(account_id);
-        false
-    }
-
-    async fn schedule_recovery(&self, account_id: &str, now: DateTime<Utc>) {
-        self.recovery_not_before.lock().await.insert(
-            account_id.to_string(),
-            now + chrono::Duration::seconds(RECOVERY_DELAY_SECONDS),
-        );
-    }
-
-    async fn clear_recovery_delay(&self, account_id: &str) {
-        self.recovery_not_before.lock().await.remove(account_id);
     }
 
     async fn try_acquire_refresh_lease(
@@ -728,6 +784,7 @@ async fn persist_token_update(
                     .map(|token| SecretString::new(token.into())),
                 access_token_expires_at: jwt_expiration(&account.access_token)
                     .or(account.access_token_expires_at),
+                next_refresh_at: account.next_refresh_at,
                 status: account.status,
             },
         )
@@ -745,6 +802,23 @@ async fn persist_status(
     status: AccountStatus,
 ) -> TokenRefreshTaskResult<()> {
     let updated = store.set_status(account_id, status).await?;
+    if updated {
+        Ok(())
+    } else {
+        Err(TokenRefreshTaskError::AccountNotFound(
+            account_id.to_string(),
+        ))
+    }
+}
+
+async fn persist_next_refresh_at(
+    store: &SqliteAccountStore,
+    account_id: &str,
+    next_refresh_at: Option<DateTime<Utc>>,
+) -> TokenRefreshTaskResult<()> {
+    let updated = store
+        .set_next_refresh_at(account_id, next_refresh_at)
+        .await?;
     if updated {
         Ok(())
     } else {
@@ -793,6 +867,18 @@ fn scheduled_at_from_delay(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc>
     }
 }
 
+fn duration_until(now: DateTime<Utc>, scheduled_at: DateTime<Utc>) -> Duration {
+    (scheduled_at - now).to_std().unwrap_or(Duration::ZERO)
+}
+
+fn same_refresh_time(left: Option<DateTime<Utc>>, right: Option<DateTime<Utc>>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.timestamp() == right.timestamp(),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 fn stored_account_to_refresh_account(stored: StoredAccount) -> Account {
     Account {
         id: stored.id,
@@ -806,6 +892,7 @@ fn stored_account_to_refresh_account(stored: StoredAccount) -> Account {
             .refresh_token
             .map(|token| token.expose_secret().to_string()),
         access_token_expires_at: stored.access_token_expires_at,
+        next_refresh_at: stored.next_refresh_at,
         status: stored.status,
         quota_limit_reached: false,
         quota_verify_required: false,

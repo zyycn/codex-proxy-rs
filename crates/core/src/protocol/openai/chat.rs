@@ -80,6 +80,378 @@ pub enum ChatTranslationError {
     EmptyMessages,
 }
 
+/// Chat Completions 流式转换失败。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ChatStreamTranslationError {
+    /// 上游 SSE 无法解析。
+    #[error("invalid upstream SSE response: {0}")]
+    InvalidSse(#[from] SseError),
+    /// 上游返回错误事件。
+    #[error("{0}")]
+    Upstream(String),
+}
+
+/// 增量转换 Codex Responses SSE 为 OpenAI Chat Completions chunk SSE。
+#[derive(Debug)]
+pub struct ChatCompletionStreamTranslator {
+    pending: String,
+    id: String,
+    created: i64,
+    model: String,
+    include_reasoning: bool,
+    tuple_schema: Option<Value>,
+    tuple_text_buffer: Option<String>,
+    has_tool_calls: bool,
+    has_content: bool,
+    function_call_items: BTreeMap<String, FunctionCallInfo>,
+    tool_call_indices: BTreeMap<String, usize>,
+    call_ids_with_deltas: BTreeSet<String>,
+    next_tool_call_index: usize,
+    closed: bool,
+}
+
+impl ChatCompletionStreamTranslator {
+    /// 构造新的 chat stream 转换器。
+    pub fn new(
+        model: impl Into<String>,
+        include_reasoning: bool,
+        tuple_schema: Option<Value>,
+    ) -> Self {
+        let tuple_text_buffer = tuple_schema.as_ref().map(|_| String::new());
+        Self {
+            pending: String::new(),
+            id: chat_completion_stream_id(),
+            created: Utc::now().timestamp(),
+            model: model.into(),
+            include_reasoning,
+            tuple_schema,
+            tuple_text_buffer,
+            has_tool_calls: false,
+            has_content: false,
+            function_call_items: BTreeMap::new(),
+            tool_call_indices: BTreeMap::new(),
+            call_ids_with_deltas: BTreeSet::new(),
+            next_tool_call_index: 0,
+            closed: false,
+        }
+    }
+
+    /// TS 版本会先发 assistant role chunk。
+    pub fn initial_frame(&self) -> String {
+        self.frame(json!({
+            "choices": [{
+                "delta": {"role": "assistant"},
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        }))
+    }
+
+    /// 推入一段上游 SSE 文本，返回已完成事件对应的下游 SSE 文本。
+    pub fn push_str(&mut self, chunk: &str) -> Result<String, ChatStreamTranslationError> {
+        if self.closed {
+            return Ok(String::new());
+        }
+        self.pending.push_str(chunk);
+        let mut output = String::new();
+
+        while let Some((event_end, separator_len)) = sse_event_separator(&self.pending) {
+            let event_frame = self.pending[..event_end].to_string();
+            self.pending.drain(..event_end + separator_len);
+            if event_frame.trim().is_empty() {
+                continue;
+            }
+            let events = parse_sse_events(&format!("{event_frame}\n\n"))?;
+            for event in events {
+                self.push_event(&event, &mut output)?;
+            }
+        }
+
+        Ok(output)
+    }
+
+    fn push_event(
+        &mut self,
+        event: &crate::protocol::codex::sse::SseEvent,
+        output: &mut String,
+    ) -> Result<(), ChatStreamTranslationError> {
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            return Ok(());
+        };
+        let event_type = event
+            .event
+            .as_deref()
+            .or_else(|| value.get("type").and_then(Value::as_str));
+
+        if matches!(event_type, Some("error" | "response.failed")) {
+            return Err(ChatStreamTranslationError::Upstream(
+                codex_stream_error_message(&value),
+            ));
+        }
+
+        match event_type {
+            Some("response.output_text.delta") => {
+                self.push_text_delta(&value, output);
+            }
+            Some("response.reasoning_summary_text.delta") if self.include_reasoning => {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    self.has_content = true;
+                    output.push_str(&self.frame(json!({
+                        "choices": [{
+                            "delta": {"reasoning_content": delta},
+                            "finish_reason": Value::Null,
+                            "index": 0,
+                        }],
+                    })));
+                }
+            }
+            Some("response.output_item.added") => {
+                self.push_function_call_start(&value, output);
+            }
+            Some("response.function_call_arguments.delta") => {
+                self.push_function_call_delta(&value, output);
+            }
+            Some("response.function_call_arguments.done") => {
+                self.push_function_call_done(&value, output);
+            }
+            Some("response.output_item.done") => {
+                self.push_image_generation_done(&value, output);
+            }
+            Some("response.completed") => {
+                self.push_completed(&value, output);
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn push_text_delta(&mut self, value: &Value, output: &mut String) {
+        let Some(delta) = value.get("delta").and_then(Value::as_str) else {
+            return;
+        };
+        self.has_content = true;
+        if let Some(buffer) = &mut self.tuple_text_buffer {
+            buffer.push_str(delta);
+            return;
+        }
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {"content": delta},
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_function_call_start(&mut self, value: &Value, output: &mut String) {
+        let Some((item_id, call_id, name)) = function_call_item(value.get("item")) else {
+            return;
+        };
+        self.has_tool_calls = true;
+        self.has_content = true;
+        let index = self.next_tool_call_index;
+        self.next_tool_call_index += 1;
+        self.function_call_items.insert(
+            item_id,
+            FunctionCallInfo {
+                call_id: call_id.clone(),
+                name: name.clone(),
+            },
+        );
+        self.tool_call_indices.insert(call_id.clone(), index);
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": "", "name": name},
+                        "id": call_id,
+                        "index": index,
+                        "type": "function",
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_function_call_delta(&mut self, value: &Value, output: &mut String) {
+        let Some((call_id, delta)) = self.function_call_delta(value) else {
+            return;
+        };
+        self.call_ids_with_deltas.insert(call_id.clone());
+        let index = self.tool_call_indices.get(&call_id).copied().unwrap_or(0);
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": delta},
+                        "index": index,
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_function_call_done(&mut self, value: &Value, output: &mut String) {
+        let Some((call_id, arguments)) = self.function_call_done(value) else {
+            return;
+        };
+        if self.call_ids_with_deltas.contains(&call_id) {
+            return;
+        }
+        let index = self.tool_call_indices.get(&call_id).copied().unwrap_or(0);
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": arguments},
+                        "index": index,
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_image_generation_done(&mut self, value: &Value, output: &mut String) {
+        let Some(item) = value.get("item") else {
+            return;
+        };
+        if item.get("type").and_then(Value::as_str) != Some("image_generation_call") {
+            return;
+        }
+        self.has_tool_calls = true;
+        self.has_content = true;
+        let index = self.next_tool_call_index;
+        self.next_tool_call_index += 1;
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        let mut arguments = json!({
+            "result": item.get("result").and_then(Value::as_str).unwrap_or_default(),
+        });
+        if let Some(revised_prompt) = item.get("revised_prompt") {
+            arguments["revised_prompt"] = revised_prompt.clone();
+        }
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": "", "name": "image_generation"},
+                        "id": id,
+                        "index": index,
+                        "type": "function",
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": arguments.to_string()},
+                        "index": index,
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_completed(&mut self, value: &Value, output: &mut String) {
+        self.flush_tuple_text(output);
+        if !self.has_content {
+            output.push_str(&self.frame(json!({
+                "choices": [{
+                    "delta": {"content": "[Error] Codex returned an empty response. Please retry."},
+                    "finish_reason": Value::Null,
+                    "index": 0,
+                }],
+            })));
+        }
+        let response = value.get("response");
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {},
+                "finish_reason": if self.has_tool_calls { "tool_calls" } else { "stop" },
+                "index": 0,
+            }],
+            "usage": openai_stream_usage(response.and_then(|response| response.get("usage"))),
+        })));
+        output.push_str("data: [DONE]\n\n");
+        self.closed = true;
+    }
+
+    fn flush_tuple_text(&mut self, output: &mut String) {
+        let Some(buffer) = self.tuple_text_buffer.take() else {
+            return;
+        };
+        if buffer.is_empty() {
+            return;
+        }
+        let content = self
+            .tuple_schema
+            .as_ref()
+            .and_then(|tuple_schema| reconvert_tuple_text(&buffer, tuple_schema))
+            .unwrap_or(buffer);
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {"content": content},
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn function_call_delta(&self, value: &Value) -> Option<(String, String)> {
+        let event_id = value
+            .get("call_id")
+            .or_else(|| value.get("item_id"))
+            .and_then(Value::as_str)?;
+        let delta = value.get("delta").and_then(Value::as_str)?;
+        let call_id = self
+            .function_call_items
+            .get(event_id)
+            .map(|info| info.call_id.as_str())
+            .unwrap_or(event_id)
+            .to_string();
+        Some((call_id, delta.to_string()))
+    }
+
+    fn function_call_done(&self, value: &Value) -> Option<(String, String)> {
+        let event_id = value
+            .get("call_id")
+            .or_else(|| value.get("item_id"))
+            .and_then(Value::as_str)?;
+        let call_id = self
+            .function_call_items
+            .get(event_id)
+            .map(|info| info.call_id.as_str())
+            .unwrap_or(event_id)
+            .to_string();
+        let arguments = value
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Some((call_id, arguments))
+    }
+
+    fn frame(&self, mut chunk: Value) -> String {
+        chunk["id"] = Value::String(self.id.clone());
+        chunk["object"] = Value::String("chat.completion.chunk".to_string());
+        chunk["created"] = json!(self.created);
+        chunk["model"] = Value::String(self.model.clone());
+        format!("data: {chunk}\n\n")
+    }
+}
+
 /// 将 OpenAI Chat Completions 请求纯转换为 Codex Responses 请求。
 pub fn translate_chat_to_codex(
     request: ChatCompletionRequest,
@@ -617,4 +989,72 @@ fn openai_usage(usage: Option<&Value>) -> Value {
         });
     }
     openai_usage
+}
+
+fn openai_stream_usage(usage: Option<&Value>) -> Value {
+    let Some(usage) = usage else {
+        return Value::Null;
+    };
+    let prompt_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let completion_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let mut openai_usage = json!({
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens.saturating_add(completion_tokens),
+    });
+    if let Some(cached_tokens) = usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_u64)
+    {
+        openai_usage["prompt_tokens_details"] = json!({
+            "cached_tokens": cached_tokens,
+        });
+    }
+    if let Some(reasoning_tokens) = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(Value::as_u64)
+    {
+        openai_usage["completion_tokens_details"] = json!({
+            "reasoning_tokens": reasoning_tokens,
+        });
+    }
+    openai_usage
+}
+
+fn sse_event_separator(input: &str) -> Option<(usize, usize)> {
+    let lf = input.find("\n\n").map(|index| (index, 2));
+    let crlf = input.find("\r\n\r\n").map(|index| (index, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(found), None) | (None, Some(found)) => Some(found),
+        (None, None) => None,
+    }
+}
+
+fn chat_completion_stream_id() -> String {
+    let suffix = Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(24)
+        .collect::<String>();
+    format!("chatcmpl-{suffix}")
+}
+
+fn codex_stream_error_message(value: &Value) -> String {
+    value
+        .pointer("/error/message")
+        .or_else(|| value.pointer("/response/error/message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or("Upstream Codex response failed")
+        .to_string()
 }

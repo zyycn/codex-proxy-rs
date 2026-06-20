@@ -12,7 +12,6 @@ bytes.workspace = true
 codex-proxy-core = { path = "../core" }
 codex-proxy-platform = { path = "../platform" }
 chrono.workspace = true
-flate2.workspace = true
 futures.workspace = true
 indexmap.workspace = true
 reqwest.workspace = true
@@ -28,6 +27,7 @@ tokio.workspace = true
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
+tungstenite.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

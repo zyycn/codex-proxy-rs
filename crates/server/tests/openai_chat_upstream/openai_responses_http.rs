@@ -206,7 +206,7 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
     assert!(body.contains("\"id\":\"resp_ws_default\""));
     assert_eq!(captured.payload["type"], "response.create");
     assert_eq!(captured.payload["model"], "gpt-5.5");
-    assert_eq!(captured.payload["generate"], false);
+    assert!(captured.payload.get("generate").is_none());
     assert!(captured.payload.get("previous_response_id").is_none());
     assert!(captured.payload["prompt_cache_key"]
         .as_str()
@@ -215,6 +215,44 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
     assert!(captured.payload["client_metadata"]["x-codex-window-id"]
         .as_str()
         .is_some_and(|value| value.starts_with("cp_") && value.ends_with(":0")));
+}
+
+#[tokio::test]
+async fn responses_non_stream_should_record_websocket_transport_metadata() {
+    let (base_url, upstream) =
+        spawn_single_websocket_completed_upstream("resp_ws_non_stream_log").await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "generate": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let captured = upstream.await.unwrap();
+
+    assert_eq!(body["id"], "resp_ws_non_stream_log");
+    assert_eq!(captured.payload["type"], "response.create");
+
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["transport"], "websocket");
 }
 
 #[tokio::test]
@@ -396,12 +434,9 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
                 .header("x-codex-turn-state", "turn-header")
-                .header("x-codex-turn-metadata", "meta-header")
                 .header("x-codex-beta-features", "beta-header")
                 .header("x-responsesapi-include-timing-metrics", "false")
                 .header("version", "header-version")
-                .header("x-codex-window-id", "window-header")
-                .header("x-codex-parent-thread-id", "parent-header")
                 .header("x-openai-subagent", "review")
                 .body(Body::from(
                     json!({
@@ -410,14 +445,17 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
                         "use_websocket": false,
                         "input": [],
                         "prompt_cache_key": "pcache",
-                        "client_metadata": {"safe": "yes", "drop": 42},
+                        "client_metadata": {
+                            "safe": "yes",
+                            "drop": 42,
+                            "x-codex-turn-metadata": "meta-metadata",
+                            "x-codex-window-id": "window-metadata",
+                            "x-codex-parent-thread-id": "parent-metadata"
+                        },
                         "turnState": "turn-body",
-                        "turnMetadata": "meta-body",
                         "betaFeatures": "beta-body",
                         "includeTimingMetrics": "true",
                         "version": "2026-06-12",
-                        "codexWindowId": "window-body",
-                        "parentThreadId": "parent-body",
                         "use_websocket": false
                     })
                     .to_string(),
@@ -437,7 +475,8 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         .find(|request| request.url.path() == "/codex/responses")
         .expect("responses upstream request should be sent");
     let upstream_body: Value = serde_json::from_slice(&upstream.body).unwrap();
-    let identity = build_conversation_identity(Some("pcache"), Some("window-body"), "acct_chat");
+    let identity =
+        build_conversation_identity(Some("pcache"), Some("window-metadata"), "acct_chat");
     let conversation_id = identity
         .conversation_id
         .as_deref()
@@ -479,16 +518,19 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     );
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-turn-metadata"],
-        "meta-body"
+        "meta-metadata"
     );
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-parent-thread-id"],
-        "parent-body"
+        "parent-metadata"
     );
     assert_eq!(upstream_header("session_id"), Some(conversation_id));
     assert_eq!(upstream_header("x-codex-window-id"), Some(window_id));
     assert_eq!(upstream_header("x-codex-turn-state"), Some("turn-body"));
-    assert_eq!(upstream_header("x-codex-turn-metadata"), Some("meta-body"));
+    assert_eq!(
+        upstream_header("x-codex-turn-metadata"),
+        Some("meta-metadata")
+    );
     assert_eq!(upstream_header("x-codex-beta-features"), Some("beta-body"));
     assert_eq!(
         upstream_header("x-responsesapi-include-timing-metrics"),
@@ -497,7 +539,7 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     assert_eq!(upstream_header("version"), Some("2026-06-12"));
     assert_eq!(
         upstream_header("x-codex-parent-thread-id"),
-        Some("parent-body")
+        Some("parent-metadata")
     );
     assert_eq!(upstream_header("x-openai-subagent"), Some("review"));
     for local_field in [

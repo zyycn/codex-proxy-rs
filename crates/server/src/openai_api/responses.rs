@@ -37,7 +37,7 @@ pub async fn responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_responses(state, request_id, headers, body, None).await
+    handle_responses(state, request_id, headers, body, "/v1/responses", None).await
 }
 
 /// `POST /v1/responses/review`
@@ -47,7 +47,15 @@ pub async fn review_responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_responses(state, request_id, headers, body, Some("review")).await
+    handle_responses(
+        state,
+        request_id,
+        headers,
+        body,
+        "/v1/responses/review",
+        Some("review"),
+    )
+    .await
 }
 
 /// `POST /v1/responses/compact`
@@ -65,6 +73,7 @@ async fn handle_responses(
     request_id: RequestId,
     headers: HeaderMap,
     body: Bytes,
+    route: &str,
     forced_subagent: Option<&str>,
 ) -> Response {
     if !authorize_client_api_key(&state, &headers).await {
@@ -107,7 +116,7 @@ async fn handle_responses(
         return match state
             .services
             .responses
-            .stream(request_id.as_str(), codex_request, &model)
+            .stream(request_id.as_str(), route, codex_request, &model)
             .await
         {
             Ok(stream) => live_event_stream_response(stream),
@@ -118,7 +127,7 @@ async fn handle_responses(
     match state
         .services
         .responses
-        .complete(request_id.as_str(), codex_request, &model)
+        .complete(request_id.as_str(), route, codex_request, &model)
         .await
     {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
@@ -163,6 +172,31 @@ async fn handle_responses(
             StatusCode::UNAUTHORIZED,
             &format!(
                 "All accounts exhausted ({count} expired). Codex upstream error: {upstream_error}"
+            ),
+            "server_error",
+            "upstream_error",
+        )
+        .into_response(),
+        Err(ResponseDispatchError::Disabled {
+            count,
+            upstream_error,
+        }) => openai_error_response(
+            StatusCode::UNAUTHORIZED,
+            &format!(
+                "All accounts exhausted ({count} disabled). Codex upstream error: {upstream_error}"
+            ),
+            "server_error",
+            "upstream_error",
+        )
+        .into_response(),
+        Err(ResponseDispatchError::Banned {
+            count,
+            upstream_error,
+            status_code,
+        }) => openai_error_response(
+            StatusCode::from_u16(status_code).unwrap_or(StatusCode::FORBIDDEN),
+            &format!(
+                "All accounts exhausted ({count} banned). Codex upstream error: {upstream_error}"
             ),
             "server_error",
             "upstream_error",
@@ -449,6 +483,27 @@ fn response_dispatch_compact_error_response(error: ResponseDispatchError) -> Res
             ),
         )
         .into_response(),
+        ResponseDispatchError::Disabled {
+            count,
+            upstream_error,
+        } => responses_dispatch_error_response(
+            StatusCode::UNAUTHORIZED,
+            &format!(
+                "All accounts exhausted ({count} disabled). Codex upstream error: {upstream_error}"
+            ),
+        )
+        .into_response(),
+        ResponseDispatchError::Banned {
+            count,
+            upstream_error,
+            status_code,
+        } => responses_dispatch_error_response(
+            StatusCode::from_u16(status_code).unwrap_or(StatusCode::FORBIDDEN),
+            &format!(
+                "All accounts exhausted ({count} banned). Codex upstream error: {upstream_error}"
+            ),
+        )
+        .into_response(),
         ResponseDispatchError::CloudflareChallenge {
             count,
             upstream_error,
@@ -564,6 +619,25 @@ fn response_dispatch_stream_error_response(error: ResponseDispatchError) -> Resp
             StatusCode::UNAUTHORIZED,
             format!(
                 "All accounts exhausted ({count} expired). Codex upstream error: {upstream_error}"
+            ),
+        ),
+        ResponseDispatchError::Disabled {
+            count,
+            upstream_error,
+        } => (
+            StatusCode::UNAUTHORIZED,
+            format!(
+                "All accounts exhausted ({count} disabled). Codex upstream error: {upstream_error}"
+            ),
+        ),
+        ResponseDispatchError::Banned {
+            count,
+            upstream_error,
+            status_code,
+        } => (
+            StatusCode::from_u16(status_code).unwrap_or(StatusCode::FORBIDDEN),
+            format!(
+                "All accounts exhausted ({count} banned). Codex upstream error: {upstream_error}"
             ),
         ),
         ResponseDispatchError::CloudflareChallenge {

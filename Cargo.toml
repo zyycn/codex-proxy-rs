@@ -20,7 +20,6 @@ bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde", "clock"] }
 config = "0.15.23"
 dirs = "5.0.1"
-flate2 = "1.1.9"
 futures = "0.3.32"
 hex = "0.4.3"
 hmac = "0.13.0"
@@ -39,14 +38,19 @@ sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite",
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync", "net", "test-util"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
-tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6.11", features = ["trace", "cors", "request-id", "timeout"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
 zeroize = "1.8.2"
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
 [workspace.lints.rust]
 future_incompatible = { level = "warn", priority = -1 }

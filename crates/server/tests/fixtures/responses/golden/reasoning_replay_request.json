@@ -20,12 +20,9 @@
       "content": "continue"
     }
   ],
-  "tools": [],
-  "tool_choice": "auto",
-  "parallel_tool_calls": true,
-  "reasoning": null,
   "store": false,
   "stream": true,
-  "include": [],
-  "previous_response_id": "resp_implicit_resume_first"
+  "previous_response_id": "resp_implicit_resume_first",
+  "tool_choice": "auto",
+  "parallel_tool_calls": true
 }

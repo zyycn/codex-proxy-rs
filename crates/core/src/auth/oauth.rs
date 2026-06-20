@@ -225,8 +225,11 @@ pub enum RefreshFailure {
     /// 账号被显式禁用。
     #[error("account is disabled")]
     Disabled,
-    /// 刷新请求在传输层失败。
-    #[error("refresh transport failed")]
+    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
+    #[error("refresh transport failed before server processing")]
+    RetryableTransport,
+    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
+    #[error("refresh transport failed after possible server processing")]
     Transport,
 }
 
@@ -236,8 +239,11 @@ pub enum RefreshError {
     /// 并发限制信号量已关闭。
     #[error("refresh task semaphore closed")]
     ConcurrencyClosed,
-    /// 刷新请求在传输层失败。
-    #[error("refresh transport failed")]
+    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
+    #[error("refresh transport failed before server processing")]
+    RetryableTransport,
+    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
+    #[error("refresh transport failed after possible server processing")]
     Transport,
 }
 
@@ -295,6 +301,7 @@ where
 
         match self.client.refresh(refresh_token).await {
             Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
+            Err(RefreshFailure::RetryableTransport) => Err(RefreshError::RetryableTransport),
             Err(RefreshFailure::Transport) => Err(RefreshError::Transport),
             Err(error) => Ok(apply_refresh_failure(account, error)),
         }
@@ -352,10 +359,11 @@ pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
 pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Account {
     let mut updated = account.clone();
     updated.status = match failure {
-        RefreshFailure::InvalidGrant => AccountStatus::Expired,
+        RefreshFailure::InvalidGrant => AccountStatus::Disabled,
         RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
         RefreshFailure::Banned => AccountStatus::Banned,
         RefreshFailure::Disabled => AccountStatus::Disabled,
+        RefreshFailure::RetryableTransport => AccountStatus::Active,
         RefreshFailure::Transport => AccountStatus::Active,
     };
     updated

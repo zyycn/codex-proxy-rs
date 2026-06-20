@@ -1,6 +1,6 @@
 //! Codex WebSocket 连接建立。
 
-use std::{io, pin::Pin, sync::Arc, time::Duration, time::Instant};
+use std::{pin::Pin, sync::Arc, time::Duration, time::Instant};
 
 use bytes::Bytes;
 use codex_proxy_core::protocol::codex::{
@@ -19,31 +19,21 @@ use codex_proxy_core::protocol::codex::{
     },
 };
 use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
-use rustls_pki_types::ServerName;
 use serde_json::Value;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    sync::Mutex,
-    time::timeout,
-};
-use tokio_rustls::TlsConnector;
-use tokio_tungstenite::{
-    tungstenite::{
-        self,
-        error::{CapacityError, ProtocolError, TlsError, UrlError},
-        handshake::derive_accept_key,
-        http::{HeaderName, HeaderValue, Response as WsResponse, StatusCode as WsStatusCode, Uri},
-        protocol::Role,
-        Message,
-    },
-    MaybeTlsStream, WebSocketStream,
+use tokio::{sync::Mutex, time::timeout};
+use tokio_tungstenite::{connect_async_tls_with_config, Connector};
+use tungstenite::{
+    self,
+    extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+    handshake::client::Request as WsRequest,
+    http::{HeaderMap, Response as WsResponse},
+    protocol::WebSocketConfig,
+    Message,
 };
 
-use crate::codex::client::{maybe_build_rustls_client_config_with_custom_ca, native_root_store};
+use crate::codex::client::maybe_build_rustls_client_config_with_custom_ca;
 
-use super::deflate::{permessage_deflate_enabled, PerMessageDeflateStream};
 use super::pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey, CodexWsStream,
     PooledWebSocketConnection, WebSocketPoolAcquire,
@@ -52,7 +42,6 @@ use super::pool::{
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
 const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
-const MAX_OPENING_RESPONSE_BYTES: usize = 64 * 1024;
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// WebSocket 连接适配器。
@@ -133,6 +122,8 @@ pub enum CodexWebSocketExchangeError {
         retry_after_seconds: Option<u64>,
         /// 原始错误帧。
         body: String,
+        /// 上游透传的 `set-cookie` 列表。
+        set_cookie_headers: Vec<String>,
     },
     /// 上游返回 `response.incomplete`。
     #[error("Incomplete response returned, reason: {reason}")]
@@ -479,28 +470,39 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
 async fn connect_websocket(
     connection: &CodexWebSocketConnection,
 ) -> Result<(CodexWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
-    let uri = connection
-        .endpoint()
-        .parse::<Uri>()
-        .map_err(tungstenite::Error::from)?;
-    let mut stream = connect_stream(&uri).await?;
-    let request_bytes = opening_request_bytes(connection);
-    stream
-        .write_all(&request_bytes)
-        .await
-        .map_err(tungstenite::Error::Io)?;
-    stream.flush().await.map_err(tungstenite::Error::Io)?;
-
-    let (response, buffered) = read_opening_response(&mut stream).await?;
-    if response.status() != WsStatusCode::SWITCHING_PROTOCOLS {
-        return Err(websocket_opening_error(response));
+    let request = websocket_handshake_request(connection)?;
+    let connector = maybe_build_rustls_client_config_with_custom_ca()
+        .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?
+        .map(Connector::Rustls);
+    match connect_async_tls_with_config(request, Some(websocket_config()), false, connector).await {
+        Ok((websocket, response)) => Ok((websocket, response)),
+        Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(*response)),
+        Err(error) => Err(error.into()),
     }
-    verify_accept_key(connection, &response)?;
-    let permessage_deflate = response_accepts_permessage_deflate(&response);
-    let stream = PerMessageDeflateStream::new(stream, permessage_deflate, buffered);
-    let websocket =
-        WebSocketStream::from_partially_read(stream, Vec::new(), Role::Client, None).await;
-    Ok((websocket, response))
+}
+
+fn websocket_handshake_request(
+    connection: &CodexWebSocketConnection,
+) -> Result<WsRequest, tungstenite::http::Error> {
+    let mut builder = WsRequest::builder()
+        .method("GET")
+        .uri(connection.endpoint());
+    for (name, value) in connection.headers() {
+        if name.eq_ignore_ascii_case("sec-websocket-extensions") {
+            continue;
+        }
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    builder.body(())
+}
+
+fn websocket_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
 }
 
 fn websocket_opening_error(response: WsResponse<Option<Vec<u8>>>) -> CodexWebSocketExchangeError {
@@ -521,53 +523,8 @@ fn websocket_opening_error(response: WsResponse<Option<Vec<u8>>>) -> CodexWebSoc
         status_code,
         retry_after_seconds,
         body,
+        set_cookie_headers: websocket_set_cookie_headers(response.headers()),
     }
-}
-
-async fn connect_stream(uri: &Uri) -> Result<MaybeTlsStream<TcpStream>, tungstenite::Error> {
-    let host = uri.host().ok_or(UrlError::NoHostName)?;
-    if host.is_empty() {
-        return Err(UrlError::EmptyHostName.into());
-    }
-    let port = uri
-        .port_u16()
-        .or_else(|| match uri.scheme_str() {
-            Some("wss") => Some(443),
-            Some("ws") => Some(80),
-            _ => None,
-        })
-        .ok_or(UrlError::UnsupportedUrlScheme)?;
-
-    let socket = TcpStream::connect((host, port)).await?;
-    match uri.scheme_str() {
-        Some("ws") => Ok(MaybeTlsStream::Plain(socket)),
-        Some("wss") => connect_tls_stream(socket, host).await,
-        _ => Err(UrlError::UnsupportedUrlScheme.into()),
-    }
-}
-
-async fn connect_tls_stream(
-    socket: TcpStream,
-    host: &str,
-) -> Result<MaybeTlsStream<TcpStream>, tungstenite::Error> {
-    let server_name =
-        ServerName::try_from(host.to_string()).map_err(|_| TlsError::InvalidDnsName)?;
-    let config = if let Some(config) = maybe_build_rustls_client_config_with_custom_ca()
-        .map_err(|error| tungstenite::Error::Io(io::Error::other(error)))?
-    {
-        config
-    } else {
-        Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(native_root_store().map_err(tungstenite::Error::Io)?)
-                .with_no_client_auth(),
-        )
-    };
-    let stream = TlsConnector::from(config)
-        .connect(server_name, socket)
-        .await
-        .map_err(tungstenite::Error::Io)?;
-    Ok(MaybeTlsStream::Rustls(stream))
 }
 
 fn opening_request_bytes(connection: &CodexWebSocketConnection) -> Vec<u8> {
@@ -582,130 +539,6 @@ fn opening_request_bytes(connection: &CodexWebSocketConnection) -> Vec<u8> {
     }
     bytes.extend_from_slice(b"\r\n");
     bytes
-}
-
-async fn read_opening_response(
-    stream: &mut MaybeTlsStream<TcpStream>,
-) -> Result<(WsResponse<Option<Vec<u8>>>, Vec<u8>), tungstenite::Error> {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    let header_end = loop {
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            return Err(ProtocolError::HandshakeIncomplete.into());
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > MAX_OPENING_RESPONSE_BYTES {
-            return Err(CapacityError::MessageTooLong {
-                size: bytes.len(),
-                max_size: MAX_OPENING_RESPONSE_BYTES,
-            }
-            .into());
-        }
-        if let Some(index) = find_header_end(&bytes) {
-            break index;
-        }
-    };
-
-    let body_start = header_end + 4;
-    let mut body = bytes[body_start..].to_vec();
-    let mut response = parse_response_head(&bytes[..header_end])?;
-    if response.status() != WsStatusCode::SWITCHING_PROTOCOLS {
-        read_response_body(stream, response.headers(), &mut body).await?;
-        *response.body_mut() = Some(body);
-        return Ok((response, Vec::new()));
-    }
-
-    Ok((response, body))
-}
-
-fn find_header_end(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn parse_response_head(head: &[u8]) -> Result<WsResponse<Option<Vec<u8>>>, tungstenite::Error> {
-    let head = std::str::from_utf8(head)?;
-    let mut lines = head.split("\r\n");
-    let status_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty response"))?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing response status"))?
-        .parse::<u16>()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-
-    let mut response = WsResponse::new(None);
-    *response.status_mut() = WsStatusCode::from_u16(status)?;
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        response.headers_mut().append(
-            HeaderName::from_bytes(name.trim().as_bytes())?,
-            HeaderValue::from_bytes(value.trim_start().as_bytes())?,
-        );
-    }
-    Ok(response)
-}
-
-async fn read_response_body(
-    stream: &mut MaybeTlsStream<TcpStream>,
-    headers: &tokio_tungstenite::tungstenite::http::HeaderMap,
-    body: &mut Vec<u8>,
-) -> Result<(), tungstenite::Error> {
-    let Some(content_length) = headers
-        .get("content-length")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok())
-    else {
-        return Ok(());
-    };
-
-    while body.len() < content_length {
-        let remaining = content_length - body.len();
-        let mut chunk = vec![0_u8; remaining.min(1024)];
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            break;
-        }
-        body.extend_from_slice(&chunk[..read]);
-    }
-    body.truncate(content_length);
-    Ok(())
-}
-
-fn verify_accept_key(
-    connection: &CodexWebSocketConnection,
-    response: &WsResponse<Option<Vec<u8>>>,
-) -> Result<(), tungstenite::Error> {
-    let key = connection
-        .headers()
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-key"))
-        .map(|(_, value)| value.as_str())
-        .ok_or(ProtocolError::MissingSecWebSocketKey)?;
-    let expected = derive_accept_key(key.as_bytes());
-    let actual = response
-        .headers()
-        .get("sec-websocket-accept")
-        .ok_or(ProtocolError::SecWebSocketAcceptKeyMismatch)?;
-
-    if actual == expected.as_str() {
-        Ok(())
-    } else {
-        Err(ProtocolError::SecWebSocketAcceptKeyMismatch.into())
-    }
-}
-
-fn response_accepts_permessage_deflate(response: &WsResponse<Option<Vec<u8>>>) -> bool {
-    response
-        .headers()
-        .get_all("sec-websocket-extensions")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(permessage_deflate_enabled)
 }
 
 async fn collect_websocket_response(
@@ -742,6 +575,7 @@ async fn collect_websocket_response(
                 status_code: classified.status_code,
                 retry_after_seconds,
                 body: raw,
+                set_cookie_headers: Vec::new(),
             });
         }
         if let Some(reason) = websocket_incomplete_response_reason(&raw) {
@@ -887,6 +721,7 @@ async fn forward_websocket_response_stream(
                 status_code: classified.status_code,
                 retry_after_seconds,
                 body: raw,
+                set_cookie_headers: Vec::new(),
             }));
             return;
         }
@@ -990,18 +825,14 @@ fn websocket_event_type(raw: &str) -> Option<String> {
     })
 }
 
-fn websocket_response_turn_state(
-    headers: &tokio_tungstenite::tungstenite::http::HeaderMap,
-) -> Option<String> {
+fn websocket_response_turn_state(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-codex-turn-state")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string)
 }
 
-fn websocket_set_cookie_headers(
-    headers: &tokio_tungstenite::tungstenite::http::HeaderMap,
-) -> Vec<String> {
+fn websocket_set_cookie_headers(headers: &HeaderMap) -> Vec<String> {
     headers
         .get_all("set-cookie")
         .iter()
@@ -1009,9 +840,7 @@ fn websocket_set_cookie_headers(
         .collect()
 }
 
-fn websocket_rate_limit_headers(
-    headers: &tokio_tungstenite::tungstenite::http::HeaderMap,
-) -> Vec<(String, String)> {
+fn websocket_rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
         .filter(|(name, _)| is_rate_limit_header(name.as_str()))

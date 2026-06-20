@@ -12,6 +12,7 @@ codex-proxy-assets = { path = "../assets" }
 codex-proxy-core = { path = "../core" }
 codex-proxy-platform = { path = "../platform" }
 codex-proxy-runtime = { path = "../runtime" }
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

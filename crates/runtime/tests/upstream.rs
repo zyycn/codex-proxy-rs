@@ -10,8 +10,16 @@ use codex_proxy_core::{
 use codex_proxy_platform::config::WebSocketPoolConfig;
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::{
+    accept_hdr_async_with_config,
+    tungstenite::{
+        extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+        handshake::server::{Request as WsRequest, Response as WsResponse},
+        protocol::WebSocketConfig,
+        Message,
+    },
+};
 
 #[tokio::test]
 async fn codex_backend_client_should_apply_configured_websocket_pool() {
@@ -22,7 +30,7 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_runtime_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -45,7 +53,7 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
             accepted = listener.accept() => {
                 let (second_stream, _) = accepted.unwrap();
                 accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                let mut second_websocket = accept_async(second_stream).await.unwrap();
+                let mut second_websocket = accept_runtime_test_websocket(second_stream).await;
                 let _second_message = second_websocket.next().await.unwrap().unwrap();
                 second_websocket
                     .send(Message::Text(
@@ -91,6 +99,33 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
     assert!(first.body.contains("resp_runtime_pool_first"));
     assert!(second.body.contains("resp_runtime_pool_second"));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+}
+
+fn websocket_accept_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
+}
+
+async fn accept_runtime_test_websocket(
+    stream: TcpStream,
+) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+    accept_hdr_async_with_config(
+        stream,
+        |_request: &WsRequest, mut response: WsResponse| {
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            Ok(response)
+        },
+        Some(websocket_accept_config()),
+    )
+    .await
+    .unwrap()
 }
 
 fn request_context<'a>(

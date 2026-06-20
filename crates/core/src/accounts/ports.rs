@@ -76,6 +76,18 @@ pub trait AccountStore: Send + Sync + 'static {
         Ok(false)
     }
 
+    /// 应用已经验证过的账号配额快照。
+    async fn apply_quota_snapshot(
+        &self,
+        account_id: &str,
+        quota_json: &str,
+        limit_reached: bool,
+        cooldown_until: Option<DateTime<Utc>>,
+    ) -> AccountStoreResult<bool> {
+        let _ = (limit_reached, cooldown_until);
+        self.update_quota_json(account_id, quota_json).await
+    }
+
     /// 同步账号当前 rate-limit 统计窗口。
     async fn sync_rate_limit_window(
         &self,

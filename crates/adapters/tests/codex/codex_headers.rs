@@ -92,6 +92,10 @@ fn websocket_connection_should_build_standard_opening_headers_around_business_he
             "test-websocket-key",
             vec![
                 (
+                    "chatgpt-account-id".to_string(),
+                    "chatgpt-account".to_string(),
+                ),
+                (
                     "authorization".to_string(),
                     "Bearer access-token".to_string(),
                 ),
@@ -117,6 +121,7 @@ fn websocket_connection_should_build_standard_opening_headers_around_business_he
             "Upgrade",
             "Sec-WebSocket-Version",
             "Sec-WebSocket-Key",
+            "chatgpt-account-id",
             "authorization",
             "user-agent",
             "openai-beta",
@@ -135,6 +140,7 @@ fn websocket_connection_should_build_standard_opening_headers_around_business_he
             ("Upgrade", "websocket"),
             ("Sec-WebSocket-Version", "13"),
             ("Sec-WebSocket-Key", "test-websocket-key"),
+            ("chatgpt-account-id", "<redacted>"),
             ("authorization", "<redacted>"),
             ("user-agent", "Codex Desktop/test"),
             ("openai-beta", "responses_websockets=2026-02-06"),
@@ -156,8 +162,13 @@ async fn websocket_execute_response_create_request_should_capture_handshake_head
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket =
-            accept_hdr_async(stream, |_request: &WsRequest, mut response: WsResponse| {
+        let mut websocket = accept_hdr_async_with_config(
+            stream,
+            |_request: &WsRequest, mut response: WsResponse| {
+                response.headers_mut().insert(
+                    "sec-websocket-extensions",
+                    "permessage-deflate".parse().unwrap(),
+                );
                 response
                     .headers_mut()
                     .insert("x-codex-turn-state", "turn-from-handshake".parse().unwrap());
@@ -171,9 +182,11 @@ async fn websocket_execute_response_create_request_should_capture_handshake_head
                     .headers_mut()
                     .insert("x-ratelimit-remaining-requests", "41".parse().unwrap());
                 Ok(response)
-            })
-            .await
-            .unwrap();
+            },
+            Some(websocket_accept_config()),
+        )
+        .await
+        .unwrap();
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -239,8 +252,14 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let headers_for_server = Arc::clone(&received_headers);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket =
-            accept_hdr_async(stream, move |request: &WsRequest, response: WsResponse| {
+        let mut websocket = accept_hdr_async_with_config(
+            stream,
+            move |request: &WsRequest, response: WsResponse| {
+                let mut response = response;
+                response.headers_mut().insert(
+                    "sec-websocket-extensions",
+                    "permessage-deflate".parse().unwrap(),
+                );
                 let headers = request
                     .headers()
                     .iter()
@@ -253,9 +272,11 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
                     .collect::<Vec<_>>();
                 *headers_for_server.lock().unwrap() = headers;
                 Ok(response)
-            })
-            .await
-            .unwrap();
+            },
+            Some(websocket_accept_config()),
+        )
+        .await
+        .unwrap();
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
             .expect("client payload should be json");
@@ -330,16 +351,38 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
         .any(|(name, value)| name == "x-client-request-id" && value == "cp_derived"));
     assert!(headers
         .iter()
+        .any(|(name, value)| name == "x-codex-installation-id" && value == "install-123"));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "x-openai-internal-codex-residency" && value == "us"));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "x-codex-turn-state" && value == "turn-state"));
+    assert!(headers.iter().any(|(name, value)| {
+        name == "x-codex-turn-metadata" && value == "{\"thread_source\":\"subagent\"}"
+    }));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "x-codex-beta-features" && value == "feature-a"));
+    assert!(headers.iter().any(|(name, value)| {
+        name == "x-responsesapi-include-timing-metrics" && value == "true"
+    }));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "version" && value == "26.318.11754"));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "x-codex-parent-thread-id" && value == "parent-456"));
+    assert!(headers
+        .iter()
         .any(|(name, value)| name == "x-openai-subagent" && value == "review"));
     assert!(headers
         .iter()
-        .any(|(name, value)| name == "session-id" && value == "cp_derived"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "thread-id" && value == "cp_derived"));
+        .any(|(name, value)| name == "session_id" && value == "cp_derived"));
     assert!(headers.iter().all(|(name, _)| name != "content-type"));
     assert!(headers.iter().all(|(name, _)| name != "accept"));
-    assert!(headers.iter().all(|(name, _)| name != "session_id"));
+    assert!(headers.iter().all(|(name, _)| name != "session-id"));
+    assert!(headers.iter().all(|(name, _)| name != "thread-id"));
 }
 
 #[tokio::test]

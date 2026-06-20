@@ -51,6 +51,7 @@ create table if not exists accounts (
   access_token_cipher text not null,
   refresh_token_cipher text,
   access_token_expires_at text,
+  next_refresh_at text,
   status text not null check (status in ('active', 'expired', 'quota_exhausted', 'refreshing', 'disabled', 'banned')),
   quota_json text,
   quota_fetched_at text,
