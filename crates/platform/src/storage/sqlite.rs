@@ -22,37 +22,6 @@ pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Erro
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let schema = include_str!("schema.sql");
     sqlx::raw_sql(schema).execute(pool).await?;
-    apply_lightweight_migrations(pool).await?;
-    Ok(())
-}
-
-async fn apply_lightweight_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    add_accounts_next_refresh_at_if_missing(pool).await?;
-    Ok(())
-}
-
-async fn add_accounts_next_refresh_at_if_missing(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let table_exists: Option<(String,)> =
-        sqlx::query_as("select name from sqlite_master where type = 'table' and name = ?")
-            .bind("accounts")
-            .fetch_optional(pool)
-            .await?;
-    if table_exists.is_none() {
-        return Ok(());
-    }
-
-    let column_exists: Option<(String,)> =
-        sqlx::query_as("select name from pragma_table_info('accounts') where name = ?")
-            .bind("next_refresh_at")
-            .fetch_optional(pool)
-            .await?;
-    if column_exists.is_some() {
-        return Ok(());
-    }
-
-    sqlx::query("alter table accounts add column next_refresh_at text")
-        .execute(pool)
-        .await?;
     Ok(())
 }
 

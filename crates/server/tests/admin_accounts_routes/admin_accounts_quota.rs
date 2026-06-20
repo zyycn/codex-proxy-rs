@@ -22,7 +22,7 @@ async fn admin_usage_stats_should_return_page_and_summary() {
     .await
     .unwrap();
     sqlx::query(
-        "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, image_input_tokens, image_output_tokens, image_request_count, image_request_failed_count, last_used_at) values (?, 3, 1, 21, 8, 5, 7, 2, 1, 0, ?)",
+        "insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, reasoning_tokens, total_tokens, image_input_tokens, image_output_tokens, image_request_count, image_request_failed_count, last_used_at) values (?, 3, 1, 21, 8, 5, 4, 29, 7, 2, 1, 0, ?)",
     )
     .bind("acct_usage")
     .bind("2026-06-18T00:10:00Z")
@@ -58,6 +58,8 @@ async fn admin_usage_stats_should_return_page_and_summary() {
     assert_eq!(page_body["data"][0]["email"], "usage@example.com");
     assert_eq!(page_body["data"][0]["requestCount"], 3);
     assert_eq!(page_body["data"][0]["inputTokens"], 21);
+    assert_eq!(page_body["data"][0]["reasoningTokens"], 4);
+    assert_eq!(page_body["data"][0]["totalTokens"], 29);
 
     let summary_response = app
         .oneshot(
@@ -78,6 +80,8 @@ async fn admin_usage_stats_should_return_page_and_summary() {
     assert_eq!(summary_body["data"]["accountCount"], 1);
     assert_eq!(summary_body["data"]["requestCount"], 3);
     assert_eq!(summary_body["data"]["outputTokens"], 8);
+    assert_eq!(summary_body["data"]["reasoningTokens"], 4);
+    assert_eq!(summary_body["data"]["totalTokens"], 29);
 }
 
 #[tokio::test]

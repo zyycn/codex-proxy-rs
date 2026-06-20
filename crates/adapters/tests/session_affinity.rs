@@ -10,6 +10,7 @@ async fn session_affinity_store_should_upsert_and_list_active_records() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
+    insert_account(&pool, "acct_1").await;
     let store = SqliteSessionAffinityStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 18, 12, 0, 0).unwrap();
 
@@ -49,6 +50,8 @@ async fn session_affinity_store_should_delete_expired_records() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
+    insert_account(&pool, "acct_1").await;
+    insert_account(&pool, "acct_2").await;
     let store = SqliteSessionAffinityStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 18, 12, 0, 0).unwrap();
 
@@ -99,4 +102,14 @@ async fn session_affinity_store_should_delete_expired_records() {
     assert_eq!(deleted, 1);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].response_id, "resp_active");
+}
+
+async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {
+    sqlx::query(
+        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, 'cipher', 'active', '2026-06-18T12:00:00Z', '2026-06-18T12:00:00Z')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("account should be inserted");
 }

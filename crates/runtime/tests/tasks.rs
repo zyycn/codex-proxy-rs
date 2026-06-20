@@ -87,15 +87,16 @@ async fn mount_appcast(server: &MockServer, body: &str) {
         .await;
 }
 
-async fn wait_for_auto_updated_fingerprint(
+async fn wait_for_current_fingerprint_version(
     repo: &FingerprintRepository,
 ) -> codex_proxy_core::gateway::fingerprint::Fingerprint {
     let deadline = tokio::time::Instant::now() + StdDuration::from_secs(2);
     loop {
         if let Some(stored) = repo
-            .load_latest_auto_updated()
+            .load_current()
             .await
-            .expect("latest auto update should load")
+            .expect("current fingerprint should load")
+            .filter(|stored| stored.app_version == "26.900.1")
         {
             return stored;
         }
@@ -281,6 +282,7 @@ fn test_config(database_url: String) -> AppConfig {
             force_http11: false,
         },
         ws_pool: Default::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,

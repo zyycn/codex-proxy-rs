@@ -48,7 +48,7 @@ async fn sqlite_account_store_should_list_pool_accounts() {
         .expect("encrypt refresh token");
     sqlx::query(
         "insert into accounts (
-            id, email, account_id, user_id, label, plan_type, access_token_cipher, refresh_token_cipher,
+            id, email, chatgpt_account_id, chatgpt_user_id, label, plan_type, access_token_cipher, refresh_token_cipher,
             access_token_expires_at, status, added_at, updated_at
         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )

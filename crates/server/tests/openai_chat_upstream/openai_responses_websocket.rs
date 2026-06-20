@@ -403,10 +403,6 @@ async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled()
 }
 
 #[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "tokio-tungstenite handshake callbacks use a large error response type"
-)]
 async fn responses_websocket_stream_should_record_metadata_turn_state_for_continuation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -440,13 +436,9 @@ async fn responses_websocket_stream_should_record_metadata_turn_state_for_contin
         let (second_stream, _) = listener.accept().await.unwrap();
         let second_headers = Arc::new(Mutex::new(Vec::new()));
         let second_headers_for_callback = Arc::clone(&second_headers);
-        let mut second_websocket = accept_hdr_async(
-            second_stream,
-            move |request: &WsRequest, response: WsResponse| {
-                *second_headers_for_callback.lock().unwrap() = request_headers(request);
-                Ok(response)
-            },
-        )
+        let mut second_websocket = accept_hdr_async(second_stream, move |request, _response| {
+            *second_headers_for_callback.lock().unwrap() = request_headers(request);
+        })
         .await
         .unwrap();
         let second_message = second_websocket.next().await.unwrap().unwrap();

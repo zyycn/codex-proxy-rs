@@ -158,6 +158,8 @@ async fn account_repository_should_accumulate_usage_counters() {
             input_tokens: 10,
             output_tokens: 4,
             cached_tokens: 3,
+            reasoning_tokens: 2,
+            total_tokens: 14,
             empty_response_count: 0,
             ..UsageDelta::default()
         },
@@ -170,6 +172,8 @@ async fn account_repository_should_accumulate_usage_counters() {
             input_tokens: 8,
             output_tokens: 2,
             cached_tokens: 1,
+            reasoning_tokens: 1,
+            total_tokens: 10,
             empty_response_count: 1,
             ..UsageDelta::default()
         },
@@ -182,6 +186,8 @@ async fn account_repository_should_accumulate_usage_counters() {
     assert_eq!(usage.input_tokens, 18);
     assert_eq!(usage.output_tokens, 6);
     assert_eq!(usage.cached_tokens, 4);
+    assert_eq!(usage.reasoning_tokens, 3);
+    assert_eq!(usage.total_tokens, 24);
     assert_eq!(usage.empty_response_count, 1);
     assert!(usage.last_used_at.is_some());
 }

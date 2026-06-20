@@ -10,31 +10,35 @@ fn update_manifest_should_extract_version_and_build_number() {
 }
 
 #[tokio::test]
-async fn fingerprint_repository_should_upsert_auto_update_record() {
+async fn fingerprint_repository_should_update_current_record() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("fingerprints.sqlite");
     let pool = codex_proxy_platform::storage::connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
     let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool.clone());
+    let default_fingerprint =
+        codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests();
 
-    repo.upsert_auto_update("26.800.1", "6001", Some("147"))
+    repo.ensure_current_seed(&default_fingerprint)
         .await
-        .expect("first upsert");
-    repo.upsert_auto_update("26.800.2", "6002", None)
+        .expect("seed current fingerprint");
+    repo.update_current_version("26.800.1", "6001", Some("147"))
         .await
-        .expect("second upsert");
+        .expect("first update");
+    repo.update_current_version("26.800.2", "6002", None)
+        .await
+        .expect("second update");
 
     let stored = repo
-        .load_latest_auto_updated()
+        .load_current()
         .await
-        .expect("load latest")
+        .expect("load current")
         .expect("stored fingerprint");
-    let count: (i64,) =
-        sqlx::query_as("select count(*) from fingerprints where id = 'auto_updated'")
-            .fetch_one(&pool)
-            .await
-            .expect("count row");
+    let count: (i64,) = sqlx::query_as("select count(*) from fingerprints where id = 'current'")
+        .fetch_one(&pool)
+        .await
+        .expect("count row");
 
     assert_eq!(count.0, 1);
     assert_eq!(stored.app_version, "26.800.2");
@@ -60,6 +64,11 @@ async fn fingerprint_updater_should_fetch_manifest_and_persist_history() {
         .await
         .expect("sqlite pool");
     let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool);
+    repo.ensure_current_seed(
+        &codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let updater = codex_proxy_adapters::codex::fingerprint::FingerprintUpdater::new(
         reqwest::Client::new(),
         repo.clone(),
@@ -146,6 +155,11 @@ async fn update_checker_should_apply_available_update_to_repository() {
         .await
         .expect("sqlite pool");
     let repo = codex_proxy_adapters::codex::fingerprint::FingerprintRepository::new(pool);
+    repo.ensure_current_seed(
+        &codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let extracted_path = dir.path().join("extracted-fingerprint.json");
     std::fs::write(
         &extracted_path,
@@ -167,9 +181,9 @@ async fn update_checker_should_apply_available_update_to_repository() {
         .await
         .expect("apply update");
     let stored = repo
-        .load_latest_auto_updated()
+        .load_current()
         .await
-        .expect("load latest")
+        .expect("load current")
         .expect("stored fingerprint");
 
     assert!(applied);

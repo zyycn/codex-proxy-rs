@@ -201,6 +201,7 @@ fn test_config(database_url: String) -> AppConfig {
             force_http11: false,
         },
         ws_pool: WebSocketPoolConfig::default(),
+        fingerprint: Default::default(),
         admin: AdminConfig {
             session_ttl_minutes: 60,
             session_cleanup_interval_secs: 3600,

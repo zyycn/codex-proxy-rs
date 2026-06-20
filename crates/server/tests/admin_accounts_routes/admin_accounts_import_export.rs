@@ -66,6 +66,12 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let secret_box = SecretBox::new([79u8; 32]);
+    let access_token = test_jwt(
+        "chatgpt_import",
+        Some("user_import"),
+        Some("import@example.com"),
+        Some("team"),
+    );
     let state = AppState::with_pool_secret_and_api_key_hasher(
         test_config(url),
         pool.clone(),
@@ -91,7 +97,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
                             "userId": "user_import",
                             "label": "secondary",
                             "planType": "team",
-                            "token": "access-import",
+                            "token": access_token.clone(),
                             "refreshToken": "refresh-import",
                             "accessTokenExpiresAt": "2026-06-18T02:00:00Z",
                             "status": "disabled"
@@ -116,7 +122,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     assert_eq!(body["data"]["imported"], 1);
     assert_eq!(body["data"]["skipped"], 0);
     assert_eq!(body["data"]["sourceFormat"], "native");
-    assert_eq!(stored.access_token.expose_secret(), "access-import");
+    assert_eq!(stored.access_token.expose_secret(), access_token);
     assert_eq!(
         stored.refresh_token.unwrap().expose_secret(),
         "refresh-import"
@@ -358,7 +364,6 @@ async fn admin_accounts_import_should_expire_sub2api_account_when_token_is_expir
                             "label": "expired-label",
                             "planType": "free",
                             "token": expired_access_token,
-                            "refreshToken": "expired-refresh",
                             "status": "active",
                             "cachedQuota": {
                                 "rate_limit": {
@@ -436,6 +441,12 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
 async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_accounts() {
     let (app, _state, pool, _dir, _secret_box) =
         admin_accounts_test_app("admin-accounts-import-sanitized.sqlite", 113).await;
+    let access_token = test_jwt(
+        "chatgpt-account",
+        Some("chatgpt-user"),
+        Some("user@example.com"),
+        Some("plus"),
+    );
 
     let response = app
         .clone()
@@ -455,7 +466,7 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
                             "userId": "chatgpt-user",
                             "label": "primary",
                             "planType": "plus",
-                            "token": "access-secret",
+                            "token": access_token.clone(),
                             "refreshToken": "refresh-secret",
                             "status": "active"
                         }]
@@ -480,7 +491,7 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
     .await
     .unwrap();
     assert!(stored.0.starts_with("v1:"));
-    assert!(!stored.0.contains("access-secret"));
+    assert!(!stored.0.contains(&access_token));
     assert!(stored.1.starts_with("v1:"));
     assert!(!stored.1.contains("refresh-secret"));
 

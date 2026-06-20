@@ -1365,6 +1365,10 @@ pub struct AdminUsageRecord {
     pub output_tokens: i64,
     /// 缓存 token 数。
     pub cached_tokens: i64,
+    /// reasoning token 数。
+    pub reasoning_tokens: i64,
+    /// 上游返回的总 token 数。
+    pub total_tokens: i64,
     /// 图片输入 token 数。
     pub image_input_tokens: i64,
     /// 图片输出 token 数。
@@ -1392,6 +1396,10 @@ pub struct AdminUsageSummary {
     pub output_tokens: i64,
     /// 缓存 token 总数。
     pub cached_tokens: i64,
+    /// reasoning token 总数。
+    pub reasoning_tokens: i64,
+    /// 上游返回 token 总数。
+    pub total_tokens: i64,
     /// 图片输入 token 总数。
     pub image_input_tokens: i64,
     /// 图片输出 token 总数。
@@ -1574,7 +1582,7 @@ impl ChatDispatchService {
             )
             .await
             {
-                QuotaVerificationDecision::Ready(acquired) => acquired,
+                QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
                     rate_limited_count += 1;
                     last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
@@ -2276,7 +2284,7 @@ impl ResponseDispatchService {
             )
             .await
             {
-                QuotaVerificationDecision::Ready(acquired) => acquired,
+                QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
                     rate_limited_count += 1;
                     last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
@@ -2685,6 +2693,10 @@ impl ResponseDispatchService {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keeps response dispatch logging call sites explicit at branch exits"
+    )]
     async fn record_response_dispatch_error(
         &self,
         request_id: &str,
@@ -2897,7 +2909,7 @@ impl ResponseDispatchService {
             )
             .await
             {
-                QuotaVerificationDecision::Ready(acquired) => acquired,
+                QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
                     rate_limited_count += 1;
                     last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
@@ -3259,7 +3271,7 @@ impl ResponseDispatchService {
             )
             .await
             {
-                QuotaVerificationDecision::Ready(acquired) => acquired,
+                QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
                     rate_limited_count += 1;
                     last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
@@ -3629,11 +3641,15 @@ impl ResponseDispatchService {
 }
 
 enum QuotaVerificationDecision {
-    Ready(AcquiredAccount),
+    Ready(Box<AcquiredAccount>),
     RetryWithAnotherAccount,
     MaxAttemptsReached,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "quota verification needs shared services plus mutable retry state at dispatch loop boundaries"
+)]
 async fn verify_acquired_quota_if_required(
     account_pool: &RuntimeAccountPoolService,
     codex: &CodexBackendClient,
@@ -3645,7 +3661,7 @@ async fn verify_acquired_quota_if_required(
     verify_attempts: &mut usize,
 ) -> QuotaVerificationDecision {
     if !acquired.account.quota_verify_required {
-        return QuotaVerificationDecision::Ready(acquired);
+        return QuotaVerificationDecision::Ready(Box::new(acquired));
     }
 
     let account_id = acquired.account.id.clone();
@@ -3678,7 +3694,7 @@ async fn verify_acquired_quota_if_required(
                 error = %error,
                 "failed to verify dirty quota before upstream request"
             );
-            return QuotaVerificationDecision::Ready(acquired);
+            return QuotaVerificationDecision::Ready(Box::new(acquired));
         }
     };
 
@@ -3694,7 +3710,7 @@ async fn verify_acquired_quota_if_required(
         return QuotaVerificationDecision::RetryWithAnotherAccount;
     }
 
-    QuotaVerificationDecision::Ready(acquired_with_verified_quota(acquired, &quota))
+    QuotaVerificationDecision::Ready(Box::new(acquired_with_verified_quota(acquired, &quota)))
 }
 
 fn acquired_with_verified_quota(mut acquired: AcquiredAccount, quota: &Value) -> AcquiredAccount {
@@ -5761,6 +5777,18 @@ pub struct AdminLogFilter {
     pub model: Option<String>,
     /// HTTP 状态码。
     pub status_code: Option<i64>,
+    /// 上游传输方式。
+    pub transport: Option<String>,
+    /// 同一请求内的上游尝试序号。
+    pub attempt_index: Option<i64>,
+    /// 上游 HTTP 状态码。
+    pub upstream_status_code: Option<i64>,
+    /// 失败分类。
+    pub failure_class: Option<String>,
+    /// 上游响应 ID。
+    pub response_id: Option<String>,
+    /// 上游请求 ID。
+    pub upstream_request_id: Option<String>,
     /// 搜索关键词。
     pub search: Option<String>,
 }
@@ -5837,6 +5865,10 @@ pub struct AdminAccountService {
 
 impl AdminAccountService {
     /// 构造管理端账号服务。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor wires service dependencies from runtime bootstrap"
+    )]
     pub fn new(
         store: SqliteAccountStore,
         cookies: SqliteCookieStore,
@@ -8662,6 +8694,8 @@ impl From<AccountUsageListRecord> for AdminUsageRecord {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cached_tokens: usage.cached_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            total_tokens: usage.total_tokens,
             image_input_tokens: usage.image_input_tokens,
             image_output_tokens: usage.image_output_tokens,
             image_request_count: usage.image_request_count,
@@ -8680,6 +8714,8 @@ impl From<AccountUsageSummary> for AdminUsageSummary {
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_tokens: summary.cached_tokens,
+            reasoning_tokens: summary.reasoning_tokens,
+            total_tokens: summary.total_tokens,
             image_input_tokens: summary.image_input_tokens,
             image_output_tokens: summary.image_output_tokens,
             image_request_count: summary.image_request_count,
@@ -8698,6 +8734,12 @@ impl From<AdminLogFilter> for EventLogFilter {
             route: filter.route,
             model: filter.model,
             status_code: filter.status_code,
+            transport: filter.transport,
+            attempt_index: filter.attempt_index,
+            upstream_status_code: filter.upstream_status_code,
+            failure_class: filter.failure_class,
+            response_id: filter.response_id,
+            upstream_request_id: filter.upstream_request_id,
             search: filter.search,
         }
     }

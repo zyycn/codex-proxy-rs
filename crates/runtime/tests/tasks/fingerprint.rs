@@ -8,6 +8,11 @@ async fn fingerprint_update_task_should_start_background_checker() {
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
+    repo.ensure_current_seed(
+        &codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
 
     let handle = codex_proxy_runtime::tasks::fingerprint_update::start_fingerprint_update_task(
         Some(repo),
@@ -43,6 +48,11 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
+    repo.ensure_current_seed(
+        &codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let extracted_path = dir.path().join("extracted-fingerprint.json");
     std::fs::write(
         &extracted_path,
@@ -58,7 +68,7 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
         "6001".to_string(),
     );
 
-    let stored = wait_for_auto_updated_fingerprint(&repo).await;
+    let stored = wait_for_current_fingerprint_version(&repo).await;
     handle.shutdown().await;
 
     assert_eq!(
@@ -94,6 +104,11 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
+    repo.ensure_current_seed(
+        &codex_proxy_core::gateway::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let handle = codex_proxy_runtime::tasks::fingerprint_update::start_fingerprint_update_task(
         Some(repo.clone()),
         format!("{}/appcast.xml", server.uri()),
@@ -104,12 +119,9 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
 
     wait_for_appcast_requests(&server, 1).await;
     handle.shutdown().await;
-    let stored = repo
-        .load_latest_auto_updated()
-        .await
-        .expect("latest auto update should load");
+    let latest_history = repo.latest().await.expect("latest history should load");
 
-    assert!(stored.is_none());
+    assert!(latest_history.is_none());
 }
 
 #[tokio::test]

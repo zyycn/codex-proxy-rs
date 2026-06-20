@@ -46,6 +46,50 @@ ws_pool:
   enabled: true
   max_age_ms: 3300000
   max_per_account: 8
+fingerprint:
+  originator: Codex Desktop
+  app_version: 26.519.81530
+  build_number: "3178"
+  platform: darwin
+  arch: arm64
+  chromium_version: "146"
+  user_agent_template: "Codex Desktop/{version} ({platform}; {arch})"
+  default_headers:
+    - name: Accept-Encoding
+      value: gzip, deflate, br, zstd
+    - name: Accept-Language
+      value: en-US,en;q=0.9
+    - name: sec-ch-ua-mobile
+      value: "?0"
+    - name: sec-ch-ua-platform
+      value: "\"macOS\""
+    - name: sec-fetch-site
+      value: same-origin
+    - name: sec-fetch-mode
+      value: cors
+    - name: sec-fetch-dest
+      value: empty
+  header_order:
+    - authorization
+    - chatgpt-account-id
+    - originator
+    - x-openai-internal-codex-residency
+    - x-client-request-id
+    - x-codex-installation-id
+    - x-codex-turn-state
+    - openai-beta
+    - user-agent
+    - sec-ch-ua
+    - sec-ch-ua-mobile
+    - sec-ch-ua-platform
+    - accept-encoding
+    - accept-language
+    - sec-fetch-site
+    - sec-fetch-mode
+    - sec-fetch-dest
+    - content-type
+    - accept
+    - cookie
 admin:
   session_ttl_minutes: 1440
   default_username: admin
@@ -78,6 +122,9 @@ fn default_config_keeps_only_codex_backend() {
     assert!(cfg.ws_pool.enabled);
     assert_eq!(cfg.ws_pool.max_age_ms, 3_300_000);
     assert_eq!(cfg.ws_pool.max_per_account, 8);
+    assert_eq!(cfg.fingerprint.originator, "Codex Desktop");
+    assert_eq!(cfg.fingerprint.app_version, "26.519.81530");
+    assert_eq!(cfg.fingerprint.default_headers[0].name, "Accept-Encoding");
 }
 
 #[test]
@@ -146,6 +193,50 @@ ws_pool:
   enabled: true
   max_age_ms: 3300000
   max_per_account: 8
+fingerprint:
+  originator: Codex Desktop
+  app_version: 26.519.81530
+  build_number: "3178"
+  platform: darwin
+  arch: arm64
+  chromium_version: "146"
+  user_agent_template: "Codex Desktop/{version} ({platform}; {arch})"
+  default_headers:
+    - name: Accept-Encoding
+      value: gzip, deflate, br, zstd
+    - name: Accept-Language
+      value: en-US,en;q=0.9
+    - name: sec-ch-ua-mobile
+      value: "?0"
+    - name: sec-ch-ua-platform
+      value: "\"macOS\""
+    - name: sec-fetch-site
+      value: same-origin
+    - name: sec-fetch-mode
+      value: cors
+    - name: sec-fetch-dest
+      value: empty
+  header_order:
+    - authorization
+    - chatgpt-account-id
+    - originator
+    - x-openai-internal-codex-residency
+    - x-client-request-id
+    - x-codex-installation-id
+    - x-codex-turn-state
+    - openai-beta
+    - user-agent
+    - sec-ch-ua
+    - sec-ch-ua-mobile
+    - sec-ch-ua-platform
+    - accept-encoding
+    - accept-language
+    - sec-fetch-site
+    - sec-fetch-mode
+    - sec-fetch-dest
+    - content-type
+    - accept
+    - cookie
 admin:
   session_ttl_minutes: 1440
 logging:

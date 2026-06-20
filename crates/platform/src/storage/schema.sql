@@ -1,6 +1,15 @@
 pragma foreign_keys = on;
 
 -- ============================================
+-- Schema Migrations
+-- ============================================
+create table if not exists schema_migrations (
+  version integer primary key,
+  name text not null,
+  applied_at text not null
+);
+
+-- ============================================
 -- Admin Users
 -- ============================================
 create table if not exists admin_users (
@@ -44,8 +53,8 @@ create index if not exists idx_client_api_keys_prefix on client_api_keys(prefix)
 create table if not exists accounts (
   id text primary key,
   email text,
-  account_id text,
-  user_id text,
+  chatgpt_account_id text,
+  chatgpt_user_id text,
   label text,
   plan_type text,
   access_token_cipher text not null,
@@ -64,7 +73,9 @@ create table if not exists accounts (
 );
 
 create index if not exists idx_accounts_status on accounts(status);
-create index if not exists idx_accounts_identity on accounts(account_id, user_id) where account_id is not null;
+create unique index if not exists ux_accounts_chatgpt_identity
+on accounts(chatgpt_account_id, coalesce(chatgpt_user_id, ''))
+where chatgpt_account_id is not null;
 
 -- ============================================
 -- Account Refresh Leases
@@ -88,6 +99,8 @@ create table if not exists account_usage (
   input_tokens integer not null default 0 check (input_tokens >= 0),
   output_tokens integer not null default 0 check (output_tokens >= 0),
   cached_tokens integer not null default 0 check (cached_tokens >= 0),
+  reasoning_tokens integer not null default 0 check (reasoning_tokens >= 0),
+  total_tokens integer not null default 0 check (total_tokens >= 0),
   image_input_tokens integer not null default 0 check (image_input_tokens >= 0),
   image_output_tokens integer not null default 0 check (image_output_tokens >= 0),
   image_request_count integer not null default 0 check (image_request_count >= 0),
@@ -129,13 +142,28 @@ create index if not exists idx_account_cookies_account_domain on account_cookies
 -- ============================================
 create table if not exists fingerprints (
   id text primary key,
+  originator text not null,
   app_version text not null,
   build_number text not null,
   platform text not null,
   arch text not null,
   chromium_version text not null,
   user_agent_template text not null,
+  default_headers_json text not null,
+  header_order_json text not null,
   source text not null,
+  created_at text not null,
+  updated_at text not null
+);
+
+create table if not exists fingerprint_update_history (
+  id text primary key,
+  current_fingerprint_id text not null references fingerprints(id) on delete cascade,
+  app_version text not null,
+  build_number text not null,
+  chromium_version text,
+  source text not null,
+  manifest_json text,
   created_at text not null
 );
 
@@ -151,6 +179,12 @@ create table if not exists event_logs (
   route text,
   model text,
   status_code integer check (status_code is null or (status_code >= 100 and status_code <= 599)),
+  transport text,
+  attempt_index integer check (attempt_index is null or attempt_index >= 0),
+  upstream_status_code integer check (upstream_status_code is null or (upstream_status_code >= 100 and upstream_status_code <= 599)),
+  failure_class text,
+  response_id text,
+  upstream_request_id text,
   latency_ms integer check (latency_ms is null or latency_ms >= 0),
   message text not null,
   metadata_json text not null,
@@ -161,6 +195,10 @@ create index if not exists idx_event_logs_created_id on event_logs(created_at de
 create index if not exists idx_event_logs_kind_created on event_logs(kind, created_at desc);
 create index if not exists idx_event_logs_request_id on event_logs(request_id);
 create index if not exists idx_event_logs_account on event_logs(account_id, created_at desc) where account_id is not null;
+create index if not exists idx_event_logs_transport on event_logs(transport, created_at desc) where transport is not null;
+create index if not exists idx_event_logs_failure_class on event_logs(failure_class, created_at desc) where failure_class is not null;
+create index if not exists idx_event_logs_response_id on event_logs(response_id) where response_id is not null;
+create index if not exists idx_event_logs_upstream_request_id on event_logs(upstream_request_id) where upstream_request_id is not null;
 
 -- ============================================
 -- Model Plan Snapshots
@@ -176,7 +214,7 @@ create table if not exists model_plan_snapshots (
 -- ============================================
 create table if not exists session_affinities (
   response_id text primary key,
-  account_id text not null,
+  account_id text not null references accounts(id) on delete cascade,
   conversation_id text not null,
   turn_state text,
   instructions_hash text,

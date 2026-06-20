@@ -39,6 +39,18 @@ pub struct EventLog {
     pub model: Option<String>,
     /// HTTP 状态码。
     pub status_code: Option<i64>,
+    /// 上游传输方式，例如 http_sse 或 websocket。
+    pub transport: Option<String>,
+    /// 同一请求内的上游尝试序号。
+    pub attempt_index: Option<i64>,
+    /// 上游 HTTP 状态码。
+    pub upstream_status_code: Option<i64>,
+    /// 失败分类。
+    pub failure_class: Option<String>,
+    /// 上游响应 ID。
+    pub response_id: Option<String>,
+    /// 上游请求 ID。
+    pub upstream_request_id: Option<String>,
     /// 请求耗时毫秒。
     pub latency_ms: Option<i64>,
     /// 展示消息。
@@ -61,6 +73,12 @@ impl EventLog {
             route: None,
             model: None,
             status_code: None,
+            transport: None,
+            attempt_index: None,
+            upstream_status_code: None,
+            failure_class: None,
+            response_id: None,
+            upstream_request_id: None,
             latency_ms: None,
             message: message.into(),
             metadata: Value::Object(Default::default()),

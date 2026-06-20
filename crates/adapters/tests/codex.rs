@@ -22,7 +22,9 @@ use tokio_tungstenite::{
     accept_hdr_async_with_config,
     tungstenite::{
         extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
-        handshake::server::{Request as WsRequest, Response as WsResponse},
+        handshake::server::{
+            Callback, ErrorResponse, Request as WsRequest, Response as WsResponse,
+        },
         protocol::WebSocketConfig,
         Message,
     },
@@ -51,15 +53,41 @@ fn websocket_accept_config() -> WebSocketConfig {
 async fn accept_codex_test_websocket(
     stream: TcpStream,
 ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+    accept_codex_test_websocket_with(stream, |_request, response| {
+        response.headers_mut().insert(
+            "sec-websocket-extensions",
+            "permessage-deflate".parse().unwrap(),
+        );
+    })
+    .await
+}
+
+struct TestWebSocketCallback<F>(F);
+
+impl<F> Callback for TestWebSocketCallback<F>
+where
+    F: FnOnce(&WsRequest, &mut WsResponse) + Unpin,
+{
+    fn on_request(
+        self,
+        request: &WsRequest,
+        mut response: WsResponse,
+    ) -> Result<WsResponse, ErrorResponse> {
+        (self.0)(request, &mut response);
+        Ok(response)
+    }
+}
+
+async fn accept_codex_test_websocket_with<F>(
+    stream: TcpStream,
+    callback: F,
+) -> tokio_tungstenite::WebSocketStream<TcpStream>
+where
+    F: FnOnce(&WsRequest, &mut WsResponse) + Unpin,
+{
     accept_hdr_async_with_config(
         stream,
-        |_request: &WsRequest, mut response: WsResponse| {
-            response.headers_mut().insert(
-                "sec-websocket-extensions",
-                "permessage-deflate".parse().unwrap(),
-            );
-            Ok(response)
-        },
+        TestWebSocketCallback(callback),
         Some(websocket_accept_config()),
     )
     .await
