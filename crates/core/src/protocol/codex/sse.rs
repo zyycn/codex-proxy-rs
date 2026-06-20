@@ -18,6 +18,15 @@ pub struct SseEvent {
 /// 单事件缓冲上限。
 pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
+/// SSE 流结束标记帧。
+pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
+
+/// 判断 SSE 文本是否已经包含结束标记。
+pub fn sse_body_has_done(body: &str) -> bool {
+    body.trim_end_matches(['\r', '\n'])
+        .ends_with(DONE_SSE_FRAME.trim_end_matches(['\r', '\n']))
+}
+
 /// SSE 解析错误。
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SseError {

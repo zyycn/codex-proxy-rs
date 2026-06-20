@@ -4,7 +4,6 @@ use std::{sync::Arc, time::Duration};
 
 use codex_proxy_adapters::codex::{
     client::CodexBackendClient,
-    default_http_client,
     websocket::pool::{CodexWebSocketPool, CodexWebSocketPoolConfig as AdapterWebSocketPoolConfig},
 };
 use codex_proxy_core::gateway::{fingerprint::Fingerprint, ports::CodexModelCatalogClient};
@@ -16,7 +15,7 @@ pub fn model_catalog_client(
     fingerprint: Fingerprint,
 ) -> Arc<dyn CodexModelCatalogClient> {
     Arc::new(CodexBackendClient::new(
-        default_http_client(),
+        reqwest::Client::new(),
         base_url,
         fingerprint,
     ))
@@ -28,7 +27,7 @@ pub fn codex_backend_client(
     fingerprint: Fingerprint,
     ws_pool: &WebSocketPoolConfig,
 ) -> Arc<CodexBackendClient> {
-    let client = CodexBackendClient::new(default_http_client(), base_url, fingerprint);
+    let client = CodexBackendClient::new(reqwest::Client::new(), base_url, fingerprint);
     if ws_pool.enabled {
         Arc::new(
             client.with_websocket_pool(Arc::new(CodexWebSocketPool::with_config(

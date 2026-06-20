@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 use crate::protocol::codex::{
     responses::{CodexCompactRequest, CodexResponsesRequest},
     schema::{prepare_schema, reconvert_tuple_values},
-    sse::{parse_sse_events, SseError},
+    sse::{encode_sse_event, parse_sse_events, SseError},
 };
 
 /// OpenAI 请求声明的响应格式类别。
@@ -612,6 +612,25 @@ pub fn completed_response_metadata(
         function_call_ids: function_call_ids.into_iter().collect(),
         replay_items,
     }))
+}
+
+/// 编码 OpenAI Responses `response.failed` SSE 事件。
+pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
+    let error = json!({
+        "type": error_type,
+        "code": code,
+        "message": message,
+    });
+    let data = json!({
+        "type": "response.failed",
+        "response": {
+            "id": format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
+            "status": "failed",
+            "error": error,
+        },
+        "error": error,
+    });
+    encode_sse_event("response.failed", &data.to_string())
 }
 
 /// 对单个 Responses SSE 事件的数据执行 tuple schema 回转换。

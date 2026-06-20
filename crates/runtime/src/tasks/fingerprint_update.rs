@@ -2,10 +2,7 @@
 
 use std::path::PathBuf;
 
-use codex_proxy_adapters::codex::{
-    default_http_client,
-    fingerprint::{FingerprintRepository, UpdateChecker},
-};
+use codex_proxy_adapters::codex::fingerprint::{FingerprintRepository, UpdateChecker};
 
 use super::coordinator::SchedulerHandle;
 
@@ -25,7 +22,7 @@ pub fn start_fingerprint_update_task(
 ) -> SchedulerHandle {
     let update_checker = UpdateChecker::with_client(
         repository,
-        default_http_client(),
+        reqwest::Client::new(),
         appcast_url,
         extracted_fingerprint_path,
         current_version,

@@ -5,7 +5,6 @@
 pub mod accounts;
 pub mod admin;
 pub mod auth;
-pub mod error;
 pub mod events;
 pub mod gateway;
 pub mod models;

@@ -16,9 +16,11 @@ use codex_proxy_core::{
 use codex_proxy_platform::config::AppConfig;
 use codex_proxy_runtime::state::AppState;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::middleware::request_id::RequestId;
+
+const LOCAL_DEBUG_ONLY_ERROR: &str = "debug endpoint is local-only";
 
 /// 诊断数据。
 #[derive(Debug, Serialize)]
@@ -185,11 +187,7 @@ pub struct SettingsDiagnostics {
 /// `GET /debug/diagnostics`
 pub async fn diagnostics(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if !is_local_debug_request(&headers) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "debug endpoint is local-only" })),
-        )
-            .into_response();
+        return local_debug_forbidden_response().into_response();
     }
 
     (StatusCode::OK, Json(diagnostics_data(&state).await)).into_response()
@@ -198,11 +196,7 @@ pub async fn diagnostics(State(state): State<AppState>, headers: HeaderMap) -> i
 /// `GET /debug/fingerprint`
 pub async fn fingerprint(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if !is_local_debug_request(&headers) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "debug endpoint is local-only" })),
-        )
-            .into_response();
+        return local_debug_forbidden_response().into_response();
     }
 
     (
@@ -219,11 +213,7 @@ pub async fn upstream(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if !is_local_debug_request(&headers) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "debug endpoint is local-only" })),
-        )
-            .into_response();
+        return local_debug_forbidden_response().into_response();
     }
 
     let probe = state
@@ -321,6 +311,13 @@ fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics 
 pub(super) fn is_local_debug_request(headers: &HeaderMap) -> bool {
     forwarded_header_is_local(headers, "x-forwarded-for")
         && forwarded_header_is_local(headers, "x-real-ip")
+}
+
+pub(super) fn local_debug_forbidden_response() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": LOCAL_DEBUG_ONLY_ERROR })),
+    )
 }
 
 impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {

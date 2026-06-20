@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::protocol::codex::{
     responses::CodexResponsesRequest,
     schema::{prepare_schema, reconvert_tuple_values},
-    sse::{parse_sse_events, SseError},
+    sse::{encode_sse_event, parse_sse_events, SseError, DONE_SSE_FRAME},
 };
 
 /// OpenAI Chat Completions 请求体。
@@ -384,7 +384,7 @@ impl ChatCompletionStreamTranslator {
             }],
             "usage": openai_stream_usage(response.and_then(|response| response.get("usage"))),
         })));
-        output.push_str("data: [DONE]\n\n");
+        output.push_str(DONE_SSE_FRAME);
         self.closed = true;
     }
 
@@ -448,7 +448,7 @@ impl ChatCompletionStreamTranslator {
         chunk["object"] = Value::String("chat.completion.chunk".to_string());
         chunk["created"] = json!(self.created);
         chunk["model"] = Value::String(self.model.clone());
-        format!("data: {chunk}\n\n")
+        encode_sse_event("", &chunk.to_string())
     }
 }
 

@@ -5,6 +5,7 @@ use codex_proxy_core::protocol::codex::events::{
     TokenUsage,
 };
 use codex_proxy_core::protocol::codex::responses::CodexResponsesRequest;
+use codex_proxy_core::protocol::codex::sse::{parse_sse_events, sse_body_has_done, DONE_SSE_FRAME};
 use codex_proxy_core::protocol::codex::websocket::{
     classify_websocket_error_frame, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers,
@@ -37,8 +38,8 @@ use codex_proxy_core::protocol::codex::websocket::{
     WebSocketErrorClassificationProfile,
 };
 use codex_proxy_core::protocol::openai::responses::{
-    response_from_codex_sse, translate_response_to_codex, translate_response_to_compact,
-    CollectedResponse, OpenAiResponsesRequest,
+    response_failed_sse_event, response_from_codex_sse, translate_response_to_codex,
+    translate_response_to_compact, CollectedResponse, OpenAiResponsesRequest,
 };
 use codex_proxy_core::serving::responses::{
     apply_response_model_options, http_sse_fallback_allowed, transport_for_request, CodexTransport,

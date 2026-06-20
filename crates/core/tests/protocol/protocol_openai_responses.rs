@@ -92,6 +92,28 @@ fn response_from_codex_sse_should_collect_completed_response_with_deltas() {
 }
 
 #[test]
+fn response_failed_sse_event_should_encode_openai_failure_shape() {
+    let frame = response_failed_sse_event("server_error", "stream_disconnected", "closed early");
+
+    let events = parse_sse_events(&frame).expect("frame should be valid SSE");
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.event.as_deref(), Some("response.failed"));
+    let data =
+        serde_json::from_str::<serde_json::Value>(&event.data).expect("event data should be JSON");
+
+    assert_eq!(data["type"], "response.failed");
+    assert_eq!(data["response"]["status"], "failed");
+    assert_eq!(data["response"]["error"]["type"], "server_error");
+    assert_eq!(data["response"]["error"]["code"], "stream_disconnected");
+    assert_eq!(data["response"]["error"]["message"], "closed early");
+    assert_eq!(data["error"], data["response"]["error"]);
+    assert!(data["response"]["id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("resp_proxy_")));
+}
+
+#[test]
 fn openai_response_request_should_translate_to_codex_request() {
     let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
         "model": "gpt-5.5",
