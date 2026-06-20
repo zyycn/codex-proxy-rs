@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { RefreshCw } from '@lucide/vue'
+
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseSpinner from '@/components/base/BaseSpinner.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
@@ -9,13 +13,16 @@ import ServiceStatusCard from './components/ServiceStatusCard.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
+  loading,
   metrics,
   trendPoints,
   trendSummary,
   accountUsage,
   serviceStatuses,
   eventLogs,
+  refresh,
 } = useDashboard()
+
 </script>
 
 <template>
@@ -26,24 +33,39 @@ const {
           系统概览
         </h1>
         <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          生产环境 · 14:32 更新 · 自动刷新 30s
+          生产环境 · 自动刷新 30s
         </p>
       </div>
 
-      <AppTopbar class="mt-0.5" />
+      <div class="flex items-center gap-2">
+        <BaseIconButton
+          variant="ghost"
+          size="md"
+          title="刷新数据"
+          :disabled="loading"
+          @click="refresh"
+        >
+          <RefreshCw class="size-4.5" :class="{ 'animate-spin': loading }" />
+        </BaseIconButton>
+        <AppTopbar class="mt-0.5" />
+      </div>
     </header>
 
-    <section class="mt-6 grid grid-cols-4 gap-6" aria-label="核心指标">
-      <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
-    </section>
+    <BaseSpinner v-if="loading && metrics.length === 0" class="mt-20" />
 
-    <section class="mt-6 grid grid-cols-[minmax(0,948fr)_minmax(0,608fr)] gap-7">
-      <RequestTrendCard :points="trendPoints" :summary="trendSummary" />
-      <ServiceStatusCard :items="serviceStatuses" />
-    </section>
+    <template v-else>
+      <section class="mt-6 grid grid-cols-4 gap-6" aria-label="核心指标">
+        <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
+      </section>
 
-    <AccountOverviewCard :accounts="accountUsage" class="mt-6" />
+      <section class="mt-6 grid grid-cols-[minmax(0,948fr)_minmax(0,608fr)] gap-7">
+        <RequestTrendCard :points="trendPoints" :summary="trendSummary" />
+        <ServiceStatusCard :items="serviceStatuses" />
+      </section>
 
-    <EventLogCard :rows="eventLogs" class="mt-6" />
+      <AccountOverviewCard :accounts="accountUsage" class="mt-6" />
+
+      <EventLogCard :rows="eventLogs" class="mt-6" />
+    </template>
   </div>
 </template>

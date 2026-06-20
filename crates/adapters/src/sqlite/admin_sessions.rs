@@ -111,4 +111,13 @@ impl SqliteAdminSessionStore {
             .await?;
         Ok(result.rows_affected())
     }
+
+    /// 删除指定的管理员会话。
+    pub async fn delete_session(&self, session_id: &str) -> SqliteAdminSessionStoreResult<bool> {
+        let result = sqlx::query("delete from admin_sessions where id = ?")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }

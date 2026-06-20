@@ -21,7 +21,7 @@ use crate::admin_api::client_keys::{
 use crate::admin_api::diagnostics::diagnostics;
 use crate::admin_api::logs::{clear_logs, log_detail, logs, logs_state, update_logs_state};
 use crate::admin_api::models::refresh_models;
-use crate::admin_api::session::login;
+use crate::admin_api::session::{login, logout};
 use crate::admin_api::settings::{settings, update_settings};
 use crate::admin_api::usage::{usage_stats, usage_stats_summary};
 
@@ -29,6 +29,7 @@ use crate::admin_api::usage::{usage_stats, usage_stats_summary};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/login", post(login))
+        .route("/api/admin/logout", post(logout))
         .route("/api/admin/settings", get(settings).patch(update_settings))
         .route("/api/admin/diagnostics", get(diagnostics))
         .route("/api/admin/auth/status", get(auth_status))

@@ -3,7 +3,7 @@ import { storeToRefs } from 'pinia'
 import { RouterView } from 'vue-router'
 
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
-import { useUiStore } from '@/stores/ui'
+import { useUiStore } from '@/stores/modules/ui'
 
 import AppSidebar from './components/AppSidebar.vue'
 

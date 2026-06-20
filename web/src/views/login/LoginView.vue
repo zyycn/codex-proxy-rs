@@ -1,7 +1,31 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ArrowRight, KeyRound, Mail, SquareTerminal } from '@lucide/vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
+import { useAuthStore } from '@/stores/modules/auth'
+
+const router = useRouter()
+const authStore = useAuthStore()
+
+const username = ref('')
+const password = ref('')
+
+async function handleSubmit() {
+  if (!username.value.trim() || !password.value.trim()) {
+    return
+  }
+
+  const success = await authStore.login({
+    username: username.value.trim(),
+    password: password.value,
+  })
+
+  if (success) {
+    router.push('/')
+  }
+}
 </script>
 
 <template>
@@ -101,8 +125,9 @@ import BaseCard from '@/components/base/BaseCard.vue'
         as="form"
         :padded="false"
         radius-class="rounded-[22px]"
-        shadow-class="shadow-[0_12px_26px_-18px_#0E17261F,0_34px_70px_-40px_#0E172629]"
+        shadow-class="shadow-[0_12px_26px_-18px_rgba(14,23,38,0.122),0_34px_70px_-40px_rgba(14,23,38,0.161)]"
         class="grid w-full max-w-120 gap-5.5 p-9"
+        @submit.prevent="handleSubmit"
       >
         <header class="grid h-21 gap-2.5">
           <h2 class="m-0 text-[34px] leading-[1.12] font-extrabold tracking-normal text-[#0E1726]">
@@ -113,14 +138,22 @@ import BaseCard from '@/components/base/BaseCard.vue'
           </p>
         </header>
 
+        <div v-if="authStore.error" class="px-4 py-3 rounded-xl bg-red-50 border border-red-200">
+          <p class="m-0 text-[13px] font-medium text-red-700">
+            {{ authStore.error }}
+          </p>
+        </div>
+
         <label class="grid h-18 gap-2">
           <span class="text-xs leading-[1.1] font-bold text-[#0E1726]">管理员账号</span>
-          <span class="inline-flex h-11.5 items-center gap-2.5 rounded-xl bg-[#EEF2F7] px-3.5 text-[#64748B] shadow-[inset_0_1px_0_#FFFFFF66]">
+          <span class="inline-flex h-11.5 items-center gap-2.5 rounded-xl bg-[#EEF2F7] px-3.5 text-[#64748B] shadow-[inset_0_1px_0_#FFFFFF66] transition focus-within:bg-[#F8FAFC] focus-within:shadow-[inset_0_1px_0_#FFFFFF,0_0_0_3px_#DBEAFE]">
             <Mail :size="17" />
             <input
-              class="min-w-0 flex-1 border-0 bg-transparent text-[13px] leading-none font-medium text-[#0E1726] outline-0"
-              value="admin@example.com"
-              readonly
+              v-model="username"
+              class="min-w-0 flex-1 border-0 bg-transparent text-[13px] leading-none font-medium text-[#0E1726] outline-0 placeholder:text-[#94A3B8]"
+              placeholder="请输入用户名"
+              type="text"
+              required
             >
           </span>
         </label>
@@ -130,29 +163,23 @@ import BaseCard from '@/components/base/BaseCard.vue'
           <span class="inline-flex h-11.5 items-center gap-2.5 rounded-xl bg-[#EEF2F7] px-3.5 text-[#64748B] shadow-[inset_0_1px_0_#FFFFFF66] transition focus-within:bg-[#F8FAFC] focus-within:shadow-[inset_0_1px_0_#FFFFFF,0_0_0_3px_#DBEAFE]">
             <KeyRound :size="17" />
             <input
+              v-model="password"
               class="min-w-0 flex-1 border-0 bg-transparent text-[13px] leading-none font-medium text-[#0E1726] outline-0 placeholder:text-[#94A3B8]"
               placeholder="输入会话密钥"
               type="password"
+              required
+              @keyup.enter="handleSubmit"
             >
           </span>
         </label>
 
-        <div class="flex h-7.5 items-center">
-          <label class="inline-flex h-5.5 items-center gap-2">
-            <input
-              class="size-4 appearance-none rounded-[5px] bg-white shadow-[inset_0_0_0_1px_#CBD5E1] checked:bg-[#2563EB] checked:shadow-[inset_0_0_0_4px_#FFFFFF,0_0_0_1px_#2563EB] focus-visible:outline-0 focus-visible:shadow-[inset_0_0_0_1px_#2563EB,0_0_0_3px_#DBEAFE]"
-              type="checkbox"
-            >
-            <span class="text-xs leading-[1.1] font-[650] text-[#64748B]">保持登录</span>
-          </label>
-        </div>
-
         <button
-          class="inline-flex h-12 items-center justify-center gap-2.5 rounded-xl border-0 bg-[#2563EB] text-[15px] leading-[1.1] font-[760] text-white shadow-[0_12px_24px_-16px_#2563EB66] transition-colors hover:bg-[#1D4ED8]"
-          type="button"
+          class="inline-flex h-12 items-center justify-center gap-2.5 rounded-xl border-0 bg-[#2563EB] text-[15px] leading-[1.1] font-[760] text-white shadow-[0_12px_24px_-16px_#2563EB66] transition-colors hover:bg-[#1D4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
+          type="submit"
+          :disabled="authStore.loading || !username.trim() || !password.trim()"
         >
-          <span>登录</span>
-          <ArrowRight :size="18" />
+          <span>{{ authStore.loading ? '登录中...' : '登录' }}</span>
+          <ArrowRight v-if="!authStore.loading" :size="18" />
         </button>
       </BaseCard>
     </section>

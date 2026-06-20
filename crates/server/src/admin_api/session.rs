@@ -96,6 +96,54 @@ pub async fn login(
     Ok(response)
 }
 
+/// `POST /api/admin/logout`
+pub async fn logout(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<Response, AdminError> {
+    let request_id = request_id.as_str().to_string();
+
+    // 获取并删除服务器端 session
+    if let Some(session_id) = admin_session_cookie(&headers) {
+        let _ = state
+            .services
+            .admin_sessions
+            .delete_session(&session_id)
+            .await;
+    }
+
+    // 返回 JSON 响应并清除 cookie
+    let mut response = AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            serde_json::json!({
+                "message": "Logged out successfully"
+            }),
+            request_id.clone(),
+        ),
+    )
+    .into_response();
+
+    // 清除 cookie
+    let cookie = format!(
+        "{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+    );
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| {
+            AdminError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                50001,
+                "Failed to clear admin session cookie",
+                request_id.clone(),
+            )
+        })?,
+    );
+
+    Ok(response)
+}
+
 /// 要求请求携带有效管理员会话。
 pub async fn require_admin_session(
     state: &AppState,
