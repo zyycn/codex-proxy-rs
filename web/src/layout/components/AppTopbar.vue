@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { gsap } from 'gsap'
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   CalendarDays,
   ChevronDown,
@@ -13,7 +14,16 @@ import {
   User,
 } from '@lucide/vue'
 
+import { useAuthStore } from '@/stores/modules/auth'
+
+const router = useRouter()
+const authStore = useAuthStore()
 const accountMenuOpen = ref(false)
+
+async function handleLogout() {
+  await authStore.logout()
+  router.push('/login')
+}
 
 function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -158,6 +168,7 @@ function animateAccountMenuLeave(el: Element, done: () => void) {
           <button
             class="grid h-9 grid-cols-[20px_minmax(0,1fr)] items-center gap-3 rounded-[11px] border-0 bg-transparent px-3 text-left text-(--cp-danger-text) transition-colors duration-200 hover:bg-(--cp-danger-bg)"
             type="button"
+            @click="handleLogout"
           >
             <LogOut class="text-(--cp-danger)" :size="20" />
             <span class="text-[13px] leading-[1.15] font-[650]">退出登录</span>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { gsap } from 'gsap'
 import { nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Box,
   ChartColumn,
@@ -15,16 +16,28 @@ import {
   Users,
 } from '@lucide/vue'
 
+const route = useRoute()
+const router = useRouter()
+
 const navItems = [
-  { label: '概览', icon: LayoutDashboard, active: true },
-  { label: '账号池', icon: Users, active: false },
-  { label: 'API Keys', icon: KeyRound, active: false },
-  { label: '日志', icon: ScrollText, active: false },
-  { label: '用量', icon: ChartColumn, active: false },
-  { label: '模型', icon: Box, active: false },
-  { label: '设置', icon: Settings, active: false },
-  { label: '诊断', icon: Radar, active: false },
+  { label: '概览', icon: LayoutDashboard, path: '/' },
+  { label: '账号池', icon: Users, path: '/accounts' },
+  { label: 'API Keys', icon: KeyRound, path: '/api-keys' },
+  { label: '日志', icon: ScrollText, path: '/logs' },
+  { label: '用量', icon: ChartColumn, path: '/usage' },
+  { label: '模型', icon: Box, path: '/models' },
+  { label: '设置', icon: Settings, path: '/settings' },
+  { label: '诊断', icon: Radar, path: '/diagnostics' },
 ]
+
+const isActive = (path: string) => {
+  if (path === '/') return route.path === '/'
+  return route.path.startsWith(path)
+}
+
+function navigate(path: string) {
+  router.push(path)
+}
 
 const props = withDefaults(defineProps<{
   collapsed?: boolean
@@ -205,21 +218,22 @@ watch(
       :class="collapsed ? '' : 'ml-6 self-start'"
       aria-label="主导航"
     >
-      <a
+      <button
         v-for="item in navItems"
         :key="item.label"
-        class="inline-flex h-11.5 items-center rounded-xl text-sm leading-[1.15] no-underline transition-colors duration-200"
+        type="button"
+        class="inline-flex h-11.5 items-center rounded-xl text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
         :class="[
           collapsed ? 'w-11.5 justify-center' : 'w-52 gap-3 pl-5.5',
-          item.active
+          isActive(item.path)
             ? 'bg-[#E9EEF5] font-bold text-gray-900'
             : 'bg-transparent font-semibold text-slate-500 hover:bg-slate-50',
         ]"
-        href="#"
+        @click="navigate(item.path)"
       >
         <component :is="item.icon" class="shrink-0" :size="20" />
         <span class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200" :class="collapsed ? 'pointer-events-none w-0' : 'w-auto'">{{ item.label }}</span>
-      </a>
+      </button>
     </nav>
 
     <button

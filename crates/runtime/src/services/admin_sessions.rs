@@ -83,6 +83,14 @@ impl AdminSessionService {
             expires_at,
         }))
     }
+
+    /// 删除指定的管理员会话。
+    pub async fn delete_session(&self, session_id: &str) -> Result<bool, AdminSessionError> {
+        self.store
+            .delete_session(session_id)
+            .await
+            .map_err(|_| AdminSessionError::DeleteSession)
+    }
 }
 
 /// 管理员登录成功后的会话。
@@ -115,4 +123,7 @@ pub enum AdminSessionError {
     /// 创建会话失败。
     #[error("failed to create admin session")]
     CreateSession,
+    /// 删除会话失败。
+    #[error("failed to delete admin session")]
+    DeleteSession,
 }
