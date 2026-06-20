@@ -105,7 +105,17 @@ fn openai_response_request_should_translate_to_codex_request() {
     let codex = translate_response_to_codex(request);
 
     assert_eq!(codex.model, "gpt-5.5");
-    assert_eq!(codex.input, vec![json!("hello")]);
+    assert_eq!(
+        codex.input,
+        vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "hello"
+            }]
+        })]
+    );
     assert_eq!(codex.previous_response_id.as_deref(), Some("resp_previous"));
     assert_eq!(codex.turn_state.as_deref(), Some("turn_previous"));
     assert!(!codex.use_websocket);
@@ -234,6 +244,38 @@ fn openai_response_request_should_forward_parity_fields_to_codex() {
     assert_eq!(codex.codex_window_id.as_deref(), Some("window-body"));
     assert_eq!(codex.parent_thread_id.as_deref(), Some("parent-body"));
     assert!(codex.force_http_sse);
+}
+
+#[test]
+fn openai_response_request_should_fallback_context_fields_to_client_metadata() {
+    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+        "model": "gpt-5.5",
+        "stream": false,
+        "input": [],
+        "client_metadata": {
+            "x-codex-turn-metadata": " meta-from-metadata ",
+            "x-codex-beta-features": " beta-from-metadata ",
+            "x-responsesapi-include-timing-metrics": " true ",
+            "x-codex-window-id": " window-from-metadata ",
+            "x-codex-parent-thread-id": " parent-from-metadata "
+        },
+        "betaFeatures": "beta-direct"
+    }))
+    .expect("responses request should deserialize");
+
+    let codex = translate_response_to_codex(request);
+
+    assert_eq!(codex.turn_metadata.as_deref(), Some("meta-from-metadata"));
+    assert_eq!(codex.beta_features.as_deref(), Some("beta-direct"));
+    assert_eq!(codex.include_timing_metrics.as_deref(), Some("true"));
+    assert_eq!(
+        codex.codex_window_id.as_deref(),
+        Some("window-from-metadata")
+    );
+    assert_eq!(
+        codex.parent_thread_id.as_deref(),
+        Some("parent-from-metadata")
+    );
 }
 
 #[test]

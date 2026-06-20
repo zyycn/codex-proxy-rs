@@ -208,7 +208,7 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
         .await
         .expect("sqlite pool");
     let store = SqliteAccountStore::new(pool, SecretBox::new([21u8; 32]));
-    let now = Utc.with_ymd_and_hms(2026, 6, 19, 17, 0, 0).unwrap();
+    let now = Utc::now() + Duration::minutes(5);
     let old_access_token = test_jwt((now + Duration::seconds(1)).timestamp());
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
     store

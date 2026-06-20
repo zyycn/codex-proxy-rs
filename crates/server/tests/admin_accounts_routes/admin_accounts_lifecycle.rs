@@ -573,7 +573,7 @@ async fn admin_account_refresh_should_update_tokens_and_runtime_pool_without_ret
 }
 
 #[tokio::test]
-async fn admin_account_refresh_should_mark_invalid_refresh_token_as_expired() {
+async fn admin_account_refresh_should_disable_invalid_refresh_token() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir
         .path()
@@ -630,13 +630,13 @@ async fn admin_account_refresh_should_mark_invalid_refresh_token_as_expired() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["data"]["result"], "dead");
-    assert_eq!(body["data"]["status"], "expired");
+    assert_eq!(body["data"]["status"], "disabled");
     let stored_status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_refresh_invalid_route")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(stored_status.0, "expired");
+    assert_eq!(stored_status.0, "disabled");
     assert!(state
         .services
         .account_pool

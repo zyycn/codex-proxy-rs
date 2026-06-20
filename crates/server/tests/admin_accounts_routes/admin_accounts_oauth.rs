@@ -531,5 +531,5 @@ async fn admin_accounts_health_check_should_refresh_oauth_without_touching_codex
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(dead_status.0, "expired");
+    assert_eq!(dead_status.0, "disabled");
 }

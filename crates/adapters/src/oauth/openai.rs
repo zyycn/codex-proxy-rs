@@ -126,7 +126,7 @@ impl TokenRefresher for OpenAiOAuthClient {
             ])
             .send()
             .await
-            .map_err(|_| RefreshFailure::Transport)?;
+            .map_err(|error| refresh_transport_failure(&error))?;
         let status = response.status();
         let body = response
             .text()
@@ -187,4 +187,27 @@ fn classify_refresh_failure(status: StatusCode, body: &str) -> RefreshFailure {
         return RefreshFailure::InvalidGrant;
     }
     RefreshFailure::Transport
+}
+
+fn refresh_transport_failure(error: &reqwest::Error) -> RefreshFailure {
+    if is_safe_to_retry_refresh_transport(error) {
+        RefreshFailure::RetryableTransport
+    } else {
+        RefreshFailure::Transport
+    }
+}
+
+fn is_safe_to_retry_refresh_transport(error: &reqwest::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("econnrefused")
+        || message.contains("could not resolve proxy")
+        || message.contains("could not resolve host")
+        || message.contains("curl exited with code 5")
+        || message.contains("curl exited with code 6")
+        || message.contains("curl exited with code 7")
+        || message.contains("curl exited with code 35")
+        || message.contains("dns error")
+        || message.contains("connection refused")
+        || message.contains("network is unreachable")
+        || message.contains("tls handshake")
 }

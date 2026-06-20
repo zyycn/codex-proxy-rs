@@ -13,7 +13,6 @@ base64.workspace = true
 chrono.workspace = true
 config.workspace = true
 dirs.workspace = true
-flate2.workspace = true
 hex.workspace = true
 hmac.workspace = true
 rand.workspace = true

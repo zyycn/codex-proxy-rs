@@ -107,7 +107,7 @@ async fn token_refresh_task_should_persist_success_after_transient_transport_ret
         account_id: "acct-refresh-transient-success".to_string(),
         observed_statuses: observed_statuses.clone(),
         responses: Arc::new(Mutex::new(VecDeque::from(vec![
-            Err(RefreshFailure::Transport),
+            Err(RefreshFailure::RetryableTransport),
             Ok(TokenPair {
                 access_token: new_access_token.clone(),
                 refresh_token: None,

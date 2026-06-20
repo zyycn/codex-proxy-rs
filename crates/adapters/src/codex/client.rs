@@ -114,6 +114,8 @@ pub enum CodexClientError {
         body: String,
         /// 推导出的重试秒数。
         retry_after_seconds: Option<u64>,
+        /// 上游透传的 `set-cookie` 列表。
+        set_cookie_headers: Vec<String>,
     },
 }
 
@@ -290,6 +292,8 @@ pub struct CodexRequestContext<'a> {
 pub struct CodexBackendResponse {
     /// 完整 SSE 文本。
     pub body: String,
+    /// 实际使用的上游传输。
+    pub transport: CodexBackendTransport,
     /// 从 SSE 中提取出的最终 usage。
     pub usage: Option<TokenUsage>,
     /// 响应头里的最新 turn state。
@@ -476,6 +480,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                set_cookie_headers,
             });
         }
 
@@ -483,6 +488,7 @@ impl CodexBackendClient {
         let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
         Ok(CodexBackendResponse {
             body,
+            transport: CodexBackendTransport::HttpSse,
             usage,
             turn_state,
             set_cookie_headers,
@@ -516,6 +522,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                set_cookie_headers,
             });
         }
 
@@ -539,7 +546,7 @@ impl CodexBackendClient {
         let prepared = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
-            websocket_header_pairs(&headers, context),
+            websocket_header_pairs(&headers),
             upstream_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
@@ -562,6 +569,7 @@ impl CodexBackendClient {
 
         Ok(CodexBackendResponse {
             body: exchange.body,
+            transport: CodexBackendTransport::WebSocket,
             usage: exchange.usage,
             turn_state: exchange.turn_state,
             set_cookie_headers: exchange.set_cookie_headers,
@@ -578,7 +586,7 @@ impl CodexBackendClient {
         let prepared = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
-            websocket_header_pairs(&headers, context),
+            websocket_header_pairs(&headers),
             upstream_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
@@ -658,6 +666,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                set_cookie_headers,
             });
         }
 
@@ -669,6 +678,7 @@ impl CodexBackendClient {
                     "Compact response is not valid JSON: {}",
                     truncate_for_error(&body)
                 ),
+                set_cookie_headers: set_cookie_headers.clone(),
             })?;
 
         Ok(CodexCompactResponse {
@@ -699,6 +709,7 @@ impl CodexBackendClient {
                     retry_after_seconds: retry_after_seconds
                         .or_else(|| retry_after_seconds_from_body(&body)),
                     body,
+                    set_cookie_headers: Vec::new(),
                 });
             }
 
@@ -715,6 +726,7 @@ impl CodexBackendClient {
             body: last_invalid_body
                 .map(|body| format!("invalid usage response: {}", truncate_for_error(&body)))
                 .unwrap_or_else(|| "usage endpoint is unavailable".to_string()),
+            set_cookie_headers: Vec::new(),
         })
     }
 
@@ -749,6 +761,7 @@ impl CodexBackendClient {
             status: StatusCode::BAD_GATEWAY,
             retry_after_seconds: None,
             body: "backend model catalog is unavailable".to_string(),
+            set_cookie_headers: Vec::new(),
         })
     }
 
@@ -1201,23 +1214,13 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-fn websocket_header_pairs(
-    headers: &HeaderMap,
-    context: CodexRequestContext<'_>,
-) -> Vec<(String, String)> {
-    let mut pairs = header_pairs(headers)
+fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+    let pairs = header_pairs(headers)
         .into_iter()
         .filter(|(name, _)| {
-            !name.eq_ignore_ascii_case("content-type")
-                && !name.eq_ignore_ascii_case("accept")
-                && !name.eq_ignore_ascii_case("session_id")
+            !name.eq_ignore_ascii_case("content-type") && !name.eq_ignore_ascii_case("accept")
         })
         .collect::<Vec<_>>();
-
-    if let Some(session_id) = context.session_id {
-        pairs.push(("session-id".to_string(), session_id.to_string()));
-        pairs.push(("thread-id".to_string(), session_id.to_string()));
-    }
 
     pairs
 }
@@ -1230,10 +1233,12 @@ fn websocket_exchange_error_to_client_error(
             status_code,
             retry_after_seconds,
             body,
+            set_cookie_headers,
         } => CodexClientError::Upstream {
             status: StatusCode::from_u16(status_code).unwrap_or(StatusCode::BAD_GATEWAY),
             body,
             retry_after_seconds,
+            set_cookie_headers,
         },
         error => CodexClientError::WebSocket(error),
     }

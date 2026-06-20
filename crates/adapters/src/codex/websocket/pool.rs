@@ -10,8 +10,6 @@ use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpStream, sync::Mutex, time::timeout};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
-use super::deflate::PerMessageDeflateStream;
-
 const DEFAULT_MAX_PER_ACCOUNT: usize = 8;
 const DEFAULT_MAX_AGE: Duration = Duration::from_secs(55 * 60);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
@@ -426,7 +424,7 @@ struct WebSocketPoolState {
     shutting_down: bool,
 }
 
-pub(crate) type CodexWsStream = WebSocketStream<PerMessageDeflateStream<MaybeTlsStream<TcpStream>>>;
+pub(crate) type CodexWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 #[derive(Clone)]
 pub(crate) struct CodexWebSocketConnectionMetadata {

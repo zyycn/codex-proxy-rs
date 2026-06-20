@@ -50,6 +50,50 @@ async fn responses_review_route_should_force_review_subagent_upstream() {
 }
 
 #[tokio::test]
+async fn responses_review_route_should_record_review_route_in_event_log() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("x-openai-subagent", "review"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_SUCCESS_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/review")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_review_route_log")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let event = latest_response_event_log(&pool).await;
+    assert_eq!(event.request_id.as_deref(), Some("req_review_route_log"));
+    assert_eq!(event.route.as_deref(), Some("/v1/responses/review"));
+}
+
+#[tokio::test]
 async fn responses_compact_should_post_json_to_codex_compact_upstream() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -59,20 +103,25 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
         .and(header("content-type", "application/json"))
         .and(header("openai-beta", "responses_websockets=2026-02-06"))
         .and(header("x-openai-internal-codex-residency", "us"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "output": [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "compacted"}]
-                }
-            ]
-        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-ratelimit-limit-requests", "33")
+                .set_body_json(json!({
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "compacted"}]
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 4}
+                })),
+        )
         .expect(1)
         .mount(&server)
         .await;
 
-    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -80,6 +129,7 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
                 .uri("/v1/responses/compact")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_compact_success_log")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5-fast",
@@ -161,6 +211,19 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
         upstream_body["input"][2]["encrypted_content"],
         "enc_compact"
     );
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.request_id.as_deref(), Some("req_compact_success_log"));
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/responses/compact"));
+    assert_eq!(event.status_code, Some(200));
+    assert_eq!(metadata["route"], "/v1/responses/compact");
+    assert_eq!(metadata["apiKind"], "responses");
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["compact"], true);
+    assert_eq!(metadata["usage"]["inputTokens"], 11);
+    assert_eq!(metadata["usage"]["outputTokens"], 4);
+    assert_rate_limit_header(&metadata, "x-ratelimit-limit-requests", "33");
 }
 
 #[tokio::test]
@@ -179,7 +242,7 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
         .mount(&server)
         .await;
 
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -187,6 +250,7 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
                 .uri("/v1/responses/compact")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_compact_rate_limited_log")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
@@ -208,6 +272,27 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
     assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
     assert!(message.contains("compact quota reached"));
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_compact_rate_limited_log")
+    );
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/responses/compact"));
+    assert_eq!(event.status_code, Some(429));
+    assert_eq!(event.level, "error");
+    assert_eq!(metadata["route"], "/v1/responses/compact");
+    assert_eq!(metadata["apiKind"], "responses");
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["compact"], true);
+    assert_eq!(metadata["transport"], "http");
+    assert_eq!(metadata["failed"], true);
+    assert_eq!(metadata["failureClass"], "rate_limited");
+    assert_eq!(metadata["exhaustedCount"], 1);
+    assert!(metadata["upstreamError"]
+        .as_str()
+        .is_some_and(|value| value.contains("compact quota reached")));
 }
 
 #[tokio::test]

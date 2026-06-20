@@ -92,73 +92,42 @@ fn websocket_responses_endpoint_should_convert_http_base_url_to_ws_endpoint() {
     );
 }
 
-#[test]
-fn websocket_deflate_should_rewrite_compressed_server_text_frame() {
-    let payload = json!({
-        "type": "response.completed",
-        "response": {
-            "id": "resp_deflate",
-            "object": "response"
-        }
-    })
-    .to_string();
-    let compressed = compressed_permessage_deflate_payload(payload.as_bytes());
-    let frame = server_websocket_frame(0x1, true, &compressed);
-
-    let rewritten =
-        codex_proxy_adapters::codex::websocket::deflate::rewrite_permessage_deflate_server_frame(
-            &frame,
-        )
-        .expect("compressed frame should rewrite")
-        .expect("compressed frame should produce rewritten frame");
-
-    assert_eq!(rewritten[0] & 0x40, 0);
-    assert_eq!(rewritten[0] & 0x0f, 0x1);
-    assert_eq!(server_websocket_payload(&rewritten), payload.as_bytes());
-}
-
-#[test]
-fn websocket_deflate_should_leave_uncompressed_server_frame_unchanged() {
-    let frame = server_websocket_frame(0x1, false, b"plain");
-
-    let rewritten =
-        codex_proxy_adapters::codex::websocket::deflate::rewrite_permessage_deflate_server_frame(
-            &frame,
-        )
-        .expect("plain frame should parse");
-
-    assert_eq!(rewritten, None);
-}
-
 #[tokio::test]
-async fn codex_backend_client_should_decode_live_permessage_deflate_websocket_frame() {
+async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_frames() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let request = read_http_request(&mut stream).await;
-        let websocket_key = websocket_opening_header(&request, "sec-websocket-key")
-            .expect("opening request should include sec-websocket-key");
-        let accept_key = derive_accept_key(websocket_key.as_bytes());
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 101 Switching Protocols\r\n\
-                     Upgrade: websocket\r\n\
-                     Connection: Upgrade\r\n\
-                     Sec-WebSocket-Accept: {accept_key}\r\n\
-                     Sec-WebSocket-Extensions: permessage-deflate\r\n\
-                     \r\n"
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_hdr_async_with_config(
+            stream,
+            |request: &WsRequest, response: WsResponse| {
+                let extensions = request
+                    .headers()
+                    .get("sec-websocket-extensions")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default();
+                assert!(extensions.contains("permessage-deflate"));
+                let mut response = response;
+                response.headers_mut().insert(
+                    "sec-websocket-extensions",
+                    "permessage-deflate".parse().unwrap(),
+                );
+                Ok(response)
+            },
+            Some(websocket_accept_config()),
+        )
+        .await
+        .unwrap();
 
+        let delta = json!({
+            "type": "response.output_text.delta",
+            "delta": "hello from websocket"
+        })
+        .to_string();
         let completed = json!({
             "type": "response.completed",
             "response": {
-                "id": "resp_live_deflate",
+                "id": "resp_6f8d0c2b5a4e4a0d9c1b7e3f2a8d5c6b",
                 "object": "response",
                 "usage": {
                     "input_tokens": 3,
@@ -168,12 +137,14 @@ async fn codex_backend_client_should_decode_live_permessage_deflate_websocket_fr
             }
         })
         .to_string();
-        let compressed = compressed_permessage_deflate_payload(completed.as_bytes());
-        stream
-            .write_all(&server_websocket_frame(0x1, true, &compressed))
-            .await
-            .unwrap();
-        stream.flush().await.unwrap();
+
+        let Some(Ok(Message::Text(_payload))) = websocket.next().await else {
+            panic!("client should send response.create payload");
+        };
+
+        for payload in [delta, completed] {
+            websocket.send(Message::Text(payload.into())).await.unwrap();
+        }
     });
     let backend = client::CodexBackendClient::new(
         client::build_reqwest_client(false).unwrap(),
@@ -197,7 +168,10 @@ async fn codex_backend_client_should_decode_live_permessage_deflate_websocket_fr
         .expect("deflated websocket response should decode");
     server.await.unwrap();
 
-    assert!(response.body.contains("resp_live_deflate"));
+    assert!(response.body.contains("hello from websocket"));
+    assert!(response
+        .body
+        .contains("resp_6f8d0c2b5a4e4a0d9c1b7e3f2a8d5c6b"));
 }
 
 #[test]
@@ -316,7 +290,6 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
         "thread_id": "capture-thread-secret",
         "safe": "capture",
     }));
-    request.generate = Some(false);
 
     let prepared =
         codex_proxy_adapters::codex::websocket::connect::CodexWebSocketConnection::responses_create_request(
@@ -334,15 +307,11 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"tools\":[]",
-            "\"tool_choice\":\"auto\"",
-            "\"parallel_tool_calls\":true",
-            "\"reasoning\":null",
             "\"store\":false",
             "\"stream\":true",
-            "\"include\":[]",
+            "\"tool_choice\":\"auto\"",
+            "\"parallel_tool_calls\":true",
             "\"prompt_cache_key\":\"session-1\"",
-            "\"generate\":false",
             "\"client_metadata\":",
         ],
     );
@@ -354,7 +323,7 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
             .expect("client payload should be json");
@@ -413,7 +382,7 @@ async fn websocket_execute_response_create_request_should_surface_response_faile
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -457,6 +426,7 @@ async fn websocket_execute_response_create_request_should_surface_response_faile
         status_code,
         retry_after_seconds,
         body,
+        ..
     } = error
     else {
         panic!("expected upstream websocket error");
@@ -500,6 +470,7 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
         status_code,
         retry_after_seconds,
         body,
+        ..
     } = error
     else {
         panic!("expected upstream opening error");
@@ -515,7 +486,7 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Binary(b"unexpected-binary".to_vec().into()))
@@ -544,7 +515,7 @@ async fn websocket_execute_response_create_request_should_surface_wrapped_error_
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -578,6 +549,7 @@ async fn websocket_execute_response_create_request_should_surface_wrapped_error_
         status_code,
         retry_after_seconds,
         body,
+        ..
     } = error
     else {
         panic!("expected wrapped upstream error");
@@ -593,7 +565,7 @@ async fn websocket_execute_response_create_request_should_surface_connection_lim
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -640,7 +612,7 @@ async fn websocket_execute_response_create_request_should_skip_invalid_stream_ev
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -700,7 +672,7 @@ async fn websocket_execute_response_create_request_should_capture_internal_metad
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -781,7 +753,7 @@ async fn websocket_execute_response_create_request_should_surface_incomplete_res
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -836,7 +808,7 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -895,7 +867,7 @@ async fn websocket_execute_response_create_request_should_ignore_completed_witho
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -942,7 +914,7 @@ async fn websocket_execute_response_create_request_should_ignore_success_status_
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -993,7 +965,7 @@ async fn websocket_execute_response_create_request_should_timeout_when_upstream_
     let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         request_seen_tx.send(()).unwrap();
         futures::future::pending::<()>().await;
@@ -1030,7 +1002,7 @@ async fn websocket_execute_response_create_request_should_reply_to_server_ping_b
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Ping("codex-ping".as_bytes().to_vec().into()))
@@ -1094,7 +1066,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Binary(b"unexpected-binary".to_vec().into()))
@@ -1144,7 +1116,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -1212,8 +1184,13 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket =
-            accept_hdr_async(stream, |_request: &WsRequest, mut response: WsResponse| {
+        let mut websocket = accept_hdr_async_with_config(
+            stream,
+            |_request: &WsRequest, mut response: WsResponse| {
+                response.headers_mut().insert(
+                    "sec-websocket-extensions",
+                    "permessage-deflate".parse().unwrap(),
+                );
                 response
                     .headers_mut()
                     .insert("x-codex-turn-state", "turn-ws-client".parse().unwrap());
@@ -1227,9 +1204,11 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
                     .headers_mut()
                     .insert("x-ratelimit-remaining-requests", "17".parse().unwrap());
                 Ok(response)
-            })
-            .await
-            .unwrap();
+            },
+            Some(websocket_accept_config()),
+        )
+        .await
+        .unwrap();
         let message = websocket.next().await.unwrap().unwrap();
         let payload = serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
             .expect("client payload should be json");

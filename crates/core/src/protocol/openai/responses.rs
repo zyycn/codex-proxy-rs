@@ -110,6 +110,7 @@ fn default_responses_stream() -> bool {
 /// 将 OpenAI Responses 请求转换为 Codex Responses 请求。
 pub fn translate_response_to_codex(request: OpenAiResponsesRequest) -> CodexResponsesRequest {
     let prepared_text = prepare_text_format(request.text, true);
+    let client_metadata = sanitize_client_metadata(request.client_metadata);
     let mut codex_request = CodexResponsesRequest::new_http_sse(
         request.model,
         request.instructions.unwrap_or_default(),
@@ -117,12 +118,32 @@ pub fn translate_response_to_codex(request: OpenAiResponsesRequest) -> CodexResp
     );
     codex_request.previous_response_id = request.previous_response_id;
     codex_request.turn_state = request.turn_state;
-    codex_request.turn_metadata = non_empty_string(request.turn_metadata);
-    codex_request.beta_features = non_empty_string(request.beta_features);
-    codex_request.include_timing_metrics = non_empty_string(request.include_timing_metrics);
+    codex_request.turn_metadata = first_request_string(
+        request.turn_metadata,
+        client_metadata.as_ref(),
+        "x-codex-turn-metadata",
+    );
+    codex_request.beta_features = first_request_string(
+        request.beta_features,
+        client_metadata.as_ref(),
+        "x-codex-beta-features",
+    );
+    codex_request.include_timing_metrics = first_request_string(
+        request.include_timing_metrics,
+        client_metadata.as_ref(),
+        "x-responsesapi-include-timing-metrics",
+    );
     codex_request.version = non_empty_string(request.version);
-    codex_request.codex_window_id = non_empty_string(request.codex_window_id);
-    codex_request.parent_thread_id = non_empty_string(request.parent_thread_id);
+    codex_request.codex_window_id = first_request_string(
+        request.codex_window_id,
+        client_metadata.as_ref(),
+        "x-codex-window-id",
+    );
+    codex_request.parent_thread_id = first_request_string(
+        request.parent_thread_id,
+        client_metadata.as_ref(),
+        "x-codex-parent-thread-id",
+    );
     codex_request.reasoning = responses_reasoning(request.reasoning);
     codex_request.tools = non_empty_array(request.tools);
     codex_request.tool_choice = request.tool_choice;
@@ -134,7 +155,7 @@ pub fn translate_response_to_codex(request: OpenAiResponsesRequest) -> CodexResp
     codex_request.prompt_cache_key = non_empty_string(request.prompt_cache_key);
     codex_request.explicit_prompt_cache_key = codex_request.prompt_cache_key.is_some();
     codex_request.include = string_array(request.include);
-    codex_request.client_metadata = sanitize_client_metadata(request.client_metadata);
+    codex_request.client_metadata = client_metadata;
     ensure_reasoning_include(&mut codex_request);
     match request.use_websocket {
         Some(true) => codex_request.use_websocket = true,
@@ -214,6 +235,7 @@ fn sanitize_responses_input(input: Value) -> Vec<Value> {
     match input {
         Value::Array(items) => sanitize_codex_input_items(items),
         Value::Null => Vec::new(),
+        Value::String(text) => vec![responses_input_text_message(text)],
         value => vec![value],
     }
 }
@@ -222,6 +244,9 @@ fn sanitize_codex_input_items(input: Vec<Value>) -> Vec<Value> {
     input
         .into_iter()
         .filter_map(|item| {
+            if let Value::String(text) = item {
+                return Some(responses_input_text_message(text));
+            }
             let Value::Object(object) = item else {
                 return Some(item);
             };
@@ -232,6 +257,19 @@ fn sanitize_codex_input_items(input: Vec<Value>) -> Vec<Value> {
             }
         })
         .collect()
+}
+
+fn responses_input_text_message(text: String) -> Value {
+    json!({
+        "type": "message",
+        "role": "user",
+        "content": [
+            {
+                "type": "input_text",
+                "text": text
+            }
+        ]
+    })
 }
 
 fn sanitize_reasoning_item(item: &Map<String, Value>) -> Option<Value> {
@@ -373,6 +411,25 @@ fn sanitize_client_metadata(client_metadata: Option<Value>) -> Option<Value> {
         })
         .collect::<Map<_, _>>();
     (!metadata.is_empty()).then_some(Value::Object(metadata))
+}
+
+fn first_request_string(
+    direct: Option<String>,
+    client_metadata: Option<&Value>,
+    metadata_key: &str,
+) -> Option<String> {
+    non_empty_string(direct).or_else(|| metadata_string(client_metadata, metadata_key))
+}
+
+fn metadata_string(client_metadata: Option<&Value>, key: &str) -> Option<String> {
+    client_metadata?
+        .as_object()?
+        .get(key)?
+        .as_str()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
 }
 
 fn non_empty_array(value: Option<Value>) -> Option<Vec<Value>> {

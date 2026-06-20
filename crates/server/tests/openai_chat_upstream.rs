@@ -44,11 +44,14 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{
-    accept_async, accept_hdr_async,
+    accept_hdr_async_with_config,
     tungstenite::{
-        handshake::server::{Request as WsRequest, Response as WsResponse},
-        Message,
+        extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+        handshake::server::{Callback, Request as WsRequest, Response as WsResponse},
+        protocol::WebSocketConfig,
+        Error as WsError, Message,
     },
+    WebSocketStream,
 };
 use tower::util::ServiceExt;
 use wiremock::{
@@ -57,6 +60,40 @@ use wiremock::{
 };
 
 const TEST_INSTALLATION_ID: &str = "b4f9d503-07b1-457b-a0da-87e6836b1c43";
+
+fn websocket_accept_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
+}
+
+async fn accept_async(stream: TcpStream) -> Result<WebSocketStream<TcpStream>, WsError> {
+    accept_hdr_async(stream, |_request: &WsRequest, response: WsResponse| {
+        Ok(response)
+    })
+    .await
+}
+
+async fn accept_hdr_async<C>(
+    stream: TcpStream,
+    callback: C,
+) -> Result<WebSocketStream<TcpStream>, WsError>
+where
+    C: Callback + Unpin,
+{
+    accept_hdr_async_with_config(
+        stream,
+        move |request: &WsRequest, response: WsResponse| {
+            let response = callback.on_request(request, response)?;
+            Ok(response)
+        },
+        Some(websocket_accept_config()),
+    )
+    .await
+}
 
 const CHAT_SUCCESS_SSE: &str = concat!(include_str!("fixtures/chat/success.sse"), "\n");
 const RESPONSES_SUCCESS_SSE: &str = concat!(
@@ -1188,19 +1225,49 @@ async fn response_text(response: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+async fn wait_for_session_affinity_turn_state(
+    pool: &SqlitePool,
+    response_id: &str,
+) -> Option<String> {
+    timeout(StdDuration::from_secs(1), async {
+        loop {
+            if let Some(turn_state) = sqlx::query_scalar::<_, Option<String>>(
+                "select turn_state from session_affinities where response_id = ?",
+            )
+            .bind(response_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+            .flatten()
+            {
+                return Some(turn_state);
+            }
+            tokio::time::sleep(StdDuration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 struct ResponseEventLog {
     level: String,
     request_id: Option<String>,
     account_id: Option<String>,
+    route: Option<String>,
     status_code: Option<i64>,
     metadata_json: String,
 }
 
 async fn latest_response_event_log(pool: &SqlitePool) -> ResponseEventLog {
+    latest_event_log(pool, "v1.response").await
+}
+
+async fn latest_event_log(pool: &SqlitePool, kind: &str) -> ResponseEventLog {
     let page = SqliteEventLogStore::new(pool.clone())
         .list(
             EventLogFilter {
-                kind: Some("v1.response".to_string()),
+                kind: Some(kind.to_string()),
                 ..EventLogFilter::default()
             },
             None,
@@ -1212,11 +1279,12 @@ async fn latest_response_event_log(pool: &SqlitePool) -> ResponseEventLog {
         .items
         .into_iter()
         .next()
-        .expect("expected a v1.response event log");
+        .unwrap_or_else(|| panic!("expected a {kind} event log"));
     ResponseEventLog {
         level: event_level_name(event.level).to_string(),
         request_id: event.request_id,
         account_id: event.account_id,
+        route: event.route,
         status_code: event.status_code,
         metadata_json: event.metadata.to_string(),
     }

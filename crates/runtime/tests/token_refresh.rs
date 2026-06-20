@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_adapters::sqlite::{
-    accounts::{NewAccount, SqliteAccountStore},
+    accounts::{AccountClaimsUpdate, NewAccount, SqliteAccountStore},
     refresh_leases::SqliteRefreshLeaseStore,
 };
 use codex_proxy_core::{
@@ -145,6 +145,39 @@ impl TokenRefresher for SequenceTokenRefresher {
             .await
             .pop_front()
             .expect("refresh response should be configured")
+    }
+}
+
+#[derive(Clone)]
+struct RefreshTokenRotatingRefresher {
+    store: SqliteAccountStore,
+    account_id: String,
+    calls: Arc<AtomicUsize>,
+    access_token: String,
+}
+
+#[async_trait]
+impl TokenRefresher for RefreshTokenRotatingRefresher {
+    async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.store
+            .update_from_claims(
+                &self.account_id,
+                AccountClaimsUpdate {
+                    email: Some("rotated@example.com".to_string()),
+                    account_id: Some("chatgpt-rotated".to_string()),
+                    user_id: Some("user-rotated".to_string()),
+                    plan_type: Some("plus".to_string()),
+                    access_token: SecretString::new(self.access_token.clone().into()),
+                    refresh_token: Some(SecretString::new("refresh-rotated".to_string().into())),
+                    access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+                    next_refresh_at: None,
+                    status: AccountStatus::Active,
+                },
+            )
+            .await
+            .expect("rotated token should persist");
+        Err(RefreshFailure::RetryableTransport)
     }
 }
 

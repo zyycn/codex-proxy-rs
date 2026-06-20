@@ -41,6 +41,8 @@ pub struct Account {
     pub refresh_token: Option<String>,
     /// 访问令牌过期时间。
     pub access_token_expires_at: Option<DateTime<Utc>>,
+    /// 下一次允许刷新 token 的时间。
+    pub next_refresh_at: Option<DateTime<Utc>>,
     /// 当前账号状态。
     pub status: AccountStatus,
     /// 是否已经触发配额封顶。
@@ -104,6 +106,7 @@ impl Account {
             access_token: format!("token-{id}"),
             refresh_token: Some(format!("refresh-{id}")),
             access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+            next_refresh_at: None,
             status,
             quota_limit_reached: false,
             quota_verify_required: false,

@@ -35,19 +35,18 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
             "type",
             "model",
             "instructions",
-            "previous_response_id",
             "input",
+            "store",
+            "stream",
+            "previous_response_id",
+            "reasoning",
             "tools",
             "tool_choice",
             "parallel_tool_calls",
-            "reasoning",
-            "store",
-            "stream",
-            "include",
+            "text",
             "service_tier",
             "prompt_cache_key",
-            "text",
-            "generate",
+            "include",
             "client_metadata",
         ]
     );
@@ -92,18 +91,30 @@ fn codex_websocket_response_create_payload_text_should_preserve_canonical_field_
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"tools\":[]",
-            "\"tool_choice\":\"auto\"",
-            "\"parallel_tool_calls\":true",
-            "\"reasoning\":null",
             "\"store\":false",
             "\"stream\":true",
-            "\"include\":[]",
+            "\"tool_choice\":\"auto\"",
+            "\"parallel_tool_calls\":true",
             "\"prompt_cache_key\":\"session-1\"",
-            "\"generate\":false",
             "\"client_metadata\":",
         ],
     );
+}
+
+#[test]
+fn codex_websocket_response_create_payload_text_should_include_empty_instructions() {
+    let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
+
+    let payload =
+        codex_proxy_core::protocol::codex::websocket::websocket_response_create_payload_text(
+            &request,
+        )
+        .expect("payload should serialize");
+    let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    let snapshot = websocket_payload_audit_snapshot(&request);
+
+    assert_eq!(value["instructions"], "");
+    assert_eq!(snapshot.top_level_keys[2], "instructions");
 }
 
 #[test]

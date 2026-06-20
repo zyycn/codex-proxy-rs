@@ -27,7 +27,7 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         for response_id in ["resp_pool_first", "resp_pool_second"] {
             let _message = websocket.next().await.unwrap().unwrap();
             websocket
@@ -101,7 +101,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
     let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -116,7 +116,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
             .unwrap();
 
         let (second_stream, _) = listener.accept().await.unwrap();
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -127,7 +127,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
         second_websocket.close(None).await.unwrap();
 
         let (third_stream, _) = listener.accept().await.unwrap();
-        let mut third_websocket = accept_async(third_stream).await.unwrap();
+        let mut third_websocket = accept_codex_test_websocket(third_stream).await;
         let _third_message = third_websocket.next().await.unwrap().unwrap();
         third_websocket
             .send(Message::Text(
@@ -204,7 +204,7 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
         for response_id in ["resp_cap_first", "resp_cap_second", "resp_cap_third"] {
             let (stream, _) = listener.accept().await.unwrap();
             accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-            let mut websocket = accept_async(stream).await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
             let _message = websocket.next().await.unwrap().unwrap();
             websocket
                 .send(Message::Text(
@@ -264,7 +264,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_during_maintenan
     let ping_count_for_server = Arc::clone(&ping_count);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _first_message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -368,7 +368,7 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -378,7 +378,7 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
             .unwrap();
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -434,7 +434,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -451,7 +451,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -507,7 +507,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
     let ping_count_for_server = Arc::clone(&ping_count);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
         let _first_message = websocket.next().await.unwrap().unwrap();
         websocket
             .send(Message::Text(
@@ -616,7 +616,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -646,7 +646,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -718,7 +718,7 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -748,7 +748,7 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -820,7 +820,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -850,7 +850,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(
@@ -923,7 +923,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
         first_websocket
             .send(Message::Text(
@@ -946,7 +946,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_async(second_stream).await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
         second_websocket
             .send(Message::Text(

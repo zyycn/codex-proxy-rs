@@ -69,3 +69,42 @@ fn chat_completion_from_codex_sse_should_convert_completed_response() {
 
     assert_eq!(response["choices"][0]["message"]["content"], "hello");
 }
+
+#[test]
+fn chat_completion_stream_translator_should_emit_openai_chunks() {
+    let mut translator =
+        codex_proxy_core::protocol::openai::chat::ChatCompletionStreamTranslator::new(
+            "gpt-5.5", false, None,
+        );
+    let first = concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"delta\":\"he",
+    );
+    let rest = concat!(
+        "llo\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
+    );
+    let pending_output = translator
+        .push_str(first)
+        .expect("partial event should be buffered");
+    assert!(pending_output.is_empty());
+    let output = format!(
+        "{}{}",
+        translator.initial_frame(),
+        translator
+            .push_str(rest)
+            .expect("stream conversion should succeed")
+    );
+
+    assert_substrings_appear_in_order(
+        &output,
+        &[
+            "\"delta\":{\"role\":\"assistant\"}",
+            "\"delta\":{\"content\":\"hello\"}",
+            "\"finish_reason\":\"stop\"",
+            "\"usage\":{\"completion_tokens\":3,\"prompt_tokens\":2,\"total_tokens\":5}",
+            "data: [DONE]",
+        ],
+    );
+}

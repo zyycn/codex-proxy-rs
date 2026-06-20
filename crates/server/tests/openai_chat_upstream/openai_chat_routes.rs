@@ -1,5 +1,15 @@
 use super::*;
 
+fn assert_substrings_appear_in_order(haystack: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let Some(offset) = haystack[cursor..].find(needle) else {
+            panic!("expected substring {needle:?} after byte {cursor} in:\n{haystack}");
+        };
+        cursor += offset + needle.len();
+    }
+}
+
 #[tokio::test]
 async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() {
     let server = MockServer::start().await;
@@ -15,7 +25,7 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -23,9 +33,10 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
                 .uri("/v1/chat/completions")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_chat_nonstream_log")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-5.5",
+                        "model": "gpt-5.5-high-fast",
                         "messages": [
                             {"role": "system", "content": "You are concise."},
                             {"role": "user", "content": "Say hello"}
@@ -42,10 +53,22 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["object"], "chat.completion");
-    assert_eq!(body["model"], "gpt-5.5");
+    assert_eq!(body["model"], "gpt-5.5-high-fast");
     assert_eq!(body["choices"][0]["message"]["content"], "hello");
     assert_eq!(body["usage"]["prompt_tokens"], 9);
     assert_eq!(body["usage"]["completion_tokens"], 3);
+    let requests = server.received_requests().await.unwrap();
+    let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(upstream_body["model"], "gpt-5.5");
+    assert_eq!(upstream_body["service_tier"], "priority");
+    assert_eq!(
+        upstream_body["reasoning"],
+        json!({"summary": "auto", "effort": "high"})
+    );
+    assert_eq!(
+        upstream_body["include"],
+        json!(["reasoning.encrypted_content"])
+    );
     let usage: (i64, i64, i64) = sqlx::query_as(
         "select request_count, input_tokens, output_tokens from account_usage where account_id = ?",
     )
@@ -54,6 +77,103 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
     .await
     .unwrap();
     assert_eq!(usage, (1, 9, 3));
+    let event = latest_event_log(&pool, "v1.chat").await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.request_id.as_deref(), Some("req_chat_nonstream_log"));
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
+    assert_eq!(event.status_code, Some(200));
+    assert_eq!(metadata["route"], "/v1/chat/completions");
+    assert_eq!(metadata["apiKind"], "chat");
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["transport"], "http_sse");
+    assert_eq!(metadata["usage"]["inputTokens"], 9);
+    assert_eq!(metadata["usage"]["outputTokens"], 3);
+}
+
+#[tokio::test]
+async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secret"))
+        .and(header("chatgpt-account-id", "chatgpt-account"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "event: response.reasoning_summary_text.delta\n",
+                    "data: {\"delta\":\"I considered the context.\"}\n\n",
+                    "event: response.output_text.delta\n",
+                    "data: {\"delta\":\"hello\"}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"response\":{\"id\":\"resp_1\",\"output_text\":\"hello\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3}}}\n\n",
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_chat_stream_log")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5-high-fast",
+                        "stream": true,
+                        "messages": [
+                            {"role": "user", "content": "Say hello"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/event-stream"));
+    assert!(body.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(body.contains("\"model\":\"gpt-5.5-high-fast\""));
+    assert_substrings_appear_in_order(
+        &body,
+        &[
+            "\"delta\":{\"role\":\"assistant\"}",
+            "\"delta\":{\"reasoning_content\":\"I considered the context.\"}",
+            "\"delta\":{\"content\":\"hello\"}",
+            "\"finish_reason\":\"stop\"",
+            "\"usage\":{\"completion_tokens\":3,\"prompt_tokens\":9,\"total_tokens\":12}",
+            "data: [DONE]",
+        ],
+    );
+    let event = latest_event_log(&pool, "v1.chat").await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.request_id.as_deref(), Some("req_chat_stream_log"));
+    assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
+    assert_eq!(metadata["route"], "/v1/chat/completions");
+    assert_eq!(metadata["apiKind"], "chat");
+    assert_eq!(metadata["stream"], true);
+    assert_eq!(metadata["transport"], "http_sse");
 }
 
 #[tokio::test]
@@ -80,6 +200,7 @@ async fn chat_completions_should_forward_runtime_installation_id_to_codex() {
                 .uri("/v1/chat/completions")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_chat_429_exhausted")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
@@ -222,7 +343,7 @@ async fn chat_completions_should_return_rate_limit_error_when_429_fallback_is_ex
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -258,6 +379,26 @@ async fn chat_completions_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(body["error"]["code"], "upstream_error");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
+    let event = latest_event_log(&pool, "v1.chat").await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.level, "error");
+    assert!(event
+        .request_id
+        .as_deref()
+        .is_some_and(|request_id| request_id.starts_with("req_")));
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
+    assert_eq!(event.status_code, Some(429));
+    assert_eq!(metadata["route"], "/v1/chat/completions");
+    assert_eq!(metadata["apiKind"], "chat");
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["transport"], "http_sse");
+    assert_eq!(metadata["failed"], true);
+    assert_eq!(metadata["failureClass"], "rate_limited");
+    assert_eq!(metadata["exhaustedCount"], 1);
+    assert!(metadata["upstreamError"]
+        .as_str()
+        .is_some_and(|error| error.contains("rate limited")));
 }
 
 #[tokio::test]

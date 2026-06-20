@@ -39,7 +39,7 @@ async fn fingerprint_repository_should_upsert_auto_update_record() {
     assert_eq!(count.0, 1);
     assert_eq!(stored.app_version, "26.800.2");
     assert_eq!(stored.build_number, "6002");
-    assert_eq!(stored.chromium_version, "146");
+    assert_eq!(stored.chromium_version, "147");
 }
 
 #[tokio::test]

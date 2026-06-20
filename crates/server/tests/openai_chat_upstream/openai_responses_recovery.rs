@@ -2015,7 +2015,7 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -2023,6 +2023,7 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
                 .uri("/v1/responses")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_responses_429_exhausted")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
@@ -2053,6 +2054,23 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
     assert_eq!(body["error"]["code"], "upstream_error");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_responses_429_exhausted")
+    );
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/responses"));
+    assert_eq!(event.status_code, Some(429));
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["transport"], "http_sse");
+    assert_eq!(metadata["failureClass"], "rate_limited");
+    assert_eq!(metadata["exhaustedCount"], 1);
+    assert!(metadata["upstreamError"]
+        .as_str()
+        .is_some_and(|error| error.contains("rate limited")));
 }
 
 #[tokio::test]
@@ -2068,7 +2086,7 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -2096,6 +2114,12 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    let response_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
     let body = response_text(response).await;
     let quota_state: (i64, Option<String>) = sqlx::query_as(
         "select quota_limit_reached, quota_cooldown_until from accounts where id = ?",
@@ -2113,6 +2137,24 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
     assert!(body.contains("rate limited"));
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
+    assert!(!response_request_id.is_empty());
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some(response_request_id.as_str())
+    );
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/responses"));
+    assert_eq!(event.status_code, Some(429));
+    assert_eq!(metadata["stream"], true);
+    assert_eq!(metadata["transport"], "http_sse");
+    assert_eq!(metadata["failureClass"], "rate_limited");
+    assert_eq!(metadata["exhaustedCount"], 1);
+    assert!(metadata["upstreamError"]
+        .as_str()
+        .is_some_and(|error| error.contains("rate limited")));
 }
 
 #[tokio::test]

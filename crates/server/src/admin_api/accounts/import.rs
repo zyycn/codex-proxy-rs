@@ -22,7 +22,7 @@ use crate::{
 struct AccountImportData {
     imported: u32,
     skipped: u32,
-    source_format: &'static str,
+    source_format: String,
 }
 
 /// `POST /api/admin/accounts/import`
@@ -42,7 +42,7 @@ pub async fn import_accounts(
                 AccountImportData {
                     imported: imported.imported,
                     skipped: imported.skipped,
-                    source_format: "native",
+                    source_format: imported.source_format.to_string(),
                 },
                 request_id,
             ),

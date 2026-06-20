@@ -457,6 +457,7 @@ async fn responses_stream_should_record_event_log_after_completed_stream() {
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
     assert_eq!(event.status_code, Some(200));
     assert_eq!(metadata["stream"], true);
+    assert_eq!(metadata["transport"], "http_sse");
     assert_eq!(metadata["completed"], true);
     assert_eq!(metadata["responseId"], "resp_stream_usage");
     assert_eq!(metadata["usage"]["inputTokens"], 3);

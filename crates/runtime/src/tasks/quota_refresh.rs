@@ -11,7 +11,10 @@ use codex_proxy_core::{
         model::AccountStatus,
         ports::{AccountStore, AccountStoreError},
     },
-    serving::quota::quota_from_usage,
+    serving::quota::{
+        quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
+        quota_snapshot_reset_at,
+    },
 };
 use thiserror::Error;
 use tokio::time::{interval, sleep, Instant};
@@ -105,7 +108,7 @@ impl QuotaRefreshTask {
                                     candidates = summary.candidates,
                                     skipped_recent = summary.skipped_recent,
                                     failed = summary.failed,
-                                    "没有需要刷新的 quota 锁定账号"
+                                    "没有需要刷新的 quota 锁定或待验证账号"
                                 );
                             }
                             Err(error) => {
@@ -124,7 +127,7 @@ impl QuotaRefreshTask {
         SchedulerHandle::new(shutdown_tx)
     }
 
-    /// 执行一次配额锁定账号刷新。
+    /// 执行一次配额锁定或待验证账号刷新。
     pub async fn refresh_locked_accounts_once(
         &self,
     ) -> QuotaRefreshTaskResult<QuotaRefreshSummary> {
@@ -151,7 +154,8 @@ impl QuotaRefreshTask {
         let mut candidates = accounts
             .into_iter()
             .filter(|account| {
-                account.status == AccountStatus::Active && account.quota_limit_reached
+                account.status == AccountStatus::Active
+                    && (account.quota_limit_reached || account.quota_verify_required)
             })
             .peekable();
 
@@ -188,14 +192,30 @@ impl QuotaRefreshTask {
             {
                 Ok(raw) => {
                     let quota = quota_from_usage(&raw);
+                    let limit_reached = quota_snapshot_limit_reached(&quota);
+                    let reset_at = quota_snapshot_reset_at(&quota);
                     if self
                         .store
-                        .update_quota_json(&account.id, &quota.to_string())
+                        .apply_quota_snapshot(
+                            &account.id,
+                            &quota.to_string(),
+                            limit_reached,
+                            limit_reached.then_some(reset_at).flatten(),
+                        )
                         .await?
                     {
                         summary.refreshed += 1;
                     } else {
                         summary.missing += 1;
+                    }
+                    if let Some(reset_at) = reset_at {
+                        self.store
+                            .sync_rate_limit_window(
+                                &account.id,
+                                reset_at,
+                                quota_snapshot_limit_window_seconds(&quota),
+                            )
+                            .await?;
                     }
                 }
                 Err(error) => {
@@ -222,7 +242,7 @@ impl QuotaRefreshTask {
 pub struct QuotaRefreshSummary {
     /// 扫描账号数。
     pub scanned: usize,
-    /// 配额锁定候选账号数。
+    /// 配额锁定或待验证候选账号数。
     pub candidates: usize,
     /// 成功刷新账号数。
     pub refreshed: usize,

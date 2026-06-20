@@ -125,6 +125,280 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
 }
 
 #[tokio::test]
+async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_stale_quota_lock() {
+    let (app, state, pool, _dir, secret_box) =
+        admin_accounts_test_app("admin-accounts-import-update-existing.sqlite", 116).await;
+    let new_access_token = test_jwt(
+        "chatgpt-import-update",
+        Some("user-import-update"),
+        Some("new@example.com"),
+        Some("plus"),
+    );
+    seed_encrypted_account(
+        &pool,
+        secret_box.clone(),
+        NewAccount {
+            id: "acct_import_update".to_string(),
+            email: Some("old@example.com".to_string()),
+            account_id: Some("chatgpt-import-update".to_string()),
+            user_id: Some("user-import-update".to_string()),
+            label: Some("old-label".to_string()),
+            plan_type: Some("free".to_string()),
+            access_token: SecretString::new("old-access".to_string().into()),
+            refresh_token: Some(SecretString::new("old-refresh".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Expired,
+        },
+    )
+    .await;
+    sqlx::query(
+        "update accounts set quota_limit_reached = 1, quota_cooldown_until = ?, quota_verify_required = 1 where id = ?",
+    )
+    .bind("2026-06-25T00:00:00Z")
+    .bind("acct_import_update")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_update")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_import_update",
+                            "email": "new@example.com",
+                            "accountId": "chatgpt-import-update",
+                            "userId": "user-import-update",
+                            "label": "new-label",
+                            "planType": "plus",
+                            "token": new_access_token,
+                            "refreshToken": "new-refresh",
+                            "status": "active",
+                            "cachedQuota": {
+                                "rate_limit": {
+                                    "allowed": true,
+                                    "limit_reached": false,
+                                    "used_percent": 5
+                                }
+                            },
+                            "quotaFetchedAt": "2026-06-19T14:00:00Z",
+                            "quotaVerifyRequired": false,
+                            "proxyApiKey": "exported-key-prefix",
+                            "usage": {"requestCount": 9}
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool.clone(), secret_box)
+        .get("acct_import_update")
+        .await
+        .unwrap()
+        .unwrap();
+    let quota_state: (i64, Option<String>, i64, Option<String>) = sqlx::query_as(
+        "select quota_limit_reached, quota_cooldown_until, quota_verify_required, quota_json from accounts where id = ?",
+    )
+    .bind("acct_import_update")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["requestId"], "req_accounts_import_update");
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["skipped"], 0);
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(stored.email.as_deref(), Some("new@example.com"));
+    assert_eq!(stored.label.as_deref(), Some("new-label"));
+    assert_eq!(stored.plan_type.as_deref(), Some("plus"));
+    assert_eq!(stored.access_token.expose_secret(), new_access_token);
+    assert_eq!(stored.refresh_token.unwrap().expose_secret(), "new-refresh");
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(quota_state.0, 0);
+    assert!(quota_state.1.is_none());
+    assert_eq!(quota_state.2, 0);
+    assert!(quota_state.3.is_some());
+    let acquired = state
+        .services
+        .account_pool
+        .acquire("gpt-5.5", Utc::now())
+        .await
+        .unwrap()
+        .account;
+    assert_eq!(acquired.id, "acct_import_update");
+    assert_eq!(acquired.access_token, new_access_token);
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_update_existing_identity_when_import_id_changed() {
+    let (app, _state, pool, _dir, secret_box) =
+        admin_accounts_test_app("admin-accounts-import-update-existing-identity.sqlite", 126).await;
+    let new_access_token = test_jwt(
+        "chatgpt-import-identity",
+        Some("user-import-identity"),
+        Some("identity-new@example.com"),
+        Some("plus"),
+    );
+    seed_encrypted_account(
+        &pool,
+        secret_box.clone(),
+        NewAccount {
+            id: "acct_existing_identity".to_string(),
+            email: Some("identity-old@example.com".to_string()),
+            account_id: Some("chatgpt-import-identity".to_string()),
+            user_id: Some("user-import-identity".to_string()),
+            label: Some("old-label".to_string()),
+            plan_type: Some("free".to_string()),
+            access_token: SecretString::new("old-access".to_string().into()),
+            refresh_token: Some(SecretString::new("old-refresh".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Disabled,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_update_identity")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_changed_export_id",
+                            "email": "identity-new@example.com",
+                            "accountId": "chatgpt-import-identity",
+                            "userId": "user-import-identity",
+                            "label": "new-label",
+                            "planType": "plus",
+                            "token": new_access_token,
+                            "refreshToken": "new-refresh",
+                            "status": "active",
+                            "cachedQuota": {
+                                "rate_limit": {
+                                    "allowed": true,
+                                    "limit_reached": false,
+                                    "used_percent": 6
+                                }
+                            }
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let store = SqliteAccountStore::new(pool.clone(), secret_box);
+    let stored = store.get("acct_existing_identity").await.unwrap().unwrap();
+    let changed_id = store.get("acct_changed_export_id").await.unwrap();
+    let account_count: i64 = sqlx::query_scalar("select count(*) from accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["requestId"], "req_accounts_import_update_identity");
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["skipped"], 0);
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(account_count, 1);
+    assert!(changed_id.is_none());
+    assert_eq!(stored.email.as_deref(), Some("identity-new@example.com"));
+    assert_eq!(stored.label.as_deref(), Some("new-label"));
+    assert_eq!(stored.plan_type.as_deref(), Some("plus"));
+    assert_eq!(stored.access_token.expose_secret(), new_access_token);
+    assert_eq!(stored.refresh_token.unwrap().expose_secret(), "new-refresh");
+    assert_eq!(stored.status, AccountStatus::Active);
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_expire_sub2api_account_when_token_is_expired() {
+    let (app, state, pool, _dir, secret_box) =
+        admin_accounts_test_app("admin-accounts-import-expired-sub2api.sqlite", 117).await;
+    let expired_access_token = test_jwt_with_exp(
+        Some("chatgpt-expired-import"),
+        Some("user-expired-import"),
+        Some("expired@example.com"),
+        Some("free"),
+        1_600_000_000,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_expired_sub2api")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_expired_import",
+                            "email": "expired@example.com",
+                            "accountId": "chatgpt-expired-import",
+                            "userId": "user-expired-import",
+                            "label": "expired-label",
+                            "planType": "free",
+                            "token": expired_access_token,
+                            "refreshToken": "expired-refresh",
+                            "status": "active",
+                            "cachedQuota": {
+                                "rate_limit": {
+                                    "allowed": true,
+                                    "limit_reached": false,
+                                    "used_percent": 5
+                                }
+                            }
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool, secret_box)
+        .get("acct_expired_import")
+        .await
+        .unwrap()
+        .unwrap();
+    let auth_status = state.services.admin_accounts.auth_status().await.unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(stored.status, AccountStatus::Expired);
+    assert_eq!(auth_status.pool.active, 0);
+    assert_eq!(auth_status.pool.expired, 1);
+    assert!(auth_status.user.is_none());
+    assert!(state
+        .services
+        .account_pool
+        .acquire("gpt-5.5", Utc::now())
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn admin_accounts_import_should_require_admin_session_cookie() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-accounts-import-auth.sqlite");
