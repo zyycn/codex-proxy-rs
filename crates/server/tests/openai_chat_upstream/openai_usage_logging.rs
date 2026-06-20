@@ -70,6 +70,8 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_event_log
     );
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
     assert_eq!(event.status_code, Some(200));
+    assert_eq!(event.response_id.as_deref(), Some("resp_usage"));
+    assert_eq!(metadata["responseId"], "resp_usage");
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["usage"]["inputTokens"], 7);
 }

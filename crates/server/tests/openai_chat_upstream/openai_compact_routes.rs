@@ -296,6 +296,68 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
 }
 
 #[tokio::test]
+async fn responses_compact_should_preserve_upstream_client_error_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .and(header("authorization", "Bearer access-secret"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "invalid_encrypted_content",
+                "message": "The encrypted content could not be verified."
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_compact_invalid_encrypted_content")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "codex_api_error");
+    let event = latest_response_event_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_compact_invalid_encrypted_content")
+    );
+    assert_eq!(event.route.as_deref(), Some("/v1/responses/compact"));
+    assert_eq!(event.status_code, Some(400));
+    assert_eq!(event.level, "error");
+    assert_eq!(metadata["route"], "/v1/responses/compact");
+    assert_eq!(metadata["compact"], true);
+    assert_eq!(metadata["failed"], true);
+    assert_eq!(metadata["failureClass"], "upstream");
+    assert_eq!(metadata["upstreamStatus"], 400);
+    assert!(metadata["error"]
+        .as_str()
+        .is_some_and(|value| value.contains("invalid_encrypted_content")));
+}
+
+#[tokio::test]
 async fn responses_compact_should_return_responses_error_when_no_accounts_are_available() {
     let server = MockServer::start().await;
     let (app, api_key, _dir) = test_app_without_accounts(server.uri()).await;

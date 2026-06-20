@@ -83,8 +83,12 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
     assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
     assert_eq!(event.status_code, Some(200));
+    let response_id = event.response_id.as_deref().unwrap_or_default();
+    assert!(!response_id.is_empty());
+    assert!(response_id.starts_with("chatcmpl-"));
     assert_eq!(metadata["route"], "/v1/chat/completions");
     assert_eq!(metadata["apiKind"], "chat");
+    assert_eq!(metadata["responseId"], response_id);
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["transport"], "http_sse");
     assert_eq!(metadata["usage"]["inputTokens"], 9);

@@ -107,6 +107,34 @@ async fn debug_fingerprint_should_return_runtime_fingerprint_summary() {
 }
 
 #[tokio::test]
+async fn debug_models_should_return_catalog_debug_without_client_api_key() {
+    let (app, _dir) = test_app_with_account(
+        "https://chatgpt.test/backend-api".to_string(),
+        diagnostics_fingerprint(),
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["models"].is_array());
+    assert!(!serde_json::to_string(&body)
+        .unwrap()
+        .contains("access-secret"));
+}
+
+#[tokio::test]
 async fn debug_upstream_should_probe_codex_models_endpoint_without_returning_secrets() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -190,6 +218,7 @@ async fn debug_endpoints_should_reject_forwarded_remote_requests_without_probe()
         .await
         .unwrap();
     let upstream = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -200,10 +229,22 @@ async fn debug_endpoints_should_reject_forwarded_remote_requests_without_probe()
         )
         .await
         .unwrap();
+    let models = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/debug/models")
+                .header("x-real-ip", "203.0.113.60")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(diagnostics.status(), StatusCode::FORBIDDEN);
     assert_eq!(fingerprint.status(), StatusCode::FORBIDDEN);
     assert_eq!(upstream.status(), StatusCode::FORBIDDEN);
+    assert_eq!(models.status(), StatusCode::FORBIDDEN);
 }
 
 async fn test_app_with_account(
