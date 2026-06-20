@@ -1737,6 +1737,7 @@ impl ChatDispatchService {
                 );
             }
         };
+        let response_id = body.get("id").and_then(Value::as_str);
         self.cloudflare.reset_account_recovery(&account_id).await;
         if let Some(usage) = response.usage {
             self.account_pool
@@ -1754,6 +1755,7 @@ impl ChatDispatchService {
             level: EventLevel::Info,
             message: "v1 chat completions completed",
             metadata: serde_json::json!({
+                "responseId": response_id,
                 "stream": false,
                 "transport": backend_transport_name(response.transport),
                 "usage": response.usage,
@@ -2605,6 +2607,7 @@ impl ResponseDispatchService {
 
         match collected_response {
             CollectedResponse::Completed(body) => {
+                let response_id = body.get("id").and_then(Value::as_str);
                 self.cloudflare.reset_account_recovery(&account.id).await;
                 self.account_pool
                     .sync_passive_rate_limit_headers(&account, &response.rate_limit_headers)
@@ -2633,6 +2636,7 @@ impl ResponseDispatchService {
                     level: EventLevel::Info,
                     message: "v1 responses completed",
                     metadata: serde_json::json!({
+                        "responseId": response_id,
                         "stream": false,
                         "transport": backend_transport_name(response.transport),
                         "usage": response.usage,
@@ -5301,21 +5305,7 @@ fn insert_exhausted_dispatch_metadata(
 }
 
 fn status_code_for_response_dispatch_error(error: &ResponseDispatchError) -> i64 {
-    match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => 503,
-        ResponseDispatchError::QuotaExhausted { .. } => 402,
-        ResponseDispatchError::RateLimited { .. } => 429,
-        ResponseDispatchError::Expired { .. } | ResponseDispatchError::Disabled { .. } => 401,
-        ResponseDispatchError::Banned { status_code, .. } => i64::from(*status_code),
-        ResponseDispatchError::CloudflareChallenge { .. }
-        | ResponseDispatchError::CloudflarePathBlocked { .. }
-        | ResponseDispatchError::InvalidSse(_)
-        | ResponseDispatchError::MissingCompleted
-        | ResponseDispatchError::EmptyUpstreamResponse
-        | ResponseDispatchError::Failed(_) => 502,
-        ResponseDispatchError::ModelUnsupported { .. } => 400,
-        ResponseDispatchError::Upstream(error) => status_code_for_upstream_error(error),
-    }
+    i64::from(error.http_status_code())
 }
 
 fn status_code_for_chat_dispatch_error(error: &ChatDispatchError) -> i64 {
@@ -5610,6 +5600,28 @@ pub enum ResponseDispatchError {
     /// 上游返回失败事件。
     #[error("upstream response failed: {0:?}")]
     Failed(ResponsesSseFailure),
+}
+
+impl ResponseDispatchError {
+    /// HTTP status code that best represents this dispatch failure to API clients.
+    #[must_use]
+    pub fn http_status_code(&self) -> u16 {
+        match self {
+            Self::NoActiveAccount | Self::AccountStore => 503,
+            Self::QuotaExhausted { .. } => 402,
+            Self::RateLimited { .. } => 429,
+            Self::Expired { .. } | Self::Disabled { .. } => 401,
+            Self::Banned { status_code, .. } => *status_code,
+            Self::CloudflareChallenge { .. }
+            | Self::CloudflarePathBlocked { .. }
+            | Self::InvalidSse(_)
+            | Self::MissingCompleted
+            | Self::EmptyUpstreamResponse
+            | Self::Failed(_) => 502,
+            Self::ModelUnsupported { .. } => 400,
+            Self::Upstream(error) => upstream_error_http_status(error),
+        }
+    }
 }
 
 /// Responses live SSE body stream error.

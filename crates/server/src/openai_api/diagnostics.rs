@@ -318,7 +318,7 @@ fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics 
     }
 }
 
-fn is_local_debug_request(headers: &HeaderMap) -> bool {
+pub(super) fn is_local_debug_request(headers: &HeaderMap) -> bool {
     forwarded_header_is_local(headers, "x-forwarded-for")
         && forwarded_header_is_local(headers, "x-real-ip")
 }

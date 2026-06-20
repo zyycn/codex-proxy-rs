@@ -448,8 +448,9 @@ fn response_dispatch_compact_error_response(error: ResponseDispatchError) -> Res
         ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
             responses_no_available_accounts_response().into_response()
         }
-        ResponseDispatchError::Upstream(_) => responses_dispatch_error_response(
-            StatusCode::BAD_GATEWAY,
+        ResponseDispatchError::Upstream(error) => responses_dispatch_error_response(
+            StatusCode::from_u16(ResponseDispatchError::Upstream(error).http_status_code())
+                .unwrap_or(StatusCode::BAD_GATEWAY),
             "Upstream Codex request failed",
         )
         .into_response(),

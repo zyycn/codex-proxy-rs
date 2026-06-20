@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use codex_proxy_core::models::catalog::ModelCatalog;
 use codex_proxy_runtime::state::AppState;
 
-use super::auth::authorize_client_api_key;
+use super::{auth::authorize_client_api_key, diagnostics::is_local_debug_request};
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
 
@@ -82,8 +82,11 @@ pub async fn model_info(
 
 /// `GET /debug/models`
 pub async fn debug_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    if !authorize_client_api_key(&state, &headers).await {
-        return missing_client_api_key_response();
+    if !is_local_debug_request(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "debug endpoint is local-only" })),
+        );
     }
 
     let catalog = model_catalog_for_state(&state).await;

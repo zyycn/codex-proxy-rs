@@ -1237,6 +1237,7 @@ struct ResponseEventLog {
     account_id: Option<String>,
     route: Option<String>,
     status_code: Option<i64>,
+    response_id: Option<String>,
     metadata_json: String,
 }
 
@@ -1267,6 +1268,7 @@ async fn latest_event_log(pool: &SqlitePool, kind: &str) -> ResponseEventLog {
         account_id: event.account_id,
         route: event.route,
         status_code: event.status_code,
+        response_id: event.response_id,
         metadata_json: event.metadata.to_string(),
     }
 }
