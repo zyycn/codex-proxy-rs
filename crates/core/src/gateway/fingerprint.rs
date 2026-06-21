@@ -22,6 +22,9 @@ pub struct Fingerprint {
     pub default_headers: IndexMap<String, String>,
     /// 请求头顺序。
     pub header_order: Vec<String>,
+    /// DB 最后更新时间。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 impl Fingerprint {
@@ -37,6 +40,7 @@ impl Fingerprint {
             user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
             default_headers: Self::default_headers(),
             header_order: Self::default_header_order(),
+            updated_at: None,
         }
     }
 

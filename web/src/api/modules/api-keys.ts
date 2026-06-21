@@ -12,11 +12,6 @@ export interface ClientApiKey {
   lastUsedAt?: string
 }
 
-export interface ApiKeysListResponse {
-  keys: ClientApiKey[]
-  total: number
-}
-
 export interface CreateApiKeyPayload {
   name: string
   label?: string
@@ -29,7 +24,7 @@ export interface CreateApiKeyResponse {
 }
 
 export function getApiKeys() {
-  return requestJson<ApiKeysListResponse>('/api/admin/api-keys')
+  return requestJson<ClientApiKey[]>('/api/admin/api-keys')
 }
 
 export function createApiKey(payload: CreateApiKeyPayload) {

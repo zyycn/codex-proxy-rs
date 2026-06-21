@@ -20,6 +20,9 @@ const {
   accountUsage,
   serviceStatuses,
   eventLogs,
+  poolSummary,
+  capacityInfo,
+  rotationStrategy,
   refresh,
 } = useDashboard()
 
@@ -63,7 +66,13 @@ const {
         <ServiceStatusCard :items="serviceStatuses" />
       </section>
 
-      <AccountOverviewCard :accounts="accountUsage" class="mt-6" />
+      <AccountOverviewCard
+        :accounts="accountUsage"
+        :pool="poolSummary"
+        :capacity="capacityInfo"
+        :rotation-strategy="rotationStrategy"
+        class="mt-6"
+      />
 
       <EventLogCard :rows="eventLogs" class="mt-6" />
     </template>
