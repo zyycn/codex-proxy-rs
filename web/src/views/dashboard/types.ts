@@ -21,6 +21,7 @@ export interface TrendPoint {
   requests: number
   tokens: number
   errors: number
+  latency: number
 }
 
 export interface TrendSummaryItem {
@@ -58,4 +59,34 @@ export interface EventLogItem {
   statusCode: string
   latency: string
   tone: SemanticTone
+}
+
+export interface AccountPoolSummary {
+  total: number
+  active: number
+  expired: number
+  quotaExhausted: number
+  refreshing: number
+  disabled: number
+  banned: number
+}
+
+export interface AccountCapacityInfo {
+  maxConcurrentPerAccount: number
+  totalSlots: number
+  usedSlots: number
+  availableSlots: number
+}
+
+export interface AccountStatusRow {
+  label: string
+  description: string
+  value: string
+  tone: SemanticTone
+  icon: Component
+}
+
+export interface ScheduleStat {
+  label: string
+  value: string
 }

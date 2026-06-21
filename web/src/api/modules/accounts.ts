@@ -2,19 +2,15 @@ import { requestJson } from '../request'
 
 export interface Account {
   id: string
-  email: string
+  email?: string
   accountId?: string
   userId?: string
   planType?: string
   status: 'active' | 'expired' | 'disabled' | 'banned' | 'quota_exhausted' | 'refreshing'
   label?: string
   accessTokenExpiresAt?: string
-  nextRefreshAt?: string
-  createdAt: string
-  lastUsedAt?: string
-  totalRequests: number
-  totalInputTokens: number
-  totalOutputTokens: number
+  addedAt: string
+  updatedAt: string
 }
 
 export function getAccounts() {

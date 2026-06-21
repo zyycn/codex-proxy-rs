@@ -62,7 +62,7 @@ async function loadApiKeys() {
   try {
     loading.value = true
     const data = await getApiKeys()
-    apiKeys.value = data.keys
+    apiKeys.value = data
   } catch (error: any) {
     toast.error(error.message || '加载失败')
   } finally {

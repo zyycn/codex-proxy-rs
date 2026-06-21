@@ -250,7 +250,8 @@ impl FingerprintRepository {
               chromium_version,
               user_agent_template,
               default_headers_json,
-              header_order_json
+              header_order_json,
+              updated_at
             from fingerprints
             where id = ?
             "#,
@@ -315,6 +316,7 @@ fn fingerprint_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Fingerprint, sq
         user_agent_template: row.get("user_agent_template"),
         default_headers: decode_default_headers(&default_headers_json)?,
         header_order: decode_header_order(&header_order_json)?,
+        updated_at: row.get("updated_at"),
     })
 }
 

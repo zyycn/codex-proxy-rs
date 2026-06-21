@@ -31,14 +31,20 @@ const valueToneClasses: Record<SemanticTone, string> = {
       <div
         v-for="item in items"
         :key="item.label"
-        class="grid h-12.5 w-full grid-cols-[24px_16px_minmax(0,224fr)_16px_86px_34px_100px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
+        class="grid h-12.5 w-full grid-cols-[24px_16px_1fr_1fr_1fr] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
       >
         <span class="inline-flex size-6 items-center justify-center rounded-lg" :class="iconToneClasses[item.tone]">
           <component :is="item.icon" :size="14" />
         </span>
-        <strong class="col-start-3 w-40 text-[13px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{ item.label }}</strong>
-        <span class="col-start-5 w-21.5 text-[13px] leading-[1.15] font-bold" :class="valueToneClasses[item.tone]">{{ item.value }}</span>
-        <span class="col-start-7 w-25 font-mono text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)">{{ item.detail }}</span>
+        <template v-if="item.label === 'User Agent' || item.label === '更新时间'">
+          <strong class="col-start-3 text-[13px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{ item.label }}</strong>
+          <span class="col-start-4 col-span-2 text-[13px] leading-[1.15] font-mono font-semibold text-(--cp-text-secondary) truncate">{{ item.value }}</span>
+        </template>
+        <template v-else>
+          <strong class="col-start-3 text-[13px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{ item.label }}</strong>
+          <span class="col-start-4 text-[13px] leading-[1.15] font-bold" :class="valueToneClasses[item.tone]">{{ item.value }}</span>
+          <span class="col-start-5 text-right font-mono text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)">{{ item.detail }}</span>
+        </template>
       </div>
     </div>
   </BaseCard>

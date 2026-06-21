@@ -359,18 +359,18 @@ onMounted(() => {
                 </span>
               </td>
               <td class="px-3 text-right">
-                <span class="text-[14px] font-mono text-(--cp-text-primary)">
-                  {{ account.totalRequests.toLocaleString() }}
+                <span class="text-[14px] font-mono text-(--cp-text-secondary)">
+                  —
                 </span>
               </td>
               <td class="px-3 text-right">
-                <span class="text-[14px] font-mono text-(--cp-text-primary)">
-                  {{ formatTokens(account.totalInputTokens + account.totalOutputTokens) }}
+                <span class="text-[14px] font-mono text-(--cp-text-secondary)">
+                  —
                 </span>
               </td>
               <td class="px-3">
                 <span class="text-[13px] text-(--cp-text-secondary)">
-                  {{ formatDate(account.lastUsedAt) }}
+                  {{ formatDate(account.updatedAt) }}
                 </span>
               </td>
               <td class="px-3">

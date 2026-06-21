@@ -2,17 +2,30 @@ import { requestJson } from '../request'
 
 // ==================== 设置管理 ====================
 
+export interface QuotaWarningThresholds {
+  primary: number[]
+  secondary: number[]
+}
+
 export interface Settings {
-  logging: {
-    enabled: boolean
-    level: string
-  }
-  quota: {
-    warningThresholds: {
-      requestsRemaining: number
-      tokensRemaining: number
-    }
-  }
+  defaultModel: string
+  defaultReasoningEffort?: string | null
+  serviceTier?: string | null
+  modelAliases?: Record<string, string>
+  refreshEnabled: boolean
+  refreshMarginSeconds?: number
+  refreshConcurrency?: number
+  maxConcurrentPerAccount: number
+  requestIntervalMs: number
+  rotationStrategy: string
+  tierPriority?: string[]
+  quotaRefreshIntervalMinutes?: number
+  quotaWarningThresholds: QuotaWarningThresholds
+  quotaSkipExhausted: boolean
+  logsEnabled: boolean
+  logsCapacity: number
+  logsCaptureBody?: boolean
+  usageHistoryRetentionDays?: number | null
   [key: string]: unknown
 }
 

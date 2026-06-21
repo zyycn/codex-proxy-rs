@@ -1,55 +1,111 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
-import type { AccountUsageItem, SemanticTone } from '../types'
+import type { AccountCapacityInfo, AccountPoolSummary, AccountStatusRow, AccountUsageItem, ScheduleStat, SemanticTone } from '../types'
 
-defineProps<{
+const props = defineProps<{
   accounts: AccountUsageItem[]
+  pool?: AccountPoolSummary | null
+  capacity?: AccountCapacityInfo | null
+  rotationStrategy?: string | null
 }>()
 
-const scheduleStats = [
-  { label: '单账号并发', value: '3' },
-  { label: '可用槽位', value: '81' },
-  { label: '剩余槽位', value: '54' },
-]
+const scheduleStats = computed<ScheduleStat[]>(() => {
+  const cap = props.capacity
+  return [
+    { label: '单账号并发', value: cap ? String(cap.maxConcurrentPerAccount) : '—' },
+    { label: '可用槽位', value: cap ? String(cap.totalSlots) : '—' },
+    { label: '剩余槽位', value: cap ? String(cap.availableSlots) : '—' },
+  ]
+})
 
-const statusRows = [
-  {
-    label: '活跃账号',
-    description: '可直接参与调度',
-    value: '32',
-    tone: 'success',
-    icon: CircleCheck,
-  },
-  {
-    label: '刷新中',
-    description: '令牌自动刷新中',
-    value: '2',
-    tone: 'normal',
-    icon: RefreshCw,
-  },
-  {
-    label: '额度受限',
-    description: '已触发或接近额度阈值',
-    value: '6',
-    tone: 'warning',
-    icon: TriangleAlert,
-  },
-  {
-    label: '不可用',
-    description: '过期 4 · 禁用 3 · 封禁 0',
-    value: '7',
-    tone: 'danger',
-    icon: ShieldAlert,
-  },
-] satisfies Array<{
-  label: string
-  description: string
-  value: string
-  tone: SemanticTone
-  icon: typeof CircleCheck
-}>
+const usedPercent = computed(() => {
+  const cap = props.capacity
+  if (!cap || cap.totalSlots === 0) return 0
+  return Math.round((cap.usedSlots / cap.totalSlots) * 100)
+})
+
+const usedRatio = computed(() => {
+  const cap = props.capacity
+  if (!cap) return '— / —'
+  return `${cap.usedSlots} / ${cap.totalSlots}`
+})
+
+const strategyLabel = computed(() => {
+  const s = props.rotationStrategy
+  if (!s) return '—'
+  const map: Record<string, string> = {
+    'least_used': '最少使用优先',
+    'round_robin': '轮询',
+    'random': '随机',
+  }
+  return map[s] || s
+})
+
+const statusRows = computed<AccountStatusRow[]>(() => {
+  const p = props.pool
+  const active = p?.active ?? 0
+  const refreshing = p?.refreshing ?? 0
+  const quota = p?.quotaExhausted ?? 0
+  const expired = p?.expired ?? 0
+  const disabled = p?.disabled ?? 0
+  const banned = p?.banned ?? 0
+  const unavailable = expired + disabled + banned
+
+  return [
+    {
+      label: '活跃账号',
+      description: '可直接参与调度',
+      value: String(active),
+      tone: 'success' as SemanticTone,
+      icon: CircleCheck,
+    },
+    {
+      label: '刷新中',
+      description: '令牌自动刷新中',
+      value: String(refreshing),
+      tone: 'normal' as SemanticTone,
+      icon: RefreshCw,
+    },
+    {
+      label: '额度受限',
+      description: '已触发或接近额度阈值',
+      value: String(quota),
+      tone: 'warning' as SemanticTone,
+      icon: TriangleAlert,
+    },
+    {
+      label: '不可用',
+      description: `过期 ${expired} · 禁用 ${disabled} · 封禁 ${banned}`,
+      value: String(unavailable),
+      tone: 'danger' as SemanticTone,
+      icon: ShieldAlert,
+    },
+  ]
+})
+
+const availabilityRate = computed(() => {
+  const p = props.pool
+  if (!p || p.total === 0) return '0%'
+  return `${((p.active / p.total) * 100).toFixed(1)}%`
+})
+
+const statusBars = computed(() => {
+  const p = props.pool
+  if (!p || p.total === 0) return []
+  const active = (p.active / p.total) * 100
+  const refreshing = (p.refreshing / p.total) * 100
+  const quota = (p.quotaExhausted / p.total) * 100
+  const unavailable = ((p.expired + p.disabled + p.banned) / p.total) * 100
+  return [
+    { pct: active, cls: 'bg-(--cp-success)' },
+    { pct: refreshing, cls: 'bg-(--cp-normal)' },
+    { pct: quota, cls: 'bg-(--cp-warning)' },
+    { pct: unavailable, cls: 'bg-(--cp-danger)' },
+  ].filter(b => b.pct > 0)
+})
 
 const rowToneClasses: Record<SemanticTone, string> = {
   normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
@@ -86,11 +142,11 @@ const loadToneClasses: Record<SemanticTone, string> = {
         <div class="mt-7.75 h-30.5 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-4.5">
           <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">可调度容量</span>
           <div class="mt-3 grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
-            <strong class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)">81 / 135</strong>
-            <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">60% 已分配</span>
+            <strong class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)">{{ usedRatio }}</strong>
+            <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{ usedPercent }}% 已分配</span>
           </div>
           <div class="mt-4.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
-            <i class="block h-2.5 w-3/5 rounded-full bg-(--cp-success)" />
+            <i class="block h-2.5 rounded-full bg-(--cp-success)" :style="{ width: `${usedPercent}%` }" />
           </div>
         </div>
 
@@ -103,7 +159,7 @@ const loadToneClasses: Record<SemanticTone, string> = {
 
         <div class="mt-4 h-20.5 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-4.25">
           <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">分配策略</span>
-          <strong class="mt-2.5 block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">最少使用优先</strong>
+          <strong class="mt-2.5 block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{ strategyLabel }}</strong>
         </div>
       </section>
 
@@ -113,10 +169,10 @@ const loadToneClasses: Record<SemanticTone, string> = {
 
         <div class="mt-6.75 grid h-82.5 w-full gap-1.5 overflow-hidden">
           <article
-            v-for="account in accounts"
+            v-for="(account, index) in accounts"
             :key="account.name"
             class="grid h-19.5 w-[calc(100%-28px)] grid-cols-[34px_10px_minmax(220px,1fr)_6px_64px_2px_70px_4px_84px_6px] items-start rounded-[14px] px-3.5 transition-colors duration-200 hover:bg-(--cp-bg-subtle)"
-            :class="account.name === 'Amy Ops' || account.name === 'Build Bot' ? 'bg-(--cp-bg-subtle)' : 'bg-white'"
+            :class="['bg-(--cp-bg-subtle)', 'bg-white'][index % 2]"
           >
             <span class="mt-5.5 inline-flex size-8.5 items-center justify-center rounded-full" :class="rowToneClasses[account.tone]">
               {{ account.name[0] }}
@@ -143,7 +199,7 @@ const loadToneClasses: Record<SemanticTone, string> = {
             <p class="mt-1 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">账号池健康结构</p>
           </div>
           <div class="grid justify-items-end">
-            <strong class="font-mono text-2xl leading-[1.05] font-[760] tabular-nums text-(--cp-success-text)">71.1%</strong>
+            <strong class="font-mono text-2xl leading-[1.05] font-[760] tabular-nums text-(--cp-success-text)">{{ availabilityRate }}</strong>
             <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">可用率</span>
           </div>
         </header>
@@ -151,13 +207,10 @@ const loadToneClasses: Record<SemanticTone, string> = {
         <div class="mt-5.5 h-10.5 w-full">
           <div class="flex h-4 items-center justify-between">
             <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">状态分布</span>
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)">不可用 7</span>
+            <span class="text-xs leading-[1.15] font-[650] text-(--cp-danger-text)">不可用 {{ statusRows[3]?.value || '0' }}</span>
           </div>
           <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
-            <i class="h-3 basis-[71.1%] bg-(--cp-success)" />
-            <i class="h-3 basis-[4.4%] bg-(--cp-normal)" />
-            <i class="h-3 basis-[13.3%] bg-(--cp-warning)" />
-            <i class="h-3 basis-[11.2%] bg-(--cp-danger)" />
+            <i v-for="(bar, bi) in statusBars" :key="bi" class="h-3" :class="bar.cls" :style="{ flexBasis: `${bar.pct}%` }" />
           </div>
         </div>
 

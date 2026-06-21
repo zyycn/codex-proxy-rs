@@ -148,6 +148,9 @@ pub struct FingerprintDiagnostics {
     pub chromium_version: String,
     /// Expanded user-agent.
     pub user_agent: String,
+    /// 指纹最后更新时间。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 /// Upstream probe diagnostics.
@@ -305,6 +308,7 @@ fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics 
         arch: fingerprint.arch.clone(),
         chromium_version: fingerprint.chromium_version.clone(),
         user_agent: fingerprint.user_agent(),
+        updated_at: fingerprint.updated_at.clone(),
     }
 }
 

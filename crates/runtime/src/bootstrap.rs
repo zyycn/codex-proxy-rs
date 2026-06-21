@@ -20,6 +20,7 @@ pub fn fingerprint_from_config(config: &FingerprintConfig) -> Fingerprint {
             .map(|header| (header.name.clone(), header.value.clone()))
             .collect(),
         header_order: config.header_order.clone(),
+        updated_at: None,
     }
 }
 
