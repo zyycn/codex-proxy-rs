@@ -1,7 +1,7 @@
 use super::*;
 use codex_proxy_rs::codex::fingerprint::Fingerprint;
 use codex_proxy_rs::codex::transport::build_ordered_codex_headers;
-use codex_proxy_rs::codex::transport::connect::CodexWebSocketConnection;
+use codex_proxy_rs::codex::transport::websocket::CodexWebSocketConnection;
 
 #[test]
 fn ordered_codex_headers_should_preserve_fingerprint_priority_and_request_fields() {
@@ -270,7 +270,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
         "ignored_non_string": 42
     }));
     let pool = Arc::new(
-        codex_proxy_rs::codex::transport::pool::CodexWebSocketPool::new(
+        codex_proxy_rs::codex::transport::websocket_pool::CodexWebSocketPool::new(
             8,
             std::time::Duration::from_secs(60),
         ),

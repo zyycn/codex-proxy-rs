@@ -35,7 +35,7 @@ async fn token_refresh_task_should_persist_refreshed_access_token_and_keep_refre
             refresh_token: None,
         }))),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -116,7 +116,7 @@ async fn token_refresh_task_should_persist_success_after_transient_transport_ret
             }),
         ]))),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,

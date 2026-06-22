@@ -31,7 +31,7 @@ async fn admin_login_should_issue_http_only_session_cookie() {
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
             pool.clone(),
             secret_box.clone(),
         ),
@@ -112,7 +112,7 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
             pool.clone(),
             secret_box.clone(),
         ),

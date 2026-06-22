@@ -7,8 +7,8 @@ use axum::{
 use codex_proxy_rs::{
     access::admin_session::SqliteAdminSessionStore,
     access::client_keys::SqliteClientKeyStore,
-    accounts::store::{SqliteAccountStore, SqliteCookieStore},
     accounts::token_refresh::RefreshLeaseStore,
+    accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
     app::services::{BackgroundTaskStores, Services},
     app::state::AppState,
     codex::fingerprint::{Fingerprint, FingerprintRepository},
@@ -126,7 +126,7 @@ async fn admin_settings_patch_should_persist_retained_fields_to_config_yaml() {
     let fingerprint = Fingerprint::default_for_tests();
     let mut services = Services::new(&config, stores, fingerprint);
     services.settings = std::sync::Arc::new(
-        codex_proxy_rs::app::services::RuntimeSettingsService::with_config_path(
+        codex_proxy_rs::config::settings::RuntimeSettingsService::with_config_path(
             config.clone(),
             dir.path().join("config.yaml"),
         ),

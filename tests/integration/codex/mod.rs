@@ -8,11 +8,11 @@ use std::{
 };
 
 use codex_proxy_rs::codex::{
-    transport::connect::{
+    transport::websocket::{
         execute_response_create_request, responses_websocket_endpoint, CodexWebSocketConnection,
         CodexWebSocketExchangeError, CodexWebSocketRequest,
     },
-    transport::pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
+    transport::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
     transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
 };
 use futures::{SinkExt, StreamExt};

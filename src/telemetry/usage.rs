@@ -1,3 +1,14 @@
+/// 用量聚合模型、端口与策略服务。
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::accounts::model::AccountUsageDelta;
+use crate::codex::protocol::events::TokenUsage;
+use crate::infra::json::Page;
+use crate::telemetry::usage_store::{SqliteUsageStore, UsageListRecord, UsageSummary};
+
 /// Usage record for API responses.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UsageRecord {
@@ -10,15 +21,6 @@ pub struct UsageRecord {
     pub reasoning_tokens: u64,
     pub total_tokens: u64,
 }
-/// 用量聚合模型、端口与策略服务。
-use crate::accounts::store::UsageSummary;
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-use crate::accounts::model::AccountUsageDelta;
-use crate::codex::protocol::events::TokenUsage;
 
 /// 用量聚合窗口。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,24 +97,130 @@ impl UsageService {
     }
 }
 
-/// Admin usage summary.
-#[derive(Debug, Clone, serde::Serialize)]
+/// 管理端用量统计服务。
+#[derive(Clone)]
+pub struct AdminUsageService {
+    store: SqliteUsageStore,
+}
+
+impl AdminUsageService {
+    /// 构造服务。
+    pub fn new(store: SqliteUsageStore) -> Self {
+        Self { store }
+    }
+
+    /// 分页列出账号用量。
+    pub async fn list(
+        &self,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<Page<AdminUsageRecord>, AdminUsageError> {
+        let page = self
+            .store
+            .list_usage(cursor, limit)
+            .await
+            .map_err(|_| AdminUsageError::List)?;
+        Ok(Page {
+            items: page.items.into_iter().map(AdminUsageRecord::from).collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    /// 汇总账号用量。
+    pub async fn summary(&self) -> Result<AdminUsageSummary, AdminUsageError> {
+        self.store
+            .usage_summary()
+            .await
+            .map(AdminUsageSummary::from)
+            .map_err(|_| AdminUsageError::Summary)
+    }
+}
+
+/// 管理端用量统计错误。
+#[derive(Debug, Error)]
+pub enum AdminUsageError {
+    #[error("failed to list account usage")]
+    List,
+    #[error("failed to summarize account usage")]
+    Summary,
+}
+
+/// 管理端账号用量记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUsageRecord {
+    pub account_id: String,
+    pub email: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub request_count: i64,
+    pub empty_response_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub total_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+/// 管理端账号用量汇总。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdminUsageSummary {
-    pub total_requests: u64,
-    pub total_input_tokens: u64,
-    pub total_output_tokens: u64,
-    pub total_cached_tokens: u64,
-    pub total_reasoning_tokens: u64,
+    pub account_count: i64,
+    pub request_count: i64,
+    pub empty_response_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub total_tokens: i64,
+    pub image_input_tokens: i64,
+    pub image_output_tokens: i64,
+    pub image_request_count: i64,
+    pub image_request_failed_count: i64,
 }
 
 impl From<UsageSummary> for AdminUsageSummary {
     fn from(s: UsageSummary) -> Self {
         Self {
-            total_requests: s.request_count as u64,
-            total_input_tokens: s.input_tokens as u64,
-            total_output_tokens: s.output_tokens as u64,
-            total_cached_tokens: s.cached_tokens as u64,
-            total_reasoning_tokens: s.reasoning_tokens as u64,
+            account_count: s.account_count,
+            request_count: s.request_count,
+            empty_response_count: s.empty_response_count,
+            input_tokens: s.input_tokens,
+            output_tokens: s.output_tokens,
+            cached_tokens: s.cached_tokens,
+            reasoning_tokens: s.reasoning_tokens,
+            total_tokens: s.total_tokens,
+            image_input_tokens: s.image_input_tokens,
+            image_output_tokens: s.image_output_tokens,
+            image_request_count: s.image_request_count,
+            image_request_failed_count: s.image_request_failed_count,
+        }
+    }
+}
+
+impl From<UsageListRecord> for AdminUsageRecord {
+    fn from(usage: UsageListRecord) -> Self {
+        Self {
+            account_id: usage.account_id,
+            email: usage.email,
+            label: usage.label,
+            plan_type: usage.plan_type,
+            request_count: usage.request_count,
+            empty_response_count: usage.empty_response_count,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_tokens: usage.cached_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            total_tokens: usage.total_tokens,
+            image_input_tokens: usage.image_input_tokens,
+            image_output_tokens: usage.image_output_tokens,
+            image_request_count: usage.image_request_count,
+            image_request_failed_count: usage.image_request_failed_count,
+            last_used_at: usage.last_used_at,
         }
     }
 }

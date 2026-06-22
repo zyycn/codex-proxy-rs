@@ -10,9 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    access::client_keys::{
+        AdminClientKeyError, AdminCreatedClientApiKey, AdminStoredClientApiKey,
+        ImportedClientApiKey,
+    },
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::session::require_admin_session,
-    app::services::{AdminClientKeyError, AdminCreatedClientApiKey, AdminStoredClientApiKey},
     app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::{clamp_limit, Page},
@@ -192,8 +195,6 @@ impl From<AdminCreatedClientApiKey> for CreatedClientApiKeyData {
         }
     }
 }
-
-use crate::app::services::ImportedClientApiKey;
 
 fn imported_client_key_data(imported: ImportedClientApiKey) -> ImportedClientApiKeyData {
     ImportedClientApiKeyData {

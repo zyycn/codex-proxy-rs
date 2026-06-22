@@ -22,17 +22,14 @@ use crate::{
     codex::{
         models::ModelCatalog,
         protocol::{
-            responses::CodexResponsesRequest,
+            responses::{apply_response_model_options, CodexResponsesRequest},
             schema::{prepare_schema, reconvert_tuple_values},
             sse::{encode_sse_event, parse_sse_events, SseError, DONE_SSE_FRAME},
         },
     },
     gateway::{
         auth::authorize_client_api_key,
-        dispatch::{
-            responses::apply_response_model_options,
-            responses::{ResponseDispatchError, ResponseDispatchStream},
-        },
+        dispatch::responses::{ResponseDispatchError, ResponseDispatchStream},
     },
     http::middleware::request_id::RequestId,
 };

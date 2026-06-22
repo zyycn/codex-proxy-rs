@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    accounts::admin_service::{AdminAccountError, AdminAccountMetadata},
     accounts::store::StoredAccount,
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::session::require_admin_session,
-    app::services::{AdminAccountError, AdminAccountMetadata},
     app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::{clamp_limit, Page},
@@ -807,10 +807,6 @@ fn account_not_found(request_id: String) -> AdminError {
         request_id,
     )
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 fn account_status_str(status: crate::accounts::model::AccountStatus) -> &'static str {
     match status {

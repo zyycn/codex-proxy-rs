@@ -1,4 +1,4 @@
-//! 账号导入导出逻辑（从 admin_accounts 内联导入解析）。
+//! 账号导入导出逻辑。
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -324,14 +324,18 @@ pub fn parse_batch_account_status(status: &str) -> Result<AccountStatus, &'stati
 }
 
 /// 将 RefreshFailure 映射为账号状态。
-pub fn refresh_failure_status(failure: &crate::accounts::oauth::RefreshFailure) -> AccountStatus {
+pub fn refresh_failure_status(
+    failure: &crate::accounts::token_refresh::RefreshFailure,
+) -> AccountStatus {
     match failure {
-        crate::accounts::oauth::RefreshFailure::InvalidGrant => AccountStatus::Disabled,
-        crate::accounts::oauth::RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
-        crate::accounts::oauth::RefreshFailure::Banned => AccountStatus::Banned,
-        crate::accounts::oauth::RefreshFailure::Disabled => AccountStatus::Disabled,
-        crate::accounts::oauth::RefreshFailure::RetryableTransport => AccountStatus::Active,
-        crate::accounts::oauth::RefreshFailure::Transport => AccountStatus::Active,
+        crate::accounts::token_refresh::RefreshFailure::InvalidGrant => AccountStatus::Disabled,
+        crate::accounts::token_refresh::RefreshFailure::QuotaExhausted => {
+            AccountStatus::QuotaExhausted
+        }
+        crate::accounts::token_refresh::RefreshFailure::Banned => AccountStatus::Banned,
+        crate::accounts::token_refresh::RefreshFailure::Disabled => AccountStatus::Disabled,
+        crate::accounts::token_refresh::RefreshFailure::RetryableTransport => AccountStatus::Active,
+        crate::accounts::token_refresh::RefreshFailure::Transport => AccountStatus::Active,
     }
 }
 

@@ -4,7 +4,10 @@ use codex_proxy_rs::codex::protocol::events::{
     parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow,
     TokenUsage,
 };
-use codex_proxy_rs::codex::protocol::responses::CodexResponsesRequest;
+use codex_proxy_rs::codex::protocol::responses::{
+    apply_response_model_options, http_sse_fallback_allowed, response_from_codex_sse,
+    transport_for_request, CodexResponsesRequest, CodexTransport, CollectedResponse,
+};
 use codex_proxy_rs::codex::protocol::sse::{parse_sse_events, sse_body_has_done, DONE_SSE_FRAME};
 use codex_proxy_rs::codex::protocol::websocket::{
     classify_websocket_error_frame, is_terminal_websocket_event,
@@ -37,12 +40,9 @@ use codex_proxy_rs::codex::protocol::websocket::{
     OpeningAuditSnapshot, PayloadAuditSnapshot, WebSocketAuditErrorSnapshot,
     WebSocketErrorClassificationProfile,
 };
-use codex_proxy_rs::gateway::dispatch::responses::{
-    apply_response_model_options, http_sse_fallback_allowed, transport_for_request, CodexTransport,
-};
 use codex_proxy_rs::gateway::openai::responses::{
-    response_failed_sse_event, response_from_codex_sse, translate_response_to_codex,
-    translate_response_to_compact, CollectedResponse, OpenAiResponsesRequest,
+    response_failed_sse_event, translate_response_to_codex, translate_response_to_compact,
+    OpenAiResponsesRequest,
 };
 use serde_json::json;
 

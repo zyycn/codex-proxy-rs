@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::session::require_admin_session,
-    app::services::{AdminUsageError, AdminUsageRecord, AdminUsageSummary},
     app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::{clamp_limit, Page},
+    telemetry::usage::{AdminUsageError, AdminUsageRecord, AdminUsageSummary},
 };
 
 /// 用量统计查询参数。

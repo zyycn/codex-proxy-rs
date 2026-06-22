@@ -172,6 +172,19 @@ pub fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
     }
     retry_after_seconds_from_resets_at(error)
         .or_else(|| retry_after_seconds_from_rate_limit_message(error))
+        .or_else(|| retry_after_seconds_field(&value))
+}
+
+fn retry_after_seconds_field(value: &Value) -> Option<u64> {
+    value
+        .get("retry_after_seconds")
+        .or_else(|| value.get("retry_after"))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        })
+        .filter(|seconds| *seconds > 0)
 }
 
 /// 标准化的单个限流窗口。

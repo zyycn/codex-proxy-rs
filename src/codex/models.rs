@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use thiserror::Error;
 
-use crate::accounts::model::{Account, AccountStatus};
+use crate::accounts::{
+    model::{Account, AccountStatus},
+    store::AccountStore,
+};
 
 // ---------------------------------------------------------------------------
 // 数据类型
@@ -220,6 +223,85 @@ pub trait ModelSnapshotStore: Send + Sync + 'static {
 
     /// 列出所有计划快照。
     async fn list_plan_snapshots(&self) -> ModelSnapshotStoreResult<Vec<ModelPlanSnapshot>>;
+}
+
+// ---------------------------------------------------------------------------
+// 管理端模型刷新服务
+// ---------------------------------------------------------------------------
+
+/// 管理端模型服务。
+#[derive(Clone)]
+pub struct AdminModelService {
+    models: Arc<ModelService>,
+    accounts: Arc<dyn AccountStore>,
+    installation_id: Option<String>,
+}
+
+impl AdminModelService {
+    /// 构造服务。
+    pub fn new(
+        models: Arc<ModelService>,
+        accounts: Arc<dyn AccountStore>,
+        installation_id: Option<String>,
+    ) -> Self {
+        Self {
+            models,
+            accounts,
+            installation_id,
+        }
+    }
+
+    /// 使用账号池中的账号刷新上游模型目录。
+    pub async fn refresh_backend_models(
+        &self,
+        request_id: &str,
+    ) -> Result<ModelRefreshResult, AdminModelError> {
+        let accounts = self
+            .accounts
+            .list_pool_accounts()
+            .await
+            .map_err(|_| AdminModelError::ListAccounts)?;
+        self.models
+            .refresh_backend_models_with_installation_id(
+                &accounts,
+                request_id,
+                self.installation_id.as_deref(),
+            )
+            .await
+            .map_err(AdminModelError::from)
+    }
+}
+
+/// 管理端模型刷新错误。
+#[derive(Debug, Error)]
+pub enum AdminModelError {
+    #[error("failed to list accounts")]
+    ListAccounts,
+    #[error("no active accounts available for model refresh")]
+    NoAccounts,
+    #[error("model snapshot store is unavailable")]
+    SnapshotStoreUnavailable,
+    #[error("model upstream client is unavailable")]
+    UpstreamClientUnavailable,
+    #[error("failed to store model snapshot")]
+    StoreSnapshot,
+    #[error("failed to load model snapshots")]
+    LoadSnapshots,
+    #[error("all model refresh plans failed")]
+    AllPlansFailed(ModelRefreshResult),
+}
+
+impl From<ModelServiceError> for AdminModelError {
+    fn from(error: ModelServiceError) -> Self {
+        match error {
+            ModelServiceError::SnapshotStoreUnavailable => Self::SnapshotStoreUnavailable,
+            ModelServiceError::UpstreamClientUnavailable => Self::UpstreamClientUnavailable,
+            ModelServiceError::NoAccounts => Self::NoAccounts,
+            ModelServiceError::StoreSnapshot => Self::StoreSnapshot,
+            ModelServiceError::LoadSnapshots => Self::LoadSnapshots,
+            ModelServiceError::AllPlansFailed(result) => Self::AllPlansFailed(result),
+        }
+    }
 }
 
 /// SQLite 模型快照存储。

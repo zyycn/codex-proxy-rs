@@ -1,5 +1,7 @@
 //! 账号领域模块 —— 模型、仓库、池调度、Cookie、OAuth、配额、刷新与导入导出。
 
+/// 管理端账号业务服务。
+pub mod admin_service;
 /// Cookie 捕获与重放策略。
 pub mod cookies;
 /// 账号导入导出逻辑。

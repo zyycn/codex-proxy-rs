@@ -362,10 +362,11 @@ async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_tok
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
     use codex_proxy_rs::accounts::model::{Account, AccountStatus};
-    use codex_proxy_rs::accounts::oauth::{
-        RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger, TokenPair,
-    };
     use codex_proxy_rs::accounts::token_refresh::TokenRefresher;
+    use codex_proxy_rs::accounts::{
+        oauth::TokenPair,
+        token_refresh::{RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger},
+    };
 
     #[derive(Clone)]
     struct StaticRefreshClient {

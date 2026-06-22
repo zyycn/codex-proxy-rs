@@ -294,8 +294,17 @@ fn codex_websocket_error_frame_should_classify_upstream_gateway_special_codes() 
         ("quota_exhausted", 402),
         ("token_expired", 401),
         ("account_banned", 403),
+        ("invalid_plan", 403),
+        ("banned_unknown_charge", 403),
         ("previous_response_not_found", 400),
+        ("invalid_encrypted_content", 400),
+        ("no_tool_output_found_for_function_call", 400),
         ("server_is_overloaded", 503),
+        ("temporarily_unavailable", 503),
+        ("over_capacity", 502),
+        ("server_error", 502),
+        ("upstream_error", 502),
+        ("rate_limited", 429),
         ("usage_not_included", 429),
     ];
 
@@ -305,7 +314,7 @@ fn codex_websocket_error_frame_should_classify_upstream_gateway_special_codes() 
             "response": {
                 "error": {
                     "code": code,
-                    "message": "classified by upstream gateway compatibility"
+                    "message": "classified by upstream gateway mapping"
                 }
             }
         })
@@ -383,6 +392,20 @@ fn codex_websocket_wrapped_error_headers_should_extract_retry_after() {
     assert_eq!(
         retry_after_seconds_from_wrapped_error_headers(&frame),
         Some(37)
+    );
+
+    let frame = json!({
+        "type": "error",
+        "error": {
+            "code": "rate_limit_exceeded",
+            "retry_after_seconds": 19
+        }
+    })
+    .to_string();
+
+    assert_eq!(
+        retry_after_seconds_from_wrapped_error_headers(&frame),
+        Some(19)
     );
 }
 

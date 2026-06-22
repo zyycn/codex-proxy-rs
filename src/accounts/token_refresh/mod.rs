@@ -1,11 +1,17 @@
 //! 刷新租约存储、JWT 解码与账号 claims 验证。
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::{Map, Value};
+use tokio::sync::Semaphore;
 
-use crate::accounts::oauth::{RefreshFailure, TokenPair};
+use crate::accounts::{
+    model::{Account, AccountStatus},
+    oauth::TokenPair,
+};
 
 // ---------------------------------------------------------------------------
 // JWT 解码
@@ -135,14 +141,191 @@ fn string_claim(map: &Map<String, Value>, key: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// TokenRefresher 端口
+// 刷新策略和上游端口
 // ---------------------------------------------------------------------------
+
+/// 刷新任务的调度策略。
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshPolicy {
+    /// 提前多久开始刷新访问令牌。
+    pub refresh_margin_seconds: u64,
+    /// 允许并发执行的刷新任务数。
+    pub refresh_concurrency: u32,
+}
+
+/// 触发刷新动作的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTrigger {
+    /// 在访问令牌即将过期前触发刷新。
+    BeforeExpiry,
+    /// 在上游返回未授权后立即刷新。
+    Unauthorized,
+}
+
+/// 上游刷新失败后的领域结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RefreshFailure {
+    /// 刷新令牌无效或已过期。
+    #[error("refresh token is invalid or expired")]
+    InvalidGrant,
+    /// 账号配额耗尽。
+    #[error("account quota is exhausted")]
+    QuotaExhausted,
+    /// 账号被上游封禁。
+    #[error("account is banned")]
+    Banned,
+    /// 账号被显式禁用。
+    #[error("account is disabled")]
+    Disabled,
+    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
+    #[error("refresh transport failed before server processing")]
+    RetryableTransport,
+    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
+    #[error("refresh transport failed after possible server processing")]
+    Transport,
+}
+
+/// 调度器自身的执行错误。
+#[derive(Debug, thiserror::Error)]
+pub enum RefreshError {
+    /// 并发限制信号量已关闭。
+    #[error("refresh task semaphore closed")]
+    ConcurrencyClosed,
+    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
+    #[error("refresh transport failed before server processing")]
+    RetryableTransport,
+    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
+    #[error("refresh transport failed after possible server processing")]
+    Transport,
+}
 
 /// 刷新令牌的上游端口。
 #[async_trait]
 pub trait TokenRefresher: Send + Sync + 'static {
     /// 使用给定刷新令牌换取新的 token 对。
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure>;
+}
+
+/// 负责执行单账号刷新策略的调度器。
+#[derive(Clone)]
+pub struct RefreshScheduler<C> {
+    policy: RefreshPolicy,
+    client: Arc<C>,
+    semaphore: Arc<Semaphore>,
+}
+
+impl<C> RefreshScheduler<C>
+where
+    C: TokenRefresher,
+{
+    /// 使用策略和上游刷新端口构造调度器。
+    pub fn new(policy: RefreshPolicy, client: C) -> Self {
+        let concurrency = policy.refresh_concurrency.max(1) as usize;
+        Self {
+            policy,
+            client: Arc::new(client),
+            semaphore: Arc::new(Semaphore::new(concurrency)),
+        }
+    }
+
+    /// 在给定时间点按触发原因刷新账号。
+    ///
+    /// 当账号不需要刷新时返回原账号快照；当刷新失败但属于可映射的领域错误时，
+    /// 返回更新过状态的账号。
+    ///
+    /// # Errors
+    ///
+    /// 当并发控制已关闭或刷新传输失败时返回 [`RefreshError`]。
+    pub async fn refresh_account_at(
+        &self,
+        account: &Account,
+        trigger: RefreshTrigger,
+        now: DateTime<Utc>,
+    ) -> Result<Account, RefreshError> {
+        if !self.should_refresh(account, trigger, now) {
+            return Ok(account.clone());
+        }
+
+        let Some(refresh_token) = account.refresh_token.as_deref() else {
+            let mut expired = account.clone();
+            expired.status = AccountStatus::Expired;
+            return Ok(expired);
+        };
+
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| RefreshError::ConcurrencyClosed)?;
+
+        match self.client.refresh(refresh_token).await {
+            Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
+            Err(RefreshFailure::RetryableTransport) => Err(RefreshError::RetryableTransport),
+            Err(RefreshFailure::Transport) => Err(RefreshError::Transport),
+            Err(error) => Ok(apply_refresh_failure(account, error)),
+        }
+    }
+
+    /// 判断账号在给定触发原因下是否需要刷新。
+    pub fn should_refresh_account_at(
+        &self,
+        account: &Account,
+        trigger: RefreshTrigger,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.should_refresh(account, trigger, now)
+    }
+
+    fn should_refresh(
+        &self,
+        account: &Account,
+        trigger: RefreshTrigger,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if account.status != AccountStatus::Active {
+            return false;
+        }
+
+        match trigger {
+            RefreshTrigger::Unauthorized => true,
+            RefreshTrigger::BeforeExpiry => account
+                .access_token_expires_at
+                .is_some_and(|expires_at| expires_at <= now + self.refresh_margin()),
+        }
+    }
+
+    fn refresh_margin(&self) -> Duration {
+        let seconds = self.policy.refresh_margin_seconds.min(86_400 * 7) as i64;
+        Duration::seconds(seconds)
+    }
+}
+
+/// 将新的 token 对应用到账号快照上。
+pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
+    let mut refreshed = account.clone();
+    refreshed.access_token = token_pair.access_token;
+
+    // 刷新响应不返回 refresh_token 时，继续保留旧值，避免永久失去刷新能力。
+    if let Some(refresh_token) = token_pair.refresh_token {
+        refreshed.refresh_token = Some(refresh_token);
+    }
+
+    refreshed.status = AccountStatus::Active;
+    refreshed
+}
+
+/// 将刷新失败映射为账号状态变更。
+pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Account {
+    let mut updated = account.clone();
+    updated.status = match failure {
+        RefreshFailure::InvalidGrant => AccountStatus::Disabled,
+        RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
+        RefreshFailure::Banned => AccountStatus::Banned,
+        RefreshFailure::Disabled => AccountStatus::Disabled,
+        RefreshFailure::RetryableTransport => AccountStatus::Active,
+        RefreshFailure::Transport => AccountStatus::Active,
+    };
+    updated
 }
 
 // ---------------------------------------------------------------------------
@@ -222,3 +405,10 @@ where account_refresh_leases.expires_at <= ?
         Ok(result.rows_affected() > 0)
     }
 }
+
+mod runtime;
+
+pub use runtime::{
+    RuntimeTokenRefreshService, TokenRefreshServiceError, TokenRefreshServiceResult,
+    TokenRefreshSummary, TokenTimerSummary,
+};

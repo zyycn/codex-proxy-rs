@@ -11,8 +11,8 @@ use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     admin::session::require_admin_session,
     app::state::AppState,
-    gateway::openai::diagnostics_data,
     http::middleware::request_id::RequestId,
+    telemetry::diagnostics::{diagnostics_data, DiagnosticsInput},
 };
 
 /// `GET /api/admin/diagnostics`
@@ -23,9 +23,25 @@ pub async fn diagnostics(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
+    let config = state.services.settings.current();
+    let accounts = state
+        .services
+        .accounts
+        .list_pool_accounts()
+        .await
+        .unwrap_or_default();
+    let capacity = state.services.account_pool.capacity_summary_now().await;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(diagnostics_data(&state).await, request_id),
+        AdminEnvelope::ok(
+            diagnostics_data(DiagnosticsInput {
+                config: config.as_ref(),
+                accounts: &accounts,
+                capacity,
+                fingerprint: &state.services.fingerprint,
+            }),
+            request_id,
+        ),
     ))
 }
