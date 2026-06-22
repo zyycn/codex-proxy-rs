@@ -9,7 +9,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::{AppConfig, ConfigWriteError, QuotaWarningThresholds};
+use crate::config::{
+    types::{AppConfig, QuotaWarningThresholds},
+    ConfigWriteError,
+};
 
 const ROTATION_STRATEGIES: [&str; 3] = ["least_used", "round_robin", "sticky"];
 

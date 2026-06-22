@@ -13,9 +13,9 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
         session::require_admin_session,
     },
-    app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::clamp_limit,
+    runtime::state::AppState,
     telemetry::{
         event_store::{AdminLogError, AdminLogFilter, AdminLogState, AdminLogStateUpdate},
         events::EventLevel,

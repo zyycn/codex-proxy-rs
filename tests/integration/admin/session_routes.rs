@@ -10,21 +10,21 @@ use codex_proxy_rs::{
     access::client_keys::SqliteClientKeyStore,
     accounts::token_refresh::RefreshLeaseStore,
     accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
-    app::services::{BackgroundTaskStores, Services},
-    app::state::AppState,
     codex::fingerprint::{Fingerprint, FingerprintRepository},
+    config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig, WebSocketPoolConfig,
     },
-    config::AppConfig,
-    gateway::dispatch::session_affinity::SqliteSessionAffinityStore,
     infra::{
         crypto::SecretBox,
         database::connect_sqlite,
         identity::{hash_admin_password, ApiKeyHasher},
     },
+    proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
+    runtime::services::{BackgroundTaskStores, Services},
+    runtime::state::AppState,
     telemetry::event_store::SqliteEventLogStore,
 };
 use serde_json::Value;

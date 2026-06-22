@@ -1,0 +1,247 @@
+//! 运行时服务集合。
+
+use std::sync::Arc as StdArc;
+
+use crate::{
+    access::{
+        admin_session::{AdminSessionService, SqliteAdminSessionStore},
+        client_keys::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
+    },
+    accounts::{
+        admin_service::AdminAccountService,
+        cookies::SqliteCookieStore,
+        oauth::AdminOAuthService,
+        pool::{AccountPoolOptions, RuntimeAccountPoolService},
+        store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
+        token_refresh::RefreshLeaseStore as SqliteRefreshLeaseStore,
+    },
+    codex::{
+        fingerprint::{Fingerprint, FingerprintRepository},
+        models::{AdminModelService, ModelService, ModelSnapshotStore},
+        oauth_client::default_openai_oauth_client,
+        transport::{CodexBackendClient, CodexModelCatalogClient},
+    },
+    config::{settings::RuntimeSettingsService, types::AppConfig},
+    proxy::dispatch::{
+        chat::ChatDispatchService,
+        responses::ResponseDispatchService,
+        session_affinity::{RuntimeSessionAffinityService, SqliteSessionAffinityStore},
+    },
+    telemetry::{
+        event_store::{AdminLogService, SqliteEventLogStore},
+        usage::AdminUsageService,
+        usage_store::SqliteUsageStore,
+    },
+};
+
+// ============================================================================
+// BackgroundTaskStores
+// ============================================================================
+
+/// 后台任务需要的具体存储适配器集合。
+#[derive(Clone)]
+pub struct BackgroundTaskStores {
+    pub accounts: SqliteAccountStore,
+    pub admin_sessions: SqliteAdminSessionStore,
+    pub cookies: SqliteCookieStore,
+    pub fingerprints: FingerprintRepository,
+    pub session_affinity: SqliteSessionAffinityStore,
+    pub refresh_leases: SqliteRefreshLeaseStore,
+    pub client_keys: SqliteClientKeyStore,
+    pub event_logs: SqliteEventLogStore,
+}
+
+// ============================================================================
+// Services struct
+// ============================================================================
+
+/// 运行时服务集合。
+#[derive(Clone)]
+pub struct Services {
+    pub models: StdArc<ModelService>,
+    pub admin_models: StdArc<AdminModelService>,
+    pub accounts: StdArc<dyn AccountStoreTrait>,
+    pub client_keys: StdArc<ClientKeyService>,
+    pub admin_client_keys: StdArc<AdminClientKeyService>,
+    pub admin_sessions: StdArc<AdminSessionService>,
+    pub settings: StdArc<RuntimeSettingsService>,
+    pub admin_accounts: StdArc<AdminAccountService>,
+    pub admin_oauth: StdArc<AdminOAuthService>,
+    pub logs: StdArc<AdminLogService>,
+    pub usage: StdArc<AdminUsageService>,
+    pub account_pool: StdArc<RuntimeAccountPoolService>,
+    pub chat: StdArc<ChatDispatchService>,
+    pub responses: StdArc<ResponseDispatchService>,
+    pub session_affinity: StdArc<RuntimeSessionAffinityService>,
+    pub codex: StdArc<CodexBackendClient>,
+    pub fingerprint: Fingerprint,
+    pub installation_id: Option<String>,
+    pub background_tasks: BackgroundTaskStores,
+}
+
+impl Services {
+    pub fn new(config: &AppConfig, stores: BackgroundTaskStores, fingerprint: Fingerprint) -> Self {
+        Self::with_installation_id(config, stores, fingerprint, None)
+    }
+
+    pub fn with_installation_id(
+        config: &AppConfig,
+        stores: BackgroundTaskStores,
+        fingerprint: Fingerprint,
+        installation_id: Option<String>,
+    ) -> Self {
+        let installation_id = installation_id.filter(|id| !id.trim().is_empty());
+        let account_store_trait =
+            StdArc::new(stores.accounts.clone()) as StdArc<dyn AccountStoreTrait>;
+        let codex = {
+            let client = CodexBackendClient::new(
+                reqwest::Client::new(),
+                config.api.base_url.clone(),
+                fingerprint.clone(),
+            );
+            if config.ws_pool.enabled {
+                let pool = StdArc::new(crate::codex::transport::CodexWebSocketPool::with_config(
+                    crate::codex::transport::CodexWebSocketPoolConfig {
+                        enabled: config.ws_pool.enabled,
+                        max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
+                        max_per_account: config.ws_pool.max_per_account,
+                        ..crate::codex::transport::CodexWebSocketPoolConfig::default()
+                    },
+                ));
+                StdArc::new(client.with_websocket_pool(pool))
+            } else {
+                StdArc::new(client)
+            }
+        };
+        let settings = StdArc::new(RuntimeSettingsService::with_config_path(
+            config.clone(),
+            "config.yaml",
+        ));
+        let admin_sessions = StdArc::new(AdminSessionService::new(
+            stores.admin_sessions.clone(),
+            config.admin.default_username.clone(),
+            config.admin.session_ttl_minutes,
+        ));
+        let admin_client_keys = StdArc::new(AdminClientKeyService::new(stores.client_keys.clone()));
+        let client_keys = StdArc::new(ClientKeyService::new(StdArc::new(
+            stores.client_keys.clone(),
+        )));
+        let account_pool = StdArc::new(RuntimeAccountPoolService::new(
+            account_store_trait.clone(),
+            AccountPoolOptions::default(),
+            config.auth.request_interval_ms,
+        ));
+        let oauth_config = oauth_config(config);
+        let oauth_client = StdArc::new(default_openai_oauth_client(oauth_config.clone()));
+        let admin_accounts = StdArc::new(AdminAccountService::new(
+            stores.accounts.clone(),
+            stores.cookies.clone(),
+            config.quota.warning_thresholds.clone(),
+            codex.clone(),
+            account_pool.clone(),
+            oauth_client.clone(),
+            config.auth.refresh_margin_seconds,
+            installation_id.clone(),
+        ));
+        let admin_oauth = StdArc::new(AdminOAuthService::new(oauth_config, oauth_client));
+        let logs = StdArc::new(AdminLogService::new(
+            stores.event_logs.clone(),
+            config.logging.enabled,
+            config.logging.capacity,
+            config.logging.capture_body,
+        ));
+        let usage_store = SqliteUsageStore::new(stores.accounts.pool().clone());
+        let usage = StdArc::new(AdminUsageService::new(usage_store));
+        let session_affinity = StdArc::new(RuntimeSessionAffinityService::new(
+            stores.session_affinity.clone(),
+        ));
+
+        let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
+        let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
+            crate::codex::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
+        );
+        let models = StdArc::new(ModelService::new(
+            crate::codex::models::ModelConfig {
+                default_model: config.model.default_model.clone(),
+                default_reasoning_effort: config.model.default_reasoning_effort.clone(),
+                service_tier: config.model.service_tier.clone(),
+                aliases: config.model.aliases.clone(),
+            },
+            Some(snapshot_store.clone()),
+            Some(upstream_client.clone()),
+            None,
+        ));
+        let admin_models = StdArc::new(AdminModelService::new(
+            StdArc::new(ModelService::new(
+                crate::codex::models::ModelConfig {
+                    default_model: config.model.default_model.clone(),
+                    default_reasoning_effort: config.model.default_reasoning_effort.clone(),
+                    service_tier: config.model.service_tier.clone(),
+                    aliases: config.model.aliases.clone(),
+                },
+                Some(snapshot_store),
+                Some(upstream_client),
+                None,
+            )),
+            account_store_trait.clone(),
+            installation_id.clone(),
+        ));
+        let cloudflare_recovery =
+            crate::proxy::dispatch::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
+        let chat = StdArc::new(ChatDispatchService::new(
+            account_pool.clone(),
+            models.clone(),
+            codex.clone(),
+            logs.clone(),
+            installation_id.clone(),
+            cloudflare_recovery.clone(),
+        ));
+        let responses = StdArc::new(ResponseDispatchService::new(
+            account_pool.clone(),
+            models.clone(),
+            codex.clone(),
+            session_affinity.clone(),
+            logs.clone(),
+            installation_id.clone(),
+            cloudflare_recovery,
+        ));
+
+        Self {
+            models,
+            admin_models,
+            accounts: account_store_trait,
+            client_keys,
+            admin_client_keys,
+            admin_sessions,
+            settings,
+            admin_accounts,
+            admin_oauth,
+            logs,
+            usage,
+            account_pool,
+            chat,
+            responses,
+            session_affinity,
+            codex,
+            fingerprint,
+            installation_id,
+            background_tasks: stores,
+        }
+    }
+}
+
+fn oauth_config(config: &AppConfig) -> crate::accounts::oauth::OAuthConfig {
+    crate::accounts::oauth::OAuthConfig {
+        client_id: config.auth.oauth_client_id.clone(),
+        auth_endpoint: config.auth.oauth_auth_endpoint.clone(),
+        device_code_endpoint: oauth_device_code_endpoint(&config.auth.oauth_token_endpoint),
+        token_endpoint: config.auth.oauth_token_endpoint.clone(),
+    }
+}
+
+fn oauth_device_code_endpoint(token_endpoint: &str) -> String {
+    token_endpoint
+        .strip_suffix("/token")
+        .map(|endpoint| format!("{endpoint}/device/code"))
+        .unwrap_or_else(|| "https://auth.openai.com/oauth/device/code".to_string())
+}

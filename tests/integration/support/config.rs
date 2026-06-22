@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 
 use codex_proxy_rs::config::types::{
-    AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig, QuotaConfig,
-    QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig, UsageStatsConfig,
+    AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
+    QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig, UsageStatsConfig,
     WebSocketPoolConfig,
 };
-use codex_proxy_rs::config::AppConfig;
 
 pub fn test_config(database_url: String) -> AppConfig {
     AppConfig {

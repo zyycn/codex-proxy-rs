@@ -15,12 +15,12 @@ use serde_json::Value;
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     admin::session::require_admin_session,
-    app::state::AppState,
     config::{
         settings::{AdminSettingsPatch, RuntimeSettingsError, SettingsServiceError},
         types::{AppConfig, QuotaWarningThresholds},
     },
     http::middleware::request_id::RequestId,
+    runtime::state::AppState,
 };
 
 const ALLOWED_SETTINGS_KEYS: [&str; 18] = [

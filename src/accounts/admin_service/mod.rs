@@ -16,7 +16,7 @@ use crate::{
         token_refresh::TokenRefresher,
     },
     codex::transport::CodexBackendClient,
-    config::QuotaWarningThresholds,
+    config::types::QuotaWarningThresholds,
 };
 
 pub use types::{

@@ -40,7 +40,7 @@ use codex_proxy_rs::codex::protocol::websocket::{
     OpeningAuditSnapshot, PayloadAuditSnapshot, WebSocketAuditErrorSnapshot,
     WebSocketErrorClassificationProfile,
 };
-use codex_proxy_rs::gateway::openai::responses::{
+use codex_proxy_rs::proxy::openai::responses::{
     response_failed_sse_event, translate_response_to_codex, translate_response_to_compact,
     OpenAiResponsesRequest,
 };

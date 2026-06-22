@@ -14,17 +14,17 @@ use codex_proxy_rs::{
         store::{NewAccount, SqliteAccountStore},
         token_refresh::RefreshLeaseStore,
     },
-    app::services::{BackgroundTaskStores, Services},
-    app::state::AppState,
     codex::fingerprint::{Fingerprint, FingerprintRepository},
+    config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig, WebSocketPoolConfig,
     },
-    config::AppConfig,
-    gateway::dispatch::session_affinity::SqliteSessionAffinityStore,
     infra::{crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher},
+    proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
+    runtime::services::{BackgroundTaskStores, Services},
+    runtime::state::AppState,
     telemetry::event_store::SqliteEventLogStore,
 };
 use secrecy::{ExposeSecret, SecretString};

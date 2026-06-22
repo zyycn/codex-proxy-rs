@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn chat_completion_request_should_translate_to_codex_request() {
-    let request = codex_proxy_rs::gateway::openai::chat::ChatCompletionRequest {
+    let request = codex_proxy_rs::proxy::openai::chat::ChatCompletionRequest {
         model: "gpt-5.5".to_string(),
         stream: true,
         messages: vec![
-            codex_proxy_rs::gateway::openai::chat::ChatMessage {
+            codex_proxy_rs::proxy::openai::chat::ChatMessage {
                 role: "system".to_string(),
                 content: Some(json!("be brief")),
                 name: None,
@@ -14,7 +14,7 @@ fn chat_completion_request_should_translate_to_codex_request() {
                 tool_call_id: None,
                 function_call: None,
             },
-            codex_proxy_rs::gateway::openai::chat::ChatMessage {
+            codex_proxy_rs::proxy::openai::chat::ChatMessage {
                 role: "user".to_string(),
                 content: Some(json!("hello")),
                 name: None,
@@ -33,7 +33,7 @@ fn chat_completion_request_should_translate_to_codex_request() {
         user: Some(" client-123 ".to_string()),
     };
 
-    let codex = codex_proxy_rs::gateway::openai::chat::translate_chat_to_codex(request)
+    let codex = codex_proxy_rs::proxy::openai::chat::translate_chat_to_codex(request)
         .expect("chat request should translate");
 
     assert_eq!(codex.model, "gpt-5.5");
@@ -72,7 +72,7 @@ fn chat_completion_from_codex_sse_should_convert_completed_response() {
         "data: {\"response\":{\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
     );
 
-    let response = codex_proxy_rs::gateway::openai::chat::chat_completion_from_codex_sse(
+    let response = codex_proxy_rs::proxy::openai::chat::chat_completion_from_codex_sse(
         body, "gpt-5.5", false, None,
     )
     .expect("conversion should succeed")
@@ -83,7 +83,7 @@ fn chat_completion_from_codex_sse_should_convert_completed_response() {
 
 #[test]
 fn chat_completion_stream_translator_should_emit_openai_chunks() {
-    let mut translator = codex_proxy_rs::gateway::openai::chat::ChatCompletionStreamTranslator::new(
+    let mut translator = codex_proxy_rs::proxy::openai::chat::ChatCompletionStreamTranslator::new(
         "gpt-5.5", false, None,
     );
     let first = concat!(

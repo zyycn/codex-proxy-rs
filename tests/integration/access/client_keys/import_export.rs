@@ -47,7 +47,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
     let source_config = test_config(source_url);
     let source_secret_box = SecretBox::new([51u8; 32]);
     let source_hasher = ApiKeyHasher::new([52u8; 32]);
-    let source_stores = codex_proxy_rs::app::services::BackgroundTaskStores {
+    let source_stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::accounts::store::SqliteAccountStore::new(
             source_pool.clone(),
             source_secret_box.clone(),
@@ -63,7 +63,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
             source_pool.clone(),
         ),
         session_affinity:
-            codex_proxy_rs::gateway::dispatch::session_affinity::SqliteSessionAffinityStore::new(
+            codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
                 source_pool.clone(),
             ),
         refresh_leases: codex_proxy_rs::accounts::token_refresh::RefreshLeaseStore::new(
@@ -78,12 +78,12 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
         ),
     };
     let source_fingerprint = codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests();
-    let source_services = std::sync::Arc::new(codex_proxy_rs::app::services::Services::new(
+    let source_services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &source_config,
         source_stores,
         source_fingerprint,
     ));
-    let source_state = codex_proxy_rs::app::state::AppState {
+    let source_state = codex_proxy_rs::runtime::state::AppState {
         config: source_config,
         services: (*source_services).clone(),
     };
@@ -115,7 +115,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
     let target_config = test_config(target_url);
     let target_secret_box = SecretBox::new([61u8; 32]);
     let target_hasher = ApiKeyHasher::new([62u8; 32]);
-    let target_stores = codex_proxy_rs::app::services::BackgroundTaskStores {
+    let target_stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::accounts::store::SqliteAccountStore::new(
             target_pool.clone(),
             target_secret_box.clone(),
@@ -131,7 +131,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
             target_pool.clone(),
         ),
         session_affinity:
-            codex_proxy_rs::gateway::dispatch::session_affinity::SqliteSessionAffinityStore::new(
+            codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
                 target_pool.clone(),
             ),
         refresh_leases: codex_proxy_rs::accounts::token_refresh::RefreshLeaseStore::new(
@@ -146,12 +146,12 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
         ),
     };
     let target_fingerprint = codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests();
-    let target_services = std::sync::Arc::new(codex_proxy_rs::app::services::Services::new(
+    let target_services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &target_config,
         target_stores,
         target_fingerprint,
     ));
-    let target_state = codex_proxy_rs::app::state::AppState {
+    let target_state = codex_proxy_rs::runtime::state::AppState {
         config: target_config,
         services: (*target_services).clone(),
     };

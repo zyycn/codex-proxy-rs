@@ -3,7 +3,9 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use codex_proxy_rs::admin::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse};
+use codex_proxy_rs::admin::response::{
+    AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse,
+};
 use codex_proxy_rs::infra::json::Page;
 use serde_json::{json, Value};
 
