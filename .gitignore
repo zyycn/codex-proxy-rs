@@ -3,6 +3,7 @@
 
 # Application runtime state.
 /.runtime/
+/logs/
 *.sqlite
 *.sqlite3
 *.db
