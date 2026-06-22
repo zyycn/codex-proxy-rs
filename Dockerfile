@@ -1,9 +1,9 @@
 FROM rust:1.95-bookworm AS builder
 
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
-COPY migrations ./migrations
+COPY web/dist ./web/dist
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
@@ -15,7 +15,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /app/target/release/codex-proxy-rs /usr/local/bin/codex-proxy-rs
 COPY config.yaml ./config.yaml
-COPY migrations ./migrations
 
 EXPOSE 8080
 

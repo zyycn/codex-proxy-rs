@@ -1,17 +1,14 @@
-[workspace]
-members = ["crates/*"]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "codex-proxy-rs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
 rust-version = "1.95"
+description = "AI protocol gateway backed by ChatGPT/Codex accounts."
 
-[workspace.dependencies]
+[dependencies]
 aes-gcm = "0.10.3"
-anyhow = "1.0.102"
 argon2 = "0.5.3"
 async-trait = "0.1.89"
 axum = "0.8.9"
@@ -38,8 +35,8 @@ sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite",
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync", "net", "test-util"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+tokio-stream = "0.1.17"
 tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
-tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6.11", features = ["trace", "cors", "request-id", "timeout"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
@@ -48,16 +45,21 @@ tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
 zeroize = "1.8.2"
 
+[dev-dependencies]
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }
+wiremock = "0.6.5"
+
 [patch.crates-io]
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
-[workspace.lints.rust]
+[lints.rust]
 future_incompatible = { level = "warn", priority = -1 }
 nonstandard_style = { level = "deny", priority = -1 }
 unsafe_code = "forbid"
 
-[workspace.lints.clippy]
+[lints.clippy]
 all = { level = "deny", priority = 10 }
 redundant_clone = { level = "deny", priority = 9 }
 large_enum_variant = { level = "warn", priority = 8 }
