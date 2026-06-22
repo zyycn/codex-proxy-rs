@@ -1,8 +1,15 @@
 //! Codex WebSocket 连接建立（关键函数）。
 
-use std::{pin::Pin, sync::Arc, time::Duration, time::Instant};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
+use chrono::Utc;
 use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
 use serde_json::Value;
 use thiserror::Error;
@@ -19,20 +26,28 @@ use tungstenite::{
 
 use crate::codex::protocol::events::{self, TokenUsage};
 use crate::codex::protocol::responses::CodexResponsesRequest;
-use crate::codex::protocol::sse::{parse_sse_events, SseError};
+use crate::codex::protocol::sse::SseError;
 use crate::codex::protocol::websocket::{
-    websocket_response_create_payload_text, OpeningAuditHeader, OpeningAuditSnapshot,
+    classify_websocket_error_frame, is_terminal_websocket_event,
+    retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
+    websocket_incomplete_response_reason, websocket_metadata_turn_state,
+    websocket_response_completed_parse_error, websocket_response_create_payload_text,
+    OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
+    WebSocketErrorClassificationProfile,
 };
 
-use super::pool::{
+use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey, CodexWsStream,
     PooledWebSocketConnection, WebSocketPoolAcquire,
 };
+use uuid::Uuid;
 
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
 const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+/// WebSocket audit artifact 输出目录环境变量。
+pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +58,44 @@ const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct CodexWebSocketConnection {
     endpoint: String,
     headers: Vec<(String, String)>,
+}
+
+/// 构造握手审计快照。
+pub fn opening_audit_snapshot(header_order: Vec<String>) -> OpeningAuditSnapshot {
+    OpeningAuditSnapshot {
+        header_order,
+        ..OpeningAuditSnapshot::default()
+    }
+}
+
+/// 显式写入 WebSocket audit artifact。
+pub async fn write_websocket_audit_artifact_for_dir(
+    dir: Option<&Path>,
+    artifact: &WebSocketAuditArtifact,
+) -> io::Result<Option<PathBuf>> {
+    let Some(dir) = dir.filter(|dir| !dir.as_os_str().is_empty()) else {
+        return Ok(None);
+    };
+
+    tokio::fs::create_dir_all(dir).await?;
+    let path = dir.join(websocket_audit_file_name());
+    let body = serde_json::to_vec_pretty(artifact).map_err(io::Error::other)?;
+    tokio::fs::write(&path, body).await?;
+    Ok(Some(path))
+}
+
+/// 按环境变量配置写入 WebSocket audit artifact。
+pub async fn write_websocket_audit_artifact_from_env(
+    artifact: &WebSocketAuditArtifact,
+) -> io::Result<Option<PathBuf>> {
+    let Some(dir) = std::env::var_os(WS_AUDIT_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+
+    write_websocket_audit_artifact_for_dir(Some(&dir), artifact).await
 }
 
 /// Prepared Responses WebSocket request descriptor.
@@ -330,7 +383,7 @@ fn websocket_opening_error(response: WsResponse<Option<Vec<u8>>>) -> CodexWebSoc
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
-        .or_else(|| retry_after_seconds_from_body(&body));
+        .or_else(|| events::retry_after_seconds_from_body(&body));
     CodexWebSocketExchangeError::Upstream {
         status_code,
         retry_after_seconds,
@@ -695,7 +748,7 @@ async fn collect_websocket_response(
             classify_websocket_error_frame(&raw, WebSocketErrorClassificationProfile::OneShot)
         {
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
-                .or_else(|| retry_after_seconds_from_body(&raw));
+                .or_else(|| events::retry_after_seconds_from_body(&raw));
             return Err(CodexWebSocketExchangeError::Upstream {
                 status_code: classified.status_code,
                 retry_after_seconds,
@@ -729,7 +782,7 @@ async fn collect_websocket_response(
             false
         };
         if forwarded && event.as_deref().is_some_and(is_terminal_websocket_event) {
-            let usage = extract_sse_usage(&body)?;
+            let usage = events::extract_sse_usage(&body)?;
             let exchange = CodexWebSocketExchange {
                 body,
                 usage,
@@ -867,7 +920,7 @@ async fn forward_websocket_response_stream(
         {
             discard_stream_websocket(websocket, pool_return).await;
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
-                .or_else(|| retry_after_seconds_from_body(&raw));
+                .or_else(|| events::retry_after_seconds_from_body(&raw));
             let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::Upstream {
                 status_code: classified.status_code,
                 retry_after_seconds,
@@ -1025,217 +1078,6 @@ fn websocket_rate_limit_event_headers(raw: &str) -> Option<Vec<(String, String)>
         .map(|parsed| events::rate_limits_to_header_pairs(&parsed))
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket protocol utilities (inlined from protocol::websocket)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WebSocketErrorClassificationProfile {
-    OneShot,
-}
-
-struct ClassifiedErrorFrame {
-    status_code: u16,
-}
-
-fn classify_websocket_error_frame(
-    raw: &str,
-    _profile: WebSocketErrorClassificationProfile,
-) -> Option<ClassifiedErrorFrame> {
-    let value: Value = serde_json::from_str(raw).ok()?;
-    let event_type = value.get("type").and_then(Value::as_str)?;
-    if event_type != "error" && event_type != "response.failed" {
-        return None;
-    }
-
-    let code = websocket_error_code(&value);
-
-    if code.as_deref() == Some("websocket_connection_limit_reached") {
-        return Some(ClassifiedErrorFrame { status_code: 503 });
-    }
-
-    if event_type == "error" {
-        if let Some(status_code) = explicit_error_status_code(&value) {
-            if (200..=299).contains(&status_code) {
-                return None;
-            }
-            return Some(ClassifiedErrorFrame { status_code });
-        }
-    }
-
-    if let Some(code) = code {
-        if let Some(status_code) = error_code_to_status_code(&code) {
-            return Some(ClassifiedErrorFrame { status_code });
-        }
-    }
-
-    if event_type == "response.failed" {
-        return Some(ClassifiedErrorFrame { status_code: 503 });
-    }
-
-    None
-}
-
-fn websocket_error_code(value: &Value) -> Option<String> {
-    value
-        .pointer("/response/error/code")
-        .or_else(|| value.pointer("/response/error/type"))
-        .or_else(|| value.pointer("/error/code"))
-        .or_else(|| value.pointer("/error/type"))
-        .and_then(Value::as_str)
-        .map(str::to_ascii_lowercase)
-}
-
-fn explicit_error_status_code(value: &Value) -> Option<u16> {
-    value
-        .get("status")
-        .or_else(|| value.get("status_code"))
-        .and_then(Value::as_u64)
-        .and_then(|status| u16::try_from(status).ok())
-}
-
-fn error_code_to_status_code(code: &str) -> Option<u16> {
-    match code {
-        "usage_limit_reached" | "rate_limit_exceeded" | "rate_limit_reached" => Some(429),
-        "quota_exhausted" | "quota_exceeded" | "insufficient_quota" | "payment_required" => {
-            Some(402)
-        }
-        "usage_not_included" => Some(429),
-        "unauthorized" | "token_invalid" | "token_expired" | "account_deactivated" => Some(401),
-        "forbidden" | "account_banned" | "banned" | "invalid_plan" | "banned_unknown_charge" => {
-            Some(403)
-        }
-        "context_length_exceeded" | "invalid_prompt" | "cyber_policy" | "invalid_request" => {
-            Some(400)
-        }
-        "previous_response_not_found"
-        | "invalid_encrypted_content"
-        | "no_tool_output_found_for_function_call" => Some(400),
-        "server_is_overloaded" | "slow_down" | "temporarily_unavailable" => Some(503),
-        "over_capacity" | "server_error" | "upstream_error" => Some(502),
-        "rate_limited" => Some(429),
-        _ => None,
-    }
-}
-
-fn is_terminal_websocket_event(event_type: &str) -> bool {
-    matches!(event_type, "response.completed" | "response.incomplete")
-}
-
-fn websocket_incomplete_response_reason(raw: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(raw).ok()?;
-    if value.get("type")?.as_str()? != "response.incomplete" {
-        return None;
-    }
-    value
-        .pointer("/response/incomplete_details/reason")
-        .or_else(|| value.pointer("/incomplete_details/reason"))
-        .or_else(|| value.get("reason"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-}
-
-fn websocket_response_completed_parse_error(raw: &str) -> Option<String> {
-    crate::codex::protocol::websocket::websocket_response_completed_parse_error(raw)
-}
-
-fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
-    crate::codex::protocol::websocket::websocket_event_to_sse_frame(raw)
-}
-
-fn json_value_as_string(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) => Some(value.clone()),
-        Value::Array(items) => items.first().and_then(json_value_as_string),
-        _ => None,
-    }
-}
-
-fn websocket_metadata_turn_state(raw: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(raw).ok()?;
-    if value.get("type")?.as_str()? != "response.metadata" {
-        return None;
-    }
-    value
-        .get("headers")
-        .and_then(Value::as_object)
-        .and_then(|headers| {
-            headers.iter().find_map(|(name, value)| {
-                if name.eq_ignore_ascii_case("x-codex-turn-state") {
-                    json_value_as_string(value)
-                } else {
-                    None
-                }
-            })
-        })
-        .or_else(|| {
-            value
-                .pointer("/metadata/turn_state")
-                .or_else(|| value.get("turn_state"))
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
-}
-
-fn retry_after_seconds_from_wrapped_error_headers(raw: &str) -> Option<u64> {
-    let value: Value = serde_json::from_str(raw).ok()?;
-    let headers = value.get("headers")?;
-    if let Some(retry_after) = headers
-        .get("retry-after")
-        .or_else(|| headers.get("Retry-After"))
-    {
-        return json_header_value_as_u64(retry_after);
-    }
-    value
-        .pointer("/error/retry_after_seconds")
-        .or_else(|| value.get("retry_after_seconds"))
-        .and_then(Value::as_u64)
-}
-
-fn json_header_value_as_u64(value: &Value) -> Option<u64> {
-    match value {
-        Value::String(value) => value.trim().parse::<u64>().ok().filter(|s| *s > 0),
-        Value::Number(value) => value.as_u64().filter(|s| *s > 0),
-        Value::Array(values) => values.first().and_then(json_header_value_as_u64),
-        _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SSE / Usage utilities (inlined from protocol::events)
-// ---------------------------------------------------------------------------
-
-fn extract_sse_usage(body: &str) -> Result<Option<TokenUsage>, SseError> {
-    let events = parse_sse_events(body)?;
-    for event in events.iter().rev() {
-        if event.data == "[DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-            continue;
-        };
-        let inner = value.get("response").unwrap_or(&value);
-        if let Some(usage) = events::extract_usage(inner) {
-            return Ok(Some(usage));
-        }
-    }
-    Ok(None)
-}
-
-fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
-    events::retry_after_seconds_from_body(body).or_else(|| {
-        let value: Value = serde_json::from_str(body).ok()?;
-        value
-            .get("retry_after_seconds")
-            .or_else(|| value.get("retry_after"))
-            .and_then(|v| {
-                v.as_u64()
-                    .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-            })
-            .filter(|seconds| *seconds > 0)
-    })
-}
-
 fn audit_header_value(name: &str, value: &str) -> String {
     if is_sensitive_opening_header(name) {
         REDACTED_HEADER_VALUE.to_string()
@@ -1259,4 +1101,9 @@ fn is_sensitive_opening_header(name: &str) -> bool {
             | "x-codex-turn-state"
             | "x-codex-parent-thread-id"
     )
+}
+
+fn websocket_audit_file_name() -> String {
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    format!("codex-ws-audit-{timestamp}-{}.json", Uuid::new_v4())
 }

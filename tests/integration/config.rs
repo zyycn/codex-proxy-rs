@@ -145,7 +145,7 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
 }
 
 #[test]
-fn config_loader_should_ignore_local_yaml() {
+fn config_loader_should_read_only_config_yaml() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config.yaml"),
@@ -250,12 +250,12 @@ logging:
     )
     .unwrap();
     fs::write(
-        dir.path().join("local.yaml"),
+        dir.path().join("ignored-extra.yaml"),
         r#"
 server:
   host: 0.0.0.0
 logging:
-  directory: local-logs
+  directory: ignored-logs
 ws_pool:
   enabled: false
   max_age_ms: 120000

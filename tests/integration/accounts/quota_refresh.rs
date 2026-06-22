@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration as StdDuration};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::accounts::model::AccountStatus;
+use codex_proxy_rs::accounts::quota::RuntimeQuotaRefreshService;
 use codex_proxy_rs::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::codex::fingerprint::Fingerprint;
 use codex_proxy_rs::codex::transport::CodexBackendClient;
@@ -15,15 +16,15 @@ use wiremock::{
 };
 
 #[test]
-fn quota_refresh_task_should_expose_default_request_spacing() {
+fn quota_refresh_service_should_expose_default_request_spacing() {
     assert_eq!(
-        codex_proxy_rs::app::tasks::quota_refresh::QuotaRefreshTask::default_request_spacing(),
+        RuntimeQuotaRefreshService::default_request_spacing(),
         StdDuration::from_secs(3)
     );
 }
 
 #[tokio::test]
-async fn quota_refresh_task_should_fetch_usage_for_quota_locked_accounts_and_store_quota() {
+async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_store_quota() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -79,12 +80,9 @@ async fn quota_refresh_task_should_fetch_usage_for_quota_locked_accounts_and_sto
         server.uri(),
         Fingerprint::default_for_tests(),
     );
-    let task = codex_proxy_rs::app::tasks::quota_refresh::QuotaRefreshTask::new(
-        store.clone(),
-        Arc::new(codex),
-    );
+    let service = RuntimeQuotaRefreshService::new(store.clone(), Arc::new(codex));
 
-    let summary = task
+    let summary = service
         .refresh_locked_accounts_once()
         .await
         .expect("quota refresh should succeed");
@@ -113,7 +111,7 @@ async fn quota_refresh_task_should_fetch_usage_for_quota_locked_accounts_and_sto
 }
 
 #[tokio::test]
-async fn quota_refresh_task_should_stagger_multiple_locked_account_requests() {
+async fn quota_refresh_service_should_stagger_multiple_locked_account_requests() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -145,11 +143,10 @@ async fn quota_refresh_task_should_stagger_multiple_locked_account_requests() {
         server.uri(),
         Fingerprint::default_for_tests(),
     );
-    let task =
-        codex_proxy_rs::app::tasks::quota_refresh::QuotaRefreshTask::new(store, Arc::new(codex))
-            .with_request_spacing(StdDuration::from_millis(200));
+    let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex))
+        .with_request_spacing(StdDuration::from_millis(200));
 
-    let refresh = tokio::spawn(async move { task.refresh_locked_accounts_once().await });
+    let refresh = tokio::spawn(async move { service.refresh_locked_accounts_once().await });
     wait_for_usage_requests(&server, 1).await;
     tokio::time::sleep(StdDuration::from_millis(50)).await;
 
@@ -157,7 +154,7 @@ async fn quota_refresh_task_should_stagger_multiple_locked_account_requests() {
 
     let summary = refresh
         .await
-        .expect("quota refresh task should join")
+        .expect("quota refresh service should join")
         .expect("quota refresh should succeed");
 
     assert_eq!(

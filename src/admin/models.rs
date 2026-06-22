@@ -12,11 +12,9 @@ use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     admin::session::require_admin_session,
     app::state::AppState,
-    codex::models::ModelRefreshResult,
+    codex::models::{AdminModelError, ModelRefreshResult},
     http::middleware::request_id::RequestId,
 };
-
-use crate::app::services::AdminModelError;
 
 /// 模型刷新响应。
 #[derive(Debug, Serialize)]

@@ -13,13 +13,13 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
         session::require_admin_session,
     },
-    app::{
-        services::{AdminLogFilter, AdminLogStateUpdate},
-        state::AppState,
-    },
+    app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::clamp_limit,
-    telemetry::events::EventLevel,
+    telemetry::{
+        event_store::{AdminLogError, AdminLogFilter, AdminLogState, AdminLogStateUpdate},
+        events::EventLevel,
+    },
 };
 
 /// 日志查询参数。
@@ -218,20 +218,20 @@ fn filter_from_query(query: LogsQuery, request_id: &str) -> Result<AdminLogFilte
     })
 }
 
-fn log_error(error: crate::app::services::AdminLogError, request_id: String) -> AdminError {
+fn log_error(error: AdminLogError, request_id: String) -> AdminError {
     match error {
-        crate::app::services::AdminLogError::List
-        | crate::app::services::AdminLogError::Get
-        | crate::app::services::AdminLogError::Count
-        | crate::app::services::AdminLogError::Clear
-        | crate::app::services::AdminLogError::Append
-        | crate::app::services::AdminLogError::Trim => AdminError::new(
+        AdminLogError::List
+        | AdminLogError::Get
+        | AdminLogError::Count
+        | AdminLogError::Clear
+        | AdminLogError::Append
+        | AdminLogError::Trim => AdminError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             50001,
             error.to_string(),
             request_id,
         ),
-        crate::app::services::AdminLogError::InvalidCapacity => AdminError::new(
+        AdminLogError::InvalidCapacity => AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             error.to_string(),
@@ -259,8 +259,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-impl From<crate::app::services::AdminLogState> for LogStateData {
-    fn from(state: crate::app::services::AdminLogState) -> Self {
+impl From<AdminLogState> for LogStateData {
+    fn from(state: AdminLogState) -> Self {
         Self {
             enabled: state.enabled,
             capacity: state.capacity,

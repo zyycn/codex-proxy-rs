@@ -9,15 +9,16 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    accounts::{
+        admin_service::{AdminAccountError, AdminAuthStatus},
+        oauth::{AdminDevicePoll, AdminOAuthError},
+    },
     admin::{
         accounts::AdminAccountData,
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::require_admin_session,
     },
-    app::{
-        services::{AdminDevicePoll, AdminOAuthError},
-        state::AppState,
-    },
+    app::state::AppState,
     http::middleware::request_id::RequestId,
 };
 
@@ -360,29 +361,29 @@ fn oauth_error(error: AdminOAuthError, request_id: String) -> AdminError {
     }
 }
 
-fn account_error(error: crate::app::services::AdminAccountError, request_id: String) -> AdminError {
+fn account_error(error: AdminAccountError, request_id: String) -> AdminError {
     match error {
-        crate::app::services::AdminAccountError::InvalidStatus(_)
-        | crate::app::services::AdminAccountError::LabelTooLong
-        | crate::app::services::AdminAccountError::EmptyIds
-        | crate::app::services::AdminAccountError::NoImportableAccounts
-        | crate::app::services::AdminAccountError::InvalidAccessTokenExpiresAt
-        | crate::app::services::AdminAccountError::TokenRequired
-        | crate::app::services::AdminAccountError::InvalidToken(_)
-        | crate::app::services::AdminAccountError::RefreshTokenExchange(_)
-        | crate::app::services::AdminAccountError::NoValidCookies => AdminError::new(
+        AdminAccountError::InvalidStatus(_)
+        | AdminAccountError::LabelTooLong
+        | AdminAccountError::EmptyIds
+        | AdminAccountError::NoImportableAccounts
+        | AdminAccountError::InvalidAccessTokenExpiresAt
+        | AdminAccountError::TokenRequired
+        | AdminAccountError::InvalidToken(_)
+        | AdminAccountError::RefreshTokenExchange(_)
+        | AdminAccountError::NoValidCookies => AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             error.to_string(),
             request_id,
         ),
-        crate::app::services::AdminAccountError::NotFound => AdminError::new(
+        AdminAccountError::NotFound => AdminError::new(
             StatusCode::NOT_FOUND,
             40401,
             "Account not found",
             request_id,
         ),
-        crate::app::services::AdminAccountError::Inactive(_) => {
+        AdminAccountError::Inactive(_) => {
             AdminError::new(StatusCode::CONFLICT, 40901, error.to_string(), request_id)
         }
         _ => AdminError::new(
@@ -394,8 +395,8 @@ fn account_error(error: crate::app::services::AdminAccountError, request_id: Str
     }
 }
 
-impl From<crate::app::services::AdminAuthStatus> for AdminAuthStatusData {
-    fn from(status: crate::app::services::AdminAuthStatus) -> Self {
+impl From<AdminAuthStatus> for AdminAuthStatusData {
+    fn from(status: AdminAuthStatus) -> Self {
         Self {
             authenticated: status.authenticated,
             user: status.user.map(AdminAccountData::from),

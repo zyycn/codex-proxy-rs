@@ -8,25 +8,40 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    accounts::{model::AccountStatus, pool::AccountAcquireRequest},
-    app::services::{AdminLogService, RuntimeAccountPoolService},
+    accounts::{
+        model::AccountStatus,
+        pool::{AccountAcquireRequest, RuntimeAccountPoolService},
+    },
     codex::{
         models::ModelCatalog,
-        protocol::responses::CodexResponsesRequest,
-        transport::{CodexBackendClient, CodexClientError},
+        protocol::responses::{apply_response_model_options, CodexResponsesRequest},
+        transport::{
+            backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
+            CodexClientError,
+        },
     },
-    gateway::dispatch::responses::{
-        apply_response_model_options, auth_failure_account_status, backend_transport_name,
-        cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-        create_response_with_account, is_auth_upstream_error, is_banned_upstream_error,
-        is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-        is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-        is_rate_limit_upstream_error, rate_limit_cooldown_until, requested_response_transport,
-        upstream_error_body, upstream_error_http_status, verify_acquired_quota_if_required,
-        CloudflareRecovery, QuotaVerificationDecision,
+    gateway::dispatch::{
+        cloudflare::{
+            cloudflare_challenge_error_message, cloudflare_path_block_error_message,
+            is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
+            CloudflareRecovery,
+        },
+        upstream_errors::{
+            auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
+            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
+            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
+            upstream_error_http_status,
+        },
+        upstream_requests::{
+            create_response_with_account, verify_acquired_quota_if_required,
+            QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+        },
     },
     gateway::openai::chat::ChatStreamTranslationError,
-    telemetry::events::{EventLevel, ResponseEventRecord},
+    telemetry::{
+        event_store::AdminLogService,
+        events::{EventLevel, ResponseEventRecord},
+    },
 };
 
 /// OpenAI Chat Completions 调度服务。
@@ -108,9 +123,9 @@ impl ChatDispatchService {
                     requested_model,
                     started_at,
                     last_failed_account_id.as_deref(),
-                    Some(backend_transport_name(requested_response_transport(
-                        &request,
-                    ))),
+                    Some(backend_transport_name(
+                        backend_transport_for_response_request(&request),
+                    )),
                     &error,
                 )
                 .await;
@@ -202,13 +217,13 @@ impl ChatDispatchService {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
                     rate_limited_count += 1;
-                    last_rate_limit_error = Some("QUOTA_VERIFY_LIMIT_REACHED_MESSAGE".to_string());
+                    last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
                     continue;
                 }
                 QuotaVerificationDecision::MaxAttemptsReached => {
                     return_dispatch_error!(ChatDispatchError::RateLimited {
                         count: rate_limited_count + 1,
-                        upstream_error: "QUOTA_VERIFY_LIMIT_REACHED_MESSAGE".to_string(),
+                        upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
                     });
                 }
             };
@@ -300,7 +315,7 @@ impl ChatDispatchService {
                                 upstream_error,
                             },
                             account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(requested_response_transport(
+                            transport: Some(backend_transport_name(backend_transport_for_response_request(
                                 &request
                             )))
                         );
@@ -325,7 +340,7 @@ impl ChatDispatchService {
                     return_dispatch_error!(
                         ChatDispatchError::Upstream(error),
                         account_id: Some(&release_account_id),
-                        transport: Some(backend_transport_name(requested_response_transport(
+                        transport: Some(backend_transport_name(backend_transport_for_response_request(
                             &request
                         )))
                     );

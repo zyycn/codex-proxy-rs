@@ -1,11 +1,6 @@
 //! 诊断数据类型与聚合函数。
 
-use axum::{
-    http::{HeaderMap, StatusCode},
-    Json,
-};
 use serde::Serialize;
-use serde_json::{json, Value};
 
 use crate::{
     accounts::{
@@ -15,8 +10,6 @@ use crate::{
     codex::fingerprint::Fingerprint,
     config::types::AppConfig,
 };
-
-const LOCAL_DEBUG_ONLY_ERROR: &str = "debug endpoint is local-only";
 
 /// 诊断数据。
 #[derive(Debug, Serialize)]
@@ -181,16 +174,20 @@ pub struct SettingsDiagnostics {
     pub logs_enabled: bool,
 }
 
+/// 诊断聚合输入。
+pub struct DiagnosticsInput<'a> {
+    /// 当前配置。
+    pub config: &'a AppConfig,
+    /// 运行时账号快照。
+    pub accounts: &'a [Account],
+    /// 账号池容量摘要。
+    pub capacity: AccountCapacitySummary,
+    /// 当前 fingerprint。
+    pub fingerprint: &'a Fingerprint,
+}
+
 /// 构造诊断数据。
-pub async fn diagnostics_data(state: &crate::app::state::AppState) -> DiagnosticsData {
-    let config = state.services.settings.current();
-    let accounts = state
-        .services
-        .accounts
-        .list_pool_accounts()
-        .await
-        .unwrap_or_default();
-    let capacity = state.services.account_pool.capacity_summary_now().await;
+pub fn diagnostics_data(input: DiagnosticsInput<'_>) -> DiagnosticsData {
     DiagnosticsData {
         status: "ok",
         runtime: RuntimeDiagnostics {
@@ -199,15 +196,15 @@ pub async fn diagnostics_data(state: &crate::app::state::AppState) -> Diagnostic
         },
         paths: PathDiagnostics {
             config: "config.yaml",
-            database_url: config.database.url.clone(),
+            database_url: input.config.database.url.clone(),
         },
-        transport: transport_diagnostics(&config, &state.services.fingerprint),
+        transport: transport_diagnostics(input.config, input.fingerprint),
         accounts: AccountDiagnostics {
             repository_available: true,
-            pool: account_pool_diagnostics(&accounts),
-            capacity: AccountCapacityDiagnostics::from(capacity),
+            pool: account_pool_diagnostics(input.accounts),
+            capacity: AccountCapacityDiagnostics::from(input.capacity),
         },
-        settings: SettingsDiagnostics::from(config.as_ref()),
+        settings: SettingsDiagnostics::from(input.config),
     }
 }
 
@@ -239,7 +236,8 @@ fn account_pool_diagnostics(accounts: &[Account]) -> AccountPoolDiagnostics {
     summary
 }
 
-fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics {
+/// 构造 fingerprint 诊断数据。
+pub fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics {
     FingerprintDiagnostics {
         source: "runtime",
         originator: fingerprint.originator.clone(),
@@ -253,20 +251,6 @@ fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics 
     }
 }
 
-/// 检查请求是否来自本地调试地址。
-pub fn is_local_debug_request(headers: &HeaderMap) -> bool {
-    forwarded_header_is_local(headers, "x-forwarded-for")
-        && forwarded_header_is_local(headers, "x-real-ip")
-}
-
-/// 非本地调试请求的禁止响应。
-pub fn local_debug_forbidden_response() -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({ "error": LOCAL_DEBUG_ONLY_ERROR })),
-    )
-}
-
 impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
     fn from(summary: AccountCapacitySummary) -> Self {
         Self {
@@ -276,18 +260,6 @@ impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
             available_slots: summary.available_slots,
         }
     }
-}
-
-fn forwarded_header_is_local(headers: &HeaderMap, name: &str) -> bool {
-    let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) else {
-        return true;
-    };
-    value.split(',').next().is_some_and(is_local_host)
-}
-
-fn is_local_host(host: &str) -> bool {
-    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
-    host == "localhost" || host == "::1" || host.starts_with("127.")
 }
 
 impl From<&AppConfig> for SettingsDiagnostics {

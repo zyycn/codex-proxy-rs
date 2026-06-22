@@ -125,33 +125,3 @@ impl<T: Serialize> IntoResponse for AdminResponse<T> {
         (self.status, Json(self.body)).into_response()
     }
 }
-
-/// Helper to create JSON success response.
-pub fn ok_json<T: Serialize>(data: T) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"code": 200, "message": "OK", "data": data})),
-    )
-}
-
-/// Helper to create JSON error response.
-pub fn err_json(status: StatusCode, code: u32, message: &str) -> impl IntoResponse {
-    (
-        status,
-        Json(serde_json::json!({"code": code, "message": message})),
-    )
-}
-
-/// Helper to create JSON page response.
-pub fn ok_page<T: Serialize>(page: Page<T>, limit: u32) -> impl IntoResponse {
-    let Page { items, next_cursor } = page;
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "code": 200,
-            "message": "OK",
-            "data": items,
-            "page": { "limit": limit, "nextCursor": next_cursor }
-        })),
-    )
-}

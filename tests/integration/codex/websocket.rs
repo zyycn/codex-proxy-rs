@@ -1,9 +1,11 @@
 use super::*;
-use codex_proxy_rs::codex::transport::opening::write_websocket_audit_artifact_for_dir;
+use codex_proxy_rs::codex::{
+    protocol::websocket::{OpeningAuditSnapshot, WebSocketAuditArtifact},
+    transport::websocket::write_websocket_audit_artifact_for_dir,
+};
 
 #[tokio::test]
 async fn websocket_audit_artifact_should_require_explicit_directory() {
-    use codex_proxy_rs::codex::transport::opening::{OpeningAuditSnapshot, WebSocketAuditArtifact};
     let dir = tempfile::tempdir().expect("temp dir");
 
     let artifact = WebSocketAuditArtifact {

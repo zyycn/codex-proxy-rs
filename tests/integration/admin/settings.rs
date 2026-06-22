@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use codex_proxy_rs::admin::settings_domain::{
+use codex_proxy_rs::config::settings::{
     AdminQuotaWarningThresholds, AdminSettings, AdminSettingsPatch, SettingsService,
 };
 

@@ -1,11 +1,10 @@
 use serde::{ser::SerializeMap, Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::codex::protocol::responses::CodexResponsesRequest;
-use crate::codex::protocol::sse::encode_sse_event;
-use crate::gateway::dispatch::responses::{
-    http_sse_fallback_allowed, transport_for_request, CodexTransport,
+use crate::codex::protocol::responses::{
+    http_sse_fallback_allowed, transport_for_request, CodexResponsesRequest, CodexTransport,
 };
+use crate::codex::protocol::sse::encode_sse_event;
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
 
@@ -271,6 +270,13 @@ pub fn websocket_metadata_turn_state(raw: &str) -> Option<String> {
                 }
             })
         })
+        .or_else(|| {
+            value
+                .pointer("/metadata/turn_state")
+                .or_else(|| value.get("turn_state"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
 }
 
 fn json_value_as_string(value: &Value) -> Option<String> {
@@ -303,13 +309,12 @@ pub fn websocket_incomplete_response_reason(raw: &str) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("response.incomplete") {
         return None;
     }
-    Some(
-        value
-            .pointer("/response/incomplete_details/reason")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string(),
-    )
+    value
+        .pointer("/response/incomplete_details/reason")
+        .or_else(|| value.pointer("/incomplete_details/reason"))
+        .or_else(|| value.get("reason"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 /// 判断事件是否不符合官方流事件的基本字段类型。
@@ -996,12 +1001,18 @@ fn rotatable_error_status_code(
         }
         "usage_not_included" => Some(429),
         "unauthorized" | "token_invalid" | "token_expired" | "account_deactivated" => Some(401),
-        "forbidden" | "account_banned" | "banned" => Some(403),
+        "forbidden" | "account_banned" | "banned" | "invalid_plan" | "banned_unknown_charge" => {
+            Some(403)
+        }
         "context_length_exceeded" | "invalid_prompt" | "cyber_policy" | "invalid_request" => {
             Some(400)
         }
-        "previous_response_not_found" => Some(400),
-        "server_is_overloaded" | "slow_down" => Some(503),
+        "previous_response_not_found"
+        | "invalid_encrypted_content"
+        | "no_tool_output_found_for_function_call" => Some(400),
+        "server_is_overloaded" | "slow_down" | "temporarily_unavailable" => Some(503),
+        "over_capacity" | "server_error" | "upstream_error" => Some(502),
+        "rate_limited" => Some(429),
         "websocket_connection_limit_reached"
             if profile == WebSocketErrorClassificationProfile::Pooled =>
         {
@@ -1014,10 +1025,7 @@ fn rotatable_error_status_code(
 /// 从包裹在 WebSocket `error.headers` 中的 retry-after 值提取秒数。
 pub fn retry_after_seconds_from_wrapped_error_headers(raw: &str) -> Option<u64> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
-    if value.get("type").and_then(Value::as_str) != Some("error") {
-        return None;
-    }
-    value
+    let header_retry_after = value
         .get("headers")
         .and_then(Value::as_object)
         .and_then(|headers| {
@@ -1028,7 +1036,13 @@ pub fn retry_after_seconds_from_wrapped_error_headers(raw: &str) -> Option<u64> 
                     None
                 }
             })
-        })
+        });
+    header_retry_after.or_else(|| {
+        value
+            .pointer("/error/retry_after_seconds")
+            .or_else(|| value.get("retry_after_seconds"))
+            .and_then(Value::as_u64)
+    })
 }
 
 fn retry_after_seconds_from_json_header_value(value: &Value) -> Option<u64> {

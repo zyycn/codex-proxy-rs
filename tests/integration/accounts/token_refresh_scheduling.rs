@@ -37,7 +37,7 @@ async fn token_refresh_task_should_skip_account_when_refresh_lease_is_held() {
         .await
         .expect("external owner should acquire lease"));
     let refresher = CountingTokenRefresher::default();
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -105,7 +105,7 @@ async fn token_refresh_task_should_skip_duplicate_in_flight_refresh() {
         }),
     };
     let task = Arc::new(
-        codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+        codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
             store.clone(),
             RefreshPolicy {
                 refresh_margin_seconds: 300,
@@ -183,7 +183,7 @@ async fn token_refresh_task_should_schedule_future_per_account_timer_without_ref
         .await
         .expect("account should be inserted");
     let refresher = CountingTokenRefresher::default();
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store,
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -238,7 +238,7 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
             refresh_token: None,
         }),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 1,
@@ -309,7 +309,7 @@ async fn token_refresh_task_should_reschedule_next_timer_after_scheduled_refresh
             refresh_token: None,
         }),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 0,

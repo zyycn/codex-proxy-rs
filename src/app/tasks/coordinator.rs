@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use tokio::task::JoinHandle;
 
-use crate::accounts::oauth::{OAuthConfig, RefreshPolicy};
+use crate::accounts::{oauth::OAuthConfig, token_refresh::RefreshPolicy};
 use crate::codex::oauth_client::default_openai_oauth_client;
 
 use super::{

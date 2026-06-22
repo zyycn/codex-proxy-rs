@@ -16,7 +16,7 @@ use std::{
 
 use chrono::{DateTime, Duration, Utc};
 use futures::{stream::Stream, StreamExt};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing;
@@ -24,56 +24,64 @@ use tracing;
 use crate::{
     accounts::{
         model::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, AcquiredAccount},
-        quota::{
-            quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
-            quota_snapshot_reset_at,
-        },
+        pool::{AccountAcquireRequest, RuntimeAccountPoolService},
     },
-    app::services::{AdminLogService, RuntimeAccountPoolService},
     codex::{
-        models::{ModelConfig, ParsedModelName},
         protocol::{
             events::{extract_sse_usage, extract_usage, TokenUsage},
-            responses::CodexResponsesRequest,
+            responses::{
+                apply_response_model_options, completed_response_metadata,
+                reconvert_responses_sse_event_tuple_values, response_from_codex_sse,
+                CodexCompactRequest, CodexResponsesRequest, CollectedResponse, ResponsesSseFailure,
+            },
             sse::{
                 encode_sse_event, parse_sse_events, sse_body_has_done, SseError, DONE_SSE_FRAME,
             },
         },
         transport::{
-            CodexBackendClient, CodexBackendResponse, CodexBackendSseStream,
-            CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError,
-            CodexCompactRequest, CodexCompactResponse, CodexRateLimitHeaderUpdates,
-            CodexRequestContext, CodexTurnStateUpdate,
+            backend_transport_for_response_request, is_banned_auth_signal,
+            is_banned_upstream_error, CodexBackendClient, CodexBackendResponse,
+            CodexBackendSseStream, CodexBackendTransport, CodexClientError,
+            CodexRateLimitHeaderUpdates, CodexTurnStateUpdate,
         },
     },
     gateway::dispatch::{
-        fallback::{
-            status_code_is_quota_exhausted, status_code_is_rate_limited,
-            status_code_is_transient_upstream,
+        cloudflare::{
+            cloudflare_challenge_error_message, cloudflare_path_block_error_message,
+            is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
+            CloudflareRecovery,
         },
         reasoning_replay::ReasoningReplayCache,
-        recovery::status_code_allows_same_account_retry,
         session_affinity::{
-            build_conversation_identity, compute_variant_hash, ensure_prompt_cache_key,
-            hash_instructions, prepare_variant_identity, RuntimeSessionAffinityService,
+            compute_variant_hash, ensure_prompt_cache_key, hash_instructions,
+            prepare_variant_identity, RuntimeSessionAffinityService,
+        },
+        upstream_errors::{
+            auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
+            is_history_recovery_signal, is_history_recovery_upstream_error,
+            is_invalid_encrypted_content_signal, is_model_unsupported_signal,
+            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
+            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
+            upstream_error_http_status, upstream_error_set_cookie_headers,
+        },
+        upstream_requests::{
+            create_compact_response_with_account_retrying_5xx,
+            create_response_stream_with_account_retrying_5xx,
+            create_response_with_account_retrying_5xx, verify_acquired_quota_if_required,
+            QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
-    telemetry::events::{EventLevel, EventLog, ResponseEventRecord},
+    telemetry::{
+        event_store::AdminLogService,
+        events::{EventLevel, EventLog, ResponseEventRecord},
+    },
 };
 
 use super::implicit_resume::{
     continuation_input_start, implicit_resume_allowed, ImplicitResumeSnapshot,
 };
 
-use crate::gateway::openai::responses::{
-    reconvert_responses_sse_event_tuple_values, response_failed_sse_event, response_from_codex_sse,
-    CollectedResponse, ResponsesSseFailure,
-};
-
-pub(super) const MAX_QUOTA_VERIFY_ATTEMPTS: usize = 5;
-pub(super) const QUOTA_VERIFY_LIMIT_REACHED_MESSAGE: &str =
-    "Upstream usage quota still reports limit_reached";
+use crate::gateway::openai::responses::response_failed_sse_event;
 
 #[derive(Clone, Copy)]
 enum ExhaustedAccountClass {
@@ -484,9 +492,9 @@ impl ResponseDispatchService {
                         last_attempted_account_id.as_deref(),
                         false,
                         false,
-                        Some(backend_transport_name(requested_response_transport(
-                            &request,
-                        ))),
+                        Some(backend_transport_name(
+                            backend_transport_for_response_request(&request),
+                        )),
                         &error,
                     )
                     .await;
@@ -528,9 +536,9 @@ impl ResponseDispatchService {
                         Some(&acquired_account_id),
                         false,
                         false,
-                        Some(backend_transport_name(requested_response_transport(
-                            &request,
-                        ))),
+                        Some(backend_transport_name(
+                            backend_transport_for_response_request(&request),
+                        )),
                         &error,
                     )
                     .await;
@@ -786,9 +794,9 @@ impl ResponseDispatchService {
                             Some(&release_account_id),
                             false,
                             false,
-                            Some(backend_transport_name(requested_response_transport(
-                                &request,
-                            ))),
+                            Some(backend_transport_name(
+                                backend_transport_for_response_request(&request),
+                            )),
                             &error,
                         )
                         .await;
@@ -819,7 +827,7 @@ impl ResponseDispatchService {
                         model: requested_model,
                         started_at,
                         stream: false,
-                        transport: requested_response_transport(&request),
+                        transport: backend_transport_for_response_request(&request),
                         error: &error,
                     })
                     .await;
@@ -1007,9 +1015,9 @@ impl ResponseDispatchService {
                     last_attempted_account_id.as_deref(),
                     true,
                     false,
-                    Some(backend_transport_name(requested_response_transport(
-                        &request,
-                    ))),
+                    Some(backend_transport_name(
+                        backend_transport_for_response_request(&request),
+                    )),
                     &error,
                 )
                 .await;
@@ -1121,7 +1129,7 @@ impl ResponseDispatchService {
                             upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
                         },
                         account_id: Some(&acquired_account_id),
-                        transport: Some(backend_transport_name(requested_response_transport(
+                        transport: Some(backend_transport_name(backend_transport_for_response_request(
                             &request
                         )))
                     );
@@ -1433,7 +1441,7 @@ impl ResponseDispatchService {
                                 upstream_error,
                             },
                             account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(requested_response_transport(
+                            transport: Some(backend_transport_name(backend_transport_for_response_request(
                                 &request
                             )))
                         );
@@ -1465,7 +1473,7 @@ impl ResponseDispatchService {
                         model: requested_model,
                         started_at,
                         stream: true,
-                        transport: requested_response_transport(&request),
+                        transport: backend_transport_for_response_request(&request),
                         error: &error,
                     })
                     .await;
@@ -1867,400 +1875,6 @@ impl ResponseDispatchService {
     }
 }
 
-// ====================================================================
-// 辅助类型与函数
-// ====================================================================
-
-pub(super) enum QuotaVerificationDecision {
-    Ready(Box<AcquiredAccount>),
-    RetryWithAnotherAccount,
-    MaxAttemptsReached,
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "quota verification is the boundary where account, transport, and retry state meet"
-)]
-pub(super) async fn verify_acquired_quota_if_required(
-    account_pool: &RuntimeAccountPoolService,
-    codex: &CodexBackendClient,
-    cloudflare: &CloudflareRecovery,
-    installation_id: Option<&str>,
-    request_id: &str,
-    acquired: AcquiredAccount,
-    excluded_account_ids: &mut Vec<String>,
-    verify_attempts: &mut usize,
-) -> QuotaVerificationDecision {
-    if !acquired.account.quota_verify_required {
-        return QuotaVerificationDecision::Ready(Box::new(acquired));
-    }
-
-    let account_id = acquired.account.id.clone();
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account_id, "/codex/usage")
-        .await;
-    let usage = codex
-        .fetch_usage(CodexRequestContext {
-            access_token: &acquired.account.access_token,
-            account_id: acquired.account.account_id.as_deref(),
-            request_id,
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
-            cookie_header: cookie_header.as_deref(),
-            installation_id,
-            session_id: None,
-        })
-        .await;
-
-    let raw = match usage {
-        Ok(raw) => raw,
-        Err(error) => {
-            tracing::warn!(
-                account_id = %account_id,
-                error = %error,
-                "failed to verify stale quota state before upstream request"
-            );
-            return QuotaVerificationDecision::Ready(Box::new(acquired));
-        }
-    };
-
-    let quota = quota_from_usage(&raw);
-    account_pool.apply_quota_snapshot(&account_id, &quota).await;
-    if quota_snapshot_limit_reached(&quota) {
-        account_pool.release(&account_id).await;
-        excluded_account_ids.push(account_id);
-        *verify_attempts += 1;
-        if *verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS {
-            return QuotaVerificationDecision::MaxAttemptsReached;
-        }
-        return QuotaVerificationDecision::RetryWithAnotherAccount;
-    }
-
-    QuotaVerificationDecision::Ready(Box::new(acquired_with_verified_quota(acquired, &quota)))
-}
-
-fn acquired_with_verified_quota(mut acquired: AcquiredAccount, quota: &Value) -> AcquiredAccount {
-    let limit_reached = quota_snapshot_limit_reached(quota);
-    acquired.account.quota_verify_required = false;
-    acquired.account.quota_limit_reached = limit_reached;
-    acquired.account.quota_cooldown_until = limit_reached
-        .then_some(quota_snapshot_reset_at(quota))
-        .flatten();
-    if let Some(reset_at) = quota_snapshot_reset_at(quota) {
-        acquired.account.window_reset_at = Some(reset_at);
-        if let Some(limit_window_seconds) = quota_snapshot_limit_window_seconds(quota) {
-            acquired.account.limit_window_seconds = Some(limit_window_seconds);
-        }
-    }
-    acquired
-}
-
-pub(super) async fn create_response_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexBackendResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses")
-        .await;
-    let identity = build_conversation_identity(
-        request.prompt_cache_key.as_deref(),
-        request.codex_window_id.as_deref(),
-        &account.id,
-    );
-    codex
-        .create_response(
-            request,
-            CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
-                turn_state: request.turn_state.as_deref(),
-                turn_metadata: request.turn_metadata.as_deref(),
-                beta_features: request.beta_features.as_deref(),
-                include_timing_metrics: request.include_timing_metrics.as_deref(),
-                version: request.version.as_deref(),
-                codex_window_id: identity.window_id.as_deref(),
-                parent_thread_id: request.parent_thread_id.as_deref(),
-                cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: identity.conversation_id.as_deref(),
-            },
-        )
-        .await
-}
-
-async fn create_response_stream_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexBackendStreamingResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses")
-        .await;
-    let identity = build_conversation_identity(
-        request.prompt_cache_key.as_deref(),
-        request.codex_window_id.as_deref(),
-        &account.id,
-    );
-    codex
-        .create_response_stream(
-            request,
-            CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
-                turn_state: request.turn_state.as_deref(),
-                turn_metadata: request.turn_metadata.as_deref(),
-                beta_features: request.beta_features.as_deref(),
-                include_timing_metrics: request.include_timing_metrics.as_deref(),
-                version: request.version.as_deref(),
-                codex_window_id: identity.window_id.as_deref(),
-                parent_thread_id: request.parent_thread_id.as_deref(),
-                cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: identity.conversation_id.as_deref(),
-            },
-        )
-        .await
-}
-
-async fn create_compact_response_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexCompactRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexCompactResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses/compact")
-        .await;
-    codex
-        .create_compact_response(
-            request,
-            CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
-                turn_state: None,
-                turn_metadata: None,
-                beta_features: None,
-                include_timing_metrics: None,
-                version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
-                cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: None,
-            },
-        )
-        .await
-}
-
-const MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT: usize = 2;
-
-async fn create_response_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexBackendResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_response_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                retries += 1;
-            }
-            result => return result,
-        }
-    }
-}
-
-async fn create_response_stream_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexBackendStreamingResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_response_stream_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                retries += 1;
-            }
-            result => return result,
-        }
-    }
-}
-
-async fn create_compact_response_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
-    request: &CodexCompactRequest,
-    request_id: &str,
-    account: &Account,
-) -> Result<CodexCompactResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_compact_response_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                retries += 1;
-            }
-            result => return result,
-        }
-    }
-}
-
-pub fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. } if status_code_is_rate_limited(status.as_u16())
-    )
-}
-
-fn is_retryable_upstream_5xx_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status_code_is_transient_upstream(status.as_u16())
-                && status_code_allows_same_account_retry(status.as_u16())
-                && !is_history_recovery_signal(body)
-    )
-}
-
-pub fn is_quota_exhausted_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. } if status_code_is_quota_exhausted(status.as_u16())
-    )
-}
-
-pub fn is_auth_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, .. } if status.as_u16() == 401
-    )
-}
-
-pub fn is_cloudflare_challenge_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status.as_u16() == 403 && is_cloudflare_challenge_signal(body)
-    )
-}
-
-pub fn is_cloudflare_path_block_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status.as_u16() == 404 && body.trim().is_empty()
-    )
-}
-
-pub fn is_model_unsupported_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status.is_client_error()
-                && !matches!(status.as_u16(), 401 | 402 | 403 | 404 | 429)
-                && is_model_unsupported_signal(body)
-    )
-}
-
-fn is_history_recovery_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { body, .. } if is_history_recovery_signal(body)
-    )
-}
-
-pub fn is_banned_upstream_error(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if status.as_u16() == 403 && is_banned_auth_signal(body)
-    )
-}
-
-pub fn auth_failure_account_status(error: &CodexClientError) -> AccountStatus {
-    match error {
-        CodexClientError::Upstream { body, .. } if is_banned_auth_signal(body) => {
-            AccountStatus::Banned
-        }
-        _ => AccountStatus::Expired,
-    }
-}
-
-pub fn upstream_error_body(error: &CodexClientError) -> String {
-    match error {
-        CodexClientError::Upstream { body, .. } => body.clone(),
-        error => error.to_string(),
-    }
-}
-
-fn upstream_error_set_cookie_headers(error: &CodexClientError) -> &[String] {
-    match error {
-        CodexClientError::Upstream {
-            set_cookie_headers, ..
-        } => set_cookie_headers,
-        _ => &[],
-    }
-}
-
 fn sse_failure_error_body(failure: &ResponsesSseFailure) -> String {
     match failure.upstream_code.as_deref() {
         Some(code) => serde_json::json!({
@@ -2346,72 +1960,9 @@ fn auth_sse_failure_account_status(failure: &ResponsesSseFailure) -> AccountStat
     }
 }
 
-fn is_banned_auth_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("account_deactivated")
-        || value.contains("account deactivated")
-        || value.contains("account has been deactivated")
-        || value.contains("deactivated")
-        || value.contains("banned")
-}
-
-fn is_cloudflare_challenge_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("cf-mitigated")
-        || value.contains("cf-chl-bypass")
-        || value.contains("_cf_chl")
-        || value.contains("cf_chl")
-        || value.contains("attention required")
-        || value.contains("just a moment")
-}
-
-fn is_model_unsupported_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("model_not_supported")
-        || value.contains("model_not_available")
-        || (value.contains("model")
-            && (value.contains("not supported")
-                || value.contains("not available")
-                || value.contains("not_supported")
-                || value.contains("not_available")))
-}
-
-fn is_history_recovery_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("previous_response_not_found")
-        || (value.contains("previous response") && value.contains("not found"))
-        || value.contains("no tool output found for function call")
-        || is_invalid_encrypted_content_signal(&value)
-}
-
-fn is_invalid_encrypted_content_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("invalid_encrypted_content")
-        || (value.contains("invalid") && value.contains("encrypted") && value.contains("content"))
-}
-
 fn strip_request_history(request: &mut CodexResponsesRequest) {
     request.previous_response_id = None;
     request.turn_state = None;
-}
-
-pub fn cloudflare_challenge_error_message() -> &'static str {
-    "Upstream blocked the request (Cloudflare challenge)"
-}
-
-pub fn cloudflare_path_block_error_message() -> &'static str {
-    "Upstream blocked the request (Cloudflare path-block)"
-}
-
-pub fn rate_limit_cooldown_until(error: &CodexClientError, now: DateTime<Utc>) -> DateTime<Utc> {
-    let retry_after_seconds = match error {
-        CodexClientError::Upstream {
-            retry_after_seconds,
-            ..
-        } => retry_after_seconds.unwrap_or(60),
-        _ => 60,
-    };
-    now + Duration::seconds(retry_after_seconds.min(i64::MAX as u64) as i64)
 }
 
 const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
@@ -3197,8 +2748,6 @@ fn stream_failure_http_status(failure: &ResponsesSseFailure) -> u16 {
 // Affinity + replay recording
 // ====================================================================
 
-use crate::gateway::openai::responses::completed_response_metadata;
-
 async fn record_response_affinity(
     session_affinity: &Arc<RuntimeSessionAffinityService>,
     reasoning_replay: &Arc<Mutex<ReasoningReplayCache>>,
@@ -3280,237 +2829,6 @@ async fn evict_reasoning_replay(
         &variant_hash,
         Utc::now(),
     );
-}
-
-// ====================================================================
-// CloudflareRecovery — Cloudflare challenge and path-block recovery
-// ====================================================================
-
-/// Tracks and manages Cloudflare challenge and path-block recovery.
-#[derive(Clone)]
-pub struct CloudflareRecovery {
-    path_block_tracker: crate::accounts::cookies::CloudflarePathBlockTracker,
-    challenge_tracker: crate::accounts::cookies::CloudflareChallengeCooldownTracker,
-    cookie_store: crate::accounts::store::SqliteCookieStore,
-}
-
-impl CloudflareRecovery {
-    pub fn new(cookie_store: crate::accounts::store::SqliteCookieStore) -> Self {
-        Self {
-            path_block_tracker: Default::default(),
-            challenge_tracker: Default::default(),
-            cookie_store,
-        }
-    }
-
-    pub async fn cookie_header_for_request(&self, account_id: &str, path: &str) -> Option<String> {
-        self.cookie_store
-            .cookie_header_for_request(account_id, "chatgpt.com", path)
-            .await
-            .ok()?
-    }
-
-    pub async fn capture_set_cookie_headers(&self, account_id: &str, headers: &[String]) {
-        for header in headers {
-            if let Err(error) = self
-                .cookie_store
-                .capture_set_cookie(account_id, header)
-                .await
-            {
-                tracing::warn!(
-                    account_id,
-                    error = %error,
-                    "failed to persist upstream set-cookie header"
-                );
-            }
-        }
-    }
-
-    pub async fn apply_challenge(
-        &self,
-        account_pool: &RuntimeAccountPoolService,
-        account_id: &str,
-    ) {
-        self.delete_account_cookies(account_id, "Cloudflare challenge")
-            .await;
-        let now = Utc::now();
-        let cooldown = self
-            .challenge_tracker
-            .record_challenge(account_id, now)
-            .await;
-        account_pool
-            .set_cloudflare_cooldown_until(account_id, cooldown.cooldown_until)
-            .await;
-    }
-
-    pub async fn apply_path_block(
-        &self,
-        account_pool: &RuntimeAccountPoolService,
-        account_id: &str,
-    ) {
-        self.delete_account_cookies(account_id, "Cloudflare path-block")
-            .await;
-        let now = Utc::now();
-        self.path_block_tracker
-            .record_path_block(account_id, now)
-            .await;
-        if self
-            .path_block_tracker
-            .should_disable(account_id, now)
-            .await
-        {
-            account_pool
-                .set_status(account_id, AccountStatus::Disabled)
-                .await;
-        }
-    }
-
-    pub async fn reset_account_recovery(&self, account_id: &str) {
-        self.path_block_tracker.reset(account_id).await;
-        self.challenge_tracker.reset(account_id).await;
-    }
-
-    async fn delete_account_cookies(&self, account_id: &str, reason: &str) {
-        if let Err(error) = self.cookie_store.delete_account_cookies(account_id).await {
-            tracing::warn!(
-                account_id,
-                reason,
-                error = %error,
-                "failed to delete account cookies after Cloudflare recovery signal"
-            );
-        }
-    }
-}
-
-// ====================================================================
-// Responses 编排辅助
-// ====================================================================
-
-/// Codex Responses 请求的上游传输决策。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexTransport {
-    HttpSse,
-    WebSocketPreferred,
-    WebSocketRequired,
-}
-
-/// 判断 Responses 请求应使用哪种上游传输。
-pub fn transport_for_request(request: &CodexResponsesRequest) -> CodexTransport {
-    if request.force_http_sse {
-        return CodexTransport::HttpSse;
-    }
-
-    if request.previous_response_id.is_some() {
-        return CodexTransport::WebSocketRequired;
-    }
-
-    CodexTransport::WebSocketPreferred
-}
-
-/// 判断请求在 WebSocket 失败后是否允许 HTTP SSE 回退。
-pub fn http_sse_fallback_allowed(request: &CodexResponsesRequest) -> bool {
-    !matches!(
-        transport_for_request(request),
-        CodexTransport::WebSocketRequired
-    )
-}
-
-pub fn requested_response_transport(request: &CodexResponsesRequest) -> CodexBackendTransport {
-    match transport_for_request(request) {
-        CodexTransport::HttpSse => CodexBackendTransport::HttpSse,
-        CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired => {
-            CodexBackendTransport::WebSocket
-        }
-    }
-}
-
-/// 应用模型名后缀和模型默认值对应的 Responses 上游请求选项。
-pub fn apply_response_model_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-    config: &ModelConfig,
-) {
-    request.model = parsed_model.model_id.clone();
-    apply_reasoning_options(request, parsed_model, config);
-    apply_service_tier_options(request, parsed_model, config);
-}
-
-fn apply_reasoning_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-    config: &ModelConfig,
-) {
-    let existing_reasoning = request.reasoning.take();
-    let existing_object = match existing_reasoning {
-        Some(Value::Object(object)) => object,
-        Some(_) | None => Map::new(),
-    };
-    let effort = existing_object
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| non_empty_string(parsed_model.reasoning_effort.as_deref()))
-        .or_else(|| non_empty_string(config.default_reasoning_effort.as_deref()));
-    if effort.is_none() && existing_object.is_empty() {
-        request.reasoning = None;
-        return;
-    }
-
-    let summary = existing_object
-        .get("summary")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("auto");
-    let mut reasoning = Map::new();
-    reasoning.insert("summary".to_string(), Value::String(summary.to_string()));
-    if let Some(effort) = effort {
-        reasoning.insert("effort".to_string(), Value::String(effort));
-    }
-    request.reasoning = Some(Value::Object(reasoning));
-    ensure_reasoning_include(request);
-}
-
-fn ensure_reasoning_include(request: &mut CodexResponsesRequest) {
-    if request.reasoning.is_none() {
-        return;
-    }
-    if request
-        .include
-        .as_ref()
-        .is_some_and(|include| !include.is_empty())
-    {
-        return;
-    }
-    request.include = Some(vec!["reasoning.encrypted_content".to_string()]);
-}
-
-fn apply_service_tier_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-    config: &ModelConfig,
-) {
-    request.service_tier = request
-        .service_tier
-        .take()
-        .and_then(|value| non_empty_string(Some(&value)))
-        .or_else(|| non_empty_string(parsed_model.service_tier.as_deref()))
-        .or_else(|| non_empty_string(config.service_tier.as_deref()))
-        .map(normalize_service_tier_for_upstream);
-}
-
-fn normalize_service_tier_for_upstream(service_tier: String) -> String {
-    if service_tier == "fast" {
-        "priority".to_string()
-    } else {
-        service_tier
-    }
-}
-
-fn non_empty_string(value: Option<&str>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
 }
 
 // ====================================================================
@@ -3602,24 +2920,6 @@ impl ResponseDispatchError {
 pub enum ResponseDispatchStreamError {
     #[error("upstream stream failed: {0}")]
     Upstream(#[from] CodexClientError),
-}
-
-// ====================================================================
-// Utility functions
-// ====================================================================
-
-pub fn upstream_error_http_status(error: &CodexClientError) -> u16 {
-    match error {
-        CodexClientError::Upstream { status, .. } => status.as_u16(),
-        _ => 502,
-    }
-}
-
-pub fn backend_transport_name(transport: CodexBackendTransport) -> &'static str {
-    match transport {
-        CodexBackendTransport::HttpSse => "http_sse",
-        CodexBackendTransport::WebSocket => "websocket",
-    }
 }
 
 fn dispatch_error_metadata(

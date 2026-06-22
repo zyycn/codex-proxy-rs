@@ -9,8 +9,9 @@ use codex_proxy_rs::{
     access::admin_session::SqliteAdminSessionStore,
     access::client_keys::SqliteClientKeyStore,
     accounts::{
+        cookies::SqliteCookieStore,
         model::AccountStatus,
-        store::{NewAccount, SqliteAccountStore, SqliteCookieStore},
+        store::{NewAccount, SqliteAccountStore},
         token_refresh::RefreshLeaseStore,
     },
     app::services::{BackgroundTaskStores, Services},

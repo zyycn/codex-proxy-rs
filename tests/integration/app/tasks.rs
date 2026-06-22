@@ -3,9 +3,10 @@ use std::{sync::Arc, time::Duration as StdDuration};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use codex_proxy_rs::access::admin_session::SqliteAdminSessionStore;
+use codex_proxy_rs::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::accounts::model::AccountUsageDelta;
 use codex_proxy_rs::accounts::model::{Account, AccountStatus};
-use codex_proxy_rs::accounts::store::{AccountStore, AccountStoreResult, SqliteCookieStore};
+use codex_proxy_rs::accounts::store::{AccountStore, AccountStoreResult};
 use codex_proxy_rs::codex::fingerprint::FingerprintRepository;
 use codex_proxy_rs::codex::models::ModelConfig;
 use codex_proxy_rs::codex::models::ModelService;
@@ -59,6 +60,37 @@ impl AccountStore for FakeAccountStore {
         &self,
         _account_id: &str,
         _usage: AccountUsageDelta,
+    ) -> AccountStoreResult<()> {
+        Ok(())
+    }
+
+    async fn get_quota_json(&self, _account_id: &str) -> AccountStoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn update_quota_json(
+        &self,
+        _account_id: &str,
+        _quota_json: &str,
+    ) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn apply_quota_snapshot(
+        &self,
+        _account_id: &str,
+        _quota_json: &str,
+        _limit_reached: bool,
+        _cooldown_until: Option<chrono::DateTime<Utc>>,
+    ) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn sync_rate_limit_window(
+        &self,
+        _account_id: &str,
+        _reset_at: chrono::DateTime<Utc>,
+        _limit_window_seconds: Option<u64>,
     ) -> AccountStoreResult<()> {
         Ok(())
     }

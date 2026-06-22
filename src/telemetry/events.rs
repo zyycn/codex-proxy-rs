@@ -130,7 +130,7 @@ impl EventLogService {
 
 /// 响应事件记录（供 dispatch 模块使用）。
 pub struct ResponseEventRecord<'a> {
-    pub logs: &'a crate::app::services::AdminLogService,
+    pub logs: &'a crate::telemetry::event_store::AdminLogService,
     pub request_id: &'a str,
     pub account_id: &'a str,
     pub route: &'a str,

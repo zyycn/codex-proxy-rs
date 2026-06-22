@@ -1,5 +1,5 @@
 use chrono::{Duration, TimeZone, Utc};
-use codex_proxy_rs::accounts::quota::CloudflareChallengeCooldownTracker;
+use codex_proxy_rs::accounts::cookies::CloudflareChallengeCooldownTracker;
 
 #[tokio::test]
 async fn challenge_cooldown_should_escalate_and_cap_delay() {

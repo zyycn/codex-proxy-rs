@@ -51,7 +51,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
             pool.clone(),
             secret_box.clone(),
         ),

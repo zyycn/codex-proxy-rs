@@ -1,15 +1,13 @@
 //! SQLite 账号仓储适配器。
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use thiserror::Error;
 
-pub use crate::accounts::model::{Account, AccountStatus, AccountUsageDelta};
-use uuid::Uuid;
-
+use crate::accounts::model::{Account, AccountStatus, AccountUsageDelta};
 use crate::infra::crypto::{CryptoError, SecretBox};
 use crate::infra::json::{decode_cursor, Page};
 
@@ -307,70 +305,6 @@ select
 from account_usage
 where account_id = ?";
 
-const LIST_USAGE_AFTER_CURSOR_SQL: &str = r"
-select
-  au.account_id,
-  a.email,
-  a.label,
-  a.plan_type,
-  au.request_count,
-  au.empty_response_count,
-  au.input_tokens,
-  au.output_tokens,
-  au.cached_tokens,
-  au.reasoning_tokens,
-  au.total_tokens,
-  au.image_input_tokens,
-  au.image_output_tokens,
-  au.image_request_count,
-  au.image_request_failed_count,
-  au.last_used_at
-from account_usage au
-left join accounts a on a.id = au.account_id
-where au.last_used_at < ?
-   or (au.last_used_at = ? and au.account_id < ?)
-order by au.last_used_at desc, au.account_id desc
-limit ?";
-
-const LIST_USAGE_SQL: &str = r"
-select
-  au.account_id,
-  a.email,
-  a.label,
-  a.plan_type,
-  au.request_count,
-  au.empty_response_count,
-  au.input_tokens,
-  au.output_tokens,
-  au.cached_tokens,
-  au.reasoning_tokens,
-  au.total_tokens,
-  au.image_input_tokens,
-  au.image_output_tokens,
-  au.image_request_count,
-  au.image_request_failed_count,
-  au.last_used_at
-from account_usage au
-left join accounts a on a.id = au.account_id
-order by au.last_used_at desc, au.account_id desc
-limit ?";
-
-const USAGE_SUMMARY_SQL: &str = r"
-select
-  count(*) as account_count,
-  coalesce(sum(request_count), 0) as request_count,
-  coalesce(sum(empty_response_count), 0) as empty_response_count,
-  coalesce(sum(input_tokens), 0) as input_tokens,
-  coalesce(sum(output_tokens), 0) as output_tokens,
-  coalesce(sum(cached_tokens), 0) as cached_tokens,
-  coalesce(sum(reasoning_tokens), 0) as reasoning_tokens,
-  coalesce(sum(total_tokens), 0) as total_tokens,
-  coalesce(sum(image_input_tokens), 0) as image_input_tokens,
-  coalesce(sum(image_output_tokens), 0) as image_output_tokens,
-  coalesce(sum(image_request_count), 0) as image_request_count,
-  coalesce(sum(image_request_failed_count), 0) as image_request_failed_count
-from account_usage";
-
 const RESET_USAGE_SQL: &str = r"
 update account_usage
 set
@@ -582,7 +516,7 @@ const DELETE_ALL_ACCOUNTS_SQL: &str = "delete from accounts";
 const DELETE_ACCOUNT_SQL: &str = "delete from accounts where id = ?";
 
 // ============================================================================
-// Error types
+// 错误类型
 // ============================================================================
 
 /// SQLite 账号仓储错误。
@@ -608,25 +542,8 @@ pub enum SqliteAccountStoreError {
 /// SQLite 账号仓储结果。
 pub type SqliteAccountStoreResult<T> = Result<T, SqliteAccountStoreError>;
 
-/// Account usage summary.
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct AccountUsageSummary {
-    pub account_count: i64,
-    pub request_count: i64,
-    pub empty_response_count: i64,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cached_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub total_tokens: i64,
-    pub image_input_tokens: i64,
-    pub image_output_tokens: i64,
-    pub image_request_count: i64,
-    pub image_request_failed_count: i64,
-}
-
 // ============================================================================
-// Data types
+// 数据类型
 // ============================================================================
 
 /// 新建账号数据。
@@ -801,72 +718,6 @@ pub struct AccountUsageRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
-/// 账号用量列表记录（不含窗口用量）。
-#[derive(Debug, Clone)]
-pub struct AccountUsageListRecord {
-    /// 账号 ID。
-    pub account_id: String,
-    /// 邮箱。
-    pub email: Option<String>,
-    /// 标签。
-    pub label: Option<String>,
-    /// 计划类型。
-    pub plan_type: Option<String>,
-    /// 历史请求总数。
-    pub request_count: i64,
-    /// 历史空响应次数。
-    pub empty_response_count: i64,
-    /// 累计输入 token。
-    pub input_tokens: i64,
-    /// 累计输出 token。
-    pub output_tokens: i64,
-    /// 累计缓存 token。
-    pub cached_tokens: i64,
-    /// 累计 reasoning token。
-    pub reasoning_tokens: i64,
-    /// 累计总 token。
-    pub total_tokens: i64,
-    /// 累计图片输入 token。
-    pub image_input_tokens: i64,
-    /// 累计图片输出 token。
-    pub image_output_tokens: i64,
-    /// 累计图片请求成功次数。
-    pub image_request_count: i64,
-    /// 累计图片请求失败次数。
-    pub image_request_failed_count: i64,
-    /// 最近使用时间。
-    pub last_used_at: Option<DateTime<Utc>>,
-}
-
-/// 账号用量汇总。
-#[derive(Debug, Clone)]
-pub struct UsageSummary {
-    /// 账号数。
-    pub account_count: i64,
-    /// 总请求数。
-    pub request_count: i64,
-    /// 总空响应数。
-    pub empty_response_count: i64,
-    /// 总输入 token。
-    pub input_tokens: i64,
-    /// 总输出 token。
-    pub output_tokens: i64,
-    /// 总缓存 token。
-    pub cached_tokens: i64,
-    /// 总 reasoning token。
-    pub reasoning_tokens: i64,
-    /// 总 token。
-    pub total_tokens: i64,
-    /// 总图片输入 token。
-    pub image_input_tokens: i64,
-    /// 总图片输出 token。
-    pub image_output_tokens: i64,
-    /// 总图片请求成功数。
-    pub image_request_count: i64,
-    /// 总图片请求失败数。
-    pub image_request_failed_count: i64,
-}
-
 /// 账号配额快照。
 #[derive(Debug, Clone)]
 pub struct AccountQuotaSnapshot {
@@ -962,18 +813,14 @@ pub trait AccountStore: Send + Sync + 'static {
     ) -> AccountStoreResult<()>;
 
     /// 读取账号当前配额 JSON。
-    async fn get_quota_json(&self, _account_id: &str) -> AccountStoreResult<Option<String>> {
-        Ok(None)
-    }
+    async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>>;
 
     /// 更新账号当前配额 JSON。
     async fn update_quota_json(
         &self,
-        _account_id: &str,
-        _quota_json: &str,
-    ) -> AccountStoreResult<bool> {
-        Ok(false)
-    }
+        account_id: &str,
+        quota_json: &str,
+    ) -> AccountStoreResult<bool>;
 
     /// 应用已经验证过的账号配额快照。
     async fn apply_quota_snapshot(
@@ -982,20 +829,15 @@ pub trait AccountStore: Send + Sync + 'static {
         quota_json: &str,
         limit_reached: bool,
         cooldown_until: Option<DateTime<Utc>>,
-    ) -> AccountStoreResult<bool> {
-        let _ = (limit_reached, cooldown_until);
-        self.update_quota_json(account_id, quota_json).await
-    }
+    ) -> AccountStoreResult<bool>;
 
     /// 同步账号当前 rate-limit 统计窗口。
     async fn sync_rate_limit_window(
         &self,
-        _account_id: &str,
-        _reset_at: DateTime<Utc>,
-        _limit_window_seconds: Option<u64>,
-    ) -> AccountStoreResult<()> {
-        Ok(())
-    }
+        account_id: &str,
+        reset_at: DateTime<Utc>,
+        limit_window_seconds: Option<u64>,
+    ) -> AccountStoreResult<()>;
 
     /// 记录账号被用于一次外部请求。
     async fn record_request(&self, account_id: &str) -> AccountStoreResult<()> {
@@ -1008,329 +850,6 @@ pub trait AccountStore: Send + Sync + 'static {
         )
         .await
     }
-}
-
-// ============================================================================
-// SqliteCookieStore
-// ============================================================================
-
-const DEFAULT_COOKIE_DOMAIN: &str = "chatgpt.com";
-const CAPTURABLE_COOKIES: &[&str] = &["cf_clearance"];
-
-/// SQLite Cookie 存储错误。
-#[derive(Debug, Error)]
-pub enum SqliteCookieStoreError {
-    /// 数据库错误。
-    #[error("sqlite cookie store database error: {0}")]
-    Database(#[from] sqlx::Error),
-    /// 加解密错误。
-    #[error("sqlite cookie store crypto error: {0}")]
-    Crypto(#[from] crate::infra::crypto::CryptoError),
-}
-
-/// SQLite Cookie 存储结果。
-pub type SqliteCookieStoreResult<T> = Result<T, SqliteCookieStoreError>;
-
-/// Cookie store implementation.  
-#[derive(Clone)]
-pub struct SqliteCookieStore {
-    pool: sqlx::SqlitePool,
-    secret: crate::infra::crypto::SecretBox,
-}
-
-impl SqliteCookieStore {
-    /// Create a new cookie store.
-    pub fn new(pool: sqlx::SqlitePool, secret: crate::infra::crypto::SecretBox) -> Self {
-        Self { pool, secret }
-    }
-
-    /// 返回底层连接池。
-    pub fn pool(&self) -> &sqlx::SqlitePool {
-        &self.pool
-    }
-
-    /// 检查账号是否存在。
-    pub async fn account_exists(&self, account_id: &str) -> SqliteCookieStoreResult<bool> {
-        let row = sqlx::query("select 1 from accounts where id = ?")
-            .bind(account_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.is_some())
-    }
-
-    /// 捕获上游 `Set-Cookie` 响应头中允许持久化的 Cookie。
-    pub async fn capture_set_cookie(
-        &self,
-        account_id: &str,
-        raw: &str,
-    ) -> SqliteCookieStoreResult<()> {
-        let Some(parsed) = parse_set_cookie(raw) else {
-            return Ok(());
-        };
-        if !CAPTURABLE_COOKIES.contains(&parsed.name.as_str()) {
-            return Ok(());
-        }
-        self.upsert_cookie(account_id, parsed).await
-    }
-
-    /// 将 Cookie 请求头写入账号 Cookie 存储。
-    pub async fn set_cookie_header(
-        &self,
-        account_id: &str,
-        raw: &str,
-    ) -> SqliteCookieStoreResult<usize> {
-        let parsed = parse_cookie_header(raw);
-        let count = parsed.len();
-        for cookie in parsed {
-            self.upsert_cookie(account_id, cookie).await?;
-        }
-        Ok(count)
-    }
-
-    /// 为请求域名读取账号 Cookie 请求头。
-    pub async fn cookie_header(
-        &self,
-        account_id: &str,
-        request_domain: &str,
-    ) -> SqliteCookieStoreResult<Option<String>> {
-        self.cookie_header_for_request(account_id, request_domain, "/")
-            .await
-    }
-
-    /// 为请求域名和路径读取账号 Cookie 请求头。
-    pub async fn cookie_header_for_request(
-        &self,
-        account_id: &str,
-        request_domain: &str,
-        request_path: &str,
-    ) -> SqliteCookieStoreResult<Option<String>> {
-        let rows = sqlx::query(
-            "select domain, name, value_cipher, path, expires_at from account_cookies where account_id = ?",
-        )
-        .bind(account_id)
-        .fetch_all(&self.pool)
-        .await?;
-        let mut pairs = Vec::new();
-        let now = Utc::now();
-        for row in rows {
-            let domain = row.get::<String, _>("domain");
-            if !domain_matches(request_domain, &domain) {
-                continue;
-            }
-            let path = row.get::<String, _>("path");
-            if !path_matches(request_path, &path) {
-                continue;
-            }
-            let expires_at = row.get::<Option<String>, _>("expires_at");
-            if cookie_is_expired(expires_at.as_deref(), now) {
-                continue;
-            }
-            let name = row.get::<String, _>("name");
-            let value_cipher = row.get::<String, _>("value_cipher");
-            let value = self.secret.decrypt(&value_cipher)?;
-            pairs.push(CookieHeaderPair {
-                path_len: path.len(),
-                name: name.clone(),
-                value: format!("{name}={}", value.expose_secret()),
-            });
-        }
-        if pairs.is_empty() {
-            Ok(None)
-        } else {
-            pairs.sort_by(|left, right| {
-                right
-                    .path_len
-                    .cmp(&left.path_len)
-                    .then_with(|| left.name.cmp(&right.name))
-            });
-            Ok(Some(
-                pairs
-                    .into_iter()
-                    .map(|pair| pair.value)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ))
-        }
-    }
-
-    /// 删除账号全部 Cookie。
-    pub async fn delete_account_cookies(&self, account_id: &str) -> SqliteCookieStoreResult<u64> {
-        let result = sqlx::query("delete from account_cookies where account_id = ?")
-            .bind(account_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
-    /// 删除指定时间之前过期的 Cookie。
-    pub async fn cleanup_expired(&self, now: DateTime<Utc>) -> SqliteCookieStoreResult<u64> {
-        let result = sqlx::query(
-            "delete from account_cookies where expires_at is not null and expires_at <= ?",
-        )
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
-    }
-
-    async fn upsert_cookie(
-        &self,
-        account_id: &str,
-        parsed: ParsedCookie,
-    ) -> SqliteCookieStoreResult<()> {
-        let now = Utc::now().to_rfc3339();
-        let value_cipher = self
-            .secret
-            .encrypt(&SecretString::new(parsed.value.into()))?;
-        sqlx::query(
-            "insert into account_cookies (id, account_id, domain, name, value_cipher, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict(account_id, domain, name, path) do update set value_cipher = excluded.value_cipher, expires_at = excluded.expires_at, updated_at = excluded.updated_at",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(account_id)
-        .bind(parsed.domain)
-        .bind(parsed.name)
-        .bind(value_cipher)
-        .bind(parsed.path)
-        .bind(parsed.expires_at)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedCookie {
-    domain: String,
-    name: String,
-    value: String,
-    path: String,
-    expires_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CookieHeaderPair {
-    path_len: usize,
-    name: String,
-    value: String,
-}
-
-fn parse_set_cookie(raw: &str) -> Option<ParsedCookie> {
-    let mut parts = raw.split(';').map(str::trim);
-    let (name, value) = parts.next()?.split_once('=')?;
-    let name = name.trim();
-    let value = value.trim();
-    if name.is_empty() || value.is_empty() {
-        return None;
-    }
-
-    let mut domain = DEFAULT_COOKIE_DOMAIN.to_string();
-    let mut path = "/".to_string();
-    let mut expires_at = None;
-    for part in parts {
-        let Some((attribute, value)) = part.split_once('=') else {
-            continue;
-        };
-        match attribute.trim().to_ascii_lowercase().as_str() {
-            "domain" => domain = value.trim().trim_start_matches('.').to_string(),
-            "path" => path = normalize_cookie_path(value),
-            "max-age" => {
-                if let Ok(seconds) = value.trim().parse::<i64>() {
-                    expires_at = Some(max_age_expires_at(seconds));
-                }
-                break;
-            }
-            "expires" => expires_at = Some(value.trim().to_string()),
-            _ => {}
-        }
-    }
-
-    Some(ParsedCookie {
-        domain,
-        name: name.to_string(),
-        value: value.to_string(),
-        path,
-        expires_at,
-    })
-}
-
-fn max_age_expires_at(seconds: i64) -> String {
-    let now = Utc::now();
-    if seconds <= 0 {
-        return (now - Duration::seconds(1)).to_rfc3339();
-    }
-    (now + Duration::seconds(seconds.min(i32::MAX as i64))).to_rfc3339()
-}
-
-fn parse_cookie_header(raw: &str) -> Vec<ParsedCookie> {
-    raw.split(';')
-        .map(str::trim)
-        .filter_map(|part| {
-            let (name, value) = part.split_once('=')?;
-            let name = name.trim();
-            let value = value.trim();
-            if name.is_empty() || value.is_empty() {
-                return None;
-            }
-            Some(ParsedCookie {
-                domain: DEFAULT_COOKIE_DOMAIN.to_string(),
-                name: name.to_string(),
-                value: value.to_string(),
-                path: "/".to_string(),
-                expires_at: None,
-            })
-        })
-        .collect()
-}
-
-fn domain_matches(request_domain: &str, cookie_domain: &str) -> bool {
-    request_domain == cookie_domain
-        || request_domain
-            .strip_suffix(cookie_domain)
-            .is_some_and(|prefix| prefix.ends_with('.'))
-}
-
-fn path_matches(request_path: &str, cookie_path: &str) -> bool {
-    let request_path = normalize_request_path(request_path);
-    let cookie_path = normalize_cookie_path(cookie_path);
-    request_path == cookie_path
-        || (request_path.starts_with(&cookie_path)
-            && (cookie_path.ends_with('/')
-                || request_path
-                    .as_bytes()
-                    .get(cookie_path.len())
-                    .is_some_and(|byte| *byte == b'/')))
-}
-
-fn normalize_request_path(path: &str) -> String {
-    let path = path.trim();
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    }
-}
-
-fn normalize_cookie_path(path: &str) -> String {
-    let path = path.trim();
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        "/".to_string()
-    }
-}
-
-fn cookie_is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> bool {
-    expires_at
-        .and_then(parse_cookie_expires_at)
-        .is_some_and(|expires_at| expires_at <= now)
-}
-
-fn parse_cookie_expires_at(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc2822(value)
-        .or_else(|_| DateTime::parse_from_rfc3339(value))
-        .map(|expires_at| expires_at.with_timezone(&Utc))
-        .ok()
 }
 
 #[derive(Clone)]
@@ -1696,62 +1215,6 @@ impl SqliteAccountStore {
         row.as_ref().map(usage_from_row).transpose()
     }
 
-    /// 分页列出用量。
-    pub async fn list_usage(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> SqliteAccountStoreResult<Page<AccountUsageListRecord>> {
-        let limit = limit.clamp(1, 200);
-        if let Some(cursor) = cursor {
-            let (last_used_at, account_id) =
-                decode_cursor(&cursor).ok_or(SqliteAccountStoreError::InvalidCursor)?;
-            let rows = sqlx::query(LIST_USAGE_AFTER_CURSOR_SQL)
-                .bind(&last_used_at)
-                .bind(&last_used_at)
-                .bind(&account_id)
-                .bind(limit + 1)
-                .fetch_all(&self.pool)
-                .await?;
-            Ok(to_page(
-                rows,
-                limit,
-                usage_list_from_row,
-                ("last_used_at", "account_id"),
-            ))
-        } else {
-            let rows = sqlx::query(LIST_USAGE_SQL)
-                .bind(limit + 1)
-                .fetch_all(&self.pool)
-                .await?;
-            Ok(to_page(
-                rows,
-                limit,
-                usage_list_from_row,
-                ("last_used_at", "account_id"),
-            ))
-        }
-    }
-
-    /// 用量汇总。
-    pub async fn usage_summary(&self) -> SqliteAccountStoreResult<UsageSummary> {
-        let row = sqlx::query(USAGE_SUMMARY_SQL).fetch_one(&self.pool).await?;
-        Ok(UsageSummary {
-            account_count: row.get("account_count"),
-            request_count: row.get("request_count"),
-            empty_response_count: row.get("empty_response_count"),
-            input_tokens: row.get("input_tokens"),
-            output_tokens: row.get("output_tokens"),
-            cached_tokens: row.get("cached_tokens"),
-            reasoning_tokens: row.get("reasoning_tokens"),
-            total_tokens: row.get("total_tokens"),
-            image_input_tokens: row.get("image_input_tokens"),
-            image_output_tokens: row.get("image_output_tokens"),
-            image_request_count: row.get("image_request_count"),
-            image_request_failed_count: row.get("image_request_failed_count"),
-        })
-    }
-
     /// 重置用量。
     pub async fn reset_usage(&self, account_id: &str) -> SqliteAccountStoreResult<bool> {
         let result = sqlx::query(RESET_USAGE_SQL)
@@ -1920,7 +1383,7 @@ impl SqliteAccountStore {
 }
 
 impl SqliteAccountStore {
-    /// Set account label.
+    /// 设置账号标签。
     pub async fn set_label(
         &self,
         account_id: &str,
@@ -1935,7 +1398,7 @@ impl SqliteAccountStore {
         Ok(true)
     }
 
-    /// Delete an account by ID.
+    /// 按 ID 删除账号。
     pub async fn delete_account(&self, account_id: &str) -> Result<bool, SqliteAccountStoreError> {
         let result = sqlx::query("DELETE FROM accounts WHERE id = ?1")
             .bind(account_id)
@@ -2047,7 +1510,7 @@ impl AccountStore for SqliteAccountStore {
 }
 
 // ============================================================================
-// Private helpers
+// 私有辅助函数
 // ============================================================================
 
 async fn list_pool_accounts(store: &SqliteAccountStore) -> SqliteAccountStoreResult<Vec<Account>> {
@@ -2308,29 +1771,6 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> SqliteAccountStoreResult<Acc
         limit_window_seconds: optional_positive_i64_to_u64(
             row.get::<Option<i64>, _>("limit_window_seconds"),
         ),
-        last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
-    })
-}
-
-fn usage_list_from_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> SqliteAccountStoreResult<AccountUsageListRecord> {
-    Ok(AccountUsageListRecord {
-        account_id: row.get("account_id"),
-        email: row.get("email"),
-        label: row.get("label"),
-        plan_type: row.get("plan_type"),
-        request_count: row.get("request_count"),
-        empty_response_count: row.get("empty_response_count"),
-        input_tokens: row.get("input_tokens"),
-        output_tokens: row.get("output_tokens"),
-        cached_tokens: row.get("cached_tokens"),
-        reasoning_tokens: row.get("reasoning_tokens"),
-        total_tokens: row.get("total_tokens"),
-        image_input_tokens: row.get("image_input_tokens"),
-        image_output_tokens: row.get("image_output_tokens"),
-        image_request_count: row.get("image_request_count"),
-        image_request_failed_count: row.get("image_request_failed_count"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
     })
 }

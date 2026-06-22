@@ -8,10 +8,6 @@ use rand::Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::sync::Semaphore;
-
-use crate::accounts::model::{Account, AccountStatus};
-pub use crate::accounts::token_refresh::TokenRefresher;
 
 /// 一次刷新返回的 token 对。
 #[derive(Debug, Clone)]
@@ -192,181 +188,122 @@ impl PkceSessionStore {
     }
 }
 
-/// 刷新任务的调度策略。
-#[derive(Debug, Clone, Copy)]
-pub struct RefreshPolicy {
-    /// 提前多久开始刷新访问令牌。
-    pub refresh_margin_seconds: u64,
-    /// 允许并发执行的刷新任务数。
-    pub refresh_concurrency: u32,
-}
-
-/// 触发刷新动作的原因。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshTrigger {
-    /// 在访问令牌即将过期前触发刷新。
-    BeforeExpiry,
-    /// 在上游返回未授权后立即刷新。
-    Unauthorized,
-}
-
-/// 上游刷新失败后的领域结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum RefreshFailure {
-    /// 刷新令牌无效或已过期。
-    #[error("refresh token is invalid or expired")]
-    InvalidGrant,
-    /// 账号配额耗尽。
-    #[error("account quota is exhausted")]
-    QuotaExhausted,
-    /// 账号被上游封禁。
-    #[error("account is banned")]
-    Banned,
-    /// 账号被显式禁用。
-    #[error("account is disabled")]
-    Disabled,
-    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
-    #[error("refresh transport failed before server processing")]
-    RetryableTransport,
-    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
-    #[error("refresh transport failed after possible server processing")]
-    Transport,
-}
-
-/// 调度器自身的执行错误。
-#[derive(Debug, Error)]
-pub enum RefreshError {
-    /// 并发限制信号量已关闭。
-    #[error("refresh task semaphore closed")]
-    ConcurrencyClosed,
-    /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
-    #[error("refresh transport failed before server processing")]
-    RetryableTransport,
-    /// 刷新请求在传输层失败，refresh token 可能已经被服务端消费。
-    #[error("refresh transport failed after possible server processing")]
-    Transport,
-}
-
-/// 负责执行单账号刷新策略的调度器。
+/// 管理端 OAuth 服务。
 #[derive(Clone)]
-pub struct RefreshScheduler<C> {
-    policy: RefreshPolicy,
-    client: Arc<C>,
-    semaphore: Arc<Semaphore>,
+pub struct AdminOAuthService {
+    config: OAuthConfig,
+    client: Arc<dyn OAuthClient>,
+    sessions: Arc<tokio::sync::Mutex<PkceSessionStore>>,
 }
 
-impl<C> RefreshScheduler<C>
-where
-    C: TokenRefresher,
-{
-    /// 使用策略和上游刷新端口构造调度器。
-    pub fn new(policy: RefreshPolicy, client: C) -> Self {
-        let concurrency = policy.refresh_concurrency.max(1) as usize;
+impl AdminOAuthService {
+    /// 构造服务。
+    pub fn new(config: OAuthConfig, client: Arc<dyn OAuthClient>) -> Self {
         Self {
-            policy,
-            client: Arc::new(client),
-            semaphore: Arc::new(Semaphore::new(concurrency)),
+            config,
+            client,
+            sessions: Arc::new(tokio::sync::Mutex::new(PkceSessionStore::default())),
         }
     }
 
-    /// 在给定时间点按触发原因刷新账号。
-    ///
-    /// 当账号不需要刷新时返回原账号快照；当刷新失败但属于可映射的领域错误时，
-    /// 返回更新过状态的账号。
-    ///
-    /// # Errors
-    ///
-    /// 当并发控制已关闭或刷新传输失败时返回 [`RefreshError`]。
-    pub async fn refresh_account_at(
-        &self,
-        account: &Account,
-        trigger: RefreshTrigger,
-        now: DateTime<Utc>,
-    ) -> Result<Account, RefreshError> {
-        if !self.should_refresh(account, trigger, now) {
-            return Ok(account.clone());
-        }
-
-        let Some(refresh_token) = account.refresh_token.as_deref() else {
-            let mut expired = account.clone();
-            expired.status = AccountStatus::Expired;
-            return Ok(expired);
-        };
-
-        let _permit = self
-            .semaphore
-            .acquire()
+    /// 开始 PKCE 登录。
+    pub async fn start_pkce_login(&self, return_host: &str) -> PkceLogin {
+        self.sessions
+            .lock()
             .await
-            .map_err(|_| RefreshError::ConcurrencyClosed)?;
-
-        match self.client.refresh(refresh_token).await {
-            Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
-            Err(RefreshFailure::RetryableTransport) => Err(RefreshError::RetryableTransport),
-            Err(RefreshFailure::Transport) => Err(RefreshError::Transport),
-            Err(error) => Ok(apply_refresh_failure(account, error)),
-        }
+            .start_login(return_host, &self.config)
     }
 
-    /// 判断账号在给定触发原因下是否需要刷新。
-    pub fn should_refresh_account_at(
+    /// 申请设备码。
+    pub async fn request_device_code(&self) -> Result<DeviceCode, AdminOAuthError> {
+        self.client
+            .request_device_code()
+            .await
+            .map_err(AdminOAuthError::OAuth)
+    }
+
+    /// 轮询设备码 token。
+    pub async fn poll_device_token(
         &self,
-        account: &Account,
-        trigger: RefreshTrigger,
-        now: DateTime<Utc>,
-    ) -> bool {
-        self.should_refresh(account, trigger, now)
+        device_code: &str,
+    ) -> Result<AdminDevicePoll, AdminOAuthError> {
+        match self.client.poll_device_token(device_code).await {
+            Ok(tokens) => Ok(AdminDevicePoll::Authorized(tokens)),
+            Err(error) => {
+                if let Some(code) = error.pending_code() {
+                    Ok(AdminDevicePoll::Pending { code })
+                } else {
+                    Err(AdminOAuthError::OAuth(error))
+                }
+            }
+        }
     }
 
-    fn should_refresh(
+    /// 交换 OAuth callback code。
+    pub async fn exchange_callback(
         &self,
-        account: &Account,
-        trigger: RefreshTrigger,
-        now: DateTime<Utc>,
-    ) -> bool {
-        if account.status != AccountStatus::Active {
-            return false;
+        code: &str,
+        state: &str,
+    ) -> Result<AdminOAuthCallback, AdminOAuthError> {
+        let session = self
+            .sessions
+            .lock()
+            .await
+            .try_acquire(state)
+            .ok_or(AdminOAuthError::InvalidState)?;
+        match self
+            .client
+            .exchange_code(code, &session.code_verifier, &session.redirect_uri)
+            .await
+        {
+            Ok(tokens) => {
+                self.sessions.lock().await.complete(state);
+                Ok(AdminOAuthCallback {
+                    tokens,
+                    return_host: session.return_host,
+                })
+            }
+            Err(error) => {
+                self.sessions.lock().await.release(state);
+                Err(AdminOAuthError::OAuth(error))
+            }
         }
-
-        match trigger {
-            RefreshTrigger::Unauthorized => true,
-            RefreshTrigger::BeforeExpiry => account
-                .access_token_expires_at
-                .is_some_and(|expires_at| expires_at <= now + self.refresh_margin()),
-        }
-    }
-
-    fn refresh_margin(&self) -> Duration {
-        let seconds = self.policy.refresh_margin_seconds.min(86_400 * 7) as i64;
-        Duration::seconds(seconds)
     }
 }
 
-/// 将新的 token 对应用到账号快照上。
-pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
-    let mut refreshed = account.clone();
-    refreshed.access_token = token_pair.access_token;
-
-    // 刷新响应不返回 refresh_token 时，继续保留旧值，避免永久失去刷新能力。
-    if let Some(refresh_token) = token_pair.refresh_token {
-        refreshed.refresh_token = Some(refresh_token);
-    }
-
-    refreshed.status = AccountStatus::Active;
-    refreshed
+/// 设备码轮询结果。
+#[derive(Debug, Clone)]
+pub enum AdminDevicePoll {
+    /// 仍在等待用户授权。
+    Pending {
+        /// OAuth 标准 pending code。
+        code: &'static str,
+    },
+    /// 设备码已授权。
+    Authorized(TokenPair),
 }
 
-/// 将刷新失败映射为账号状态变更。
-pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Account {
-    let mut updated = account.clone();
-    updated.status = match failure {
-        RefreshFailure::InvalidGrant => AccountStatus::Disabled,
-        RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
-        RefreshFailure::Banned => AccountStatus::Banned,
-        RefreshFailure::Disabled => AccountStatus::Disabled,
-        RefreshFailure::RetryableTransport => AccountStatus::Active,
-        RefreshFailure::Transport => AccountStatus::Active,
-    };
-    updated
+/// OAuth callback 交换结果。
+#[derive(Debug, Clone)]
+pub struct AdminOAuthCallback {
+    /// 交换得到的 token。
+    pub tokens: TokenPair,
+    /// 登录完成后返回的 host。
+    pub return_host: String,
+}
+
+/// 管理端 OAuth 错误。
+#[derive(Debug, Error)]
+pub enum AdminOAuthError {
+    /// OAuth callback 无法解析。
+    #[error("invalid OAuth callback")]
+    InvalidCallback,
+    /// OAuth state 无效或已被占用。
+    #[error("invalid OAuth state")]
+    InvalidState,
+    /// 上游 OAuth 调用失败。
+    #[error("{0}")]
+    OAuth(OAuthError),
 }
 
 fn generate_pkce_pair() -> (String, String) {

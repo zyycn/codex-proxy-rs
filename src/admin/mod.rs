@@ -20,8 +20,6 @@ pub mod router;
 pub mod session;
 /// 设置处理器。
 pub mod settings;
-/// 设置领域逻辑。
-pub mod settings_domain;
 /// 用量处理器。
 pub mod usage;
 

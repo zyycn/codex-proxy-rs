@@ -1,7 +1,5 @@
 //! Codex 协议类型。
 
-/// Codex Chat 扩展字段。
-pub mod chat;
 /// Codex 事件语义与用量提取。
 pub mod events;
 /// Codex Responses / Compact 请求体。

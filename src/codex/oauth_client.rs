@@ -4,10 +4,8 @@ use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 
-use crate::accounts::oauth::{
-    DeviceCode, OAuthClient, OAuthConfig, OAuthError, RefreshFailure, TokenPair,
-};
-use crate::accounts::token_refresh::TokenRefresher;
+use crate::accounts::oauth::{DeviceCode, OAuthClient, OAuthConfig, OAuthError, TokenPair};
+use crate::accounts::token_refresh::{RefreshFailure, TokenRefresher};
 
 /// OpenAI OAuth 上游客户端。
 #[derive(Clone)]

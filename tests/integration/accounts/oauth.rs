@@ -4,7 +4,10 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
-    accounts::oauth::{OAuthClient, OAuthConfig, OAuthError, TokenRefresher},
+    accounts::{
+        oauth::{OAuthClient, OAuthConfig, OAuthError},
+        token_refresh::TokenRefresher,
+    },
     codex::oauth_client::OpenAiOAuthClient,
 };
 

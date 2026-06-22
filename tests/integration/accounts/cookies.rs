@@ -1,8 +1,9 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::{
     accounts::{
+        cookies::SqliteCookieStore,
         model::AccountStatus,
-        store::{NewAccount, SqliteAccountStore, SqliteCookieStore},
+        store::{NewAccount, SqliteAccountStore},
     },
     infra::{crypto::SecretBox, database::connect_sqlite},
 };

@@ -3,10 +3,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use codex_proxy_rs::{
     accounts::{
-        pool::{AccountAcquireRequest, AccountPoolOptions},
+        pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
         store::{AccountStore, SqliteAccountStore},
     },
-    app::services::RuntimeAccountPoolService,
     infra::crypto::SecretBox,
 };
 use secrecy::SecretString;

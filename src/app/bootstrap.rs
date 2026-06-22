@@ -43,7 +43,7 @@ async fn build_application(
     let stores = BackgroundTaskStores {
         accounts: crate::accounts::store::SqliteAccountStore::new(pool.clone(), secret.clone()),
         admin_sessions: crate::access::admin_session::SqliteAdminSessionStore::new(pool.clone()),
-        cookies: crate::accounts::store::SqliteCookieStore::new(pool.clone(), secret.clone()),
+        cookies: crate::accounts::cookies::SqliteCookieStore::new(pool.clone(), secret.clone()),
         fingerprints: fingerprint_repository.clone(),
         session_affinity:
             crate::gateway::dispatch::session_affinity::SqliteSessionAffinityStore::new(

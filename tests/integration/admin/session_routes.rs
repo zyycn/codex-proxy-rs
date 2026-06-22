@@ -8,8 +8,8 @@ use chrono::Utc;
 use codex_proxy_rs::{
     access::admin_session::SqliteAdminSessionStore,
     access::client_keys::SqliteClientKeyStore,
-    accounts::store::{SqliteAccountStore, SqliteCookieStore},
     accounts::token_refresh::RefreshLeaseStore,
+    accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
     app::services::{BackgroundTaskStores, Services},
     app::state::AppState,
     codex::fingerprint::{Fingerprint, FingerprintRepository},

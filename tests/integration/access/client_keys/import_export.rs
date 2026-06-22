@@ -55,7 +55,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             source_pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
             source_pool.clone(),
             source_secret_box.clone(),
         ),
@@ -123,7 +123,7 @@ async fn admin_client_keys_import_should_rotate_exported_metadata_and_return_pla
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             target_pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
             target_pool.clone(),
             target_secret_box.clone(),
         ),

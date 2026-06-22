@@ -40,7 +40,10 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
         admin_sessions: codex_proxy_rs::access::admin_session::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::accounts::store::SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: codex_proxy_rs::accounts::cookies::SqliteCookieStore::new(
+            pool.clone(),
+            secret_box,
+        ),
         fingerprints: codex_proxy_rs::codex::fingerprint::FingerprintRepository::new(pool.clone()),
         session_affinity:
             codex_proxy_rs::gateway::dispatch::session_affinity::SqliteSessionAffinityStore::new(

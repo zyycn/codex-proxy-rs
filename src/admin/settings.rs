@@ -15,10 +15,11 @@ use serde_json::Value;
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     admin::session::require_admin_session,
-    admin::settings_domain::{AdminSettingsPatch, SettingsServiceError},
-    app::services::RuntimeSettingsError,
     app::state::AppState,
-    config::types::{AppConfig, QuotaWarningThresholds},
+    config::{
+        settings::{AdminSettingsPatch, RuntimeSettingsError, SettingsServiceError},
+        types::{AppConfig, QuotaWarningThresholds},
+    },
     http::middleware::request_id::RequestId,
 };
 

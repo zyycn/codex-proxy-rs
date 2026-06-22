@@ -39,7 +39,7 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
             refresh_token: None,
         }),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -101,7 +101,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
             refresh_token: None,
         }))),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -161,7 +161,7 @@ async fn token_refresh_task_should_not_retry_ambiguous_transport_failure() {
         observed_statuses: observed_statuses.clone(),
         response: Err(RefreshFailure::Transport),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -234,7 +234,7 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
         observed_statuses: observed_statuses.clone(),
         responses: Arc::new(Mutex::new(VecDeque::from(responses))),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -308,7 +308,7 @@ async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable
         calls: calls.clone(),
         access_token: rotated_access_token.clone(),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
@@ -381,7 +381,7 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_disabling_accoun
             Err(RefreshFailure::InvalidGrant),
         ]))),
     };
-    let task = codex_proxy_rs::app::tasks::token_refresh::TokenRefreshTask::new(
+    let task = codex_proxy_rs::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
