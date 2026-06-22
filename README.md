@@ -13,44 +13,43 @@
 ## 快速开始
 
 ```bash
-cargo run -p codex-proxy-server
+cargo run
 ```
 
-默认读取根目录 `config.yaml`，并按需合并本地覆盖文件：
+默认读取根目录 `config.yaml`。本项目不依赖 `local.yaml`，本地敏感值、数据库路径、日志路径和管理员默认密码都应直接在 `config.yaml` 中配置。
 
-```text
-local.yaml
-local.yml
-```
-
-运行时数据默认写入 `.runtime`：
+运行时数据默认写入 `.runtime`，历史或手动生成的根目录 `logs/` 也作为本地运行产物忽略：
 
 ```text
 .runtime/data/
 .runtime/logs/
+logs/
 ```
 
-默认监听 `0.0.0.0:8080`。首次启动会初始化管理员账号，默认值来自 `config.yaml`，长期使用请在 `local.yaml` 中覆盖。
+默认监听 `0.0.0.0:8080`。首次启动会初始化管理员账号，默认值来自 `config.yaml`，长期使用请修改配置中的管理员密码。
 
 ## 开发
 
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
 ```
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    client[Client] --> server[server<br/>HTTP API]
-    server --> runtime[runtime<br/>服务编排]
-    runtime --> core[core<br/>领域模型和协议]
-    runtime --> adapters[adapters<br/>上游客户端和仓储]
-    adapters --> platform[platform<br/>配置、存储、加密、日志]
-    runtime --> platform
-    server --> assets[assets<br/>静态资源 fallback]
+    client[Client] --> http[http<br/>HTTP 路由和中间件]
+    http --> gateway[gateway<br/>OpenAI 兼容入口和请求分发]
+    gateway --> accounts[accounts<br/>账号、OAuth、配额和令牌刷新]
+    gateway --> codex[codex<br/>Codex 协议、模型和上游传输]
+    http --> admin[admin<br/>管理端 API]
+    admin --> app[app<br/>服务装配和后台任务]
+    app --> infra[infra<br/>SQLite、加密、路径和日志]
+    gateway --> telemetry[telemetry<br/>事件日志和用量记录]
+    admin --> telemetry
+    http --> web[web<br/>静态资源 fallback]
 ```
 
 ## License
