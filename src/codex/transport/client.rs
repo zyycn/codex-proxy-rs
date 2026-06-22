@@ -156,10 +156,6 @@ pub type CodexClientResult<T> = Result<T, CodexClientError>;
 pub type CodexBackendSseStream =
     Pin<Box<dyn Stream<Item = CodexClientResult<Bytes>> + Send + 'static>>;
 
-// ---------------------------------------------------------------------------
-// Model catalog client port
-// ---------------------------------------------------------------------------
-
 /// 拉取上游模型目录时的请求上下文。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodexModelCatalogRequest<'a> {

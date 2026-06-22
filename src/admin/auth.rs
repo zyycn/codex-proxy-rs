@@ -18,8 +18,8 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::require_admin_session,
     },
-    app::state::AppState,
     http::middleware::request_id::RequestId,
+    runtime::state::AppState,
 };
 
 /// OAuth PKCE 登录开始响应。

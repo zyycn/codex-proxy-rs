@@ -11,8 +11,6 @@ pub mod types;
 /// 配置写回。
 pub mod writeback;
 
-pub use types::*;
-
 use thiserror::Error;
 
 /// 配置加载结果类型。

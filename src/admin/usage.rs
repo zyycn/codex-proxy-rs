@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::session::require_admin_session,
-    app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::{clamp_limit, Page},
+    runtime::state::AppState,
     telemetry::usage::{AdminUsageError, AdminUsageRecord, AdminUsageSummary},
 };
 

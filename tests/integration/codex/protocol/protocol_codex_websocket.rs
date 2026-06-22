@@ -289,7 +289,7 @@ fn codex_websocket_error_frame_should_classify_rotatable_codes() {
 }
 
 #[test]
-fn codex_websocket_error_frame_should_classify_upstream_gateway_special_codes() {
+fn codex_websocket_error_frame_should_classify_upstream_error_special_codes() {
     let cases = [
         ("quota_exhausted", 402),
         ("token_expired", 401),
@@ -314,7 +314,7 @@ fn codex_websocket_error_frame_should_classify_upstream_gateway_special_codes() 
             "response": {
                 "error": {
                     "code": code,
-                    "message": "classified by upstream gateway mapping"
+                    "message": "classified by upstream error mapping"
                 }
             }
         })
@@ -322,7 +322,7 @@ fn codex_websocket_error_frame_should_classify_upstream_gateway_special_codes() 
 
         let error =
             classify_websocket_error_frame(&frame, WebSocketErrorClassificationProfile::OneShot)
-                .expect("special gateway code should classify");
+                .expect("special upstream code should classify");
 
         assert_eq!(error.status_code, expected_status, "code: {code}");
     }
@@ -627,7 +627,7 @@ fn codex_websocket_output_item_metadata_and_agent_should_validate_required_field
 }
 
 #[test]
-fn codex_websocket_output_item_optional_fields_should_reject_upstream_gateway_edge_cases() {
+fn codex_websocket_output_item_optional_fields_should_reject_upstream_error_edge_cases() {
     let invalid_tool_search_call = json!({
         "type": "response.output_item.done",
         "item": {

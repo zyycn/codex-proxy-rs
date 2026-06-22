@@ -5,7 +5,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use codex_proxy_rs::{
-    config::{
+    config::types::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig, WebSocketPoolConfig,
@@ -32,7 +32,7 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
     let config = test_config(url);
     let secret_box = SecretBox::new([43u8; 32]);
     let hasher = ApiKeyHasher::new([44u8; 32]);
-    let stores = codex_proxy_rs::app::services::BackgroundTaskStores {
+    let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::accounts::store::SqliteAccountStore::new(
             pool.clone(),
             secret_box.clone(),
@@ -46,7 +46,7 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
         ),
         fingerprints: codex_proxy_rs::codex::fingerprint::FingerprintRepository::new(pool.clone()),
         session_affinity:
-            codex_proxy_rs::gateway::dispatch::session_affinity::SqliteSessionAffinityStore::new(
+            codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
                 pool.clone(),
             ),
         refresh_leases: codex_proxy_rs::accounts::token_refresh::RefreshLeaseStore::new(
@@ -59,12 +59,12 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
         event_logs: codex_proxy_rs::telemetry::event_store::SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests();
-    let services = std::sync::Arc::new(codex_proxy_rs::app::services::Services::new(
+    let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,
         fingerprint,
     ));
-    let state = codex_proxy_rs::app::state::AppState {
+    let state = codex_proxy_rs::runtime::state::AppState {
         config,
         services: (*services).clone(),
     };

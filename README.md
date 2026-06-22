@@ -41,13 +41,13 @@ cargo test --all-targets
 ```mermaid
 flowchart LR
     client[Client] --> http[http<br/>HTTP 路由和中间件]
-    http --> gateway[gateway<br/>OpenAI 兼容入口和请求分发]
-    gateway --> accounts[accounts<br/>账号、OAuth、配额和令牌刷新]
-    gateway --> codex[codex<br/>Codex 协议、模型和上游传输]
+    http --> proxy[proxy<br/>OpenAI 兼容入口和请求分发]
+    proxy --> accounts[accounts<br/>账号、OAuth、配额和令牌刷新]
+    proxy --> codex[codex<br/>Codex 协议、模型和上游传输]
     http --> admin[admin<br/>管理端 API]
-    admin --> app[app<br/>服务装配和后台任务]
-    app --> infra[infra<br/>SQLite、加密、路径和日志]
-    gateway --> telemetry[telemetry<br/>事件日志和用量记录]
+    admin --> runtime[runtime<br/>启动装配、状态和后台任务]
+    runtime --> infra[infra<br/>SQLite、加密、路径和日志]
+    proxy --> telemetry[telemetry<br/>事件日志和用量记录]
     admin --> telemetry
     http --> web[web<br/>静态资源 fallback]
 ```

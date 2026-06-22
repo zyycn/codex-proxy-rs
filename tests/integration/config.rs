@@ -1,5 +1,5 @@
+use codex_proxy_rs::config::types::AppConfig;
 use codex_proxy_rs::config::types::LoggingConfig;
-use codex_proxy_rs::config::AppConfig;
 use std::fs;
 
 const DEFAULT_CONFIG_YAML: &str = r#"

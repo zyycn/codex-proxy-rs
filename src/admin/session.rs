@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
-    app::state::AppState,
     http::middleware::request_id::RequestId,
+    runtime::state::AppState,
 };
 
 const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";

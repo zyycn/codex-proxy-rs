@@ -1,11 +1,11 @@
 mod access;
 mod accounts;
 mod admin;
-mod app;
 mod codex;
 mod config;
-mod gateway;
 mod http;
 mod infra;
+mod proxy;
+mod runtime;
 mod support;
 mod telemetry;

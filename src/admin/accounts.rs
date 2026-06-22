@@ -16,9 +16,9 @@ use crate::{
     accounts::store::StoredAccount,
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::session::require_admin_session,
-    app::state::AppState,
     http::middleware::request_id::RequestId,
     infra::json::{clamp_limit, Page},
+    runtime::state::AppState,
 };
 
 // ============================================================================

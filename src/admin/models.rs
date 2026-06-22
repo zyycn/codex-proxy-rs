@@ -11,9 +11,9 @@ use serde::Serialize;
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     admin::session::require_admin_session,
-    app::state::AppState,
     codex::models::{AdminModelError, ModelRefreshResult},
     http::middleware::request_id::RequestId,
+    runtime::state::AppState,
 };
 
 /// 模型刷新响应。

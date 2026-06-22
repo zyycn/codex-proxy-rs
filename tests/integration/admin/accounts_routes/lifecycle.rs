@@ -79,7 +79,7 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
 }
 
 #[tokio::test]
-async fn admin_account_status_update_should_update_gateway_account_pool() {
+async fn admin_account_status_update_should_update_proxy_account_pool() {
     let (app, state, pool, _dir, secret_box) =
         admin_accounts_test_app("admin-account-status-runtime-pool.sqlite", 121).await;
     seed_encrypted_account(
