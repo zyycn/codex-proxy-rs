@@ -6,6 +6,112 @@
 
 ## 本轮执行进度
 
+### 2026-06-22 ban / fallback / 风险剥离真实稳定性复测
+
+- 运行目录：`.runtime/real-chain-openai-20260622-ban-failover-223211`
+- 当前数据库账号基线：
+  - `active=1`：`a18bcfa9ae932857` / `setup-down-penpal@duck.com`
+  - `banned=1`：`acct_be7f5c37f60b44ff8058b1b9b164fd42` / `lashes-reach-task@aivify.cc`
+  - `disabled=3`
+- 代码路径确认：
+  - `AccountPool::acquire_with` 只从候选 active 且可用账号中选择；`disabled` / `banned` 不应被选中。
+  - `ResponseDispatchService::apply_cascading_ban_defense` 在 preferred affinity 账号已 `disabled` / `banned` 且实际切到其它账号时，剥离 `previous_response_id` 与 `turn_state`，并删除旧 session affinity。
+  - `/backend-api/wham/usage` 请求头按 `codex2api`：`Authorization`、`Accept: application/json`、`User-Agent`、`Originator`、可选 `chatgpt-account-id`。
+
+测试矩阵：
+
+| 场景 | 请求 ID | 状态 | 验收点 |
+| --- | --- | --- | --- |
+| active 基线请求 | `real_ban_active_baseline_223211` | 通过 | HTTP SSE 200，输出 `BAN-BASELINE-OK`；`event_logs.account_id=a18bcfa9ae932857`，未选择 banned / disabled 账号 |
+| banned affinity 风险剥离 | `real_ban_affinity_strip_after_fix_223211` | 通过 | 构造 banned 账号 affinity 后真实请求成功切到 active；`session_affinities` 中旧 `resp_real_banned_affinity_223211` 已删除；最新 WS audit 不包含旧 `previous_response_id` / `turn_state` |
+| disabled affinity 风险剥离 | `real_disabled_affinity_strip_223211` | 通过 | 构造 disabled 账号 affinity 后真实请求成功切到 active；`session_affinities` 中旧 `resp_real_disabled_affinity_223211` 已删除；最新 WS audit 不包含旧历史 |
+| 全部账号不可用边界 | `real_all_accounts_unavailable_after_fix2_223211` | 通过 | 临时将唯一 active 账号置为 `banned` 后，请求返回 SSE `response.failed`；`event_logs.status_code=503`、`failure_class=no_available_accounts`、`account_id=null`、`response_id=null`，没有调用 banned 账号上游 |
+| quota verify 边界 | `real_quota_verify_223211` | 通过 | 临时置 `quota_verify_required=1` 后，请求先拉 `/wham/usage` 并写回 quota；业务请求 HTTP SSE 200；请求后 `quota_verify_required=0`、`quota_fetched_at` 更新 |
+| WebSocket required / fallback 边界 | `real_ws_required_followup_223211` | 通过 | 使用真实 `previous_response_id=resp_080fad5bdde92abf016a394cec74688197af34b0a4d9b91b58` 续链，`event_logs.transport=websocket`；WS audit 为 `websocket_required`、`fallback_allowed=false`；剥离场景为 `websocket_preferred`、`fallback_allowed=true` 且不携带旧历史 |
+| 安全审计 | `real_safety_audit_223211` | 通过 | 扫描 28 个运行产物/文档文件：无 Bearer/JWT/session-like 明文；WS audit 敏感 header 均为 `<redacted>`；唯一 cookie name 命中来自文档示例名，不含 cookie 值 |
+
+发现并修复的问题：
+
+- session affinity 风险剥离只删内存、不删 SQLite，重启后旧 banned/disabled affinity 可能恢复。已新增 `SqliteSessionAffinityStore::forget`，`RuntimeSessionAffinityService::forget` 同步删除持久化记录。
+- 管理端状态变更同步到了错误的运行时账号池实例，导致运行中将唯一 active 账号标记 `banned` 后，网关仍可能继续选中它。对照 TS 版单个 `AccountPool` 装配后，Rust `Services` 改为 `admin_accounts` 与网关调度共享同一个 `RuntimeAccountPoolService`。
+
+代码验证：
+
+- `cargo fmt --check`：通过。
+- `cargo test --test integration admin_account_status_update_should_update_gateway_account_pool -- --nocapture`：通过。
+- `cargo test --test integration session_affinity_store_should_forget_record_by_response_id -- --nocapture`：通过。
+- `cargo test --test integration codex_backend_client_usage_should_use_wham_usage_headers -- --nocapture`：通过。
+- `cargo test --test integration admin_accounts_import -- --nocapture`：7 个导入相关测试通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+
+### 2026-06-22 OpenAI / WebSocket 链路迁移偏差修复后复测
+
+- 运行目录：`.runtime/real-chain-openai-20260622`
+- 使用数据库账号：`active=1`、`disabled=3`；本轮临时 client key `key_e0f96ca35d524dba9c655a662c44d4e6` 已在复测结束后删除。
+- 依赖确认：`tokio-tungstenite` 实际解析到 `openai-oss-forks/tokio-tungstenite#132f5b39`，`tungstenite` 实际解析到 `openai-oss-forks/tungstenite-rs#9200079`。
+- 本轮修复范围：
+  - WebSocket opening audit 恢复为协议层 `WebSocketAuditArtifact`，记录 `request_line`、`header_order` 和红acted headers。
+  - Responses WebSocket JSON/SSE 恢复写 audit artifact；HTTP SSE/compact 恢复原版 usage 与 `retry-after` body fallback 解析。
+  - `ResponseDispatchService::complete/stream/compact` 恢复原版多账号故障转移、配额验证、Cloudflare cookie 捕获/清理、model unsupported 二次失败、空响应计数、被动 rate-limit 同步、调度错误事件记录。
+  - `RuntimeAccountPoolService` 恢复 `record_response_usage`、`record_empty_response_attempt`、`sync_passive_rate_limit_headers`。
+- 代码验证：
+  - `cargo check`：通过。
+  - `cargo build`：通过。
+  - `cargo test --test integration codex::headers -- --nocapture`：11 个测试通过。
+  - `cargo test --test integration codex::websocket -- --nocapture`：33 个通过，2 个 ignored。
+  - `cargo test --test integration codex::protocol::protocol_codex_websocket -- --nocapture`：30 个测试通过。
+  - `cargo test --test integration gateway::chat_upstream -- --nocapture`：43 个测试通过。
+- 真实链路复测结果：
+
+| 场景 | 请求 ID | 结果 | 关键观察 |
+| --- | --- | --- | --- |
+| Responses WebSocket preferred JSON | `real-chain-1782120929` | 通过 | HTTP 200，输出 `pong`；事件日志 `transport=websocket`，`response_id=resp_0b307d622c696a75016a3901e6ec8481968dd8375a20c10026` |
+| Responses WebSocket required JSON / 续接 | `real-chain-affinity-1782120949` | 通过 | 使用上一轮 `previous_response_id`，HTTP 200，输出 `pong2`；事件日志同一账号，WS audit `transport_mode=websocket_required`、`fallback_allowed=false` |
+| Responses WebSocket preferred SSE | `real-chain-sse-1782120961` | 通过 | HTTP 200，SSE 输出 `stream-pong`，包含 `response.completed` 和 `[DONE]`；事件日志 `transport=websocket` |
+
+- 复核证据：
+  - SQLite `event_logs` 三条真实请求均为 `status_code=200`、`failure_class=null`，并记录 `rateLimitHeaders` 与 usage。
+  - SQLite `session_affinities` 记录了本轮三个 response id；续接两轮绑定同一账号 `acct_be7f5c37f60b44ff8058b1b9b164fd42` 和同一 `conversation_id=814b5ef3-0c39-5a57-08ad-0bcad5851338`。
+  - WS audit 文件：
+    - `codex-ws-audit-20260622T093529.139Z-f0caa1a5-16ed-426c-9795-9756df9eee5d.json`
+    - `codex-ws-audit-20260622T093549.152Z-c9b4108a-9adc-4c3a-9c13-2eef082ff8b3.json`
+    - `codex-ws-audit-20260622T093601.411Z-58925161-e930-428d-8984-9ada9398bad8.json`
+  - 三个 audit 均记录 opening `GET /backend-api/codex/responses HTTP/1.1`；header order 包含 `Host`、`Connection`、`Upgrade`、`Sec-WebSocket-Version`、`Sec-WebSocket-Key`、`authorization`、`chatgpt-account-id`、`originator`、`user-agent`、`sec-ch-ua`、`sec-ch-ua-mobile`、`sec-ch-ua-platform`、`accept-encoding`、`accept-language`、`sec-fetch-site`、`sec-fetch-mode`、`sec-fetch-dest`、`openai-beta`、`x-openai-internal-codex-residency`、`x-client-request-id`、`x-codex-installation-id`、`session_id`、`x-codex-window-id`、`sec-websocket-extensions`。
+
+### 2026-06-22 单体迁移后真实账号复测
+
+- 运行目录：`.runtime/real-chain-openai-20260622T160412`
+- 使用数据库账号：`active=1`、`disabled=3`；临时 client key 已在复测结束后删除。
+- 运行配置修正：`config.yaml` 的 `model.default_service_tier` 已从 `flex` 恢复为 `null`。真实上游曾返回 `400 Unsupported service_tier: flex`，原版默认配置为 `null`，不应在 Codex backend 链路默认注入 `flex`。
+- 迁移缺陷修复：
+  - 非流式 Responses 通用上游错误恢复事件日志，失败时可看到真实上游状态与错误文本。
+  - Responses 非流式错误分支移除同一账号的重复 release。
+  - Responses WebSocket `Sec-WebSocket-Key` 恢复为标准 `generate_key()`，替代迁移后的 UUID 字符串；真实上游拒绝 UUID：`invalid Sec-WebSocket-Key header ... Only base64 data is allowed`。
+  - Compact 成功与失败事件日志恢复，`route=/v1/responses/compact`、`compact=true`、usage 和 rate-limit headers 可见。
+- 代码验证：
+  - `cargo test --test integration gateway::chat_upstream -- --nocapture`：43 个测试通过。
+  - `cargo test --test integration gateway::chat_upstream::openai_compact_routes -- --nocapture`：5 个测试通过。
+  - `cargo test --test integration responses_should_record_non_stream_upstream_dispatch_error -- --nocapture`：通过。
+  - `cargo check`、`cargo build`：通过。
+- 真实链路复测结果：
+
+| 场景 | 请求 ID | 结果 | 关键观察 |
+| --- | --- | --- | --- |
+| Responses HTTP JSON | `d5a63c3b-6cbc-4d48-b6fe-a9fdf948c88f` | 通过 | HTTP 200，输出 `DB-HTTP-JSON-OK`，`transport=http_sse` |
+| Responses HTTP SSE | `b6f02535-0b6f-422c-be62-6142e161b268` | 通过 | HTTP 200，SSE 输出 `DB-HTTP-SSE-OK-2`，`transport=http_sse` |
+| Responses WebSocket SSE | `32d51802-f898-4835-8919-050e4b5cf4f3` | 通过 | HTTP 200，SSE 输出 `DB-WS-SSE-OK-2`，`transport=websocket` |
+| Responses WebSocket JSON required | `8efe0116-8192-4211-8bac-d36557ec3214` | 通过 | 使用真实 `previous_response_id` 强制 WebSocket，HTTP 200，输出 `DB-WS-REQUIRED-JSON-OK-2`，`transport=websocket` |
+| Chat JSON | `1e8738c6-c315-4af0-b961-ff934844b528` | 通过 | HTTP 200，输出 `DB-CHAT-JSON-OK-2`，`transport=http_sse` |
+| Chat SSE | `41d85d51-ad80-4aa6-9dc1-e8332a3cae6a` | 通过 | HTTP 200，聚合 delta 后为 `DB-CHAT-SSE-OK-2`，结尾 `[DONE]` |
+| Responses Review | `1533ffa9-c55d-4fa5-a0b3-1fadb3b20106` | 通过 | HTTP 200，输出 `DB-REVIEW-OK`，日志 route 保持 `/v1/responses/review` |
+| Responses Compact | `436b62b7-8f51-447f-a7b4-91ddf025d20f` | 通过 | HTTP 200，`object=response.compaction`，日志 `route=/v1/responses/compact`、`compact=true`、usage 正常 |
+
+备注：
+
+- `responses_http_sse` 首次请求 `b7e7bc8d-e8aa-4f70-8e07-8d99958c11d1` 出现一次瞬时 HTTP transport 打开失败，重跑通过。
+- `responses_ws_required_json` 首次请求 `3593b848-bb7c-4b03-8163-ff521098a297` 出现一次 `tls handshake eof`，重跑通过。
+- 默认 WebSocket preferred 的非流式请求可能降级到 HTTP SSE；本轮使用 `previous_response_id` 强制 WebSocket required 验证了真实 WebSocket JSON。
+
 ### 运行上下文
 
 - 执行时间：2026-06-20
@@ -1157,3 +1263,62 @@ from account_usage;
 3. 如果是 WebSocket，查 `CODEX_PROXY_WS_AUDIT_DIR` artifact。
 4. 对比 `docs/upstream-request-chain-audit.md` 和 `docs/risk-control-audit.md` 的 TS/OpenAI 原版基线。
 5. 只有确认是本项目实现问题后再改代码；改完更新本文或追加到 `docs/real-chain-audit.md`。
+
+## 2026-06-22 WS 持久化 / 复用对齐复测
+
+### TS 基线
+
+- TS `ws-pool` 默认启用持久连接池，按 `entryId + conversationId` 复用物理 WebSocket。
+- TS 池连接 busy、禁用、超限时绕过为 one-shot。
+- TS 复用连接在首个响应帧前失效时，丢弃 stale 连接并用 fresh one-shot WebSocket 重试一次。
+
+### Rust 对齐结果
+
+- Rust `CodexWebSocketPool` 默认启用，配置来自 `config.yaml` 的 `ws_pool.enabled/max_age_ms/max_per_account`。
+- Rust 池 key 为 `base_url + account_id + conversation_id`，比 TS 多隔离上游地址，避免不同 base URL 串池。
+- Rust 已补齐 stale reuse 语义：复用连接在首个响应帧前 close/timeout/transport error 时，丢弃池连接并 fresh WebSocket 重试一次；上游业务错误帧不触发该重试。
+
+### 自动化验证
+
+```bash
+cargo test --test integration openai_responses_websocket -- --nocapture
+cargo test --test integration -- --nocapture
+cargo clippy --all-targets -- -D warnings
+```
+
+结果：
+
+- `openai_responses_websocket`: 30 passed
+- `integration`: 442 passed, 0 ignored
+- `clippy`: passed
+
+新增覆盖：
+
+- `responses_websocket_should_retry_fresh_connection_when_reused_connection_dies_before_first_frame`
+- 已有覆盖继续通过：正常复用、禁用池不复用、`previous_response_id` 强制 WebSocket、隐式续接、required/fallback 边界、ban 风险剥离。
+
+### 真实链路验证
+
+运行目录：
+
+- `.runtime/real-chain-openai-20260622-ws-reuse-after-fix-233859`
+
+请求：
+
+- `real_ws_reuse_after_fix_first_233859`: HTTP 200, `status=completed`, `transport=websocket`
+- `real_ws_reuse_after_fix_second_233859`: HTTP 200, `status=completed`, `transport=websocket`
+
+事件日志：
+
+- 第一跳 `event_logs.transport=websocket`, `status_code=200`, `failure_class=null`
+- 第二跳 `event_logs.transport=websocket`, `status_code=200`, `failure_class=null`
+
+WS audit：
+
+- 第一跳 `transport_mode=websocket_preferred`, `fallback_allowed=true`
+- 第二跳 `transport_mode=websocket_required`, `fallback_allowed=false`
+
+说明：
+
+- 真实链路证明当前新二进制 WebSocket 请求和 `previous_response_id` 续链可用。
+- 真实日志当前不输出物理连接池 new/reuse 决策；物理复用和 stale reuse fresh retry 由集成测试用本地 WebSocket server 精确验证。

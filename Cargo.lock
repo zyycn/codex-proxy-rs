@@ -365,16 +365,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
-name = "codex-proxy-adapters"
+name = "codex-proxy-rs"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "argon2",
  "async-trait",
+ "axum",
+ "base64",
  "bytes",
  "chrono",
- "codex-proxy-core",
- "codex-proxy-platform",
+ "config",
+ "dirs",
  "futures",
+ "hex",
+ "hmac",
  "indexmap",
+ "rand 0.10.1",
  "reqwest",
  "rustls",
  "rustls-native-certs",
@@ -382,132 +389,24 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "serde_yml",
+ "sha2 0.11.0",
  "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
- "tokio-tungstenite",
- "tracing",
- "tungstenite",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "codex-proxy-assets"
-version = "0.1.0"
-dependencies = [
- "axum",
- "tempfile",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "codex-proxy-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "chrono",
- "hex",
- "indexmap",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "codex-proxy-platform"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "base64",
- "chrono",
- "config",
- "dirs",
- "hex",
- "hmac",
- "rand 0.10.1",
- "rustls",
- "rustls-native-certs",
- "rustls-pki-types",
- "secrecy",
- "serde",
- "serde_json",
- "serde_yml",
- "sha2 0.11.0",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "codex-proxy-runtime"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "bytes",
- "chrono",
- "codex-proxy-adapters",
- "codex-proxy-core",
- "codex-proxy-platform",
- "futures",
- "reqwest",
- "secrecy",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "codex-proxy-server"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "codex-proxy-adapters",
- "codex-proxy-assets",
- "codex-proxy-core",
- "codex-proxy-platform",
- "codex-proxy-runtime",
- "futures",
- "secrecy",
- "serde",
- "serde_json",
- "serde_yml",
- "sqlx",
- "tempfile",
- "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
  "tower",
  "tower-http",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
+ "tungstenite",
  "uuid",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -3862,10 +3761,6 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
 
 [[package]]
 name = "yaml-rust2"
