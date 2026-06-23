@@ -130,8 +130,8 @@ impl TaskCoordinator {
 
 fn token_client_config(config: &crate::runtime::state::RuntimeConfig) -> TokenClientConfig {
     TokenClientConfig {
-        client_id: config.auth.token_client_id.clone(),
-        token_endpoint: config.auth.token_endpoint.clone(),
+        client_id: config.auth.oauth_client_id.clone(),
+        token_endpoint: config.auth.oauth_token_endpoint.clone(),
     }
 }
 

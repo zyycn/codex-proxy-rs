@@ -226,8 +226,9 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
-            token_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,

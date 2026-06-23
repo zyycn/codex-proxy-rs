@@ -81,10 +81,12 @@ pub struct AuthConfig {
     pub rotation_strategy: String,
     /// 套餐优先级。
     pub tier_priority: Vec<String>,
-    /// Token 续期客户端 ID。
-    pub token_client_id: String,
-    /// Token 续期端点。
-    pub token_endpoint: String,
+    /// OAuth 客户端 ID。
+    pub oauth_client_id: String,
+    /// OAuth 授权端点。
+    pub oauth_auth_endpoint: String,
+    /// OAuth token 端点。
+    pub oauth_token_endpoint: String,
 }
 
 /// 配额刷新与跳过配置。
