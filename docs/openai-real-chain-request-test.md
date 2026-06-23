@@ -12,7 +12,7 @@
 | 场景 | 状态 | 证据 |
 | --- | --- | --- |
 | 本地编译检查 | 通过 | `cargo check` |
-| 封禁/禁用亲和剥离集成覆盖 | 通过 | `cargo test --test integration proxy::dispatch::chat_upstream::responses_http:: -- --nocapture`；`responses_websocket::` |
+| 封禁/禁用亲和剥离集成覆盖 | 通过 | `cargo test --test main proxy::dispatch::chat_upstream::responses_http:: -- --nocapture`；`responses_websocket::` |
 | 5xx/429/403/402/Cloudflare 重试集成覆盖 | 通过 | `responses_recovery::` 37 个用例；`chat_routes::` 15 个用例；`responses_websocket::` 30 个用例 |
 | 真实链路基础健康检查 | 通过 | `/debug/diagnostics`：5 accounts，1 active，3 disabled，1 banned |
 | 真实 Responses 基线请求 | 通过 | `req_e29e505e-4623-4502-9676-922a27c1d247`，`resp_09b95050e9f8ff4b016a3a703bc2f8819a8e248aa2fc31ff4d` |
@@ -27,17 +27,17 @@
 ## 本地验证记录
 
 - `cargo check`：通过。
-- `cargo test --test integration proxy::dispatch::chat_upstream::responses_recovery:: -- --nocapture`：37 passed，覆盖 Responses HTTP/SSE 的 401/402/403/429、Cloudflare challenge/path-block、5xx same-account retry、模型不支持 fallback、previous_response_id/函数调用/加密 replay 历史剥离。
-- `cargo test --test integration proxy::dispatch::chat_upstream::responses_websocket:: -- --nocapture`：30 passed，覆盖 WebSocket 连接复用、复用连接断开后 fresh retry、previous_response_id fallback、隐式 banned 亲和剥离、quota/rate limit/path-block 边界。
-- `cargo test --test integration proxy::dispatch::chat_upstream::chat_routes:: -- --nocapture`：15 passed，覆盖 Chat Completions 的 401/402/403/429、Cloudflare、模型不支持和 SSE 翻译。
-- `cargo test --test integration proxy::dispatch::chat_upstream::responses_http:: -- --nocapture`：23 passed，覆盖 HTTP Responses 参数转换、cookie path 作用域、banned 亲和剥离、quota 亲和保留和下游断开。
-- `cargo test --test integration upstream::accounts::token_refresh:: -- --nocapture`：13 passed，覆盖 transient retry、ambiguous transport 不重试、invalid_grant 二次确认、retry exhaustion 延后恢复、stale refresh token 防复用。
-- `cargo test --test integration upstream::accounts::account_pool::quota:: -- --nocapture`：9 passed，覆盖 quota/cooldown 选择边界。
-- `cargo test --test integration upstream::accounts::cloudflare:: -- --nocapture`：2 passed，覆盖 Cloudflare cooldown 升级和过期重置。
-- `cargo test --test integration mark_banned -- --nocapture`：5 passed，覆盖 401 `account_deactivated` 和 403 banned 信号将账号标记为 banned。
-- `cargo test --test integration mark_expired_after_401 -- --nocapture`：3 passed，覆盖普通 401 将账号标记为 expired。
-- `cargo test --test integration runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_discovered -- --nocapture`：通过，覆盖运行时调度发现 active 账号 token 已过期时持久化为 expired。
-- `cargo test --test integration upstream::accounts::account_pool:: -- --nocapture`：27 passed，覆盖账号池调度、quota/cooldown、运行时状态回写。
+- `cargo test --test main proxy::dispatch::chat_upstream::responses_recovery:: -- --nocapture`：37 passed，覆盖 Responses HTTP/SSE 的 401/402/403/429、Cloudflare challenge/path-block、5xx same-account retry、模型不支持 fallback、previous_response_id/函数调用/加密 replay 历史剥离。
+- `cargo test --test main proxy::dispatch::chat_upstream::responses_websocket:: -- --nocapture`：30 passed，覆盖 WebSocket 连接复用、复用连接断开后 fresh retry、previous_response_id fallback、隐式 banned 亲和剥离、quota/rate limit/path-block 边界。
+- `cargo test --test main proxy::dispatch::chat_upstream::chat_routes:: -- --nocapture`：15 passed，覆盖 Chat Completions 的 401/402/403/429、Cloudflare、模型不支持和 SSE 翻译。
+- `cargo test --test main proxy::dispatch::chat_upstream::responses_http:: -- --nocapture`：23 passed，覆盖 HTTP Responses 参数转换、cookie path 作用域、banned 亲和剥离、quota 亲和保留和下游断开。
+- `cargo test --test main upstream::accounts::token_refresh:: -- --nocapture`：13 passed，覆盖 transient retry、ambiguous transport 不重试、invalid_grant 二次确认、retry exhaustion 延后恢复、stale refresh token 防复用。
+- `cargo test --test main upstream::accounts::account_pool::quota:: -- --nocapture`：9 passed，覆盖 quota/cooldown 选择边界。
+- `cargo test --test main upstream::accounts::cloudflare:: -- --nocapture`：2 passed，覆盖 Cloudflare cooldown 升级和过期重置。
+- `cargo test --test main mark_banned -- --nocapture`：5 passed，覆盖 401 `account_deactivated` 和 403 banned 信号将账号标记为 banned。
+- `cargo test --test main mark_expired_after_401 -- --nocapture`：3 passed，覆盖普通 401 将账号标记为 expired。
+- `cargo test --test main runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_discovered -- --nocapture`：通过，覆盖运行时调度发现 active 账号 token 已过期时持久化为 expired。
+- `cargo test --test main upstream::accounts::account_pool:: -- --nocapture`：27 passed，覆盖账号池调度、quota/cooldown、运行时状态回写。
 
 ## 真实链路记录
 
