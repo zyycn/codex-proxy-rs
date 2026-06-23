@@ -119,7 +119,11 @@ pub fn transport_for_request(request: &CodexResponsesRequest) -> CodexTransport 
         return CodexTransport::WebSocketRequired;
     }
 
-    CodexTransport::WebSocketPreferred
+    if request.use_websocket {
+        return CodexTransport::WebSocketPreferred;
+    }
+
+    CodexTransport::HttpSse
 }
 
 /// 判断请求在 WebSocket 失败后是否允许 HTTP SSE 回退。

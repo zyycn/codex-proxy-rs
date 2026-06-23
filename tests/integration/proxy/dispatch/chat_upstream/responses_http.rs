@@ -1047,7 +1047,10 @@ data: {"delta":"partial before transport failure"}
 
 #[tokio::test]
 async fn responses_stream_should_emit_failed_event_when_upstream_closes_without_completed() {
-    let first_frame = r#"event: response.output_text.delta
+    let first_frame = r#"event: response.created
+data: {"response":{"id":"resp_clean_close"}}
+
+event: response.output_text.delta
 data: {"delta":"partial before clean close"}
 
 "#;
@@ -1097,6 +1100,7 @@ data: {"delta":"partial before clean close"}
 
     assert!(rest.contains("event: response.failed"));
     assert!(rest.contains("stream_disconnected"));
+    assert!(rest.contains(r#""id":"resp_clean_close""#));
     assert!(rest.ends_with("data: [DONE]\n\n"));
 }
 

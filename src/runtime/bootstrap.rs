@@ -69,8 +69,12 @@ async fn build_application(
         .ensure_current_seed(&default_fingerprint)
         .await?;
     let runtime_config = RuntimeConfig::from(config.clone());
-    let services =
-        Services::with_installation_id(&config, stores, runtime_fingerprint, Some(installation_id));
+    let services = Services::try_with_installation_id(
+        &config,
+        stores,
+        runtime_fingerprint,
+        Some(installation_id),
+    )?;
 
     let created_default_admin = services
         .admin_sessions
