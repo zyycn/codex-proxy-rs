@@ -44,11 +44,12 @@ export function getLogs(query: LogsQuery = {}) {
 }
 
 export function getLogDetail(logId: string) {
-  return requestJson<EventLog>(`/api/admin/logs/${logId}`)
+  const params = new URLSearchParams({ id: logId })
+  return requestJson<EventLog>(`/api/admin/logs/detail?${params}`)
 }
 
 export function clearLogs() {
-  return requestJson<{ deleted: number }>('/api/admin/logs', {
-    method: 'DELETE',
+  return requestJson<{ deleted: number }>('/api/admin/logs/delete', {
+    method: 'POST',
   })
 }

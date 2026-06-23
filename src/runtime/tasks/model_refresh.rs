@@ -5,9 +5,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::time::{interval, sleep};
 use tracing::{info, warn};
 
-use crate::accounts::model::Account;
-use crate::accounts::store::AccountStore;
-use crate::codex::models::{ModelRefreshResult, ModelService, ModelServiceError};
+use crate::upstream::accounts::model::Account;
+use crate::upstream::accounts::store::AccountStore;
+use crate::upstream::models::{ModelRefreshResult, ModelService, ModelServiceError};
 
 use super::coordinator::SchedulerHandle;
 

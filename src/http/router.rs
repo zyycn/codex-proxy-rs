@@ -21,7 +21,7 @@ pub fn router() -> Router<AppState> {
 /// 使用指定前端构建产物目录构造整个 HTTP 服务路由。
 pub fn router_with_assets(dist_dir: impl AsRef<Path>) -> Router<AppState> {
     Router::new()
-        .merge(proxy::openai::router())
+        .merge(proxy::router::router())
         .merge(admin::router::router())
         .fallback_service(web::assets::spa_router(dist_dir))
         .layer(http_trace_layer())

@@ -2,9 +2,9 @@
 
 pub mod chat;
 pub mod cloudflare;
+pub mod errors;
 pub mod implicit_resume;
 pub mod reasoning_replay;
 pub mod responses;
 pub mod session_affinity;
-pub mod upstream_errors;
-pub mod upstream_requests;
+pub mod upstream;

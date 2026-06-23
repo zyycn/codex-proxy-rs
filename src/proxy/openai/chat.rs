@@ -18,7 +18,13 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    codex::{
+    http::middleware::request_id::RequestId,
+    proxy::{
+        auth::authorize_client_api_key,
+        dispatch::responses::{ResponseDispatchError, ResponseDispatchStream},
+    },
+    runtime::state::AppState,
+    upstream::{
         models::ModelCatalog,
         protocol::{
             responses::{apply_response_model_options, CodexResponsesRequest},
@@ -26,12 +32,6 @@ use crate::{
             sse::{encode_sse_event, parse_sse_events, SseError, DONE_SSE_FRAME},
         },
     },
-    http::middleware::request_id::RequestId,
-    proxy::{
-        auth::authorize_client_api_key,
-        dispatch::responses::{ResponseDispatchError, ResponseDispatchStream},
-    },
-    runtime::state::AppState,
 };
 
 use super::{
@@ -188,7 +188,7 @@ impl ChatCompletionStreamTranslator {
 
     fn push_event(
         &mut self,
-        event: &crate::codex::protocol::sse::SseEvent,
+        event: &crate::upstream::protocol::sse::SseEvent,
         output: &mut String,
     ) -> Result<(), ChatStreamTranslationError> {
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {

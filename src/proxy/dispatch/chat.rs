@@ -8,17 +8,9 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    accounts::{
-        model::AccountStatus,
-        pool::{AccountAcquireRequest, RuntimeAccountPoolService},
-    },
-    codex::{
-        models::ModelCatalog,
-        protocol::responses::{apply_response_model_options, CodexResponsesRequest},
-        transport::{
-            backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
-            CodexClientError,
-        },
+    admin::monitoring::{
+        event_store::AdminLogService,
+        events::{EventLevel, ResponseEventRecord},
     },
     proxy::dispatch::{
         cloudflare::{
@@ -26,21 +18,29 @@ use crate::{
             is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
             CloudflareRecovery,
         },
-        upstream_errors::{
+        errors::{
             auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
             is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
             is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
             upstream_error_http_status,
         },
-        upstream_requests::{
+        upstream::{
             create_response_with_account, verify_acquired_quota_if_required,
             QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
     proxy::openai::chat::ChatStreamTranslationError,
-    telemetry::{
-        event_store::AdminLogService,
-        events::{EventLevel, ResponseEventRecord},
+    upstream::accounts::{
+        model::AccountStatus,
+        pool::{AccountAcquireRequest, RuntimeAccountPoolService},
+    },
+    upstream::{
+        models::ModelCatalog,
+        protocol::responses::{apply_response_model_options, CodexResponsesRequest},
+        transport::{
+            backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
+            CodexClientError,
+        },
     },
 };
 
@@ -48,7 +48,7 @@ use crate::{
 #[derive(Clone)]
 pub struct ChatDispatchService {
     account_pool: Arc<RuntimeAccountPoolService>,
-    models: Arc<crate::codex::models::ModelService>,
+    models: Arc<crate::upstream::models::ModelService>,
     codex: Arc<CodexBackendClient>,
     logs: Arc<AdminLogService>,
     installation_id: Option<String>,
@@ -58,7 +58,7 @@ pub struct ChatDispatchService {
 impl ChatDispatchService {
     pub(crate) fn new(
         account_pool: Arc<RuntimeAccountPoolService>,
-        models: Arc<crate::codex::models::ModelService>,
+        models: Arc<crate::upstream::models::ModelService>,
         codex: Arc<CodexBackendClient>,
         logs: Arc<AdminLogService>,
         installation_id: Option<String>,
@@ -510,7 +510,7 @@ struct ChatDispatchErrorEventRecord<'a> {
     error: &'a ChatDispatchError,
 }
 
-use crate::telemetry::events::EventLog;
+use crate::admin::monitoring::events::EventLog;
 
 async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'_>) {
     let mut metadata = serde_json::json!({

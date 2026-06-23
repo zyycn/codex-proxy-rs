@@ -89,7 +89,6 @@ export function useDashboard(): {
     const inputTokens = summary?.inputTokens ?? 0
     const outputTokens = summary?.outputTokens ?? 0
     const cachedTokens = summary?.cachedTokens ?? 0
-    const reasoningTokens = summary?.reasoningTokens ?? 0
     const emptyResponseCount = summary?.emptyResponseCount ?? 0
 
     metrics.value = [
@@ -143,7 +142,7 @@ export function useDashboard(): {
       usageByAccount[u.accountId] = u
     }
 
-    // 计算用量数据：优先用 usage-stats，回退到 account 自带字段
+    // 计算用量数据：优先用 usage，回退到 account 自带字段
     const merged = accounts.map((acc) => {
       const usage = usageByAccount[acc.id] ?? {}
       return {
@@ -216,12 +215,8 @@ export function useDashboard(): {
       return
     }
 
-    const pool = diagnostics.accounts?.pool ?? {}
-    const capacity = diagnostics.accounts?.capacity ?? {}
     const transport = diagnostics.transport ?? {}
     const fingerprint = transport.fingerprint ?? {}
-    const settings = diagnostics.settings ?? {}
-    const backendUrl = (transport.backendBaseUrl || '').replace(/^https?:\/\//, '')
 
     serviceStatuses.value = [
       {
@@ -309,8 +304,6 @@ export function useDashboard(): {
 
     const totalInput = entries.reduce((s, [, b]) => s + b.inputTokens, 0)
     const totalOutput = entries.reduce((s, [, b]) => s + b.outputTokens, 0)
-    const totalErrors = entries.reduce((s, [, b]) => s + b.errors, 0)
-
     trendSummary.value = [
       { label: '输入', value: totalInput > 0 ? formatTokens(totalInput) : '—', tone: 'info' as const },
       { label: '输出', value: totalOutput > 0 ? formatTokens(totalOutput) : '—', tone: 'success' as const },
@@ -328,12 +321,6 @@ export function useDashboard(): {
     if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`
     if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
     return String(tokens)
-  }
-
-  function formatLatency(ms: number | undefined): string {
-    if (!ms) return '—'
-    if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
-    return `${Math.round(ms)}ms`
   }
 
   function formatRelativeTime(dateStr: string | undefined): string {

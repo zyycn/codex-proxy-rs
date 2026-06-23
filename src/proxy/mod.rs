@@ -1,4 +1,4 @@
-//! OpenAI 兼容接口与请求调度代理入口。
+//! OpenAI 兼容代理入口。
 //!
 //! 本模块负责：
 //! - OpenAI API 协议转换（Chat Completions / Responses / Models）
@@ -8,3 +8,4 @@
 pub mod auth;
 pub mod dispatch;
 pub mod openai;
+pub mod router;

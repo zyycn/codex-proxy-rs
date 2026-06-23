@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::accounts::{
+use crate::upstream::accounts::{
     store::SqliteAccountStore,
     token_refresh::{RefreshLeaseStore, RefreshPolicy, RuntimeTokenRefreshService, TokenRefresher},
 };

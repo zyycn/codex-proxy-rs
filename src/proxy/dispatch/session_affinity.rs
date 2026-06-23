@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::codex::protocol::responses::CodexResponsesRequest;
+use crate::upstream::protocol::responses::CodexResponsesRequest;
 
 // ====================================================================
 // 亲和性核心类型

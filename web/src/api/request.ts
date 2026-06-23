@@ -125,29 +125,6 @@ export function post<T = any, D = any>(url: string, data?: D, config?: RequestCo
   })
 }
 
-export function put<T = any, D = any>(url: string, data?: D, config?: RequestConfig): Promise<T> {
-  return requestJson<T, D>(url, {
-    method: 'PUT',
-    data,
-    ...config,
-  })
-}
-
-export function patch<T = any, D = any>(url: string, data?: D, config?: RequestConfig): Promise<T> {
-  return requestJson<T, D>(url, {
-    method: 'PATCH',
-    data,
-    ...config,
-  })
-}
-
-export function del<T = any>(url: string, config?: RequestConfig): Promise<T> {
-  return requestJson<T>(url, {
-    method: 'DELETE',
-    ...config,
-  })
-}
-
 export { http }
 
 export default {
@@ -155,7 +132,4 @@ export default {
   request: requestJson,
   get,
   post,
-  put,
-  patch,
-  delete: del,
 }

@@ -18,7 +18,7 @@ export interface UsageSummary {
 }
 
 export function getUsageSummary() {
-  return requestJson<UsageSummary>('/api/admin/usage-stats/summary')
+  return requestJson<UsageSummary>('/api/admin/usage/summary')
 }
 
 export interface AccountUsageStats {
@@ -41,5 +41,5 @@ export interface AccountUsageStats {
 }
 
 export function getUsageStats() {
-  return requestJson<AccountUsageStats[]>('/api/admin/usage-stats')
+  return requestJson<AccountUsageStats[]>('/api/admin/usage')
 }

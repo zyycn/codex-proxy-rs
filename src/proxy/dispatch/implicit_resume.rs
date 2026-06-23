@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::codex::protocol::responses::CodexResponsesRequest;
+use crate::upstream::protocol::responses::CodexResponsesRequest;
 
 /// 隐式续接前的可恢复请求状态。
 #[derive(Debug, Clone, PartialEq)]

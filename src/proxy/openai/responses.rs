@@ -11,17 +11,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    codex::protocol::{
-        responses::{ensure_reasoning_include, CodexCompactRequest, CodexResponsesRequest},
-        schema::prepare_schema,
-        sse::{encode_sse_event, sse_body_has_done},
-    },
     http::middleware::request_id::RequestId,
     proxy::{
         auth::authorize_client_api_key,
         dispatch::responses::{ResponseDispatchError, ResponseDispatchStream},
     },
     runtime::state::AppState,
+    upstream::protocol::{
+        responses::{ensure_reasoning_include, CodexCompactRequest, CodexResponsesRequest},
+        schema::prepare_schema,
+        sse::{encode_sse_event, sse_body_has_done},
+    },
 };
 
 use super::{

@@ -3,7 +3,6 @@ use std::error::Error;
 use axum::Router;
 use chrono::Utc;
 
-use crate::codex::fingerprint::{Fingerprint, FingerprintRepository};
 use crate::config::types::AppConfig;
 use crate::infra::database::connect_sqlite;
 use crate::infra::logging::{init_tracing, LogGuard, RotationConfig};
@@ -12,6 +11,7 @@ use crate::runtime::services::{BackgroundTaskStores, Services};
 use crate::runtime::shutdown::shutdown_signal;
 use crate::runtime::state::{AppState, RuntimeConfig};
 use crate::runtime::tasks::coordinator::TaskCoordinator;
+use crate::upstream::fingerprint::{Fingerprint, FingerprintRepository};
 
 pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = AppConfig::load()?;
@@ -41,16 +41,24 @@ async fn build_application(
 
     let fingerprint_repository = FingerprintRepository::new(pool.clone());
     let stores = BackgroundTaskStores {
-        accounts: crate::accounts::store::SqliteAccountStore::new(pool.clone(), secret.clone()),
-        admin_sessions: crate::access::admin_session::SqliteAdminSessionStore::new(pool.clone()),
-        cookies: crate::accounts::cookies::SqliteCookieStore::new(pool.clone(), secret.clone()),
+        accounts: crate::upstream::accounts::store::SqliteAccountStore::new(
+            pool.clone(),
+            secret.clone(),
+        ),
+        admin_sessions: crate::admin::auth::service::SqliteAdminSessionStore::new(pool.clone()),
+        cookies: crate::upstream::accounts::cookies::SqliteCookieStore::new(
+            pool.clone(),
+            secret.clone(),
+        ),
         fingerprints: fingerprint_repository.clone(),
         session_affinity: crate::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
             pool.clone(),
         ),
-        refresh_leases: crate::accounts::token_refresh::RefreshLeaseStore::new(pool.clone()),
-        client_keys: crate::access::client_keys::SqliteClientKeyStore::new(pool.clone(), hasher),
-        event_logs: crate::telemetry::event_store::SqliteEventLogStore::new(pool),
+        refresh_leases: crate::upstream::accounts::token_refresh::RefreshLeaseStore::new(
+            pool.clone(),
+        ),
+        client_keys: crate::admin::keys::service::SqliteClientKeyStore::new(pool.clone(), hasher),
+        event_logs: crate::admin::monitoring::event_store::SqliteEventLogStore::new(pool),
     };
 
     let default_admin_password = config.admin.default_password.clone();

@@ -37,7 +37,7 @@ pub fn data_installation_id_path(data_dir: &Path) -> PathBuf {
 /// 按读取优先级读取或生成 installation ID。
 ///
 /// 顺序为真实 Codex Desktop 文件、本应用数据目录文件、生成并写入本应用数据目录。
-/// 当 `data_dir` 为 `None` 且没有可读旧文件时，返回一个不会持久化的新 UUID。
+/// 当 `data_dir` 为 `None` 且没有可读文件时，返回一个不会持久化的新 UUID。
 pub fn load_or_create_installation_id(data_dir: Option<&Path>) -> io::Result<String> {
     let codex_path = codex_desktop_installation_id_path();
     let data_path = data_dir.map(data_installation_id_path);

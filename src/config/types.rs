@@ -64,7 +64,7 @@ pub struct ModelConfig {
     pub aliases: BTreeMap<String, String>,
 }
 
-/// 认证、轮换与 OAuth 配置。
+/// 认证、轮换与 token 续期配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AuthConfig {
     /// 提前刷新秒数。
@@ -81,12 +81,10 @@ pub struct AuthConfig {
     pub rotation_strategy: String,
     /// 套餐优先级。
     pub tier_priority: Vec<String>,
-    /// OAuth 客户端 ID。
-    pub oauth_client_id: String,
-    /// OAuth 授权端点。
-    pub oauth_auth_endpoint: String,
-    /// OAuth 令牌端点。
-    pub oauth_token_endpoint: String,
+    /// Token 续期客户端 ID。
+    pub token_client_id: String,
+    /// Token 续期端点。
+    pub token_endpoint: String,
 }
 
 /// 配额刷新与跳过配置。

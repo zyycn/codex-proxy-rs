@@ -50,7 +50,7 @@ const filteredAccounts = computed(() => {
   if (!searchQuery.value) return accounts.value
   const query = searchQuery.value.toLowerCase()
   return accounts.value.filter(acc =>
-    acc.email.toLowerCase().includes(query)
+    (acc.email ?? '').toLowerCase().includes(query)
     || acc.label?.toLowerCase().includes(query)
     || acc.id.toLowerCase().includes(query),
   )
@@ -153,12 +153,6 @@ function toggleAll() {
   } else {
     filteredAccounts.value.forEach(acc => selectedIds.value.add(acc.id))
   }
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
-  return String(tokens)
 }
 
 function formatDate(dateStr?: string): string {

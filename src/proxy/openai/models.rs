@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    codex::models::ModelCatalog, proxy::auth::authorize_client_api_key, runtime::state::AppState,
+    proxy::auth::authorize_client_api_key, runtime::state::AppState, upstream::models::ModelCatalog,
 };
 
 use super::{

@@ -6,11 +6,11 @@ use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 use crate::{
-    accounts::{
+    upstream::accounts::{
         quota::{QuotaRefreshSummary, RuntimeQuotaRefreshService},
         store::SqliteAccountStore,
     },
-    codex::transport::CodexBackendClient,
+    upstream::transport::CodexBackendClient,
 };
 
 use super::coordinator::SchedulerHandle;

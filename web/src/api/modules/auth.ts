@@ -36,7 +36,7 @@ export function login(payload: LoginRequest) {
 }
 
 export function getAuthStatus() {
-  return requestJson<AuthStatus>('/api/admin/auth/status')
+  return requestJson<AuthStatus>('/api/admin/accounts/auth-status')
 }
 
 export function logout() {

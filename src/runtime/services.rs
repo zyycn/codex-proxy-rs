@@ -3,23 +3,15 @@
 use std::sync::Arc as StdArc;
 
 use crate::{
-    access::{
-        admin_session::{AdminSessionService, SqliteAdminSessionStore},
-        client_keys::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
+    admin::monitoring::{
+        event_store::{AdminLogService, SqliteEventLogStore},
+        service::AdminUsageService,
+        usage_store::SqliteUsageStore,
     },
-    accounts::{
-        admin_service::AdminAccountService,
-        cookies::SqliteCookieStore,
-        oauth::AdminOAuthService,
-        pool::{AccountPoolOptions, RuntimeAccountPoolService},
-        store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
-        token_refresh::RefreshLeaseStore as SqliteRefreshLeaseStore,
-    },
-    codex::{
-        fingerprint::{Fingerprint, FingerprintRepository},
-        models::{AdminModelService, ModelService, ModelSnapshotStore},
-        oauth_client::default_openai_oauth_client,
-        transport::{CodexBackendClient, CodexModelCatalogClient},
+    admin::{
+        accounts::service::AdminAccountService,
+        auth::service::{AdminSessionService, SqliteAdminSessionStore},
+        keys::service::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
     },
     config::{settings::RuntimeSettingsService, types::AppConfig},
     proxy::dispatch::{
@@ -27,10 +19,17 @@ use crate::{
         responses::ResponseDispatchService,
         session_affinity::{RuntimeSessionAffinityService, SqliteSessionAffinityStore},
     },
-    telemetry::{
-        event_store::{AdminLogService, SqliteEventLogStore},
-        usage::AdminUsageService,
-        usage_store::SqliteUsageStore,
+    upstream::accounts::{
+        cookies::SqliteCookieStore,
+        pool::{AccountPoolOptions, RuntimeAccountPoolService},
+        store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
+        token_refresh::RefreshLeaseStore as SqliteRefreshLeaseStore,
+    },
+    upstream::{
+        fingerprint::{Fingerprint, FingerprintRepository},
+        models::{AdminModelService, ModelService, ModelSnapshotStore},
+        token_client::{default_openai_token_client, TokenClientConfig},
+        transport::{CodexBackendClient, CodexModelCatalogClient},
     },
 };
 
@@ -66,7 +65,6 @@ pub struct Services {
     pub admin_sessions: StdArc<AdminSessionService>,
     pub settings: StdArc<RuntimeSettingsService>,
     pub admin_accounts: StdArc<AdminAccountService>,
-    pub admin_oauth: StdArc<AdminOAuthService>,
     pub logs: StdArc<AdminLogService>,
     pub usage: StdArc<AdminUsageService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
@@ -100,14 +98,15 @@ impl Services {
                 fingerprint.clone(),
             );
             if config.ws_pool.enabled {
-                let pool = StdArc::new(crate::codex::transport::CodexWebSocketPool::with_config(
-                    crate::codex::transport::CodexWebSocketPoolConfig {
-                        enabled: config.ws_pool.enabled,
-                        max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
-                        max_per_account: config.ws_pool.max_per_account,
-                        ..crate::codex::transport::CodexWebSocketPoolConfig::default()
-                    },
-                ));
+                let pool =
+                    StdArc::new(crate::upstream::transport::CodexWebSocketPool::with_config(
+                        crate::upstream::transport::CodexWebSocketPoolConfig {
+                            enabled: config.ws_pool.enabled,
+                            max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
+                            max_per_account: config.ws_pool.max_per_account,
+                            ..crate::upstream::transport::CodexWebSocketPoolConfig::default()
+                        },
+                    ));
                 StdArc::new(client.with_websocket_pool(pool))
             } else {
                 StdArc::new(client)
@@ -131,19 +130,17 @@ impl Services {
             AccountPoolOptions::default(),
             config.auth.request_interval_ms,
         ));
-        let oauth_config = oauth_config(config);
-        let oauth_client = StdArc::new(default_openai_oauth_client(oauth_config.clone()));
+        let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
         let admin_accounts = StdArc::new(AdminAccountService::new(
             stores.accounts.clone(),
             stores.cookies.clone(),
             config.quota.warning_thresholds.clone(),
             codex.clone(),
             account_pool.clone(),
-            oauth_client.clone(),
+            token_client,
             config.auth.refresh_margin_seconds,
             installation_id.clone(),
         ));
-        let admin_oauth = StdArc::new(AdminOAuthService::new(oauth_config, oauth_client));
         let logs = StdArc::new(AdminLogService::new(
             stores.event_logs.clone(),
             config.logging.enabled,
@@ -158,10 +155,10 @@ impl Services {
 
         let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
         let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
-            crate::codex::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
+            crate::upstream::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
         );
         let models = StdArc::new(ModelService::new(
-            crate::codex::models::ModelConfig {
+            crate::upstream::models::ModelConfig {
                 default_model: config.model.default_model.clone(),
                 default_reasoning_effort: config.model.default_reasoning_effort.clone(),
                 service_tier: config.model.service_tier.clone(),
@@ -173,7 +170,7 @@ impl Services {
         ));
         let admin_models = StdArc::new(AdminModelService::new(
             StdArc::new(ModelService::new(
-                crate::codex::models::ModelConfig {
+                crate::upstream::models::ModelConfig {
                     default_model: config.model.default_model.clone(),
                     default_reasoning_effort: config.model.default_reasoning_effort.clone(),
                     service_tier: config.model.service_tier.clone(),
@@ -215,7 +212,6 @@ impl Services {
             admin_sessions,
             settings,
             admin_accounts,
-            admin_oauth,
             logs,
             usage,
             account_pool,
@@ -230,18 +226,9 @@ impl Services {
     }
 }
 
-fn oauth_config(config: &AppConfig) -> crate::accounts::oauth::OAuthConfig {
-    crate::accounts::oauth::OAuthConfig {
-        client_id: config.auth.oauth_client_id.clone(),
-        auth_endpoint: config.auth.oauth_auth_endpoint.clone(),
-        device_code_endpoint: oauth_device_code_endpoint(&config.auth.oauth_token_endpoint),
-        token_endpoint: config.auth.oauth_token_endpoint.clone(),
+fn token_client_config(config: &AppConfig) -> TokenClientConfig {
+    TokenClientConfig {
+        client_id: config.auth.token_client_id.clone(),
+        token_endpoint: config.auth.token_endpoint.clone(),
     }
-}
-
-fn oauth_device_code_endpoint(token_endpoint: &str) -> String {
-    token_endpoint
-        .strip_suffix("/token")
-        .map(|endpoint| format!("{endpoint}/device/code"))
-        .unwrap_or_else(|| "https://auth.openai.com/oauth/device/code".to_string())
 }
