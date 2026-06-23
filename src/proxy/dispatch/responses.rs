@@ -81,7 +81,7 @@ use super::implicit_resume::{
     continuation_input_start, implicit_resume_allowed, ImplicitResumeSnapshot,
 };
 
-use crate::proxy::openai::responses::response_failed_sse_event;
+use crate::proxy::openai::responses::response_failed_sse_event_with_id;
 
 #[derive(Clone, Copy)]
 enum ExhaustedAccountClass {
@@ -2255,7 +2255,7 @@ async fn send_live_response_stream_tail(
                 return None;
             }
         }
-        let failure = premature_close_failed_event(failure_detail);
+        let failure = premature_close_failed_event(latest_response_id(&body_text), failure_detail);
         body_text.push_str(&failure);
         body_bytes.extend_from_slice(failure.as_bytes());
         if sender.send(Ok(Bytes::from(failure))).await.is_err() {
@@ -2303,12 +2303,32 @@ fn missing_sse_event_separator(body: &str) -> Option<&'static str> {
     }
 }
 
-fn premature_close_failed_event(detail: Option<&str>) -> String {
+fn latest_response_id(body: &str) -> Option<String> {
+    parse_sse_events(body).ok().and_then(|events| {
+        events.iter().rev().find_map(|event| {
+            serde_json::from_str::<Value>(&event.data)
+                .ok()
+                .and_then(|data| {
+                    data.pointer("/response/id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.trim().is_empty())
+                        .map(ToString::to_string)
+                })
+        })
+    })
+}
+
+fn premature_close_failed_event(response_id: Option<String>, detail: Option<&str>) -> String {
     let message = match detail.filter(|value| !value.trim().is_empty()) {
         Some(detail) => format!("Upstream stream closed before response.completed: {detail}"),
         None => "Upstream stream closed before response.completed".to_string(),
     };
-    response_failed_sse_event("server_error", "stream_disconnected", &message)
+    response_failed_sse_event_with_id(
+        response_id.as_deref(),
+        "server_error",
+        "stream_disconnected",
+        &message,
+    )
 }
 
 async fn finalize_live_response_stream(context: LiveResponseStreamContext, body: String) {

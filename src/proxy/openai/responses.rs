@@ -459,15 +459,29 @@ fn non_empty_str(value: Option<&Value>) -> Option<&str> {
 
 /// 编码 OpenAI Responses `response.failed` SSE 事件。
 pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
+    response_failed_sse_event_with_id(None, error_type, code, message)
+}
+
+/// 使用指定 response id 编码 OpenAI Responses `response.failed` SSE 事件。
+pub fn response_failed_sse_event_with_id(
+    response_id: Option<&str>,
+    error_type: &str,
+    code: &str,
+    message: &str,
+) -> String {
     let error = json!({
         "type": error_type,
         "code": code,
         "message": message,
     });
+    let response_id = response_id
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()));
     let data = json!({
         "type": "response.failed",
         "response": {
-            "id": format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
+            "id": response_id,
             "status": "failed",
             "error": error,
         },
@@ -534,6 +548,9 @@ async fn handle_responses(
         return invalid_responses_request_response().into_response();
     };
     apply_responses_header_context(&mut openai_request, &headers);
+    if openai_request.use_websocket.is_none() {
+        openai_request.use_websocket = Some(true);
+    }
     if let Some(subagent) = forced_subagent {
         force_openai_subagent(&mut openai_request, subagent);
     } else if let Some(subagent) = openai_subagent_from_headers(&headers) {

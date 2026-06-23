@@ -29,7 +29,9 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintRepository},
         models::{AdminModelService, ModelService, ModelSnapshotStore},
         token_client::{default_openai_token_client, TokenClientConfig},
-        transport::{CodexBackendClient, CodexModelCatalogClient},
+        transport::{
+            build_reqwest_client, CodexBackendClient, CodexModelCatalogClient, CustomCaError,
+        },
     },
 };
 
@@ -79,7 +81,16 @@ pub struct Services {
 
 impl Services {
     pub fn new(config: &AppConfig, stores: BackgroundTaskStores, fingerprint: Fingerprint) -> Self {
-        Self::with_installation_id(config, stores, fingerprint, None)
+        Self::try_new(config, stores, fingerprint)
+            .expect("failed to build runtime services with configured TLS transport")
+    }
+
+    pub fn try_new(
+        config: &AppConfig,
+        stores: BackgroundTaskStores,
+        fingerprint: Fingerprint,
+    ) -> Result<Self, CustomCaError> {
+        Self::try_with_installation_id(config, stores, fingerprint, None)
     }
 
     pub fn with_installation_id(
@@ -88,12 +99,22 @@ impl Services {
         fingerprint: Fingerprint,
         installation_id: Option<String>,
     ) -> Self {
+        Self::try_with_installation_id(config, stores, fingerprint, installation_id)
+            .expect("failed to build runtime services with configured TLS transport")
+    }
+
+    pub fn try_with_installation_id(
+        config: &AppConfig,
+        stores: BackgroundTaskStores,
+        fingerprint: Fingerprint,
+        installation_id: Option<String>,
+    ) -> Result<Self, CustomCaError> {
         let installation_id = installation_id.filter(|id| !id.trim().is_empty());
         let account_store_trait =
             StdArc::new(stores.accounts.clone()) as StdArc<dyn AccountStoreTrait>;
         let codex = {
             let client = CodexBackendClient::new(
-                reqwest::Client::new(),
+                build_reqwest_client(config.tls.force_http11)?,
                 config.api.base_url.clone(),
                 fingerprint.clone(),
             );
@@ -203,7 +224,7 @@ impl Services {
             cloudflare_recovery,
         ));
 
-        Self {
+        Ok(Self {
             models,
             admin_models,
             accounts: account_store_trait,
@@ -222,7 +243,7 @@ impl Services {
             fingerprint,
             installation_id,
             background_tasks: stores,
-        }
+        })
     }
 }
 

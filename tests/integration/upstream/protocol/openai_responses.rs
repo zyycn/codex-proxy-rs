@@ -8,9 +8,18 @@ fn codex_responses_request_should_enable_http_sse_defaults() {
 }
 
 #[test]
-fn codex_responses_transport_should_prefer_websocket_without_history() {
+fn codex_responses_transport_should_use_http_sse_by_default_without_history() {
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
     request.force_http_sse = false;
+
+    assert_eq!(transport_for_request(&request), CodexTransport::HttpSse);
+    assert!(http_sse_fallback_allowed(&request));
+}
+
+#[test]
+fn codex_responses_transport_should_prefer_websocket_when_requested_without_history() {
+    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
+    request.use_websocket = true;
 
     assert_eq!(
         transport_for_request(&request),
