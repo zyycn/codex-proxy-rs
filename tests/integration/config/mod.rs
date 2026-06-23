@@ -21,8 +21,9 @@ auth:
   request_interval_ms: 50
   rotation_strategy: least_used
   tier_priority: []
-  token_client_id: app_EMoamEEZ73f0CkXaXp7hrann
-  token_endpoint: https://auth.openai.com/oauth/token
+  oauth_client_id: app_EMoamEEZ73f0CkXaXp7hrann
+  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
+  oauth_token_endpoint: https://auth.openai.com/oauth/token
 quota:
   refresh_interval_minutes: 5
   warning_thresholds:
@@ -110,9 +111,9 @@ fn default_config_keeps_only_codex_backend() {
     assert_eq!(cfg.model.default_model, "gpt-5.5");
     assert_eq!(cfg.auth.refresh_margin_seconds, 300);
     assert_eq!(cfg.auth.rotation_strategy, "least_used");
-    assert_eq!(cfg.auth.token_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
+    assert_eq!(cfg.auth.oauth_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
     assert_eq!(
-        cfg.auth.token_endpoint,
+        cfg.auth.oauth_token_endpoint,
         "https://auth.openai.com/oauth/token"
     );
     assert!(cfg.ws_pool.enabled);
@@ -163,8 +164,9 @@ auth:
   request_interval_ms: 50
   rotation_strategy: least_used
   tier_priority: []
-  token_client_id: app_test_client
-  token_endpoint: https://auth.example.test/oauth/token
+  oauth_client_id: app_test_client
+  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
+  oauth_token_endpoint: https://auth.example.test/oauth/token
 quota:
   refresh_interval_minutes: 5
   warning_thresholds:
@@ -268,9 +270,9 @@ ws_pool:
     );
     assert_eq!(cfg.model.default_model, "gpt-5.5");
     assert_eq!(cfg.auth.max_concurrent_per_account, 3);
-    assert_eq!(cfg.auth.token_client_id, "app_test_client");
+    assert_eq!(cfg.auth.oauth_client_id, "app_test_client");
     assert_eq!(
-        cfg.auth.token_endpoint,
+        cfg.auth.oauth_token_endpoint,
         "https://auth.example.test/oauth/token"
     );
     assert!(cfg.ws_pool.enabled);
