@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::access::admin_session::SqliteAdminSessionStore;
+use crate::admin::auth::service::SqliteAdminSessionStore;
 
 use super::coordinator::SchedulerHandle;
 

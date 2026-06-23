@@ -8,9 +8,11 @@ async fn fingerprint_update_task_should_start_background_checker() {
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests())
-        .await
-        .expect("seed current fingerprint");
+    repo.ensure_current_seed(
+        &codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
 
     let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
         Some(repo),
@@ -46,9 +48,11 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests())
-        .await
-        .expect("seed current fingerprint");
+    repo.ensure_current_seed(
+        &codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let extracted_path = dir.path().join("extracted-fingerprint.json");
     std::fs::write(
         &extracted_path,
@@ -100,9 +104,11 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&codex_proxy_rs::codex::fingerprint::Fingerprint::default_for_tests())
-        .await
-        .expect("seed current fingerprint");
+    repo.ensure_current_seed(
+        &codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+    )
+    .await
+    .expect("seed current fingerprint");
     let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
         Some(repo.clone()),
         format!("{}/appcast.xml", server.uri()),

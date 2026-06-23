@@ -1,11 +1,8 @@
-pub mod access;
-pub mod accounts;
 pub mod admin;
-pub mod codex;
 pub mod config;
 pub mod http;
 pub mod infra;
 pub mod proxy;
 pub mod runtime;
-pub mod telemetry;
+pub mod upstream;
 pub mod web;

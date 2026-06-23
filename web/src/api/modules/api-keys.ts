@@ -24,39 +24,40 @@ export interface CreateApiKeyResponse {
 }
 
 export function getApiKeys() {
-  return requestJson<ClientApiKey[]>('/api/admin/api-keys')
+  return requestJson<ClientApiKey[]>('/api/admin/keys')
 }
 
 export function createApiKey(payload: CreateApiKeyPayload) {
-  return requestJson<CreateApiKeyResponse>('/api/admin/api-keys', {
+  return requestJson<CreateApiKeyResponse>('/api/admin/keys', {
     method: 'POST',
     data: payload,
   })
 }
 
 export function deleteApiKey(keyId: string) {
-  return requestJson<void>(`/api/admin/api-keys/${keyId}`, {
-    method: 'DELETE',
+  return requestJson<{ deleted: number }>('/api/admin/keys/delete', {
+    method: 'POST',
+    data: { ids: [keyId] },
   })
 }
 
 export function updateApiKeyLabel(keyId: string, label: string | null) {
-  return requestJson<ClientApiKey>(`/api/admin/api-keys/${keyId}/label`, {
-    method: 'PATCH',
-    data: { label },
+  return requestJson<ClientApiKey>('/api/admin/keys/update', {
+    method: 'POST',
+    data: { id: keyId, label },
   })
 }
 
 export function updateApiKeyStatus(keyId: string, enabled: boolean) {
-  return requestJson<ClientApiKey>(`/api/admin/api-keys/${keyId}/status`, {
-    method: 'PATCH',
-    data: { enabled },
+  return requestJson<ClientApiKey>('/api/admin/keys/update', {
+    method: 'POST',
+    data: { id: keyId, status: enabled ? 'active' : 'disabled' },
   })
 }
 
 export function batchDeleteApiKeys(keyIds: string[]) {
-  return requestJson<{ deleted: number }>('/api/admin/api-keys/batch-delete', {
+  return requestJson<{ deleted: number }>('/api/admin/keys/delete', {
     method: 'POST',
-    data: { keyIds },
+    data: { ids: keyIds },
   })
 }

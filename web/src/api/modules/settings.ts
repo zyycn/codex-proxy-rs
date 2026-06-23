@@ -35,7 +35,7 @@ export function getSettings() {
 
 export function updateSettings(settings: Partial<Settings>) {
   return requestJson<Settings>('/api/admin/settings', {
-    method: 'PATCH',
+    method: 'POST',
     data: settings,
   })
 }

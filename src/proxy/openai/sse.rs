@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::codex::protocol::sse::{encode_sse_event, DONE_SSE_FRAME};
+use crate::upstream::protocol::sse::{encode_sse_event, DONE_SSE_FRAME};
 
 use super::errors::openai_error_response;
 

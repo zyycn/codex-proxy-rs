@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use tokio::task::JoinHandle;
 
-use crate::accounts::{oauth::OAuthConfig, token_refresh::RefreshPolicy};
-use crate::codex::oauth_client::default_openai_oauth_client;
+use crate::upstream::{
+    accounts::token_refresh::RefreshPolicy,
+    token_client::{default_openai_token_client, TokenClientConfig},
+};
 
 use super::{
     cookie_cleanup::CookieCleanupTask,
@@ -80,7 +82,7 @@ impl TaskCoordinator {
                         refresh_margin_seconds: config.auth.refresh_margin_seconds,
                         refresh_concurrency: config.auth.refresh_concurrency,
                     },
-                    default_openai_oauth_client(oauth_config(config)),
+                    default_openai_token_client(token_client_config(config)),
                 )
                 .with_refresh_lease_store(stores.refresh_leases.clone())
                 .start(),
@@ -126,20 +128,11 @@ impl TaskCoordinator {
     }
 }
 
-fn oauth_config(config: &crate::runtime::state::RuntimeConfig) -> OAuthConfig {
-    OAuthConfig {
-        client_id: config.auth.oauth_client_id.clone(),
-        auth_endpoint: config.auth.oauth_auth_endpoint.clone(),
-        device_code_endpoint: oauth_device_code_endpoint(&config.auth.oauth_token_endpoint),
-        token_endpoint: config.auth.oauth_token_endpoint.clone(),
+fn token_client_config(config: &crate::runtime::state::RuntimeConfig) -> TokenClientConfig {
+    TokenClientConfig {
+        client_id: config.auth.token_client_id.clone(),
+        token_endpoint: config.auth.token_endpoint.clone(),
     }
-}
-
-fn oauth_device_code_endpoint(token_endpoint: &str) -> String {
-    token_endpoint
-        .strip_suffix("/token")
-        .map(|prefix| format!("{prefix}/device/code"))
-        .unwrap_or_else(|| "https://auth.openai.com/oauth/device/code".to_string())
 }
 
 /// 后台任务关闭句柄。

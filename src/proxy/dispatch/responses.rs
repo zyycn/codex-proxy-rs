@@ -22,11 +22,41 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing;
 
 use crate::{
-    accounts::{
+    admin::monitoring::{
+        event_store::AdminLogService,
+        events::{EventLevel, EventLog, ResponseEventRecord},
+    },
+    proxy::dispatch::{
+        cloudflare::{
+            cloudflare_challenge_error_message, cloudflare_path_block_error_message,
+            is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
+            CloudflareRecovery,
+        },
+        errors::{
+            auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
+            is_history_recovery_signal, is_history_recovery_upstream_error,
+            is_invalid_encrypted_content_signal, is_model_unsupported_signal,
+            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
+            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
+            upstream_error_http_status, upstream_error_set_cookie_headers,
+        },
+        reasoning_replay::ReasoningReplayCache,
+        session_affinity::{
+            compute_variant_hash, ensure_prompt_cache_key, hash_instructions,
+            prepare_variant_identity, RuntimeSessionAffinityService,
+        },
+        upstream::{
+            create_compact_response_with_account_retrying_5xx,
+            create_response_stream_with_account_retrying_5xx,
+            create_response_with_account_retrying_5xx, verify_acquired_quota_if_required,
+            QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+        },
+    },
+    upstream::accounts::{
         model::{Account, AccountStatus},
         pool::{AccountAcquireRequest, RuntimeAccountPoolService},
     },
-    codex::{
+    upstream::{
         protocol::{
             events::{extract_sse_usage, extract_usage, TokenUsage},
             responses::{
@@ -44,36 +74,6 @@ use crate::{
             CodexBackendSseStream, CodexBackendTransport, CodexClientError,
             CodexRateLimitHeaderUpdates, CodexTurnStateUpdate,
         },
-    },
-    proxy::dispatch::{
-        cloudflare::{
-            cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-            is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-            CloudflareRecovery,
-        },
-        reasoning_replay::ReasoningReplayCache,
-        session_affinity::{
-            compute_variant_hash, ensure_prompt_cache_key, hash_instructions,
-            prepare_variant_identity, RuntimeSessionAffinityService,
-        },
-        upstream_errors::{
-            auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
-            is_history_recovery_signal, is_history_recovery_upstream_error,
-            is_invalid_encrypted_content_signal, is_model_unsupported_signal,
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
-            upstream_error_http_status, upstream_error_set_cookie_headers,
-        },
-        upstream_requests::{
-            create_compact_response_with_account_retrying_5xx,
-            create_response_stream_with_account_retrying_5xx,
-            create_response_with_account_retrying_5xx, verify_acquired_quota_if_required,
-            QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
-        },
-    },
-    telemetry::{
-        event_store::AdminLogService,
-        events::{EventLevel, EventLog, ResponseEventRecord},
     },
 };
 
@@ -99,7 +99,7 @@ enum ExhaustedAccountClass {
 #[derive(Clone)]
 pub struct ResponseDispatchService {
     account_pool: Arc<RuntimeAccountPoolService>,
-    models: Arc<crate::codex::models::ModelService>,
+    models: Arc<crate::upstream::models::ModelService>,
     codex: Arc<CodexBackendClient>,
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
@@ -147,7 +147,7 @@ use axum::body::Bytes;
 impl ResponseDispatchService {
     pub(crate) fn new(
         account_pool: Arc<RuntimeAccountPoolService>,
-        models: Arc<crate::codex::models::ModelService>,
+        models: Arc<crate::upstream::models::ModelService>,
         codex: Arc<CodexBackendClient>,
         session_affinity: Arc<RuntimeSessionAffinityService>,
         logs: Arc<AdminLogService>,

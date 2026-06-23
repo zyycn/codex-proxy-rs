@@ -1,11 +1,8 @@
-mod access;
-mod accounts;
 mod admin;
-mod codex;
 mod config;
 mod http;
 mod infra;
 mod proxy;
 mod runtime;
 mod support;
-mod telemetry;
+mod upstream;

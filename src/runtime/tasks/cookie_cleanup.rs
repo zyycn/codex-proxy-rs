@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::accounts::cookies::{SqliteCookieStore, SqliteCookieStoreError};
+use crate::upstream::accounts::cookies::{SqliteCookieStore, SqliteCookieStoreError};
 
 use super::coordinator::SchedulerHandle;
 

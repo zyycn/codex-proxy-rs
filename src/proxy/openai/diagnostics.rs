@@ -8,12 +8,12 @@ use axum::{
 };
 
 use crate::{
-    codex::transport::CodexRequestContext,
-    http::middleware::request_id::RequestId,
-    runtime::state::AppState,
-    telemetry::diagnostics::{
+    admin::monitoring::diagnostics::{
         diagnostics_data, fingerprint_diagnostics, DiagnosticsInput, UpstreamProbeDiagnostics,
     },
+    http::middleware::request_id::RequestId,
+    runtime::state::AppState,
+    upstream::transport::CodexRequestContext,
 };
 
 fn forwarded_header_is_local(headers: &HeaderMap, name: &str) -> bool {

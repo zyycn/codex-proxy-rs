@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::codex::fingerprint::{FingerprintRepository, UpdateChecker};
+use crate::upstream::fingerprint::{FingerprintRepository, UpdateChecker};
 
 use super::coordinator::SchedulerHandle;
 

@@ -2,23 +2,17 @@
 
 /// 账号 CRUD 处理器。
 pub mod accounts;
-/// 客户端 API Key 处理器。
-pub mod api_keys;
-/// OAuth 认证处理器。
+/// 管理端账号认证状态与本地管理员会话处理器。
 pub mod auth;
-/// 诊断处理器。
-pub mod diagnostics;
-/// 日志处理器。
-pub mod logs;
+/// v1 接口访问 Key 处理器。
+pub mod keys;
 /// 模型处理器。
 pub mod models;
+/// 管理面日志、用量与诊断统计。
+pub mod monitoring;
 /// 响应封装。
 pub mod response;
 /// 管理端路由。
 pub mod router;
-/// 会话处理器。
-pub mod session;
 /// 设置处理器。
 pub mod settings;
-/// 用量处理器。
-pub mod usage;

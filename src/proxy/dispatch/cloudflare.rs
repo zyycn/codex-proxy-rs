@@ -3,14 +3,14 @@
 use chrono::Utc;
 
 use crate::{
-    accounts::{
+    upstream::accounts::{
         cookies::{
             CloudflareChallengeCooldownTracker, CloudflarePathBlockTracker, SqliteCookieStore,
         },
         model::AccountStatus,
         pool::RuntimeAccountPoolService,
     },
-    codex::transport::CodexClientError,
+    upstream::transport::CodexClientError,
 };
 
 #[derive(Clone)]

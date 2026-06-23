@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Save, RefreshCw } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -35,6 +35,20 @@ const rotationOptions = [
   { label: '轮询', value: 'round_robin' },
   { label: '随机', value: 'random' },
 ]
+
+function numericModel(key: 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'logsCapacity') {
+  return computed({
+    get: () => String(form.value[key] ?? 0),
+    set: (value: string) => {
+      const parsed = Number(value)
+      form.value[key] = Number.isFinite(parsed) ? parsed : 0
+    },
+  })
+}
+
+const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
+const requestIntervalMsValue = numericModel('requestIntervalMs')
+const logsCapacityValue = numericModel('logsCapacity')
 
 async function loadSettings() {
   try {
@@ -109,11 +123,11 @@ onMounted(() => {
         <div class="grid gap-5">
           <div>
             <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">单账号最大并发</label>
-            <BaseInput v-model.number="form.maxConcurrentPerAccount" type="number" class="w-48" />
+            <BaseInput v-model="maxConcurrentPerAccountValue" type="number" class="w-48" />
           </div>
           <div>
             <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">请求间隔 (ms)</label>
-            <BaseInput v-model.number="form.requestIntervalMs" type="number" class="w-48" />
+            <BaseInput v-model="requestIntervalMsValue" type="number" class="w-48" />
           </div>
           <div>
             <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">轮换策略</label>
@@ -148,7 +162,7 @@ onMounted(() => {
           </div>
           <div>
             <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">日志容量上限</label>
-            <BaseInput v-model.number="form.logsCapacity" type="number" class="w-48" />
+            <BaseInput v-model="logsCapacityValue" type="number" class="w-48" />
           </div>
         </div>
       </BaseCard>
