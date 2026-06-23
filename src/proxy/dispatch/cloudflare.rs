@@ -1,5 +1,7 @@
 //! Cloudflare challenge and path-block recovery shared by dispatch routes.
 
+use std::time::Duration as StdDuration;
+
 use chrono::Utc;
 
 use crate::{
@@ -57,8 +59,6 @@ impl CloudflareRecovery {
         account_pool: &RuntimeAccountPoolService,
         account_id: &str,
     ) {
-        self.delete_account_cookies(account_id, "Cloudflare challenge")
-            .await;
         let now = Utc::now();
         let cooldown = self
             .challenge_tracker
@@ -67,6 +67,7 @@ impl CloudflareRecovery {
         account_pool
             .set_cloudflare_cooldown_until(account_id, cooldown.cooldown_until)
             .await;
+        self.clear_challenge_cookies_after_cooldown(account_id, cooldown.delay_seconds);
     }
 
     pub async fn apply_path_block(
@@ -97,14 +98,29 @@ impl CloudflareRecovery {
     }
 
     async fn delete_account_cookies(&self, account_id: &str, reason: &str) {
-        if let Err(error) = self.cookie_store.delete_account_cookies(account_id).await {
-            tracing::warn!(
-                account_id,
-                reason,
-                error = %error,
-                "failed to delete account cookies after Cloudflare recovery signal"
-            );
-        }
+        delete_account_cookies(&self.cookie_store, account_id, reason).await;
+    }
+
+    fn clear_challenge_cookies_after_cooldown(&self, account_id: &str, delay_seconds: i64) {
+        let cookie_store = self.cookie_store.clone();
+        let account_id = account_id.to_string();
+        let delay = StdDuration::from_secs(delay_seconds.max(0) as u64);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            delete_account_cookies(&cookie_store, &account_id, "Cloudflare challenge").await;
+        });
+    }
+}
+
+async fn delete_account_cookies(cookie_store: &SqliteCookieStore, account_id: &str, reason: &str) {
+    if let Err(error) = cookie_store.delete_account_cookies(account_id).await {
+        tracing::warn!(
+            account_id,
+            reason,
+            error = %error,
+            "failed to delete account cookies after Cloudflare recovery signal"
+        );
     }
 }
 

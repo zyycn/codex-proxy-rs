@@ -123,6 +123,12 @@ pub struct AcquiredAccount {
     pub previous_slot_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug)]
+struct AccountAcquireWithStatusRefresh {
+    acquired: Option<AcquiredAccount>,
+    expired_account_ids: Vec<String>,
+}
+
 /// 账号池容量摘要。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountCapacitySummary {
@@ -422,48 +428,90 @@ impl AccountPool {
 
     /// 使用完整调度请求获取账号。
     pub fn acquire_with(&mut self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
+        self.acquire_with_status_refresh(request).acquired
+    }
+
+    fn acquire_with_status_refresh(
+        &mut self,
+        request: AccountAcquireRequest,
+    ) -> AccountAcquireWithStatusRefresh {
         self.cleanup_stale_slots(request.now);
-        self.refresh_account_statuses(request.now);
+        let expired_account_ids = self.refresh_account_statuses(request.now);
         let candidates = self.candidates(&request);
-        let (selected, previous_slot_at) =
-            if let Some(preferred_account_id) = &request.preferred_account_id {
-                let preferred = candidates
-                    .iter()
-                    .find(|account| account.id == *preferred_account_id)
-                    .cloned();
-                preferred.map(|account| (account, self.previous_slot_at(preferred_account_id)))
-            } else {
-                None
-            }
-            .or_else(|| {
-                Some(match self.options.rotation_strategy {
-                    RotationStrategy::LeastUsed => {
-                        let account = self.select_least_used(&candidates)?;
-                        let previous = self.previous_slot_at(&account.id);
-                        (account, previous)
-                    }
-                    RotationStrategy::RoundRobin => {
-                        let account = self.select_round_robin(&candidates)?;
-                        let previous = self.previous_slot_at(&account.id);
-                        (account, previous)
-                    }
-                    RotationStrategy::Sticky => {
-                        let account = self.select_sticky(&candidates)?;
-                        let previous = self.previous_slot_at(&account.id);
-                        (account, previous)
-                    }
-                })
-            })?;
+        let selected = if let Some(preferred_account_id) = &request.preferred_account_id {
+            let preferred = candidates
+                .iter()
+                .find(|account| account.id == *preferred_account_id)
+                .cloned();
+            preferred.map(|account| (account, self.previous_slot_at(preferred_account_id)))
+        } else {
+            None
+        }
+        .or_else(|| {
+            Some(match self.options.rotation_strategy {
+                RotationStrategy::LeastUsed => {
+                    let account = self.select_least_used(&candidates)?;
+                    let previous = self.previous_slot_at(&account.id);
+                    (account, previous)
+                }
+                RotationStrategy::RoundRobin => {
+                    let account = self.select_round_robin(&candidates)?;
+                    let previous = self.previous_slot_at(&account.id);
+                    (account, previous)
+                }
+                RotationStrategy::Sticky => {
+                    let account = self.select_sticky(&candidates)?;
+                    let previous = self.previous_slot_at(&account.id);
+                    (account, previous)
+                }
+            })
+        });
+        let Some((selected, previous_slot_at)) = selected else {
+            return AccountAcquireWithStatusRefresh {
+                acquired: None,
+                expired_account_ids,
+            };
+        };
 
         let selected_id = selected.id.clone();
         self.push_slot(&selected_id, request.now);
-        let selected = self
+        let acquired = self
             .mark_usage(&selected_id, request.now)
             .unwrap_or(selected);
-        Some(AcquiredAccount {
-            account: selected,
-            previous_slot_at,
-        })
+        AccountAcquireWithStatusRefresh {
+            acquired: Some(AcquiredAccount {
+                account: acquired,
+                previous_slot_at,
+            }),
+            expired_account_ids,
+        }
+    }
+
+    fn refresh_account_statuses(&mut self, now: DateTime<Utc>) -> Vec<String> {
+        let account_ids = self.accounts.keys().cloned().collect::<Vec<_>>();
+        account_ids
+            .into_iter()
+            .filter(|account_id| self.refresh_account_status(account_id, now))
+            .collect()
+    }
+
+    fn refresh_account_status(&mut self, account_id: &str, now: DateTime<Utc>) -> bool {
+        let mut should_clear_slots = false;
+        let mut expired = false;
+        if let Some(account) = self.accounts.get_mut(account_id) {
+            if account.status == AccountStatus::Active && access_token_expired(account, now) {
+                account.status = AccountStatus::Expired;
+                should_clear_slots = true;
+                expired = true;
+            } else {
+                refresh_quota_window(account, now);
+                refresh_cloudflare_cooldown(account, now);
+            }
+        }
+        if should_clear_slots {
+            self.slots.remove(account_id);
+        }
+        expired
     }
 
     /// 释放指定账号的一个在途槽位。
@@ -675,29 +723,6 @@ impl AccountPool {
         });
     }
 
-    fn refresh_account_statuses(&mut self, now: DateTime<Utc>) {
-        let account_ids = self.accounts.keys().cloned().collect::<Vec<_>>();
-        for account_id in account_ids {
-            self.refresh_account_status(&account_id, now);
-        }
-    }
-
-    fn refresh_account_status(&mut self, account_id: &str, now: DateTime<Utc>) {
-        let mut should_clear_slots = false;
-        if let Some(account) = self.accounts.get_mut(account_id) {
-            if account.status == AccountStatus::Active && access_token_expired(account, now) {
-                account.status = AccountStatus::Expired;
-                should_clear_slots = true;
-            } else {
-                refresh_quota_window(account, now);
-                refresh_cloudflare_cooldown(account, now);
-            }
-        }
-        if should_clear_slots {
-            self.slots.remove(account_id);
-        }
-    }
-
     fn is_model_allowed(&self, account: &Account, model: &str) -> bool {
         let Some(allowed_plans) = self.options.model_plan_allowlist.get(model) else {
             return true;
@@ -830,7 +855,10 @@ impl RuntimeAccountPoolService {
 
     /// 按请求上下文获取可用账号。
     pub async fn acquire_with(&self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
-        let acquired = self.pool.lock().await.acquire_with(request)?;
+        let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
+        self.persist_expired_statuses(refresh.expired_account_ids)
+            .await;
+        let acquired = refresh.acquired?;
         if let Err(error) = self.store.record_request(&acquired.account.id).await {
             tracing::warn!(
                 account_id = acquired.account.id,
@@ -839,6 +867,22 @@ impl RuntimeAccountPoolService {
             );
         }
         Some(acquired)
+    }
+
+    async fn persist_expired_statuses(&self, account_ids: Vec<String>) {
+        for account_id in account_ids {
+            if let Err(error) = self
+                .store
+                .set_status(&account_id, AccountStatus::Expired)
+                .await
+            {
+                tracing::warn!(
+                    account_id,
+                    error = %error,
+                    "failed to persist runtime-expired account status"
+                );
+            }
+        }
     }
 
     /// 按账号上一个在途槽位控制请求间隔。

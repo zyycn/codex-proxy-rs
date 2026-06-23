@@ -485,7 +485,7 @@ async fn responses_should_return_cloudflare_challenge_error_when_403_fallback_is
             .cookie_header("acct_chat", "chatgpt.com")
             .await
             .unwrap(),
-        None
+        Some("cf_clearance=old".to_string())
     );
 }
 
@@ -564,8 +564,9 @@ async fn responses_should_cool_down_cloudflare_403_and_fallback() {
         cookie_store
             .cookie_header("acct_primary", "chatgpt.com")
             .await
-            .unwrap(),
-        None
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=old")
     );
     assert_eq!(
         cookie_store
@@ -1607,8 +1608,9 @@ async fn responses_stream_should_cool_down_cloudflare_403_and_fallback() {
         cookie_store
             .cookie_header("acct_primary", "chatgpt.com")
             .await
-            .unwrap(),
-        None
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=old")
     );
     assert_eq!(
         cookie_store

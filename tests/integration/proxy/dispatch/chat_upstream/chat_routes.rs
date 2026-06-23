@@ -790,8 +790,9 @@ async fn chat_completions_should_cool_down_cloudflare_403_and_fallback() {
         cookie_store
             .cookie_header("acct_primary", "chatgpt.com")
             .await
-            .unwrap(),
-        None
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=old")
     );
     assert_eq!(
         cookie_store
