@@ -64,6 +64,50 @@ fn acquire_should_skip_accounts_with_expired_jwt_when_metadata_is_missing() {
     assert!(acquired.is_none());
 }
 
+#[tokio::test]
+async fn runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_discovered() {
+    let (pool, _dir) =
+        crate::support::sqlite::init_test_db("runtime-pool-expired-status.sqlite").await;
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(
+        pool.clone(),
+        codex_proxy_rs::infra::crypto::SecretBox::new([91u8; 32]),
+    );
+    store
+        .insert(codex_proxy_rs::upstream::accounts::store::NewAccount {
+            id: "acct_expired".to_string(),
+            email: None,
+            account_id: Some("chatgpt-expired".to_string()),
+            user_id: None,
+            label: None,
+            plan_type: Some("free".to_string()),
+            access_token: secrecy::SecretString::new(test_jwt(-60).into()),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        })
+        .await
+        .unwrap();
+    let runtime_pool = codex_proxy_rs::upstream::accounts::pool::RuntimeAccountPoolService::new(
+        std::sync::Arc::new(store),
+        AccountPoolOptions::default(),
+        0,
+    );
+    runtime_pool.restore_from_repository().await.unwrap();
+
+    let acquired = runtime_pool
+        .acquire_with(AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await;
+    let status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_expired")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert!(acquired.is_none());
+    assert_eq!(status.0, "expired");
+}
+
 #[test]
 fn account_pool_should_prefer_configured_tier_priority() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {
