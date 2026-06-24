@@ -1,25 +1,38 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
-  label?: string
-  title?: string
-  size?: 'default' | 'large' | 'sm' | 'md'
-  variant?: 'default' | 'ghost'
-  active?: boolean
-  disabled?: boolean
-}>(), {
-  size: 'default',
-  variant: 'default',
-  active: false,
-  disabled: false,
+import { computed } from 'vue'
+
+const props = withDefaults(
+  defineProps<{
+    label?: string
+    title?: string
+    size?: 'default' | 'large' | 'sm' | 'md'
+    variant?: 'default' | 'ghost'
+    active?: boolean
+    disabled?: boolean
+  }>(),
+  {
+    size: 'default',
+    variant: 'default',
+    active: false,
+    disabled: false,
+  },
+)
+
+const sizeClasses = computed(() => {
+  if (props.size === 'large' || props.size === 'md') return 'h-11 w-11 rounded-xl'
+  if (props.size === 'sm') return 'h-8 w-8 rounded-(--cp-icon-button-radius)'
+  return 'h-9 w-9 rounded-xl'
 })
 </script>
 
 <template>
   <button
-    class="inline-flex items-center justify-center border-0 shadow-(--cp-shadow-control) transition-colors"
+    class="inline-flex items-center justify-center border-0 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
     :class="[
-      size === 'large' || size === 'md' ? 'h-11 w-11 rounded-xl' : size === 'sm' ? 'h-8 w-8 rounded-lg' : 'h-9 w-9 rounded-xl',
-      variant === 'ghost' ? 'bg-transparent text-(--cp-text-secondary) hover:bg-(--cp-bg-tertiary) shadow-none' : 'bg-(--cp-bg-surface) text-(--cp-text-secondary) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal)',
+      sizeClasses,
+      variant === 'ghost'
+        ? 'bg-transparent text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) shadow-none'
+        : 'bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal)',
       active ? 'bg-(--cp-default-bg-hover) text-(--cp-normal)' : '',
       disabled ? 'cursor-not-allowed opacity-50' : '',
     ]"

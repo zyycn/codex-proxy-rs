@@ -13,8 +13,8 @@ export * from './modules/logs'
 // 使用统计
 export * from './modules/usage'
 
-// 系统诊断
-export * from './modules/diagnostics'
+// Dashboard 聚合
+export * from './modules/dashboard'
 
 // 设置管理
 export * from './modules/settings'

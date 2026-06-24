@@ -21,31 +21,74 @@ const detailToneClasses: Record<SemanticTone, string> = {
   warning: 'text-(--cp-warning-text)',
   danger: 'text-(--cp-danger-text)',
 }
+
+const trendToneClasses: Record<SemanticTone, string> = {
+  normal: 'bg-(--cp-normal-text)',
+  info: 'bg-(--cp-info-text)',
+  success: 'bg-(--cp-success-text)',
+  warning: 'bg-(--cp-warning-text)',
+  danger: 'bg-(--cp-danger-text)',
+}
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" radius-class="rounded-2xl" class="h-[154px] w-full px-6 pt-5">
+  <BaseCard as="article" :padded="false" radius-class="rounded-2xl" class="h-38.5 w-full px-6 pt-5">
     <div class="flex items-start gap-3">
-      <span class="inline-flex size-[34px] shrink-0 items-center justify-center rounded-[10px]" :class="iconToneClasses[metric.tone]">
+      <span
+        class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-[10px]"
+        :class="iconToneClasses[metric.tone]"
+      >
         <component :is="metric.icon" :size="18" />
       </span>
-      <span class="mt-1 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">{{ metric.title }}</span>
+      <span class="mt-1 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">{{
+        metric.title
+      }}</span>
     </div>
 
-    <strong class="mt-2.5 block w-full font-mono text-[28px] leading-[1.05] font-[780] tabular-nums text-(--cp-text-primary)">
-      {{ metric.value }}
-    </strong>
+    <div class="mt-3.25 flex h-7.75 items-end gap-2">
+      <strong
+        class="font-mono text-[28px] leading-[1.05] font-[780] tabular-nums text-(--cp-text-primary)"
+      >
+        {{ metric.value }}
+      </strong>
+      <i
+        v-if="metric.trend && metric.trend.direction !== 'flat'"
+        class="mb-1.25 block size-3"
+        :class="[
+          trendToneClasses[metric.trend.tone],
+          metric.trend.direction === 'up'
+            ? '[clip-path:polygon(50%_0,100%_58%,66%_58%,66%_100%,34%_100%,34%_58%,0_58%)]'
+            : '[clip-path:polygon(34%_0,66%_0,66%_42%,100%_42%,50%_100%,0_42%,34%_42%)]',
+        ]"
+      />
+    </div>
 
-    <div class="mt-[16.6px] grid h-[30px] w-full grid-cols-2 items-center rounded-[10px] bg-(--cp-bg-subtle) px-3">
-      <span class="inline-flex min-w-0 w-full items-center justify-start gap-3">
-        <span class="shrink-0 text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted)">{{ metric.details[0]?.label }}</span>
-        <b class="min-w-0 truncate font-mono text-xs leading-[1.15] font-bold tabular-nums" :class="metric.details[0]?.tone ? detailToneClasses[metric.details[0].tone] : undefined">
+    <div
+      class="mt-3 grid h-7.5 w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center rounded-[10px] bg-(--cp-bg-subtle) px-3"
+    >
+      <span
+        class="inline-grid min-w-0 w-full grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2.5"
+      >
+        <span class="shrink-0 text-[11px] leading-none font-[650] text-(--cp-text-muted)">{{
+          metric.details[0]?.label
+        }}</span>
+        <b
+          class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
+          :class="metric.details[0]?.tone ? detailToneClasses[metric.details[0].tone] : undefined"
+        >
           {{ metric.details[0]?.value }}
         </b>
       </span>
-      <span class="inline-flex min-w-0 w-full items-center justify-start gap-3">
-        <span class="shrink-0 text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted)">{{ metric.details[1]?.label }}</span>
-        <b class="min-w-0 truncate font-mono text-xs leading-[1.15] font-bold tabular-nums" :class="metric.details[1]?.tone ? detailToneClasses[metric.details[1].tone] : undefined">
+      <span
+        class="inline-grid min-w-0 w-full grid-cols-[auto_minmax(0,auto)] items-baseline justify-end gap-2.5"
+      >
+        <span class="shrink-0 text-[11px] leading-none font-[650] text-(--cp-text-muted)">{{
+          metric.details[1]?.label
+        }}</span>
+        <b
+          class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
+          :class="metric.details[1]?.tone ? detailToneClasses[metric.details[1].tone] : undefined"
+        >
           {{ metric.details[1]?.value }}
         </b>
       </span>

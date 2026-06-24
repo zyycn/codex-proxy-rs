@@ -6,14 +6,11 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import BaseSpinner from '@/components/base/BaseSpinner.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
 
 import type { Settings } from '@/api'
 import { getSettings, updateSettings } from '@/api'
-import { useToastStore } from '@/stores/modules/toast'
-
-const toast = useToastStore()
+import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
 const saving = ref(false)
@@ -91,7 +88,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="w-full min-w-295 p-7">
+  <div class="w-full">
     <header class="flex h-17 items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
@@ -104,15 +101,14 @@ onMounted(() => {
 
       <AppTopbar class="mt-0.5" />
     </header>
-
-    <BaseSpinner v-if="loading" class="mt-20" />
-
-    <div v-else class="mt-6 grid gap-6 max-w-4xl">
+    <div v-loading="loading" class="mt-6 grid gap-6 max-w-4xl">
       <!-- 模型配置 -->
       <BaseCard>
         <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">模型配置</h2>
         <div>
-          <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">默认模型</label>
+          <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
+            >默认模型</label
+          >
           <BaseInput v-model="form.defaultModel" class="w-64" />
         </div>
       </BaseCard>
@@ -122,25 +118,37 @@ onMounted(() => {
         <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">调度配置</h2>
         <div class="grid gap-5">
           <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">单账号最大并发</label>
+            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
+              >单账号最大并发</label
+            >
             <BaseInput v-model="maxConcurrentPerAccountValue" type="number" class="w-48" />
           </div>
           <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">请求间隔 (ms)</label>
+            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
+              >请求间隔 (ms)</label
+            >
             <BaseInput v-model="requestIntervalMsValue" type="number" class="w-48" />
           </div>
           <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">轮换策略</label>
+            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
+              >轮换策略</label
+            >
             <BaseSelect v-model="form.rotationStrategy" :options="rotationOptions" class="w-48" />
           </div>
           <div class="flex items-center justify-between">
             <div>
-              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1">跳过配额耗尽账号</label>
-              <p class="m-0 text-[13px] text-(--cp-text-secondary)">调度时自动跳过已触发配额的账号</p>
+              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
+                >跳过配额耗尽账号</label
+              >
+              <p class="m-0 text-[13px] text-(--cp-text-secondary)">
+                调度时自动跳过已触发配额的账号
+              </p>
             </div>
             <label class="relative inline-flex items-center cursor-pointer">
-              <input v-model="form.quotaSkipExhausted" type="checkbox" class="sr-only peer">
-              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
+              <input v-model="form.quotaSkipExhausted" type="checkbox" class="sr-only peer" />
+              <div
+                class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+              />
             </label>
           </div>
         </div>
@@ -152,16 +160,22 @@ onMounted(() => {
         <div class="grid gap-5">
           <div class="flex items-center justify-between">
             <div>
-              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1">启用日志记录</label>
+              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
+                >启用日志记录</label
+              >
               <p class="m-0 text-[13px] text-(--cp-text-secondary)">记录系统运行事件和错误</p>
             </div>
             <label class="relative inline-flex items-center cursor-pointer">
-              <input v-model="form.logsEnabled" type="checkbox" class="sr-only peer">
-              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
+              <input v-model="form.logsEnabled" type="checkbox" class="sr-only peer" />
+              <div
+                class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+              />
             </label>
           </div>
           <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2">日志容量上限</label>
+            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
+              >日志容量上限</label
+            >
             <BaseInput v-model="logsCapacityValue" type="number" class="w-48" />
           </div>
         </div>
@@ -172,12 +186,16 @@ onMounted(() => {
         <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">自动刷新</h2>
         <div class="flex items-center justify-between">
           <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1">启用自动刷新</label>
+            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
+              >启用自动刷新</label
+            >
             <p class="m-0 text-[13px] text-(--cp-text-secondary)">定时刷新账号令牌和配额信息</p>
           </div>
           <label class="relative inline-flex items-center cursor-pointer">
-            <input v-model="form.refreshEnabled" type="checkbox" class="sr-only peer">
-            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
+            <input v-model="form.refreshEnabled" type="checkbox" class="sr-only peer" />
+            <div
+              class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
+            />
           </label>
         </div>
       </BaseCard>

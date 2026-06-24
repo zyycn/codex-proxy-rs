@@ -9,7 +9,6 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
-import BaseSpinner from '@/components/base/BaseSpinner.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
 
 import type { ClientApiKey } from '@/api'
@@ -21,9 +20,7 @@ import {
   updateApiKeyLabel,
   updateApiKeyStatus,
 } from '@/api'
-import { useToastStore } from '@/stores/modules/toast'
-
-const toast = useToastStore()
+import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
 const apiKeys = ref<ClientApiKey[]>([])
@@ -33,7 +30,7 @@ const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
 const showKeyModal = ref(false)
 const createdKey = ref('')
-const editingLabel = ref<{ id: string, value: string } | null>(null)
+const editingLabel = ref<{ id: string; value: string } | null>(null)
 
 const createForm = ref({
   name: '',
@@ -43,19 +40,20 @@ const createForm = ref({
 const filteredKeys = computed(() => {
   if (!searchQuery.value) return apiKeys.value
   const query = searchQuery.value.toLowerCase()
-  return apiKeys.value.filter(key =>
-    key.name.toLowerCase().includes(query)
-    || key.label?.toLowerCase().includes(query)
-    || key.id.toLowerCase().includes(query),
+  return apiKeys.value.filter(
+    (key) =>
+      key.name.toLowerCase().includes(query) ||
+      key.label?.toLowerCase().includes(query) ||
+      key.id.toLowerCase().includes(query),
   )
 })
 
-const allSelected = computed(() =>
-  selectedIds.value.size === filteredKeys.value.length && filteredKeys.value.length > 0,
+const allSelected = computed(
+  () => selectedIds.value.size === filteredKeys.value.length && filteredKeys.value.length > 0,
 )
 
-const indeterminate = computed(() =>
-  selectedIds.value.size > 0 && selectedIds.value.size < filteredKeys.value.length,
+const indeterminate = computed(
+  () => selectedIds.value.size > 0 && selectedIds.value.size < filteredKeys.value.length,
 )
 
 async function loadApiKeys() {
@@ -159,16 +157,19 @@ function toggleAll() {
   if (selectedIds.value.size === filteredKeys.value.length) {
     selectedIds.value.clear()
   } else {
-    filteredKeys.value.forEach(key => selectedIds.value.add(key.id))
+    filteredKeys.value.forEach((key) => selectedIds.value.add(key.id))
   }
 }
 
 function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text).then(() => {
-    toast.success('已复制到剪贴板')
-  }).catch(() => {
-    toast.error('复制失败')
-  })
+  navigator.clipboard
+    .writeText(text)
+    .then(() => {
+      toast.success('已复制到剪贴板')
+    })
+    .catch(() => {
+      toast.error('复制失败')
+    })
 }
 
 function formatDate(dateStr?: string): string {
@@ -197,7 +198,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="w-full min-w-295 p-7">
+  <div class="w-full">
     <header class="flex h-17 items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
@@ -213,11 +214,7 @@ onMounted(() => {
 
     <div class="mt-6 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
-        <BaseInput
-          v-model="searchQuery"
-          placeholder="搜索名称、标签或 ID..."
-          class="w-80"
-        >
+        <BaseInput v-model="searchQuery" placeholder="搜索名称、标签或 ID..." class="w-80">
           <template #prefix>
             <Search class="size-4.5 text-(--cp-text-tertiary)" />
           </template>
@@ -235,47 +232,28 @@ onMounted(() => {
       </div>
 
       <div class="flex items-center gap-2">
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="导出密钥"
-        >
+        <BaseIconButton variant="ghost" size="md" title="导出密钥">
           <Download class="size-4.5" />
         </BaseIconButton>
 
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="导入密钥"
-        >
+        <BaseIconButton variant="ghost" size="md" title="导入密钥">
           <Upload class="size-4.5" />
         </BaseIconButton>
 
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新列表"
-          @click="loadApiKeys"
-        >
+        <BaseIconButton variant="ghost" size="md" title="刷新列表" @click="loadApiKeys">
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton
-          variant="primary"
-          size="md"
-          @click="showCreateModal = true"
-        >
+        <BaseButton variant="primary" size="md" @click="showCreateModal = true">
           <Plus class="size-4" />
           创建 API Key
         </BaseButton>
       </div>
     </div>
 
-    <BaseCard class="mt-5 p-0">
-      <BaseSpinner v-if="loading" class="py-20" />
-
+    <BaseCard v-loading="loading" class="mt-5 p-0">
       <BaseEmpty
-        v-else-if="filteredKeys.length === 0"
+        v-if="filteredKeys.length === 0 && !loading"
         message="暂无 API Keys"
         class="py-20"
       />
@@ -291,7 +269,7 @@ onMounted(() => {
                   :checked="allSelected"
                   :indeterminate="indeterminate"
                   @change="toggleAll"
-                >
+                />
               </th>
               <th class="px-3">名称 / 标签</th>
               <th class="px-3">密钥前缀</th>
@@ -314,7 +292,7 @@ onMounted(() => {
                   class="cursor-pointer"
                   :checked="selectedIds.has(key.id)"
                   @change="toggleSelection(key.id)"
-                >
+                />
               </td>
               <td class="px-3">
                 <div class="flex flex-col gap-0.5">
@@ -328,7 +306,7 @@ onMounted(() => {
                       class="text-[13px] px-2 py-0.5 rounded border border-(--cp-border-primary) bg-(--cp-bg-primary)"
                       @keyup.enter="handleUpdateLabel(key.id, editingLabel.value)"
                       @keyup.escape="cancelEditLabel"
-                    >
+                    />
                     <button
                       class="text-[12px] text-(--cp-accent-primary) hover:underline"
                       @click="handleUpdateLabel(key.id, editingLabel.value)"
@@ -408,6 +386,8 @@ onMounted(() => {
     <BaseModal
       v-model="showCreateModal"
       title="创建 API Key"
+      description="为当前代理管理端生成一个新的访问密钥。创建后请立即保存。"
+      variant="info"
       width="540px"
     >
       <div class="flex flex-col gap-4">
@@ -415,35 +395,20 @@ onMounted(() => {
           <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
             名称 <span class="text-red-500">*</span>
           </label>
-          <BaseInput
-            v-model="createForm.name"
-            placeholder="例如：生产环境、测试账号..."
-          />
+          <BaseInput v-model="createForm.name" placeholder="例如：生产环境、测试账号..." />
         </div>
 
         <div>
           <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
             标签（可选）
           </label>
-          <BaseInput
-            v-model="createForm.label"
-            placeholder="备注信息..."
-          />
+          <BaseInput v-model="createForm.label" placeholder="备注信息..." />
         </div>
       </div>
 
       <template #footer>
-        <BaseButton
-          variant="ghost"
-          @click="showCreateModal = false"
-        >
-          取消
-        </BaseButton>
-        <BaseButton
-          variant="primary"
-          :disabled="!createForm.name.trim()"
-          @click="handleCreate"
-        >
+        <BaseButton variant="ghost" @click="showCreateModal = false"> 取消 </BaseButton>
+        <BaseButton variant="primary" :disabled="!createForm.name.trim()" @click="handleCreate">
           创建
         </BaseButton>
       </template>
@@ -453,12 +418,14 @@ onMounted(() => {
     <BaseModal
       v-model="showKeyModal"
       title="API Key 已创建"
+      description="密钥只会显示一次，关闭弹窗后无法再次查看完整内容。"
+      variant="success"
       width="540px"
     >
       <div class="flex flex-col gap-4">
-        <div class="px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200">
-          <p class="m-0 text-[13px] font-medium text-yellow-800">
-            ⚠️ 请妥善保存此密钥，它只会显示一次！
+        <div class="rounded-xl border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3">
+          <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
+            请妥善保存此密钥，它只会显示一次。
           </p>
         </div>
 
@@ -467,14 +434,12 @@ onMounted(() => {
             API Key
           </label>
           <div class="flex items-center gap-2">
-            <code class="flex-1 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all">
+            <code
+              class="flex-1 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all"
+            >
               {{ createdKey }}
             </code>
-            <BaseIconButton
-              size="md"
-              title="复制"
-              @click="copyToClipboard(createdKey)"
-            >
+            <BaseIconButton size="md" title="复制" @click="copyToClipboard(createdKey)">
               <Copy class="size-4" />
             </BaseIconButton>
           </div>
@@ -482,12 +447,7 @@ onMounted(() => {
       </div>
 
       <template #footer>
-        <BaseButton
-          variant="primary"
-          @click="showKeyModal = false"
-        >
-          我已保存
-        </BaseButton>
+        <BaseButton variant="primary" @click="showKeyModal = false"> 我已保存 </BaseButton>
       </template>
     </BaseModal>
 
@@ -495,6 +455,8 @@ onMounted(() => {
     <BaseModal
       v-model="showDeleteModal"
       title="确认删除"
+      description="删除后这些 API Key 将立即失效，此操作不可撤销。"
+      variant="warning"
       width="480px"
     >
       <p class="text-[14px] text-(--cp-text-secondary)">
@@ -502,18 +464,8 @@ onMounted(() => {
       </p>
 
       <template #footer>
-        <BaseButton
-          variant="ghost"
-          @click="showDeleteModal = false"
-        >
-          取消
-        </BaseButton>
-        <BaseButton
-          variant="danger"
-          @click="handleBatchDelete"
-        >
-          确认删除
-        </BaseButton>
+        <BaseButton variant="ghost" @click="showDeleteModal = false"> 取消 </BaseButton>
+        <BaseButton variant="danger" @click="handleBatchDelete"> 确认删除 </BaseButton>
       </template>
     </BaseModal>
   </div>

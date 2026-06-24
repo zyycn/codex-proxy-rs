@@ -4,19 +4,6 @@ import { requestJson } from '../request'
 
 export interface AuthStatus {
   authenticated: boolean
-  user?: {
-    email?: string
-    accountId?: string
-  } | null
-  pool?: {
-    total: number
-    active: number
-    expired: number
-    quotaExhausted: number
-    refreshing: number
-    disabled: number
-    banned: number
-  }
 }
 
 export interface LoginRequest {
@@ -36,7 +23,7 @@ export function login(payload: LoginRequest) {
 }
 
 export function getAuthStatus() {
-  return requestJson<AuthStatus>('/api/admin/accounts/auth-status')
+  return requestJson<AuthStatus>('/api/admin/auth/status')
 }
 
 export function logout() {

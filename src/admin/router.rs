@@ -13,16 +13,13 @@ use super::{
         get_account_cookies, health_check_accounts, import_accounts, quota_warnings,
         refresh_account, reset_account_usage, set_account_cookies, update_account,
     },
-    auth::{
-        routes::auth_status,
-        session::{login, logout},
-    },
+    auth::session::{login, logout, session_status},
     keys::routes::{
         api_keys, batch_delete_api_keys, create_api_key, export_api_keys, update_api_key,
     },
     models::routes::refresh_models,
     monitoring::{
-        diagnostics_routes::diagnostics,
+        dashboard::{dashboard_summary, dashboard_trend},
         logs::{clear_logs, log_detail, logs, logs_state, update_logs_state},
         usage::{usage_stats, usage_stats_summary},
     },
@@ -33,10 +30,11 @@ use super::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/admin/login", post(login))
+        .route("/api/admin/auth/status", get(session_status))
         .route("/api/admin/logout", post(logout))
         .route("/api/admin/settings", get(settings).post(update_settings))
-        .route("/api/admin/diagnostics", get(diagnostics))
-        .route("/api/admin/accounts/auth-status", get(auth_status))
+        .route("/api/admin/dashboard/summary", get(dashboard_summary))
+        .route("/api/admin/dashboard/trend", get(dashboard_trend))
         .route("/api/admin/models/refresh", post(refresh_models))
         .route("/api/admin/usage", get(usage_stats))
         .route("/api/admin/usage/summary", get(usage_stats_summary))

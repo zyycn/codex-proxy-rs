@@ -1,7 +1,7 @@
-//! 管理面监控模块：日志、用量统计和诊断。
+//! 管理面监控模块：日志、用量统计和 Dashboard 聚合。
 
+pub mod dashboard;
 pub mod diagnostics;
-pub mod diagnostics_routes;
 pub mod event_store;
 pub mod events;
 pub mod logs;

@@ -1,0 +1,743 @@
+//! 管理端 Dashboard 聚合视图。
+
+use std::collections::HashMap;
+
+use axum::{
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Extension,
+};
+use chrono::{DateTime, Duration, Timelike, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::{
+    admin::{
+        auth::session::require_admin_session,
+        monitoring::{
+            diagnostics::{
+                fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
+            },
+            event_store::AdminLogFilter,
+            events::{EventLevel, EventLog},
+            service::{AdminUsageRecord, AdminUsageSummary},
+        },
+        response::{AdminEnvelope, AdminError, AdminResponse},
+    },
+    http::middleware::request_id::RequestId,
+    runtime::state::AppState,
+    upstream::accounts::model::{Account, AccountStatus},
+};
+
+const DASHBOARD_LOG_LIMIT: u32 = 1000;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTrendQuery {
+    pub kind: Option<DashboardTrendKind>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DashboardTrendKind {
+    Usage,
+    Latency,
+    Errors,
+}
+
+impl Default for DashboardTrendKind {
+    fn default() -> Self {
+        Self::Usage
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSummaryData {
+    pub cards: DashboardCardsData,
+    pub trend: DashboardTrendData,
+    pub account_usage: Vec<DashboardAccountUsageData>,
+    pub service_statuses: Vec<DashboardServiceStatusData>,
+    pub event_logs: Vec<EventLog>,
+    pub pool_summary: AccountPoolDiagnostics,
+    pub capacity_info: AccountCapacityDiagnostics,
+    pub rotation_strategy: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardCardsData {
+    pub accounts: DashboardAccountsCardData,
+    pub traffic: DashboardTrafficCardData,
+    pub tokens: DashboardTokenCardData,
+    pub cache: DashboardCacheCardData,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardAccountsCardData {
+    pub total: u64,
+    pub enabled: u64,
+    pub abnormal: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTrafficCardData {
+    pub today_requests: u64,
+    pub yesterday_requests: u64,
+    pub total_requests: u64,
+    pub rpm: u64,
+    pub tpm: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTokenCardData {
+    pub today_tokens: u64,
+    pub yesterday_tokens: u64,
+    pub total_tokens: u64,
+    pub today_cost_usd: Option<f64>,
+    pub total_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardCacheCardData {
+    pub today_hit_rate: Option<f64>,
+    pub yesterday_hit_rate: Option<f64>,
+    pub total_hit_rate: Option<f64>,
+    pub total_cached_tokens: u64,
+    pub first_token_latency_ms: Option<u64>,
+    pub completion_latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTrendData {
+    pub kind: DashboardTrendKind,
+    pub points: Vec<DashboardTrendPointData>,
+    pub summary: Vec<DashboardTrendSummaryData>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTrendPointData {
+    pub time: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_tokens: u64,
+    pub tokens: u64,
+    pub errors: u64,
+    pub latency: u64,
+    pub max_latency: u64,
+    pub min_latency: u64,
+    pub success_rate: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTrendSummaryData {
+    pub label: String,
+    pub value: u64,
+    pub ratio: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardAccountUsageData {
+    pub name: String,
+    pub email: String,
+    pub plan: String,
+    pub requests: u64,
+    pub tokens: u64,
+    pub quota_used_percent: Option<f64>,
+    pub last_used_at: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardServiceStatusData {
+    pub label: String,
+    pub value: String,
+    pub detail: String,
+    pub tone: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UsageWindow {
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    errors: u64,
+    latency_sum: u64,
+    latency_count: u64,
+    max_latency: u64,
+    min_latency: u64,
+}
+
+impl UsageWindow {
+    fn tokens(self) -> u64 {
+        self.input_tokens + self.output_tokens
+    }
+
+    fn cache_hit_rate(self) -> Option<f64> {
+        if self.input_tokens > 0 {
+            Some(self.cached_tokens as f64 / self.input_tokens as f64)
+        } else {
+            None
+        }
+    }
+
+    fn avg_latency(self) -> Option<u64> {
+        if self.latency_count > 0 {
+            Some(self.latency_sum / self.latency_count)
+        } else {
+            None
+        }
+    }
+}
+
+/// `GET /api/admin/dashboard/summary`
+pub async fn dashboard_summary(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+
+    let accounts = state
+        .services
+        .accounts
+        .list_pool_accounts()
+        .await
+        .unwrap_or_default();
+    let capacity = state.services.account_pool.capacity_summary_now().await;
+    let summary = state
+        .services
+        .usage
+        .summary()
+        .await
+        .unwrap_or_else(|_| empty_usage_summary());
+    let usage_records = state
+        .services
+        .usage
+        .list(None, 200)
+        .await
+        .map(|page| page.items)
+        .unwrap_or_default();
+    let logs = state
+        .services
+        .logs
+        .list(None, DASHBOARD_LOG_LIMIT, AdminLogFilter::default())
+        .await
+        .map(|page| page.items)
+        .unwrap_or_default();
+
+    let pool_summary = account_pool_summary(&accounts);
+    let dashboard_logs = logs.iter().take(10).cloned().collect();
+    let trend = dashboard_trend_data(&logs, DashboardTrendKind::Usage);
+    let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
+    let settings = state.services.settings.current();
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            DashboardSummaryData {
+                cards: dashboard_cards(&accounts, &summary, &logs),
+                trend,
+                account_usage: account_usage_data(
+                    &accounts,
+                    &usage_records,
+                    &quota_used_by_account,
+                ),
+                service_statuses: service_status_data(&state),
+                event_logs: dashboard_logs,
+                pool_summary,
+                capacity_info: AccountCapacityDiagnostics::from(capacity),
+                rotation_strategy: Some(settings.auth.rotation_strategy.clone()),
+            },
+            request_id,
+        ),
+    ))
+}
+
+/// `GET /api/admin/dashboard/trend?kind=usage|latency|errors`
+pub async fn dashboard_trend(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Query(query): Query<DashboardTrendQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+    let logs = state
+        .services
+        .logs
+        .list(None, DASHBOARD_LOG_LIMIT, AdminLogFilter::default())
+        .await
+        .map(|page| page.items)
+        .unwrap_or_default();
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            dashboard_trend_data(&logs, query.kind.unwrap_or_default()),
+            request_id,
+        ),
+    ))
+}
+
+fn dashboard_cards(
+    accounts: &[Account],
+    summary: &AdminUsageSummary,
+    logs: &[EventLog],
+) -> DashboardCardsData {
+    let now = Utc::now();
+    let today_start = day_start(now);
+    let yesterday_start = today_start - Duration::days(1);
+    let hour_start = now - Duration::hours(1);
+
+    let today = usage_window(logs, today_start, now);
+    let yesterday = usage_window(logs, yesterday_start, today_start);
+    let hour = usage_window(logs, hour_start, now);
+
+    let total_input = summary.input_tokens.max(0) as u64;
+    let total_cached = summary.cached_tokens.max(0) as u64;
+
+    DashboardCardsData {
+        accounts: DashboardAccountsCardData {
+            total: accounts.len() as u64,
+            enabled: accounts
+                .iter()
+                .filter(|account| account.status == AccountStatus::Active)
+                .count() as u64,
+            abnormal: accounts
+                .iter()
+                .filter(|account| {
+                    matches!(
+                        account.status,
+                        AccountStatus::Expired
+                            | AccountStatus::QuotaExhausted
+                            | AccountStatus::Disabled
+                            | AccountStatus::Banned
+                    )
+                })
+                .count() as u64,
+        },
+        traffic: DashboardTrafficCardData {
+            today_requests: today.requests,
+            yesterday_requests: yesterday.requests,
+            total_requests: summary.request_count.max(0) as u64,
+            rpm: hour.requests,
+            tpm: hour.tokens(),
+        },
+        tokens: DashboardTokenCardData {
+            today_tokens: today.tokens(),
+            yesterday_tokens: yesterday.tokens(),
+            total_tokens: (summary.input_tokens + summary.output_tokens).max(0) as u64,
+            today_cost_usd: None,
+            total_cost_usd: None,
+        },
+        cache: DashboardCacheCardData {
+            today_hit_rate: today.cache_hit_rate(),
+            yesterday_hit_rate: yesterday.cache_hit_rate(),
+            total_hit_rate: if total_input > 0 {
+                Some(total_cached as f64 / total_input as f64)
+            } else {
+                None
+            },
+            total_cached_tokens: total_cached,
+            first_token_latency_ms: today.avg_latency(),
+            completion_latency_ms: None,
+        },
+    }
+}
+
+fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> DashboardTrendData {
+    let now = Utc::now();
+    let current_hour = hour_start(now);
+    let start = current_hour - Duration::hours(23);
+    let mut buckets = (0..24)
+        .map(|index| {
+            let bucket_start = start + Duration::hours(index);
+            (bucket_start, UsageWindow::default())
+        })
+        .collect::<Vec<_>>();
+
+    for log in logs {
+        if log.created_at < start || log.created_at > now {
+            continue;
+        }
+        let log_hour = hour_start(log.created_at);
+        if let Some((_, bucket)) = buckets
+            .iter_mut()
+            .find(|(bucket_start, _)| *bucket_start == log_hour)
+        {
+            apply_log(bucket, log);
+        }
+    }
+
+    let points = buckets
+        .iter()
+        .map(|(bucket_start, bucket)| {
+            let latency = bucket.avg_latency().unwrap_or(0);
+            DashboardTrendPointData {
+                time: format!("{:02}", bucket_start.hour()),
+                requests: bucket.requests,
+                input_tokens: bucket.input_tokens,
+                output_tokens: bucket.output_tokens,
+                cached_tokens: bucket.cached_tokens,
+                tokens: bucket.tokens(),
+                errors: bucket.errors,
+                latency,
+                max_latency: bucket.max_latency,
+                min_latency: bucket.min_latency,
+                success_rate: if bucket.requests > 0 {
+                    ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0)
+                        .round()
+                        / 10.0
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+
+    DashboardTrendData {
+        kind,
+        summary: trend_summary(kind, &points),
+        points,
+    }
+}
+
+fn trend_summary(
+    kind: DashboardTrendKind,
+    points: &[DashboardTrendPointData],
+) -> Vec<DashboardTrendSummaryData> {
+    match kind {
+        DashboardTrendKind::Usage => vec![
+            DashboardTrendSummaryData {
+                label: "输入".to_string(),
+                value: points.iter().map(|point| point.input_tokens).sum(),
+                ratio: None,
+            },
+            DashboardTrendSummaryData {
+                label: "输出".to_string(),
+                value: points.iter().map(|point| point.output_tokens).sum(),
+                ratio: None,
+            },
+            DashboardTrendSummaryData {
+                label: "缓存".to_string(),
+                value: points.iter().map(|point| point.cached_tokens).sum(),
+                ratio: None,
+            },
+        ],
+        DashboardTrendKind::Latency => {
+            let samples = points
+                .iter()
+                .filter(|point| point.latency > 0)
+                .collect::<Vec<_>>();
+            let avg = if samples.is_empty() {
+                0
+            } else {
+                samples.iter().map(|point| point.latency).sum::<u64>() / samples.len() as u64
+            };
+            vec![
+                DashboardTrendSummaryData {
+                    label: "平均".to_string(),
+                    value: avg,
+                    ratio: None,
+                },
+                DashboardTrendSummaryData {
+                    label: "最高".to_string(),
+                    value: samples
+                        .iter()
+                        .map(|point| point.max_latency)
+                        .max()
+                        .unwrap_or(0),
+                    ratio: None,
+                },
+                DashboardTrendSummaryData {
+                    label: "最低".to_string(),
+                    value: samples
+                        .iter()
+                        .filter_map(|point| (point.min_latency > 0).then_some(point.min_latency))
+                        .min()
+                        .unwrap_or(0),
+                    ratio: None,
+                },
+            ]
+        }
+        DashboardTrendKind::Errors => {
+            let errors = points.iter().map(|point| point.errors).sum::<u64>();
+            let requests = points.iter().map(|point| point.requests).sum::<u64>();
+            let success_rate = if requests > 0 {
+                Some(((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0)
+            } else {
+                None
+            };
+            vec![
+                DashboardTrendSummaryData {
+                    label: "错误数".to_string(),
+                    value: errors,
+                    ratio: None,
+                },
+                DashboardTrendSummaryData {
+                    label: "成功率".to_string(),
+                    value: 0,
+                    ratio: success_rate,
+                },
+                DashboardTrendSummaryData {
+                    label: "总请求".to_string(),
+                    value: requests,
+                    ratio: None,
+                },
+            ]
+        }
+    }
+}
+
+fn usage_window(logs: &[EventLog], start: DateTime<Utc>, end: DateTime<Utc>) -> UsageWindow {
+    let mut window = UsageWindow::default();
+    for log in logs {
+        if log.created_at >= start && log.created_at < end {
+            apply_log(&mut window, log);
+        }
+    }
+    window
+}
+
+fn apply_log(window: &mut UsageWindow, log: &EventLog) {
+    window.requests += 1;
+    window.input_tokens += metadata_usage_number(&log.metadata, "inputTokens");
+    window.output_tokens += metadata_usage_number(&log.metadata, "outputTokens");
+    window.cached_tokens += metadata_usage_number(&log.metadata, "cachedTokens");
+    if is_error_log(log) {
+        window.errors += 1;
+    }
+    if let Some(latency) = log
+        .latency_ms
+        .filter(|value| *value > 0)
+        .map(|value| value as u64)
+    {
+        window.latency_sum += latency;
+        window.latency_count += 1;
+        window.max_latency = window.max_latency.max(latency);
+        window.min_latency = if window.min_latency == 0 {
+            latency
+        } else {
+            window.min_latency.min(latency)
+        };
+    }
+}
+
+fn metadata_usage_number(metadata: &Value, field: &str) -> u64 {
+    metadata
+        .get("usage")
+        .and_then(|usage| usage.get(field))
+        .or_else(|| metadata.get(field))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn is_error_log(log: &EventLog) -> bool {
+    log.level == EventLevel::Error || log.status_code.is_some_and(|status| status >= 400)
+}
+
+fn account_pool_summary(accounts: &[Account]) -> AccountPoolDiagnostics {
+    let mut summary = AccountPoolDiagnostics {
+        total: accounts.len(),
+        ..AccountPoolDiagnostics::default()
+    };
+    for account in accounts {
+        match account.status {
+            AccountStatus::Active => summary.active += 1,
+            AccountStatus::Expired => summary.expired += 1,
+            AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
+            AccountStatus::Refreshing => summary.refreshing += 1,
+            AccountStatus::Disabled => summary.disabled += 1,
+            AccountStatus::Banned => summary.banned += 1,
+        }
+    }
+    summary
+}
+
+fn account_usage_data(
+    accounts: &[Account],
+    usage_records: &[AdminUsageRecord],
+    quota_used_by_account: &HashMap<String, f64>,
+) -> Vec<DashboardAccountUsageData> {
+    let account_by_id = accounts
+        .iter()
+        .map(|account| (account.id.as_str(), account))
+        .collect::<HashMap<_, _>>();
+    let mut rows = usage_records
+        .iter()
+        .map(|usage| {
+            let account = account_by_id.get(usage.account_id.as_str()).copied();
+            let name = account
+                .and_then(|account| account.label.clone())
+                .or_else(|| usage.label.clone())
+                .or_else(|| {
+                    usage
+                        .email
+                        .as_ref()
+                        .and_then(|email| email.split('@').next().map(ToString::to_string))
+                })
+                .unwrap_or_else(|| usage.account_id.chars().take(8).collect());
+            let status = account
+                .map(|account| account.status.to_string())
+                .unwrap_or_else(|| "active".to_string());
+            let quota_used_percent = quota_used_by_account
+                .get(&usage.account_id)
+                .copied()
+                .or_else(|| (status == "quota_exhausted").then_some(100.0));
+            DashboardAccountUsageData {
+                name,
+                email: usage.email.clone().unwrap_or_else(|| "-".to_string()),
+                plan: usage
+                    .plan_type
+                    .clone()
+                    .unwrap_or_else(|| "free".to_string()),
+                requests: usage.request_count.max(0) as u64,
+                tokens: (usage.input_tokens + usage.output_tokens).max(0) as u64,
+                quota_used_percent,
+                last_used_at: usage.last_used_at.map(|value| value.to_rfc3339()),
+                status,
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.requests.cmp(&a.requests));
+    rows.truncate(4);
+    rows
+}
+
+async fn account_quota_used_percent_by_id(
+    state: &AppState,
+    usage_records: &[AdminUsageRecord],
+) -> HashMap<String, f64> {
+    let mut records = usage_records.iter().collect::<Vec<_>>();
+    records.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+    records.truncate(4);
+
+    let mut quota_used_by_account = HashMap::with_capacity(records.len());
+    for usage in records {
+        let Ok(Some(quota_json)) = state
+            .services
+            .accounts
+            .get_quota_json(&usage.account_id)
+            .await
+        else {
+            continue;
+        };
+        if let Some(used_percent) = quota_used_percent(&quota_json) {
+            quota_used_by_account.insert(usage.account_id.clone(), used_percent);
+        }
+    }
+    quota_used_by_account
+}
+
+fn quota_used_percent(quota_json: &str) -> Option<f64> {
+    let quota = serde_json::from_str::<Value>(quota_json).ok()?;
+    quota
+        .pointer("/rate_limit/used_percent")
+        .and_then(percent_value)
+}
+
+fn percent_value(value: &Value) -> Option<f64> {
+    let percent = value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))?;
+    percent.is_finite().then_some(percent.clamp(0.0, 100.0))
+}
+
+fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
+    let fingerprint = fingerprint_diagnostics(&state.services.fingerprint);
+    vec![
+        DashboardServiceStatusData {
+            label: "客户端版本".to_string(),
+            value: empty_dash(fingerprint.app_version),
+            detail: if fingerprint.build_number.trim().is_empty() {
+                "-".to_string()
+            } else {
+                format!("Build {}", fingerprint.build_number)
+            },
+            tone: "info".to_string(),
+        },
+        DashboardServiceStatusData {
+            label: "平台架构".to_string(),
+            value: empty_dash(fingerprint.platform),
+            detail: empty_dash(fingerprint.arch),
+            tone: "info".to_string(),
+        },
+        DashboardServiceStatusData {
+            label: "Chromium".to_string(),
+            value: if fingerprint.chromium_version.trim().is_empty() {
+                "-".to_string()
+            } else {
+                format!("v{}", fingerprint.chromium_version)
+            },
+            detail: empty_dash(fingerprint.originator),
+            tone: "normal".to_string(),
+        },
+        DashboardServiceStatusData {
+            label: "更新时间".to_string(),
+            value: fingerprint.updated_at.unwrap_or_else(|| "-".to_string()),
+            detail: String::new(),
+            tone: "normal".to_string(),
+        },
+        DashboardServiceStatusData {
+            label: "User Agent".to_string(),
+            value: fingerprint.user_agent,
+            detail: String::new(),
+            tone: "normal".to_string(),
+        },
+    ]
+}
+
+fn empty_dash(value: String) -> String {
+    if value.trim().is_empty() {
+        "-".to_string()
+    } else {
+        value
+    }
+}
+
+fn empty_usage_summary() -> AdminUsageSummary {
+    AdminUsageSummary {
+        account_count: 0,
+        request_count: 0,
+        empty_response_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        image_input_tokens: 0,
+        image_output_tokens: 0,
+        image_request_count: 0,
+        image_request_failed_count: 0,
+    }
+}
+
+fn day_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("valid midnight")
+        .and_utc()
+}
+
+fn hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .date_naive()
+        .and_hms_opt(value.hour(), 0, 0)
+        .expect("valid hour")
+        .and_utc()
+}

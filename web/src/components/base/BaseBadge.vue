@@ -3,13 +3,16 @@ import { computed } from 'vue'
 
 type BadgeVariant = 'normal' | 'success' | 'warning' | 'danger' | 'info' | 'default'
 
-const props = withDefaults(defineProps<{
-  variant?: BadgeVariant
-  dot?: boolean
-}>(), {
-  variant: 'default',
-  dot: false,
-})
+const props = withDefaults(
+  defineProps<{
+    variant?: BadgeVariant
+    dot?: boolean
+  }>(),
+  {
+    variant: 'default',
+    dot: false,
+  },
+)
 
 const variantClasses: Record<BadgeVariant, string> = {
   default: 'bg-(--cp-default-bg) text-(--cp-text-secondary)',

@@ -20,8 +20,8 @@ use crate::{
 };
 
 pub use types::{
-    AdminAccountError, AdminAccountMetadata, AdminAuthPoolStatus, AdminAuthStatus,
-    BatchDeleteAccounts, BatchUpdateAccountStatus, ImportedAccounts, UpdatedAccountStatus,
+    AdminAccountError, AdminAccountMetadata, BatchDeleteAccounts, BatchUpdateAccountStatus,
+    ImportedAccounts, UpdatedAccountStatus,
 };
 
 #[derive(Clone)]

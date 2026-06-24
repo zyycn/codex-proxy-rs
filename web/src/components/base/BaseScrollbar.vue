@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
 
-const props = withDefaults(defineProps<{
-  tag?: string
-  always?: boolean
-  minThumbSize?: number
-  wrapClass?: string
-  viewClass?: string
-}>(), {
-  tag: 'div',
-  always: false,
-  minThumbSize: 32,
-  wrapClass: '',
-  viewClass: '',
-})
+const props = withDefaults(
+  defineProps<{
+    tag?: string
+    always?: boolean
+    minThumbSize?: number
+    wrapClass?: string
+    viewClass?: string
+  }>(),
+  {
+    tag: 'div',
+    always: false,
+    minThumbSize: 32,
+    wrapClass: '',
+    viewClass: '',
+  },
+)
 
 const emit = defineEmits<{
-  scroll: [payload: { scrollTop: number, scrollLeft: number }]
+  scroll: [payload: { scrollTop: number; scrollLeft: number }]
 }>()
 
 const wrapRef = useTemplateRef<HTMLDivElement>('wrap')
@@ -112,9 +115,10 @@ function handleTrackPointerDown(event: PointerEvent) {
   const nextThumbTop = event.clientY - rect.top - thumbHeight.value / 2
   const scrollRange = maxScrollTop(wrap)
   const thumbRange = maxThumbTop(wrap)
-  wrap.scrollTop = thumbRange > 0
-    ? (Math.max(0, Math.min(nextThumbTop, thumbRange)) / thumbRange) * scrollRange
-    : 0
+  wrap.scrollTop =
+    thumbRange > 0
+      ? (Math.max(0, Math.min(nextThumbTop, thumbRange)) / thumbRange) * scrollRange
+      : 0
 }
 
 function handleThumbPointerDown(event: PointerEvent) {

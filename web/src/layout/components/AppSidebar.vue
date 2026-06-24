@@ -3,13 +3,10 @@ import { gsap } from 'gsap'
 import { nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Box,
-  ChartColumn,
   KeyRound,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
-  Radar,
   ScrollText,
   Settings,
   SquareTerminal,
@@ -21,13 +18,10 @@ const router = useRouter()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
-  { label: '账号池', icon: Users, path: '/accounts' },
-  { label: 'API Keys', icon: KeyRound, path: '/api-keys' },
-  { label: '日志', icon: ScrollText, path: '/logs' },
-  { label: '用量', icon: ChartColumn, path: '/usage' },
-  { label: '模型', icon: Box, path: '/models' },
-  { label: '设置', icon: Settings, path: '/settings' },
-  { label: '诊断', icon: Radar, path: '/diagnostics' },
+  { label: '账号管理', icon: Users, path: '/accounts' },
+  { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
+  { label: '使用统计', icon: ScrollText, path: '/logs' },
+  { label: '系统设置', icon: Settings, path: '/settings' },
 ]
 
 const isActive = (path: string) => {
@@ -39,11 +33,14 @@ function navigate(path: string) {
   router.push(path)
 }
 
-const props = withDefaults(defineProps<{
-  collapsed?: boolean
-}>(), {
-  collapsed: false,
-})
+const props = withDefaults(
+  defineProps<{
+    collapsed?: boolean
+  }>(),
+  {
+    collapsed: false,
+  },
+)
 
 defineEmits<{
   toggle: []
@@ -164,8 +161,7 @@ onMounted(() => {
   })
   if (props.collapsed) {
     hideBrandLabel()
-  }
-  else {
+  } else {
     gsap.set(brandLabelEl.value, {
       opacity: 1,
       x: 0,
@@ -179,8 +175,7 @@ watch(
   async (collapsed) => {
     if (collapsed) {
       hideBrandLabel()
-    }
-    else {
+    } else {
       brandLabelVisible.value = true
     }
     animateSidebarLabels(Boolean(collapsed))
@@ -197,34 +192,38 @@ watch(
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-white shadow-(--cp-shadow-sidebar) min-[961px]:flex"
+    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-white px-4 shadow-(--cp-shadow-sidebar) min-[961px]:flex"
     :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
   >
     <div
-      class="mt-7.75 grid h-11.5 grid-cols-[46px_minmax(0,1fr)] gap-2.5"
-      :class="collapsed ? 'w-11.5' : 'ml-6 w-47 self-start'"
+      class="mt-5 grid h-11.5 grid-cols-[46px_minmax(0,1fr)] gap-2.5"
+      :class="collapsed ? 'w-11.5' : 'w-full'"
     >
-      <span class="inline-flex size-11.5 items-center justify-center rounded-[13px] bg-gray-900 text-white shadow-[0_8px_18px_-16px_#0E172614]">
-        <SquareTerminal :size="24" />
+      <span
+        class="inline-flex size-11 items-center justify-center rounded-[13px] bg-gray-900 text-white shadow-[0_8px_18px_-16px_#0E172614]"
+      >
+        <SquareTerminal :size="22" />
       </span>
-      <span v-show="brandLabelVisible" ref="brandLabelEl" class="grid min-w-33 content-center overflow-hidden">
+      <span
+        v-show="brandLabelVisible"
+        ref="brandLabelEl"
+        class="grid min-w-33 content-center overflow-hidden"
+      >
         <strong class="text-[17px] leading-[1.1] font-[720] text-gray-900">Codex</strong>
-        <span class="mt-1 text-xs leading-[1.1] font-semibold text-slate-500">Proxy RS · v0.1.0</span>
+        <span class="mt-1 text-xs leading-[1.1] font-semibold text-slate-500"
+          >Proxy RS · v0.1.0</span
+        >
       </span>
     </div>
 
-    <nav
-      class="mt-8.75 grid gap-3"
-      :class="collapsed ? '' : 'ml-6 self-start'"
-      aria-label="主导航"
-    >
+    <nav class="mt-6 grid gap-3" :class="collapsed ? '' : 'w-full'" aria-label="主导航">
       <button
         v-for="item in navItems"
         :key="item.label"
         type="button"
         class="inline-flex h-11.5 items-center rounded-xl text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
         :class="[
-          collapsed ? 'w-11.5 justify-center' : 'w-52 gap-3 pl-5.5',
+          collapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
             ? 'bg-[#E9EEF5] font-bold text-gray-900'
             : 'bg-transparent font-semibold text-slate-500 hover:bg-slate-50',
@@ -232,13 +231,17 @@ watch(
         @click="navigate(item.path)"
       >
         <component :is="item.icon" class="shrink-0" :size="20" />
-        <span class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200" :class="collapsed ? 'pointer-events-none w-0' : 'w-auto'">{{ item.label }}</span>
+        <span
+          class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
+          :class="collapsed ? 'pointer-events-none w-0' : 'w-auto'"
+          >{{ item.label }}</span
+        >
       </button>
     </nav>
 
     <button
       class="mt-auto mb-8 inline-flex items-center justify-center rounded-xl border-0 text-slate-500 transition-colors duration-200"
-      :class="collapsed ? 'h-9 w-11 bg-transparent' : 'mr-6 size-9 self-end bg-slate-50'"
+      :class="collapsed ? 'h-9 w-11 bg-transparent' : 'size-9 self-end bg-slate-50'"
       type="button"
       data-sidebar-toggle
       :aria-label="collapsed ? '展开侧边栏' : '收缩侧边栏'"

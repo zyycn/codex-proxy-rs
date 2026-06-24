@@ -1,7 +1,7 @@
 use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::{infra::json::Page, upstream::accounts::model::AccountStatus as AcctStatus};
+use crate::infra::json::Page;
 
 use super::{types::*, AdminAccountService};
 
@@ -34,33 +34,6 @@ impl AdminAccountService {
             .await
             .map(|account| account.map(AdminAccountMetadata::from))
             .map_err(|_| AdminAccountError::Inspect)
-    }
-    pub async fn auth_status(&self) -> Result<AdminAuthStatus, AdminAccountError> {
-        let mut cursor = None;
-        let mut pool = AdminAuthPoolStatus::default();
-        let mut user = None;
-        loop {
-            let page = self
-                .store
-                .list_metadata(cursor, 200)
-                .await
-                .map_err(|_| AdminAccountError::List)?;
-            for account in page.items {
-                pool.record(account.status);
-                if user.is_none() && account.status == AcctStatus::Active {
-                    user = Some(AdminAccountMetadata::from(account));
-                }
-            }
-            if page.next_cursor.is_none() {
-                break;
-            }
-            cursor = page.next_cursor;
-        }
-        Ok(AdminAuthStatus {
-            authenticated: pool.total > 0,
-            user,
-            pool,
-        })
     }
     pub async fn create(
         &self,

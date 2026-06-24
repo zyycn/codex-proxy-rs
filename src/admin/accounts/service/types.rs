@@ -111,38 +111,6 @@ pub enum AdminAccountError {
 }
 
 #[derive(Debug, Clone)]
-pub struct AdminAuthStatus {
-    pub authenticated: bool,
-    pub user: Option<AdminAccountMetadata>,
-    pub pool: AdminAuthPoolStatus,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AdminAuthPoolStatus {
-    pub total: u32,
-    pub active: u32,
-    pub expired: u32,
-    pub quota_exhausted: u32,
-    pub refreshing: u32,
-    pub disabled: u32,
-    pub banned: u32,
-}
-
-impl AdminAuthPoolStatus {
-    pub(super) fn record(&mut self, status: AcctStatus) {
-        self.total += 1;
-        match status {
-            AcctStatus::Active => self.active += 1,
-            AcctStatus::Expired => self.expired += 1,
-            AcctStatus::QuotaExhausted => self.quota_exhausted += 1,
-            AcctStatus::Refreshing => self.refreshing += 1,
-            AcctStatus::Disabled => self.disabled += 1,
-            AcctStatus::Banned => self.banned += 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct UpdatedAccountStatus {
     pub id: String,
     pub status: AcctStatus,

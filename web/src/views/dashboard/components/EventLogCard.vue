@@ -1,13 +1,20 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import BaseCard from '../../../components/base/BaseCard.vue'
+import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseTable from '../../../components/base/BaseTable.vue'
 import type { EventLogItem, SemanticTone } from '../types'
 
-defineProps<{
+const props = defineProps<{
   rows: EventLogItem[]
 }>()
 
-const filters = ['全部', '警告', '错误']
+const activeFilter = ref('all')
+const filters = [
+  { label: '全部', value: 'all' },
+  { label: '警告', value: 'warn' },
+  { label: '错误', value: 'error' },
+]
 const eventLogColumns = [
   { key: 'time', label: '时间', width: '11.5%' },
   { key: 'level', label: '级别', width: '7.5%' },
@@ -37,34 +44,59 @@ const statusToneClasses: Record<SemanticTone, string> = {
 function rowTone(row: object) {
   return (row as EventLogItem).tone
 }
+
+const filteredRows = computed(() => {
+  if (activeFilter.value === 'warn') return props.rows.filter((row) => row.tone === 'warning')
+  if (activeFilter.value === 'error') return props.rows.filter((row) => row.tone === 'danger')
+  return props.rows
+})
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="h-[350px] w-full px-7 pt-6">
+  <BaseCard as="article" :padded="false" class="h-87.5 w-full px-7 pt-6">
     <header class="flex items-start justify-between">
       <div>
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">事件日志</h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">最近 50 条事件</p>
+        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
+          最近 50 条事件
+        </p>
       </div>
 
-      <div class="grid h-9 w-[206px] grid-cols-[62px_58px_58px] gap-1 rounded-xl bg-(--cp-bg-muted) p-1">
+      <div
+        class="grid h-9 w-51.5 grid-cols-[62px_58px_58px] gap-1 rounded-xl bg-(--cp-bg-muted) p-1"
+      >
         <button
           v-for="filter in filters"
-          :key="filter"
-          class="h-7 rounded-[9px] border-0 text-xs leading-[1.15] font-[650]"
-          :class="filter === '全部' ? 'bg-white text-(--cp-text-primary) shadow-(--cp-shadow-control)' : 'bg-transparent text-(--cp-text-secondary)'"
+          :key="filter.value"
+          class="h-7 rounded-[9px] border-0 text-xs leading-[1.15] font-[650] cursor-pointer"
+          :class="
+            activeFilter === filter.value
+              ? 'bg-white text-(--cp-text-primary) shadow-(--cp-shadow-control)'
+              : 'bg-transparent text-(--cp-text-secondary)'
+          "
           type="button"
+          @click="activeFilter = filter.value"
         >
-          {{ filter }}
+          {{ filter.label }}
         </button>
       </div>
     </header>
 
-    <div class="mt-[17px] flex h-60 w-full justify-between overflow-hidden">
+    <div class="mt-4.25 flex h-60 w-full justify-between overflow-hidden">
+      <BaseEmpty
+        v-if="filteredRows.length === 0"
+        compact
+        class="w-full place-content-center"
+        :title="rows.length === 0 ? '暂无事件日志' : '没有匹配日志'"
+        :description="
+          rows.length === 0 ? '请求经过代理后会在这里显示最近事件。' : '调整筛选条件后再查看。'
+        "
+      />
       <BaseTable
+        v-else
         class="min-w-0 flex-1"
         :columns="eventLogColumns"
-        :rows="rows"
+        :rows="filteredRows"
         table-class="min-w-full"
         header-row-class="h-10 rounded-xl bg-(--cp-bg-subtle) text-xs leading-[1.15] font-bold text-(--cp-text-secondary)"
         body-row-class="h-14 rounded-[10px] transition-colors duration-200 hover:bg-(--cp-bg-subtle)"
@@ -76,7 +108,11 @@ function rowTone(row: object) {
         </template>
 
         <template #level="{ row, value }">
-          <span class="inline-flex h-6 w-[58px] items-center justify-center rounded-full text-xs leading-[1.15] font-bold" :class="levelToneClasses[rowTone(row)]">{{ value }}</span>
+          <span
+            class="inline-flex h-6 w-14.5 items-center justify-center rounded-full text-xs leading-[1.15] font-bold"
+            :class="levelToneClasses[rowTone(row)]"
+            >{{ value }}</span
+          >
         </template>
 
         <template #requestId="{ value }">
@@ -84,7 +120,9 @@ function rowTone(row: object) {
         </template>
 
         <template #statusCode="{ row, value }">
-          <span class="font-mono font-bold tabular-nums" :class="statusToneClasses[rowTone(row)]">{{ value }}</span>
+          <span class="font-mono font-bold tabular-nums" :class="statusToneClasses[rowTone(row)]">{{
+            value
+          }}</span>
         </template>
 
         <template #latency="{ value }">
