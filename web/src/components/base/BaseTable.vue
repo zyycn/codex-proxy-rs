@@ -8,23 +8,29 @@ interface TableColumn {
   cellClass?: string
 }
 
-withDefaults(defineProps<{
-  columns: TableColumn[]
-  rows: object[]
-  tableClass?: string
-  headerRowClass?: string
-  bodyRowClass?: string
-  headerCellClass?: string
-  bodyCellClass?: string
-  striped?: boolean
-}>(), {
-  tableClass: 'min-w-155',
-  headerRowClass: 'h-10 rounded-xl bg-(--cp-bg-subtle) text-[11px] font-bold text-(--cp-text-muted)',
-  bodyRowClass: 'h-13 rounded-[10px]',
-  headerCellClass: 'min-w-0 overflow-hidden bg-(--cp-bg-subtle) px-3 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl',
-  bodyCellClass: 'min-w-0 overflow-hidden px-3 text-ellipsis whitespace-nowrap text-xs font-semibold text-(--cp-text-primary) first:rounded-l-[10px] last:rounded-r-[10px]',
-  striped: true,
-})
+withDefaults(
+  defineProps<{
+    columns: TableColumn[]
+    rows: object[]
+    tableClass?: string
+    headerRowClass?: string
+    bodyRowClass?: string
+    headerCellClass?: string
+    bodyCellClass?: string
+    striped?: boolean
+  }>(),
+  {
+    tableClass: 'min-w-155',
+    headerRowClass:
+      'h-10 rounded-xl bg-(--cp-bg-subtle) text-[11px] font-bold text-(--cp-text-muted)',
+    bodyRowClass: 'h-13 rounded-[10px] transition-colors',
+    headerCellClass:
+      'min-w-0 overflow-hidden bg-(--cp-bg-subtle) px-3 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl',
+    bodyCellClass:
+      'min-w-0 overflow-hidden px-3 text-ellipsis whitespace-nowrap text-xs font-semibold text-(--cp-text-primary) first:rounded-l-[10px] last:rounded-r-[10px]',
+    striped: true,
+  },
+)
 
 function cellValue(row: object, key: string) {
   return (row as Record<string, unknown>)[key]
@@ -52,7 +58,10 @@ function alignClass(column: TableColumn) {
 }
 
 function rowSurfaceClass(index: number, striped: boolean) {
-  return striped && index % 2 === 1 ? 'bg-(--cp-bg-subtle)' : 'bg-(--cp-bg-surface)'
+  return [
+    striped && index % 2 === 1 ? 'bg-(--cp-bg-subtle)' : 'bg-(--cp-bg-surface)',
+    'group-hover:bg-(--cp-default-bg-hover)',
+  ]
 }
 </script>
 
@@ -64,11 +73,7 @@ function rowSurfaceClass(index: number, striped: boolean) {
       :style="{ width: '100%' }"
     >
       <colgroup>
-        <col
-          v-for="column in columns"
-          :key="column.key"
-          :style="{ width: columnWidth(column) }"
-        >
+        <col v-for="column in columns" :key="column.key" :style="{ width: columnWidth(column) }" />
       </colgroup>
 
       <thead>
@@ -85,15 +90,16 @@ function rowSurfaceClass(index: number, striped: boolean) {
       </thead>
 
       <tbody>
-        <tr
-          v-for="(row, index) in rows"
-          :key="rowKey(row, index)"
-          :class="bodyRowClass"
-        >
+        <tr v-for="(row, index) in rows" :key="rowKey(row, index)" :class="['group', bodyRowClass]">
           <td
             v-for="column in columns"
             :key="column.key"
-            :class="[bodyCellClass, rowSurfaceClass(index, striped), alignClass(column), column.cellClass]"
+            :class="[
+              bodyCellClass,
+              rowSurfaceClass(index, striped),
+              alignClass(column),
+              column.cellClass,
+            ]"
           >
             <slot :name="column.key" :row="row" :value="cellValue(row, column.key)">
               {{ cellValue(row, column.key) }}

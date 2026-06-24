@@ -34,6 +34,14 @@ pub struct AdminLoginData {
     pub expires_at: String,
 }
 
+/// 管理员会话状态响应。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSessionStatusData {
+    /// 当前请求是否携带有效管理端会话。
+    pub authenticated: bool,
+}
+
 /// 会话登录是否成功。
 pub fn session_login_allowed() -> bool {
     true
@@ -94,6 +102,33 @@ pub async fn login(
         })?,
     );
     Ok(response)
+}
+
+/// `GET /api/admin/auth/status`
+pub async fn session_status(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    let authenticated = state
+        .services
+        .admin_sessions
+        .validate(admin_session_cookie(&headers).as_deref())
+        .await
+        .map_err(|_| {
+            AdminError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                50001,
+                "Failed to validate admin session",
+                request_id.clone(),
+            )
+        })?;
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AdminSessionStatusData { authenticated }, request_id),
+    ))
 }
 
 /// `POST /api/admin/logout`

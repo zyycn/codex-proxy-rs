@@ -3,83 +3,199 @@ import { computed, ref } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
+import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import type { TrendPoint, TrendSummaryItem } from '../types'
 
 const props = defineProps<{
   points: TrendPoint[]
   summary: TrendSummaryItem[]
+  loading?: boolean
+}>()
+
+const emit = defineEmits<{
+  trendChange: [tab: string]
 }>()
 
 const tabs = ['用量', '延迟', '错误']
 const activeTab = ref('用量')
 
+const hasSamples = computed(() =>
+  props.points.some(
+    (point) =>
+      point.requests > 0 ||
+      point.errors > 0 ||
+      point.latency > 0 ||
+      point.tokens > 0 ||
+      point.cachedTokens > 0,
+  ),
+)
+
 const chartOption = computed<EChartsOption>(() => {
-  const times = props.points.map(p => `${p.time}:00`)
-  const getValues = () => {
-    if (activeTab.value === '用量') return props.points.map(p => p.tokens)
-    if (activeTab.value === '延迟') return props.points.map(p => p.latency)
-    return props.points.map(p => p.errors)
-  }
-  const values = getValues()
-  const colors = { '用量': '#2563EB', '延迟': '#0F9F9A', '错误': '#EF4444' }
-  const color = colors[activeTab.value as keyof typeof colors]
+  const times = props.points.map((p) => `${p.time}:00`)
+  const series = getSeries()
   return {
-    grid: { left: 30, right: 0, top: 8, bottom: 24 },
-    xAxis: { type: 'category', data: times, axisLabel: { color: '#94A3B8', fontSize: 10, fontFamily: 'JetBrains Mono' }, axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: '#F1F5F9' } }, axisLabel: { show: false } },
-    series: [{
-      type: 'line', data: values, smooth: true, symbol: 'none', lineStyle: { color, width: 2.5 },
-      areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: color + '18' }, { offset: 1, color: color + '02' }] } },
-    }],
+    grid: { left: 4, right: 0, top: 8, bottom: 24 },
+    xAxis: {
+      type: 'category',
+      data: times,
+      axisLabel: { color: '#94A3B8', fontSize: 10, fontFamily: 'JetBrains Mono' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+    },
+    yAxis: [
+      { type: 'value', splitLine: { lineStyle: { color: '#F1F5F9' } }, axisLabel: { show: false } },
+      { type: 'value', min: 0, max: 100, splitLine: { show: false }, axisLabel: { show: false } },
+    ],
+    series,
     tooltip: {
       trigger: 'axis',
       backgroundColor: '#fff',
       borderColor: 'transparent',
       borderWidth: 0,
       padding: [10, 14],
-      textStyle: { color: '#334155', fontSize: 12, fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 600 },
+      textStyle: {
+        color: '#334155',
+        fontSize: 12,
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontWeight: 600,
+      },
       extraCssText: 'border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);',
       axisPointer: { type: 'line', lineStyle: { color: '#E2E8F0', type: 'dashed' } },
+      formatter: formatTooltip,
     },
   }
 })
 
-const activeSummary = computed(() => {
-  const pts = props.points
-  if (!pts.length) return []
+function formatTooltip(params: unknown) {
+  const rows = Array.isArray(params) ? params : [params]
+  const title = tooltipValue(rows[0], 'axisValueLabel')
+  const lines = rows.map((row) => {
+    const name = tooltipValue(row, 'seriesName')
+    const value = tooltipValue(row, 'value')
+    const marker = tooltipValue(row, 'marker')
+    const unitValue = tooltipDisplayValue(name, value)
+    return `${marker}${name}: ${unitValue}`
+  })
+  return [title, ...lines].filter(Boolean).join('<br/>')
+}
+
+function tooltipDisplayValue(name: string, value: string): string {
+  if (name === '成功率') return `${value}%`
+  if (activeTab.value === '延迟') return formatLatency(Number(value))
+  return value
+}
+
+function tooltipValue(source: unknown, key: string): string {
+  if (typeof source !== 'object' || source === null || !(key in source)) return ''
+  const value = (source as Record<string, unknown>)[key]
+  return typeof value === 'number' || typeof value === 'string' ? String(value) : ''
+}
+
+function getSeries() {
   if (activeTab.value === '用量') {
-    const totalTokens = pts.reduce((s, p) => s + p.tokens, 0)
     return [
-      { label: '输入', value: formatTokens(Math.floor(totalTokens * 0.45)), tone: 'info' as const },
-      { label: '输出', value: formatTokens(Math.floor(totalTokens * 0.55)), tone: 'success' as const },
-      { label: '缓存', value: formatTokens(0), tone: 'normal' as const },
+      lineSeries(
+        '输入',
+        props.points.map((p) => p.inputTokens),
+        '#2563EB',
+        true,
+      ),
+      lineSeries(
+        '输出',
+        props.points.map((p) => p.outputTokens),
+        '#10B981',
+      ),
+      lineSeries(
+        '缓存',
+        props.points.map((p) => p.cachedTokens),
+        '#94A3B8',
+      ),
     ]
   }
   if (activeTab.value === '延迟') {
-    const withLatency = pts.filter(p => p.latency > 0)
-    const avg = withLatency.length ? Math.round(withLatency.reduce((s, p) => s + p.latency, 0) / withLatency.length) : 0
-    const max = withLatency.length ? Math.max(...withLatency.map(p => p.latency)) : 0
-    const min = withLatency.length ? Math.min(...withLatency.map(p => p.latency)) : 0
     return [
-      { label: '平均', value: avg ? `${avg}ms` : '—', tone: 'info' as const },
-      { label: '最高', value: max ? `${max}ms` : '—', tone: 'warning' as const },
-      { label: '最低', value: min ? `${min}ms` : '—', tone: 'success' as const },
+      lineSeries(
+        '平均',
+        props.points.map((p) => p.latency),
+        '#0F9F9A',
+        true,
+      ),
+      lineSeries(
+        '最高',
+        props.points.map((p) => p.maxLatency),
+        '#F59E0B',
+      ),
+      lineSeries(
+        '最低',
+        props.points.map((p) => p.minLatency),
+        '#10B981',
+      ),
     ]
   }
-  const totalErrors = pts.reduce((s, p) => s + p.errors, 0)
-  const totalRequests = pts.reduce((s, p) => s + p.requests, 0)
-  const errorRate = totalRequests > 0 ? ((totalErrors / totalRequests) * 100).toFixed(1) : '0'
   return [
-    { label: '错误数', value: String(totalErrors), tone: totalErrors > 0 ? 'danger' as const : 'normal' as const },
-    { label: '成功率', value: totalRequests > 0 ? `${(100 - Number(errorRate)).toFixed(1)}%` : '—', tone: 'success' as const },
-    { label: '总请求', value: String(totalRequests), tone: 'info' as const },
+    lineSeries(
+      '错误数',
+      props.points.map((p) => p.errors),
+      '#EF4444',
+      true,
+    ),
+    lineSeries(
+      '成功率',
+      props.points.map((p) => p.successRate),
+      '#10B981',
+      false,
+      1,
+    ),
+    lineSeries(
+      '总请求',
+      props.points.map((p) => p.requests),
+      '#2563EB',
+    ),
   ]
+}
+
+function lineSeries(name: string, data: number[], color: string, area = false, yAxisIndex = 0) {
+  return {
+    name,
+    type: 'line' as const,
+    data,
+    smooth: true,
+    symbol: 'none',
+    yAxisIndex,
+    lineStyle: { color, width: 2.5 },
+    itemStyle: { color },
+    areaStyle: area
+      ? {
+          color: {
+            type: 'linear' as const,
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: `${color}18` },
+              { offset: 1, color: `${color}02` },
+            ],
+          },
+        }
+      : undefined,
+  }
+}
+
+function selectTab(tab: string) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  emit('trendChange', tab)
+}
+
+const activeSummary = computed(() => {
+  return props.summary
 })
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
+function formatLatency(ms: number): string {
+  if (!ms) return '—'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
+  return `${ms}ms`
 }
 </script>
 
@@ -87,8 +203,10 @@ function formatTokens(n: number): string {
   <BaseCard as="article" :padded="false" class="h-95 w-full px-7 pt-5.5">
     <header class="flex items-start justify-between">
       <div class="pt-0.5">
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">请求趋势</h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">最近 24 小时</p>
+        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">使用趋势</h2>
+        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
+          最近 24 小时
+        </p>
       </div>
 
       <div class="grid h-9.5 w-61.5 grid-cols-3 gap-1 rounded-xl bg-(--cp-bg-muted) p-1">
@@ -96,9 +214,13 @@ function formatTokens(n: number): string {
           v-for="tab in tabs"
           :key="tab"
           class="h-7.5 rounded-[9px] border-0 text-xs leading-[1.15] font-[650] cursor-pointer transition-colors"
-          :class="activeTab === tab ? 'bg-white text-(--cp-text-primary) shadow-[0_10px_24px_-18px_#0E172614]' : 'bg-transparent text-(--cp-text-secondary)'"
+          :class="
+            activeTab === tab
+              ? 'bg-white text-(--cp-text-primary) shadow-[0_10px_24px_-18px_#0E172614]'
+              : 'bg-transparent text-(--cp-text-secondary)'
+          "
           type="button"
-          @click="activeTab = tab"
+          @click="selectTab(tab)"
         >
           {{ tab }}
         </button>
@@ -106,25 +228,45 @@ function formatTokens(n: number): string {
     </header>
 
     <div class="mt-4.75 grid grid-cols-[minmax(0,1fr)_minmax(150px,180px)] gap-7.5">
-      <div class="h-67 w-full overflow-hidden rounded-[10px] bg-white">
-        <BaseChart :option="chartOption" :height="268" />
+      <div
+        v-loading="props.loading"
+        class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white"
+      >
+        <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
+        <BaseEmpty
+          v-if="!hasSamples"
+          compact
+          title="暂无趋势数据"
+          description="最近 24 小时还没有可用于绘制趋势的请求日志。"
+          class="h-full place-content-center bg-white"
+        />
       </div>
 
-      <aside class="flex h-67 w-full flex-col rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5" style="gap: 36.6px">
+      <aside class="grid h-67 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5">
         <div
           v-for="item in activeSummary"
           :key="item.label"
-          class="grid grid-cols-[minmax(0,1fr)_8px] items-start gap-x-3 gap-y-px"
+          class="grid grid-cols-[minmax(0,1fr)_8px] items-center gap-x-3 py-2"
         >
-          <span class="col-span-2 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">{{ item.label }}</span>
-          <strong class="mt-1.75 font-mono text-2xl leading-[1.15] font-[760] tabular-nums text-(--cp-text-primary)">{{ item.value }}</strong>
-          <i class="mt-3.5 size-2 justify-self-end rounded-full" :class="{
-            'bg-(--cp-info)': item.tone === 'info',
-            'bg-(--cp-success)': item.tone === 'success',
-            'bg-(--cp-warning)': item.tone === 'warning',
-            'bg-(--cp-danger)': item.tone === 'danger',
-            'bg-(--cp-normal)': item.tone === 'normal',
-          }" />
+          <span class="grid gap-1.75">
+            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">{{
+              item.label
+            }}</span>
+            <strong
+              class="font-mono text-2xl leading-[1.15] font-[760] tabular-nums text-(--cp-text-primary)"
+              >{{ item.value }}</strong
+            >
+          </span>
+          <i
+            class="size-2 justify-self-end rounded-full"
+            :class="{
+              'bg-(--cp-info)': item.tone === 'info',
+              'bg-(--cp-success)': item.tone === 'success',
+              'bg-(--cp-warning)': item.tone === 'warning',
+              'bg-(--cp-danger)': item.tone === 'danger',
+              'bg-(--cp-normal)': item.tone === 'normal',
+            }"
+          />
         </div>
       </aside>
     </div>

@@ -12,13 +12,21 @@ import {
   Users,
 } from '@lucide/vue'
 
-import { getDiagnostics, getLogs, getUsageSummary, getUsageStats, getAccounts } from '@/api'
+import { getDashboardSummary, getDashboardTrend } from '@/api'
+import type {
+  DashboardAccountUsage,
+  DashboardServiceStatus,
+  DashboardSummary,
+  DashboardTrend,
+  DashboardTrendKind,
+} from '@/api'
 import type {
   AccountCapacityInfo,
   AccountPoolSummary,
   AccountUsageItem,
   EventLogItem,
   MetricCardItem,
+  SemanticTone,
   ServiceStatusItem,
   TrendPoint,
   TrendSummaryItem,
@@ -26,6 +34,7 @@ import type {
 
 export function useDashboard(): {
   loading: Ref<boolean>
+  trendLoading: Ref<boolean>
   metrics: Ref<MetricCardItem[]>
   trendPoints: Ref<TrendPoint[]>
   trendSummary: Ref<TrendSummaryItem[]>
@@ -36,8 +45,9 @@ export function useDashboard(): {
   capacityInfo: Ref<AccountCapacityInfo | null>
   rotationStrategy: Ref<string | null>
   refresh: () => Promise<void>
+  loadTrend: (tab: string) => Promise<void>
 } {
-  const metrics = ref<MetricCardItem[]>([])
+  const metrics = ref<MetricCardItem[]>(metricCards(emptyDashboardSummary()))
   const trendPoints = ref<TrendPoint[]>([])
   const trendSummary = ref<TrendSummaryItem[]>([])
   const accountUsage = ref<AccountUsageItem[]>([])
@@ -46,285 +56,325 @@ export function useDashboard(): {
   const poolSummary = ref<AccountPoolSummary | null>(null)
   const capacityInfo = ref<AccountCapacityInfo | null>(null)
   const rotationStrategy = ref<string | null>(null)
-  const loading = ref(true)
+  const loading = ref(false)
+  const trendLoading = ref(false)
   const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 
   async function loadDashboardData() {
     try {
-      loading.value = true
-
-      // 并行加载所有数据；日志拉 200 条用于趋势聚合
-      const [summary, usageStats, accounts, logs, diagnostics] = await Promise.all([
-        getUsageSummary().catch(() => null),
-        getUsageStats().catch(() => null),
-        getAccounts().catch(() => null),
-        getLogs({ limit: 200 }).catch(() => null),
-        getDiagnostics().catch(() => null),
-      ])
-
-      const totalAccounts = diagnostics?.accounts?.pool?.total ?? accounts?.length ?? 0
-
-      poolSummary.value = diagnostics?.accounts?.pool ?? null
-      capacityInfo.value = diagnostics?.accounts?.capacity ?? null
-      rotationStrategy.value = diagnostics?.settings?.rotationStrategy ?? null
-
-      updateMetrics(summary, totalAccounts, diagnostics)
-      updateAccountUsage(accounts ?? [], usageStats ?? [])
-      updateEventLogs((logs ?? []).slice(0, 10))
-      updateServiceStatus(diagnostics)
-      updateTrendData(logs ?? [], summary)
+      const summary = await getDashboardSummary()
+      applySummary(summary)
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
-    } finally {
-      loading.value = false
     }
   }
 
-  function updateMetrics(summary: any, totalAccounts: number, diagnostics: any) {
-    const pool = diagnostics?.accounts?.pool ?? {}
-    const activeAccounts = pool.active ?? summary?.accountCount ?? 0
-    const errorAccounts = (pool.expired ?? 0) + (pool.disabled ?? 0) + (pool.banned ?? 0)
+  async function loadTrend(tab: string) {
+    const kind = trendKindFromTab(tab)
+    try {
+      trendLoading.value = true
+      applyTrend(await getDashboardTrend(kind))
+    } catch (error) {
+      console.error('Failed to load dashboard trend:', error)
+    } finally {
+      trendLoading.value = false
+    }
+  }
 
-    const requestCount = summary?.requestCount ?? 0
-    const inputTokens = summary?.inputTokens ?? 0
-    const outputTokens = summary?.outputTokens ?? 0
-    const cachedTokens = summary?.cachedTokens ?? 0
-    const emptyResponseCount = summary?.emptyResponseCount ?? 0
+  function applySummary(summary: DashboardSummary) {
+    metrics.value = metricCards(summary)
+    applyTrend(summary.trend)
+    accountUsage.value = summary.accountUsage.map(accountUsageItem)
+    serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
+    eventLogs.value = summary.eventLogs.map((log) => ({
+      id: log.id,
+      time: formatTime(log.createdAt),
+      level: levelLabel(log.level),
+      requestId: log.requestId || '-',
+      route: log.route || '-',
+      model: log.model || '-',
+      statusCode: log.statusCode ? String(log.statusCode) : '-',
+      latency: log.latencyMs ? formatLatency(log.latencyMs) : '-',
+      tone: eventTone(log.level, log.statusCode),
+    }))
+    poolSummary.value = summary.poolSummary
+    capacityInfo.value = summary.capacityInfo
+    rotationStrategy.value = summary.rotationStrategy ?? null
+  }
 
-    metrics.value = [
+  function emptyDashboardSummary(): DashboardSummary {
+    return {
+      cards: {
+        accounts: {
+          total: 0,
+          enabled: 0,
+          abnormal: 0,
+        },
+        traffic: {
+          todayRequests: 0,
+          yesterdayRequests: 0,
+          totalRequests: 0,
+          rpm: 0,
+          tpm: 0,
+        },
+        tokens: {
+          todayTokens: 0,
+          yesterdayTokens: 0,
+          totalTokens: 0,
+          todayCostUsd: null,
+          totalCostUsd: null,
+        },
+        cache: {
+          todayHitRate: null,
+          yesterdayHitRate: null,
+          totalHitRate: null,
+          totalCachedTokens: 0,
+          firstTokenLatencyMs: null,
+          completionLatencyMs: null,
+        },
+      },
+      trend: {
+        kind: 'usage',
+        points: [],
+        summary: [],
+      },
+      accountUsage: [],
+      serviceStatuses: [],
+      eventLogs: [],
+      poolSummary: {
+        total: 0,
+        active: 0,
+        expired: 0,
+        quotaExhausted: 0,
+        refreshing: 0,
+        disabled: 0,
+        banned: 0,
+      },
+      capacityInfo: {
+        maxConcurrentPerAccount: 0,
+        totalSlots: 0,
+        usedSlots: 0,
+        availableSlots: 0,
+      },
+      rotationStrategy: undefined,
+    }
+  }
+
+  function metricCards(summary: DashboardSummary): MetricCardItem[] {
+    const { accounts, traffic, tokens, cache } = summary.cards
+    return [
       {
         title: '账号',
-        value: String(totalAccounts),
+        value: formatNumber(accounts.total),
         icon: Users,
         tone: 'normal',
         details: [
-          { label: '启用', value: String(activeAccounts), tone: activeAccounts > 0 ? 'success' : 'normal' },
-          { label: '异常', value: String(errorAccounts), tone: errorAccounts > 0 ? 'danger' : 'normal' },
+          {
+            label: '启用',
+            value: formatNumber(accounts.enabled),
+            tone: accounts.enabled > 0 ? 'success' : 'normal',
+          },
+          {
+            label: '异常',
+            value: formatNumber(accounts.abnormal),
+            tone: accounts.abnormal > 0 ? 'danger' : 'normal',
+          },
         ],
       },
       {
-        title: '总请求',
-        value: formatNumber(requestCount),
+        title: '今日流量',
+        value: formatNumber(traffic.todayRequests),
         icon: Activity,
         tone: 'info',
+        trend: trendState(traffic.todayRequests, traffic.yesterdayRequests, 'info'),
         details: [
-          { label: '成功', value: formatNumber(requestCount - emptyResponseCount), tone: 'success' },
-          { label: '空响应', value: formatNumber(emptyResponseCount), tone: emptyResponseCount > 0 ? 'warning' : 'info' },
+          { label: '总请求', value: formatNumber(traffic.totalRequests), tone: 'info' },
+          {
+            label: 'RPM / TPM',
+            value: `${formatNumber(traffic.rpm)} / ${formatTokens(traffic.tpm)}`,
+            tone: 'info',
+          },
         ],
       },
       {
-        title: '总 Token',
-        value: formatTokens(inputTokens + outputTokens),
+        title: '今日 Token',
+        value: formatTokens(tokens.todayTokens),
         icon: FileText,
         tone: 'success',
+        trend: trendState(tokens.todayTokens, tokens.yesterdayTokens, 'success'),
         details: [
-          { label: '输入', value: formatTokens(inputTokens), tone: 'info' },
-          { label: '输出', value: formatTokens(outputTokens), tone: 'success' },
+          { label: '总 Token', value: formatTokens(tokens.totalTokens), tone: 'success' },
+          {
+            label: '计费',
+            value: `${formatCost(tokens.todayCostUsd)} / ${formatCost(tokens.totalCostUsd)}`,
+            tone: 'success',
+          },
         ],
       },
       {
-        title: '缓存命中率',
-        value: inputTokens > 0 ? `${((cachedTokens / inputTokens) * 100).toFixed(1)}%` : '—',
+        title: '缓存命中',
+        value: formatRate(cache.todayHitRate),
         icon: Timer,
-        tone: cachedTokens > 0 ? 'success' : 'normal',
+        tone: cache.todayHitRate && cache.todayHitRate > 0 ? 'warning' : 'normal',
+        trend: trendState(cache.todayHitRate ?? 0, cache.yesterdayHitRate ?? 0, 'warning'),
         details: [
-          { label: '缓存 Token', value: formatTokens(cachedTokens), tone: cachedTokens > 0 ? 'success' : 'normal' },
-          { label: '输入总量', value: formatTokens(inputTokens), tone: 'info' },
+          { label: '总缓存命中', value: formatRate(cache.totalHitRate), tone: 'warning' },
+          {
+            label: '首字 / 完成',
+            value: `${formatLatency(cache.firstTokenLatencyMs)} / ${formatLatency(cache.completionLatencyMs)}`,
+            tone: 'warning',
+          },
         ],
       },
     ]
   }
 
-  function updateAccountUsage(accounts: any[], usageStats: any[]) {
-    // 构建 accountId → usage 的映射
-    const usageByAccount: Record<string, any> = {}
-    for (const u of usageStats) {
-      usageByAccount[u.accountId] = u
-    }
-
-    // 计算用量数据：优先用 usage，回退到 account 自带字段
-    const merged = accounts.map((acc) => {
-      const usage = usageByAccount[acc.id] ?? {}
-      return {
-        ...acc,
-        _requestCount: usage.requestCount ?? acc.totalRequests ?? 0,
-        _inputTokens: usage.inputTokens ?? acc.totalInputTokens ?? 0,
-        _outputTokens: usage.outputTokens ?? acc.totalOutputTokens ?? 0,
-        _lastUsedAt: usage.lastUsedAt ?? acc.lastUsedAt ?? acc.updatedAt ?? acc.addedAt ?? null,
+  function applyTrend(trend: DashboardTrend) {
+    trendPoints.value = trend.points
+    trendSummary.value = trend.summary.map((item) => {
+      if (trend.kind === 'latency') {
+        return {
+          label: item.label,
+          value: formatLatency(item.value),
+          tone: trendSummaryTone(item.label),
+        }
       }
-    })
-
-    // 按请求数降序排列，取前 4
-    const sorted = merged
-      .sort((a: any, b: any) => b._requestCount - a._requestCount)
-      .slice(0, 4)
-
-    const maxTokens = Math.max(...sorted.map((a: any) => a._inputTokens + a._outputTokens), 1)
-
-    accountUsage.value = sorted.map((acc: any) => {
-      const totalTokens = acc._inputTokens + acc._outputTokens
-      const loadWidth = Math.floor((totalTokens / maxTokens) * 84) // 84px = max bar width
-
-      let tone: AccountUsageItem['tone'] = 'normal'
-      if (acc.status === 'active') tone = 'success'
-      else if (acc.status === 'quota_exhausted' || acc.status === 'expired') tone = 'warning'
-      else if (acc.status === 'banned' || acc.status === 'disabled') tone = 'danger'
-      else if (acc.status === 'refreshing') tone = 'info'
-
-      return {
-        name: acc.label || (acc.email ? acc.email.split('@')[0] : acc.id.slice(0, 8)),
-        email: acc.email || '—',
-        plan: acc.planType || 'free',
-        requests: formatNumber(acc._requestCount),
-        tokens: formatTokens(totalTokens),
-        lastUsed: formatRelativeTime(acc._lastUsedAt),
-        tone,
-        loadWidth,
+      if (item.ratio !== null && item.ratio !== undefined) {
+        return {
+          label: item.label,
+          value: `${item.ratio.toFixed(1)}%`,
+          tone: trendSummaryTone(item.label),
+        }
       }
+      const formatter =
+        trend.kind === 'usage' && item.label !== '总请求' ? formatTokens : formatNumber
+      return { label: item.label, value: formatter(item.value), tone: trendSummaryTone(item.label) }
     })
   }
 
-  function updateEventLogs(logs: any[]) {
-    if (!logs.length) {
-      eventLogs.value = []
-      return
+  function accountUsageItem(item: DashboardAccountUsage): AccountUsageItem {
+    const tone = accountTone(item.status)
+    const quotaPercent = quotaUsedPercent(item.quotaUsedPercent)
+    return {
+      name: item.name,
+      email: item.email || '-',
+      plan: item.plan || 'free',
+      requests: formatNumber(item.requests),
+      tokens: formatTokens(item.tokens),
+      lastUsed: formatRelativeTime(item.lastUsedAt ?? undefined),
+      tone,
+      quotaPercent,
+      quotaTone: quotaTone(quotaPercent),
     }
-
-    eventLogs.value = logs.map((log) => {
-      let tone: EventLogItem['tone'] = 'info'
-      if (log.level === 'warning') tone = 'warning'
-      else if (log.level === 'error') tone = 'danger'
-
-      return {
-        id: log.id,
-        time: formatTime(log.createdAt),
-        level: log.level === 'info' ? '信息' : log.level === 'warning' ? '警告' : '错误',
-        requestId: log.requestId || '—',
-        route: log.route || '—',
-        model: log.model || '—',
-        statusCode: log.statusCode ? String(log.statusCode) : '—',
-        latency: log.latencyMs ? `${(log.latencyMs / 1000).toFixed(2)}s` : '—',
-        tone,
-      }
-    })
   }
 
-  function updateServiceStatus(diagnostics: any) {
-    if (!diagnostics) {
-      serviceStatuses.value = []
-      return
-    }
-
-    const transport = diagnostics.transport ?? {}
-    const fingerprint = transport.fingerprint ?? {}
-
-    serviceStatuses.value = [
-      {
-        label: '客户端版本',
-        value: fingerprint.appVersion || '—',
-        detail: `Build ${fingerprint.buildNumber || '—'}`,
-        tone: 'info' as const,
-        icon: MonitorCheck,
-      },
-      {
-        label: '平台架构',
-        value: fingerprint.platform || '—',
-        detail: fingerprint.arch || '—',
-        tone: 'info' as const,
-        icon: MonitorCheck,
-      },
-      {
-        label: 'Chromium',
-        value: fingerprint.chromiumVersion ? `v${fingerprint.chromiumVersion}` : '—',
-        detail: fingerprint.originator || '—',
-        tone: 'normal' as const,
-        icon: CloudCheck,
-      },
-      {
-        label: '更新时间',
-        value: fingerprint.updatedAt ? new Date(fingerprint.updatedAt).toLocaleString('zh-CN') : '',
-        detail: '',
-        tone: 'normal' as const,
-        icon: RefreshCw,
-      },
-      {
-        label: 'User Agent',
-        value: fingerprint.userAgent || `${fingerprint.originator || 'Codex Desktop'}/${fingerprint.appVersion || '?'} (${fingerprint.platform || '?'}; ${fingerprint.arch || '?'})`,
-        detail: '',
-        tone: 'normal' as const,
-        icon: Gauge,
-      },
-    ]
+  function quotaUsedPercent(value: number | null | undefined): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+    return Math.max(0, Math.min(100, Math.round(value)))
   }
 
-  function updateTrendData(logs: any[], summary: any) {
-    if (!logs.length) {
-      trendPoints.value = []
-      trendSummary.value = [
-        { label: '输入', value: '—', tone: 'info' as const },
-        { label: '输出', value: '—', tone: 'success' as const },
-        { label: '缓存', value: '—', tone: 'normal' as const },
-      ]
-      return
+  function quotaTone(percent: number): SemanticTone {
+    if (percent >= 95) return 'danger'
+    if (percent >= 80) return 'warning'
+    if (percent > 0) return 'success'
+    return 'normal'
+  }
+
+  function serviceStatusItem(item: DashboardServiceStatus, index: number): ServiceStatusItem {
+    const icons = [MonitorCheck, MonitorCheck, CloudCheck, RefreshCw, Gauge]
+    return {
+      label: item.label,
+      value: item.value || '-',
+      detail: item.detail || '-',
+      tone: item.tone,
+      icon: icons[index] ?? MonitorCheck,
     }
+  }
 
-    // 按小时分桶，取最近 24 个桶
-    const now = Date.now()
-    const buckets: Record<string, { requests: number; inputTokens: number; outputTokens: number; errors: number; latencySum: number; latencyCount: number }> = {}
-    for (let h = 23; h >= 0; h--) {
-      const key = new Date(now - h * 3600000).toISOString().slice(11, 13)
-      buckets[key] = { requests: 0, inputTokens: 0, outputTokens: 0, errors: 0, latencySum: 0, latencyCount: 0 }
+  function trendState(
+    current: number,
+    previous: number,
+    fallbackTone: SemanticTone,
+  ): MetricCardItem['trend'] {
+    if (current > previous) return { direction: 'up', tone: 'success' }
+    if (current < previous) return { direction: 'down', tone: 'danger' }
+    return previous > 0 || current > 0 ? { direction: 'flat', tone: fallbackTone } : undefined
+  }
+
+  function trendKindFromTab(tab: string): DashboardTrendKind {
+    if (tab === '延迟') return 'latency'
+    if (tab === '错误') return 'errors'
+    return 'usage'
+  }
+
+  function trendSummaryTone(label: string): SemanticTone {
+    if (label.includes('错误')) return 'danger'
+    if (label.includes('最高')) return 'warning'
+    if (label.includes('输出') || label.includes('最低') || label.includes('成功')) return 'success'
+    if (label.includes('缓存')) return 'normal'
+    return 'info'
+  }
+
+  function accountTone(status: DashboardAccountUsage['status']): SemanticTone {
+    if (status === 'active') return 'success'
+    if (status === 'quota_exhausted' || status === 'expired') return 'warning'
+    if (status === 'banned' || status === 'disabled') return 'danger'
+    if (status === 'refreshing') return 'info'
+    return 'normal'
+  }
+
+  function eventTone(level: string, statusCode?: number): SemanticTone {
+    if (level === 'warn') return 'warning'
+    if (level === 'error' || (typeof statusCode === 'number' && statusCode >= 400)) return 'danger'
+    if (level === 'debug') return 'normal'
+    return 'info'
+  }
+
+  function levelLabel(level: string): string {
+    const labels: Record<string, string> = {
+      debug: '调试',
+      info: '信息',
+      warn: '警告',
+      error: '错误',
     }
-
-    for (const log of logs) {
-      const hour = log.createdAt?.slice(11, 13)
-      if (!hour || !buckets[hour]) continue
-      buckets[hour].requests++
-      const usage = log.metadata?.usage
-      if (usage) {
-        buckets[hour].inputTokens += usage.inputTokens || 0
-        buckets[hour].outputTokens += usage.outputTokens || 0
-      }
-      const code = log.statusCode
-      if (code && (code >= 400 || code < 0)) buckets[hour].errors++
-      if (log.latencyMs) {
-        buckets[hour].latencySum += log.latencyMs
-        buckets[hour].latencyCount++
-      }
-    }
-
-    const entries = Object.entries(buckets)
-    trendPoints.value = entries.map(([time, b]) => ({
-      time,
-      requests: b.requests,
-      tokens: b.inputTokens + b.outputTokens,
-      errors: b.errors,
-      latency: b.latencyCount > 0 ? Math.round(b.latencySum / b.latencyCount) : 0,
-    }))
-
-    const totalInput = entries.reduce((s, [, b]) => s + b.inputTokens, 0)
-    const totalOutput = entries.reduce((s, [, b]) => s + b.outputTokens, 0)
-    trendSummary.value = [
-      { label: '输入', value: totalInput > 0 ? formatTokens(totalInput) : '—', tone: 'info' as const },
-      { label: '输出', value: totalOutput > 0 ? formatTokens(totalOutput) : '—', tone: 'success' as const },
-      { label: '缓存', value: formatTokens(summary?.cachedTokens ?? 0), tone: (summary?.cachedTokens ?? 0) > 0 ? 'success' as const : 'normal' as const },
-    ]
+    return labels[level] ?? level
   }
 
   function formatNumber(num: number): string {
-    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`
-    if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`
+    if (num >= 1_000_000_000) return `${formatCompact(num / 1_000_000_000)}B`
+    if (num >= 1_000_000) return `${formatCompact(num / 1_000_000)}M`
+    if (num >= 1_000) return `${formatCompact(num / 1_000)}K`
     return String(num)
   }
 
   function formatTokens(tokens: number): string {
-    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`
-    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
-    return String(tokens)
+    return formatNumber(tokens)
+  }
+
+  function formatCompact(value: number): string {
+    const rounded =
+      value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)
+    return rounded.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
+  }
+
+  function formatRate(value: number | null | undefined): string {
+    if (value === null || value === undefined) return '-'
+    return `${(value * 100).toFixed(1)}%`
+  }
+
+  function formatCost(value: number | null | undefined): string {
+    if (value === null || value === undefined) return '-'
+    return `$${value.toFixed(4)}`
+  }
+
+  function formatLatency(ms: number | null | undefined): string {
+    if (!ms) return '-'
+    if (ms >= 1000) return `${formatCompact(ms / 1000)}s`
+    return `${ms}ms`
   }
 
   function formatRelativeTime(dateStr: string | undefined): string {
-    if (!dateStr) return '—'
+    if (!dateStr) return '-'
     const date = new Date(dateStr)
     const now = new Date()
     const diff = now.getTime() - date.getTime()
@@ -341,15 +391,18 @@ export function useDashboard(): {
 
   function formatTime(dateStr: string): string {
     const date = new Date(dateStr)
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return date.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
   }
 
-  // 启动自动刷新
   function startAutoRefresh() {
     stopAutoRefresh()
     autoRefreshTimer.value = setInterval(() => {
       loadDashboardData()
-    }, 30000) // 30秒刷新一次
+    }, 30000)
   }
 
   function stopAutoRefresh() {
@@ -370,6 +423,7 @@ export function useDashboard(): {
 
   return {
     loading,
+    trendLoading,
     metrics,
     trendPoints,
     trendSummary,
@@ -380,5 +434,6 @@ export function useDashboard(): {
     capacityInfo,
     rotationStrategy,
     refresh: loadDashboardData,
+    loadTrend,
   }
 }

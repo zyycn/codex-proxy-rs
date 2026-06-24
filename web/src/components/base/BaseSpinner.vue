@@ -7,7 +7,10 @@ withDefaults(defineProps<{ label?: string }>(), {
 </script>
 
 <template>
-  <span class="inline-flex items-center gap-2.5 text-[13px] font-semibold text-(--cp-text-secondary)" role="status">
+  <span
+    class="inline-flex items-center gap-2.5 text-[13px] font-semibold text-(--cp-text-secondary)"
+    role="status"
+  >
     <LoaderCircle class="animate-spin text-(--cp-info)" :size="16" />
     <span>{{ label }}</span>
   </span>

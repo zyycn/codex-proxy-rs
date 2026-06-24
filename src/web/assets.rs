@@ -6,11 +6,12 @@ use std::{
 use axum::{
     body::Body,
     extract::{Path as AxumPath, State},
-    http::{header, StatusCode},
+    http::{header, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
+use serde_json::json;
 
 use super::headers::{apply_static_headers, content_type_for_path};
 
@@ -35,7 +36,19 @@ async fn serve_index(State(state): State<AssetState>) -> Response {
     serve_file(&state.dist_dir.join("index.html"), "/").await
 }
 
-async fn serve_spa_fallback(State(state): State<AssetState>) -> Response {
+async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Response {
+    if uri.path() == "/api" || uri.path().starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "code": 40401,
+                "message": "API route not found",
+                "data": null
+            })),
+        )
+            .into_response();
+    }
+
     serve_file(&state.dist_dir.join("index.html"), "/").await
 }
 

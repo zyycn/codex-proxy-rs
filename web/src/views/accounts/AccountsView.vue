@@ -9,11 +9,17 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
-import BaseSpinner from '@/components/base/BaseSpinner.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
 
 import type { Account } from '@/api'
-import { batchDeleteAccounts, createAccount, deleteAccount, getAccounts, refreshAccount, updateAccountLabel } from '@/api'
+import {
+  batchDeleteAccounts,
+  createAccount,
+  deleteAccount,
+  getAccounts,
+  refreshAccount,
+  updateAccountLabel,
+} from '@/api'
 
 const loading = ref(true)
 const accounts = ref<Account[]>([])
@@ -21,7 +27,7 @@ const searchQuery = ref('')
 const selectedIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
-const editingLabel = ref<{ id: string, value: string } | null>(null)
+const editingLabel = ref<{ id: string; value: string } | null>(null)
 
 const createForm = ref({
   refreshToken: '',
@@ -37,31 +43,34 @@ const statusLabels: Record<Account['status'], string> = {
   refreshing: '刷新中',
 }
 
-const statusTones: Record<Account['status'], 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
-  active: 'success',
-  expired: 'warning',
-  disabled: 'normal',
-  banned: 'danger',
-  quota_exhausted: 'warning',
-  refreshing: 'info',
-}
+const statusTones: Record<Account['status'], 'success' | 'danger' | 'warning' | 'info' | 'normal'> =
+  {
+    active: 'success',
+    expired: 'warning',
+    disabled: 'normal',
+    banned: 'danger',
+    quota_exhausted: 'warning',
+    refreshing: 'info',
+  }
 
 const filteredAccounts = computed(() => {
   if (!searchQuery.value) return accounts.value
   const query = searchQuery.value.toLowerCase()
-  return accounts.value.filter(acc =>
-    (acc.email ?? '').toLowerCase().includes(query)
-    || acc.label?.toLowerCase().includes(query)
-    || acc.id.toLowerCase().includes(query),
+  return accounts.value.filter(
+    (acc) =>
+      (acc.email ?? '').toLowerCase().includes(query) ||
+      acc.label?.toLowerCase().includes(query) ||
+      acc.id.toLowerCase().includes(query),
   )
 })
 
-const allSelected = computed(() =>
-  selectedIds.value.size === filteredAccounts.value.length && filteredAccounts.value.length > 0,
+const allSelected = computed(
+  () =>
+    selectedIds.value.size === filteredAccounts.value.length && filteredAccounts.value.length > 0,
 )
 
-const indeterminate = computed(() =>
-  selectedIds.value.size > 0 && selectedIds.value.size < filteredAccounts.value.length,
+const indeterminate = computed(
+  () => selectedIds.value.size > 0 && selectedIds.value.size < filteredAccounts.value.length,
 )
 
 async function loadAccounts() {
@@ -151,7 +160,7 @@ function toggleAll() {
   if (selectedIds.value.size === filteredAccounts.value.length) {
     selectedIds.value.clear()
   } else {
-    filteredAccounts.value.forEach(acc => selectedIds.value.add(acc.id))
+    filteredAccounts.value.forEach((acc) => selectedIds.value.add(acc.id))
   }
 }
 
@@ -177,7 +186,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="w-full min-w-295 p-7">
+  <div class="w-full">
     <header class="flex h-17 items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
@@ -193,11 +202,7 @@ onMounted(() => {
 
     <div class="mt-6 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
-        <BaseInput
-          v-model="searchQuery"
-          placeholder="搜索邮箱、标签或 ID..."
-          class="w-80"
-        >
+        <BaseInput v-model="searchQuery" placeholder="搜索邮箱、标签或 ID..." class="w-80">
           <template #prefix>
             <Search class="size-4.5 text-(--cp-text-tertiary)" />
           </template>
@@ -215,47 +220,28 @@ onMounted(() => {
       </div>
 
       <div class="flex items-center gap-2">
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="导出账号"
-        >
+        <BaseIconButton variant="ghost" size="md" title="导出账号">
           <Download class="size-4.5" />
         </BaseIconButton>
 
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="导入账号"
-        >
+        <BaseIconButton variant="ghost" size="md" title="导入账号">
           <Upload class="size-4.5" />
         </BaseIconButton>
 
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新列表"
-          @click="loadAccounts"
-        >
+        <BaseIconButton variant="ghost" size="md" title="刷新列表" @click="loadAccounts">
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton
-          variant="primary"
-          size="md"
-          @click="showCreateModal = true"
-        >
+        <BaseButton variant="primary" size="md" @click="showCreateModal = true">
           <Plus class="size-4" />
           添加账号
         </BaseButton>
       </div>
     </div>
 
-    <BaseCard class="mt-5 p-0">
-      <BaseSpinner v-if="loading" class="py-20" />
-
+    <BaseCard v-loading="loading" class="mt-5 p-0">
       <BaseEmpty
-        v-else-if="filteredAccounts.length === 0"
+        v-if="filteredAccounts.length === 0 && !loading"
         message="暂无账号数据"
         class="py-20"
       />
@@ -271,7 +257,7 @@ onMounted(() => {
                   :checked="allSelected"
                   :indeterminate="indeterminate"
                   @change="toggleAll"
-                >
+                />
               </th>
               <th class="px-3">邮箱 / 标签</th>
               <th class="px-3">状态</th>
@@ -296,7 +282,7 @@ onMounted(() => {
                   class="cursor-pointer"
                   :checked="selectedIds.has(account.id)"
                   @change="toggleSelection(account.id)"
-                >
+                />
               </td>
               <td class="px-3">
                 <div class="flex flex-col gap-0.5">
@@ -310,7 +296,7 @@ onMounted(() => {
                       class="text-[13px] px-2 py-0.5 rounded border border-(--cp-border-primary) bg-(--cp-bg-primary)"
                       @keyup.enter="handleUpdateLabel(account.id, editingLabel.value)"
                       @keyup.escape="cancelEditLabel"
-                    >
+                    />
                     <button
                       class="text-[12px] text-(--cp-accent-primary) hover:underline"
                       @click="handleUpdateLabel(account.id, editingLabel.value)"
@@ -353,14 +339,10 @@ onMounted(() => {
                 </span>
               </td>
               <td class="px-3 text-right">
-                <span class="text-[14px] font-mono text-(--cp-text-secondary)">
-                  —
-                </span>
+                <span class="text-[14px] font-mono text-(--cp-text-secondary)"> — </span>
               </td>
               <td class="px-3 text-right">
-                <span class="text-[14px] font-mono text-(--cp-text-secondary)">
-                  —
-                </span>
+                <span class="text-[14px] font-mono text-(--cp-text-secondary)"> — </span>
               </td>
               <td class="px-3">
                 <span class="text-[13px] text-(--cp-text-secondary)">
@@ -402,6 +384,8 @@ onMounted(() => {
     <BaseModal
       v-model="showCreateModal"
       title="添加账号"
+      description="粘贴 Refresh Token 后创建一个可参与调度的 Codex 账号。"
+      variant="info"
       width="540px"
     >
       <div class="flex flex-col gap-4">
@@ -420,20 +404,12 @@ onMounted(() => {
           <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
             标签（可选）
           </label>
-          <BaseInput
-            v-model="createForm.label"
-            placeholder="例如：生产账号、测试账号..."
-          />
+          <BaseInput v-model="createForm.label" placeholder="例如：生产账号、测试账号..." />
         </div>
       </div>
 
       <template #footer>
-        <BaseButton
-          variant="ghost"
-          @click="showCreateModal = false"
-        >
-          取消
-        </BaseButton>
+        <BaseButton variant="ghost" @click="showCreateModal = false"> 取消 </BaseButton>
         <BaseButton
           variant="primary"
           :disabled="!createForm.refreshToken.trim()"
@@ -448,6 +424,8 @@ onMounted(() => {
     <BaseModal
       v-model="showDeleteModal"
       title="确认删除"
+      description="删除后该账号将不再参与调度，此操作不可撤销。"
+      variant="warning"
       width="480px"
     >
       <p class="text-[14px] text-(--cp-text-secondary)">
@@ -455,18 +433,8 @@ onMounted(() => {
       </p>
 
       <template #footer>
-        <BaseButton
-          variant="ghost"
-          @click="showDeleteModal = false"
-        >
-          取消
-        </BaseButton>
-        <BaseButton
-          variant="danger"
-          @click="handleBatchDelete"
-        >
-          确认删除
-        </BaseButton>
+        <BaseButton variant="ghost" @click="showDeleteModal = false"> 取消 </BaseButton>
+        <BaseButton variant="danger" @click="handleBatchDelete"> 确认删除 </BaseButton>
       </template>
     </BaseModal>
   </div>

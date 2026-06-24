@@ -16,7 +16,7 @@ const { toggleSidebar } = uiStore
   <div class="flex h-screen overflow-hidden bg-(--cp-bg-page)">
     <AppSidebar :collapsed="sidebarCollapsed" @toggle="toggleSidebar" />
     <main class="h-screen min-w-0 flex-1 overflow-hidden">
-      <BaseScrollbar>
+      <BaseScrollbar view-class="w-full min-w-295 p-6">
         <RouterView />
       </BaseScrollbar>
     </main>

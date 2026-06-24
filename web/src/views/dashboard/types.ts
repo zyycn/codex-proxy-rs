@@ -14,14 +14,24 @@ export interface MetricCardItem {
   icon: Component
   tone: SemanticTone
   details: MetricDetail[]
+  trend?: {
+    direction: 'up' | 'down' | 'flat'
+    tone: SemanticTone
+  }
 }
 
 export interface TrendPoint {
   time: string
   requests: number
+  inputTokens: number
+  outputTokens: number
+  cachedTokens: number
   tokens: number
   errors: number
   latency: number
+  maxLatency: number
+  minLatency: number
+  successRate: number
 }
 
 export interface TrendSummaryItem {
@@ -38,7 +48,8 @@ export interface AccountUsageItem {
   tokens: string
   lastUsed: string
   tone: SemanticTone
-  loadWidth: number
+  quotaPercent: number
+  quotaTone: SemanticTone
 }
 
 export interface ServiceStatusItem {

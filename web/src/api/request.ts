@@ -1,4 +1,10 @@
-import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
+import axios, {
+  AxiosError,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 
 import type { ApiEnvelope } from './types'
 
@@ -6,7 +12,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code?: string,
+    public readonly code?: number,
     public readonly requestId?: string,
   ) {
     super(message)
@@ -25,7 +31,7 @@ const http: AxiosInstance = axios.create({
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    Accept: 'application/json',
   },
 })
 
@@ -85,11 +91,11 @@ http.interceptors.response.use(
 
 function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   return (
-    typeof value === 'object'
-    && value !== null
-    && 'data' in value
-    && 'code' in value
-    && 'message' in value
+    typeof value === 'object' &&
+    value !== null &&
+    'data' in value &&
+    'code' in value &&
+    'message' in value
   )
 }
 

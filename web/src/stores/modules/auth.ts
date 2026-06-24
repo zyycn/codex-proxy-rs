@@ -1,24 +1,25 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { getDiagnostics, login as apiLogin, logout as apiLogout } from '@/api'
+import { getAuthStatus, login as apiLogin, logout as apiLogout } from '@/api'
 import type { LoginRequest } from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = ref(false)
-  const email = ref<string | undefined>()
-  const accountId = ref<string | undefined>()
+  const sessionChecked = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
   async function checkAuth() {
     try {
-      await getDiagnostics()
-      isAuthenticated.value = true
-      return true
+      const status = await getAuthStatus()
+      isAuthenticated.value = status.authenticated
+      return status.authenticated
     } catch (err: any) {
       isAuthenticated.value = false
       return false
+    } finally {
+      sessionChecked.value = true
     }
   }
 
@@ -29,7 +30,7 @@ export const useAuthStore = defineStore('auth', () => {
       await apiLogin(payload)
 
       isAuthenticated.value = true
-      email.value = payload.username
+      sessionChecked.value = true
 
       return true
     } catch (err: any) {
@@ -48,18 +49,13 @@ export const useAuthStore = defineStore('auth', () => {
       // 忽略登出错误
     } finally {
       isAuthenticated.value = false
-      email.value = undefined
-      accountId.value = undefined
-
-      // 手动清除 cookie（临时方案，应该由后端清除）
-      document.cookie = 'cpr_admin_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax'
+      sessionChecked.value = true
     }
   }
 
   return {
     isAuthenticated,
-    email,
-    accountId,
+    sessionChecked,
     loading,
     error,
     checkAuth,

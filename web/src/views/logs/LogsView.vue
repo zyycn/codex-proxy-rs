@@ -10,14 +10,11 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import BaseSpinner from '@/components/base/BaseSpinner.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
 
 import type { EventLog } from '@/api'
 import { clearLogs, getLogDetail, getLogs } from '@/api'
-import { useToastStore } from '@/stores/modules/toast'
-
-const toast = useToastStore()
+import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
 const logs = ref<EventLog[]>([])
@@ -31,7 +28,7 @@ const selectedLog = ref<EventLog | null>(null)
 const levelOptions = [
   { label: '全部级别', value: '' },
   { label: '信息', value: 'info' },
-  { label: '警告', value: 'warning' },
+  { label: '警告', value: 'warn' },
   { label: '错误', value: 'error' },
 ]
 
@@ -42,9 +39,9 @@ const kindOptions = [
   { label: '系统', value: 'system' },
 ]
 
-const levelColors: Record<string, { bg: string, text: string }> = {
+const levelColors: Record<string, { bg: string; text: string }> = {
   info: { bg: 'bg-blue-50', text: 'text-blue-700' },
-  warning: { bg: 'bg-yellow-50', text: 'text-yellow-700' },
+  warn: { bg: 'bg-yellow-50', text: 'text-yellow-700' },
   error: { bg: 'bg-red-50', text: 'text-red-700' },
 }
 
@@ -53,19 +50,20 @@ const filteredLogs = computed(() => {
 
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    result = result.filter(log =>
-      log.message.toLowerCase().includes(query)
-      || log.requestId?.toLowerCase().includes(query)
-      || log.route?.toLowerCase().includes(query),
+    result = result.filter(
+      (log) =>
+        log.message.toLowerCase().includes(query) ||
+        log.requestId?.toLowerCase().includes(query) ||
+        log.route?.toLowerCase().includes(query),
     )
   }
 
   if (filterLevel.value) {
-    result = result.filter(log => log.level === filterLevel.value)
+    result = result.filter((log) => log.level === filterLevel.value)
   }
 
   if (filterKind.value) {
-    result = result.filter(log => log.kind === filterKind.value)
+    result = result.filter((log) => log.kind === filterKind.value)
   }
 
   return result
@@ -119,7 +117,7 @@ function formatTime(dateStr: string): string {
 function getLevelLabel(level: string): string {
   const labels: Record<string, string> = {
     info: '信息',
-    warning: '警告',
+    warn: '警告',
     error: '错误',
   }
   return labels[level] || level
@@ -131,7 +129,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="w-full min-w-295 p-7">
+  <div class="w-full">
     <header class="flex h-17 items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
@@ -147,55 +145,32 @@ onMounted(() => {
 
     <div class="mt-6 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
-        <BaseInput
-          v-model="searchQuery"
-          placeholder="搜索消息、请求 ID 或路由..."
-          class="w-80"
-        >
+        <BaseInput v-model="searchQuery" placeholder="搜索消息、请求 ID 或路由..." class="w-80">
           <template #prefix>
             <Search class="size-4.5 text-(--cp-text-tertiary)" />
           </template>
         </BaseInput>
 
-        <BaseSelect
-          v-model="filterLevel"
-          :options="levelOptions"
-          class="w-36"
-        />
+        <BaseSelect v-model="filterLevel" :options="levelOptions" class="w-36" />
 
-        <BaseSelect
-          v-model="filterKind"
-          :options="kindOptions"
-          class="w-36"
-        />
+        <BaseSelect v-model="filterKind" :options="kindOptions" class="w-36" />
       </div>
 
       <div class="flex items-center gap-2">
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新列表"
-          @click="loadLogs"
-        >
+        <BaseIconButton variant="ghost" size="md" title="刷新列表" @click="loadLogs">
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton
-          variant="danger"
-          size="md"
-          @click="showClearModal = true"
-        >
+        <BaseButton variant="danger" size="md" @click="showClearModal = true">
           <Trash2 class="size-4" />
           清空日志
         </BaseButton>
       </div>
     </div>
 
-    <BaseCard class="mt-5 p-0">
-      <BaseSpinner v-if="loading" class="py-20" />
-
+    <BaseCard v-loading="loading" class="mt-5 p-0">
       <BaseEmpty
-        v-else-if="filteredLogs.length === 0"
+        v-if="filteredLogs.length === 0 && !loading"
         message="暂无日志记录"
         class="py-20"
       />
@@ -255,8 +230,10 @@ onMounted(() => {
                 <span
                   class="text-[13px] font-mono"
                   :class="{
-                    'text-green-600': log.statusCode && log.statusCode >= 200 && log.statusCode < 300,
-                    'text-yellow-600': log.statusCode && log.statusCode >= 300 && log.statusCode < 400,
+                    'text-green-600':
+                      log.statusCode && log.statusCode >= 200 && log.statusCode < 300,
+                    'text-yellow-600':
+                      log.statusCode && log.statusCode >= 300 && log.statusCode < 400,
                     'text-red-600': log.statusCode && log.statusCode >= 400,
                     'text-(--cp-text-secondary)': !log.statusCode,
                   }"
@@ -291,6 +268,8 @@ onMounted(() => {
     <BaseModal
       v-model="showClearModal"
       title="确认清空日志"
+      description="清空后无法恢复，新的代理事件会继续记录。"
+      variant="warning"
       width="480px"
     >
       <p class="text-[14px] text-(--cp-text-secondary)">
@@ -298,18 +277,8 @@ onMounted(() => {
       </p>
 
       <template #footer>
-        <BaseButton
-          variant="ghost"
-          @click="showClearModal = false"
-        >
-          取消
-        </BaseButton>
-        <BaseButton
-          variant="danger"
-          @click="handleClearLogs"
-        >
-          确认清空
-        </BaseButton>
+        <BaseButton variant="ghost" @click="showClearModal = false"> 取消 </BaseButton>
+        <BaseButton variant="danger" @click="handleClearLogs"> 确认清空 </BaseButton>
       </template>
     </BaseModal>
 
@@ -317,6 +286,8 @@ onMounted(() => {
     <BaseModal
       v-model="showDetailModal"
       title="日志详情"
+      description="查看单条事件的请求、状态和元数据。"
+      variant="info"
       width="720px"
     >
       <div v-if="selectedLog" class="flex flex-col gap-4">
@@ -367,24 +338,24 @@ onMounted(() => {
 
         <div>
           <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">消息</label>
-          <p class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] text-(--cp-text-primary)">
+          <p
+            class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] text-(--cp-text-primary)"
+          >
             {{ selectedLog.message }}
           </p>
         </div>
 
         <div v-if="selectedLog.metadata">
           <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">元数据</label>
-          <pre class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[12px] font-mono text-(--cp-text-primary) overflow-x-auto">{{ JSON.stringify(selectedLog.metadata, null, 2) }}</pre>
+          <pre
+            class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[12px] font-mono text-(--cp-text-primary) overflow-x-auto"
+            >{{ JSON.stringify(selectedLog.metadata, null, 2) }}</pre
+          >
         </div>
       </div>
 
       <template #footer>
-        <BaseButton
-          variant="primary"
-          @click="showDetailModal = false"
-        >
-          关闭
-        </BaseButton>
+        <BaseButton variant="primary" @click="showDetailModal = false"> 关闭 </BaseButton>
       </template>
     </BaseModal>
   </div>
