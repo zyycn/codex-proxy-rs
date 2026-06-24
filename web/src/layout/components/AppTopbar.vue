@@ -19,10 +19,26 @@ import { useAuthStore } from '@/stores/modules/auth'
 const router = useRouter()
 const authStore = useAuthStore()
 const accountMenuOpen = ref(false)
+const props = withDefaults(
+  defineProps<{
+    refreshing?: boolean
+  }>(),
+  {
+    refreshing: false,
+  },
+)
+const emit = defineEmits<{
+  refresh: []
+}>()
 
 async function handleLogout() {
   await authStore.logout()
   router.push('/login')
+}
+
+function handleRefresh() {
+  if (props.refreshing) return
+  emit('refresh')
 }
 
 function prefersReducedMotion() {
@@ -87,11 +103,14 @@ function animateAccountMenuLeave(el: Element, done: () => void) {
     </button>
 
     <button
-      class="inline-flex size-11 items-center justify-center rounded-xl border-0 bg-white text-(--cp-normal) shadow-(--cp-shadow-control) transition-shadow duration-200"
+      class="inline-flex size-11 items-center justify-center rounded-xl border-0 bg-white text-(--cp-normal) shadow-(--cp-shadow-control) transition-shadow duration-200 disabled:cursor-not-allowed disabled:opacity-50"
       type="button"
       aria-label="刷新"
+      :aria-busy="refreshing"
+      :disabled="refreshing"
+      @click="handleRefresh"
     >
-      <RefreshCw :size="19" />
+      <RefreshCw :size="19" :class="refreshing ? 'animate-spin' : ''" />
     </button>
 
     <div class="relative ml-0.5">

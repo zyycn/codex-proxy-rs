@@ -1,8 +1,8 @@
 server:
-  host: 0.0.0.0
+  host: '0.0.0.0'
   port: 8080
 api:
-  base_url: https://chatgpt.com/backend-api
+  base_url: 'https://chatgpt.com/backend-api'
 model:
   default: gpt-5.5
   default_reasoning_effort: null
@@ -17,8 +17,8 @@ auth:
   rotation_strategy: least_used
   tier_priority: []
   oauth_client_id: app_EMoamEEZ73f0CkXaXp7hrann
-  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
-  oauth_token_endpoint: https://auth.openai.com/oauth/token
+  oauth_auth_endpoint: 'https://auth.openai.com/oauth/authorize'
+  oauth_token_endpoint: 'https://auth.openai.com/oauth/token'
 quota:
   refresh_interval_minutes: 5
   warning_thresholds:
@@ -32,7 +32,7 @@ quota:
 usage_stats:
   history_retention_days: null
 database:
-  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+  url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
 security:
   master_key_file: .runtime/data/master.key
   api_key_pepper_file: .runtime/data/api-key-pepper.key
@@ -44,21 +44,21 @@ ws_pool:
   max_per_account: 8
 fingerprint:
   originator: Codex Desktop
-  app_version: 26.519.81530
-  build_number: "3178"
+  app_version: '26.519.81530'
+  build_number: '3178'
   platform: darwin
   arch: arm64
-  chromium_version: "146"
-  user_agent_template: "Codex Desktop/{version} ({platform}; {arch})"
+  chromium_version: '146'
+  user_agent_template: Codex Desktop/{version} ({platform}; {arch})
   default_headers:
     - name: Accept-Encoding
       value: gzip, deflate, br, zstd
     - name: Accept-Language
       value: en-US,en;q=0.9
     - name: sec-ch-ua-mobile
-      value: "?0"
+      value: '?0'
     - name: sec-ch-ua-platform
-      value: "\"macOS\""
+      value: '"macOS"'
     - name: sec-fetch-site
       value: same-origin
     - name: sec-fetch-mode
@@ -88,6 +88,7 @@ fingerprint:
     - cookie
 admin:
   session_ttl_minutes: 1440
+  session_cleanup_interval_secs: 3600
   default_username: admin
   default_password: admin
 logging:

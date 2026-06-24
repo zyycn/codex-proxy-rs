@@ -18,7 +18,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     },
     http::middleware::request_id::RequestId,
-    infra::json::clamp_limit,
+    infra::json::{clamp_limit, clamp_page},
     runtime::state::AppState,
 };
 
@@ -30,6 +30,10 @@ pub struct LogsQuery {
     pub cursor: Option<String>,
     /// 分页大小。
     pub limit: Option<u32>,
+    /// 页码。
+    pub page: Option<u32>,
+    /// 每页条目数。
+    pub page_size: Option<u32>,
     /// 事件类别。
     pub kind: Option<String>,
     /// 事件等级。
@@ -111,9 +115,26 @@ pub async fn logs(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
-    let limit = clamp_limit(query.limit.unwrap_or(50));
+    let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
+    let page = query.page;
+    let use_numbered_page = page.is_some() || query.page_size.is_some();
     let cursor = query.cursor.clone();
     let filter = filter_from_query(query, &request_id)?;
+
+    if use_numbered_page {
+        return match state
+            .services
+            .logs
+            .list_page(clamp_page(page.unwrap_or(1)), limit, filter)
+            .await
+        {
+            Ok(page) => Ok(AdminResponse::new(
+                StatusCode::OK,
+                AdminPageEnvelope::numbered(page, request_id),
+            )),
+            Err(error) => Err(log_error(error, request_id)),
+        };
+    }
 
     match state.services.logs.list(cursor, limit, filter).await {
         Ok(page) => Ok(AdminResponse::new(

@@ -65,7 +65,6 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_accounts_export");
     assert_eq!(body["data"]["sourceFormat"], "native");
     assert_eq!(body["data"]["accounts"][0]["id"], "acct_export");
     assert_eq!(body["data"]["accounts"][0]["token"], "access-export");
@@ -142,7 +141,6 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
         .unwrap();
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["requestId"], "req_accounts_import");
     assert_eq!(body["data"]["imported"], 1);
     assert_eq!(body["data"]["skipped"], 0);
     assert_eq!(body["data"]["sourceFormat"], "native");
@@ -249,7 +247,6 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
         .unwrap();
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["requestId"], "req_accounts_import_current_token");
     assert_eq!(body["data"]["imported"], 1);
     assert_eq!(stored.email.as_deref(), Some("setup-down-penpal@duck.com"));
     assert_eq!(stored.account_id.as_deref(), Some("wham-account-current"));
@@ -466,7 +463,6 @@ async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_
     ).bind("acct_import_update").fetch_one(&pool).await.unwrap();
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["requestId"], "req_accounts_import_update");
     assert_eq!(body["data"]["imported"], 1);
     assert_eq!(body["data"]["sourceFormat"], "sub2api");
     assert_eq!(stored.email.as_deref(), Some("new@example.com"));
@@ -573,8 +569,11 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
         .await
         .unwrap();
     let list_body = response_json(list).await;
-    assert_eq!(list_body["data"][0]["id"], "acct_imported_sanitized");
-    assert!(list_body["data"][0].get("token").is_none());
+    assert_eq!(
+        list_body["data"]["items"][0]["id"],
+        "acct_imported_sanitized"
+    );
+    assert!(list_body["data"]["items"][0].get("token").is_none());
 }
 
 #[tokio::test]

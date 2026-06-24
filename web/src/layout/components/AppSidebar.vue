@@ -5,9 +5,9 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   KeyRound,
   LayoutDashboard,
+  List,
   PanelLeftClose,
   PanelLeftOpen,
-  ScrollText,
   Settings,
   SquareTerminal,
   Users,
@@ -20,7 +20,7 @@ const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
   { label: '账号管理', icon: Users, path: '/accounts' },
   { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
-  { label: '使用统计', icon: ScrollText, path: '/logs' },
+  { label: '事件日志', icon: List, path: '/logs' },
   { label: '系统设置', icon: Settings, path: '/settings' },
 ]
 

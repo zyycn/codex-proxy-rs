@@ -12,6 +12,7 @@ const props = defineProps<{
   description?: string
   width?: string | number
   variant?: ModalVariant
+  closeDisabled?: boolean
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -53,14 +54,19 @@ const variantClasses: Record<ModalVariant, { iconBg: string; icon: string }> = {
     icon: 'text-(--cp-success)',
   },
 }
+
+function closeModal() {
+  if (props.closeDisabled) return
+  open.value = false
+}
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
-      <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="open = false" />
+      <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
       <section
-        class="relative w-[min(560px,100%)] rounded-[22px] bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
+        class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-[22px] bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
         :style="modalStyle"
         role="dialog"
         aria-modal="true"
@@ -90,7 +96,8 @@ const variantClasses: Record<ModalVariant, { iconBg: string; icon: string }> = {
             label="关闭"
             size="sm"
             variant="ghost"
-            @click="open = false"
+            :disabled="closeDisabled"
+            @click="closeModal"
           >
             <X :size="16" />
           </BaseIconButton>

@@ -8,7 +8,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,6 +16,7 @@ use crate::{
     admin::{
         auth::session::require_admin_session,
         monitoring::{
+            billing,
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
@@ -174,10 +175,18 @@ struct UsageWindow {
     output_tokens: u64,
     cached_tokens: u64,
     errors: u64,
+    first_token_latency_sum: u64,
+    first_token_latency_count: u64,
     latency_sum: u64,
     latency_count: u64,
     max_latency: u64,
     min_latency: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BillingContext<'a> {
+    default_model: &'a str,
+    default_service_tier: Option<&'a str>,
 }
 
 impl UsageWindow {
@@ -188,6 +197,14 @@ impl UsageWindow {
     fn cache_hit_rate(self) -> Option<f64> {
         if self.input_tokens > 0 {
             Some(self.cached_tokens as f64 / self.input_tokens as f64)
+        } else {
+            None
+        }
+    }
+
+    fn avg_first_token_latency(self) -> Option<u64> {
+        if self.first_token_latency_count > 0 {
+            Some(self.first_token_latency_sum / self.first_token_latency_count)
         } else {
             None
         }
@@ -249,7 +266,13 @@ pub async fn dashboard_summary(
         StatusCode::OK,
         AdminEnvelope::ok(
             DashboardSummaryData {
-                cards: dashboard_cards(&accounts, &summary, &logs),
+                cards: dashboard_cards(
+                    &accounts,
+                    &summary,
+                    &logs,
+                    &settings.model.default_model,
+                    settings.model.service_tier.as_deref(),
+                ),
                 trend,
                 account_usage: account_usage_data(
                     &accounts,
@@ -297,15 +320,21 @@ fn dashboard_cards(
     accounts: &[Account],
     summary: &AdminUsageSummary,
     logs: &[EventLog],
+    default_model: &str,
+    default_service_tier: Option<&str>,
 ) -> DashboardCardsData {
     let now = Utc::now();
     let today_start = day_start(now);
     let yesterday_start = today_start - Duration::days(1);
-    let hour_start = now - Duration::hours(1);
+    let billing_context = BillingContext {
+        default_model,
+        default_service_tier,
+    };
 
     let today = usage_window(logs, today_start, now);
     let yesterday = usage_window(logs, yesterday_start, today_start);
-    let hour = usage_window(logs, hour_start, now);
+    let today_cost = cost_window(logs, today_start, now, billing_context).unwrap_or(0.0);
+    let total_cost = total_cost(logs, summary, billing_context);
 
     let total_input = summary.input_tokens.max(0) as u64;
     let total_cached = summary.cached_tokens.max(0) as u64;
@@ -334,15 +363,15 @@ fn dashboard_cards(
             today_requests: today.requests,
             yesterday_requests: yesterday.requests,
             total_requests: summary.request_count.max(0) as u64,
-            rpm: hour.requests,
-            tpm: hour.tokens(),
+            rpm: today.requests,
+            tpm: today.tokens(),
         },
         tokens: DashboardTokenCardData {
             today_tokens: today.tokens(),
             yesterday_tokens: yesterday.tokens(),
             total_tokens: (summary.input_tokens + summary.output_tokens).max(0) as u64,
-            today_cost_usd: None,
-            total_cost_usd: None,
+            today_cost_usd: Some(today_cost),
+            total_cost_usd: Some(total_cost),
         },
         cache: DashboardCacheCardData {
             today_hit_rate: today.cache_hit_rate(),
@@ -353,8 +382,8 @@ fn dashboard_cards(
                 None
             },
             total_cached_tokens: total_cached,
-            first_token_latency_ms: today.avg_latency(),
-            completion_latency_ms: None,
+            first_token_latency_ms: today.avg_first_token_latency(),
+            completion_latency_ms: today.avg_latency(),
         },
     }
 }
@@ -513,11 +542,84 @@ fn usage_window(logs: &[EventLog], start: DateTime<Utc>, end: DateTime<Utc>) -> 
     window
 }
 
+fn cost_window(
+    logs: &[EventLog],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    context: BillingContext<'_>,
+) -> Option<f64> {
+    let mut total = 0.0;
+    let mut has_usage = false;
+    for log in logs {
+        if log.created_at >= start && log.created_at < end {
+            if let Some(cost) = log_cost(log, context) {
+                total += cost;
+                has_usage = true;
+            }
+        }
+    }
+    has_usage.then_some(total)
+}
+
+fn total_cost(logs: &[EventLog], summary: &AdminUsageSummary, context: BillingContext<'_>) -> f64 {
+    let mut total = 0.0;
+    let mut has_usage = false;
+    for log in logs {
+        if let Some(cost) = log_cost(log, context) {
+            total += cost;
+            has_usage = true;
+        }
+    }
+    if has_usage {
+        return total;
+    }
+
+    let input_tokens = summary.input_tokens.max(0) as u64;
+    let output_tokens = summary.output_tokens.max(0) as u64;
+    let cached_tokens = summary.cached_tokens.max(0) as u64;
+    billing::calculate_cost(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        context.default_model,
+        context.default_service_tier,
+    )
+}
+
+fn log_cost(log: &EventLog, context: BillingContext<'_>) -> Option<f64> {
+    let input_tokens = metadata_usage_number(&log.metadata, "inputTokens");
+    let output_tokens = metadata_usage_number(&log.metadata, "outputTokens");
+    let cached_tokens = metadata_usage_number(&log.metadata, "cachedTokens");
+    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
+        return None;
+    }
+
+    let model = log
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(context.default_model);
+    let service_tier = metadata_service_tier(&log.metadata).or(context.default_service_tier);
+
+    Some(billing::calculate_cost(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        model,
+        service_tier,
+    ))
+}
+
 fn apply_log(window: &mut UsageWindow, log: &EventLog) {
     window.requests += 1;
     window.input_tokens += metadata_usage_number(&log.metadata, "inputTokens");
     window.output_tokens += metadata_usage_number(&log.metadata, "outputTokens");
     window.cached_tokens += metadata_usage_number(&log.metadata, "cachedTokens");
+    if let Some(first_token_latency) = metadata_first_token_latency(&log.metadata) {
+        window.first_token_latency_sum += first_token_latency;
+        window.first_token_latency_count += 1;
+    }
     if is_error_log(log) {
         window.errors += 1;
     }
@@ -537,6 +639,23 @@ fn apply_log(window: &mut UsageWindow, log: &EventLog) {
     }
 }
 
+fn metadata_first_token_latency(metadata: &Value) -> Option<u64> {
+    [
+        "firstTokenMs",
+        "first_token_ms",
+        "firstTokenLatencyMs",
+        "first_token_latency_ms",
+    ]
+    .into_iter()
+    .find_map(|field| {
+        metadata
+            .get(field)
+            .or_else(|| metadata.get("usage").and_then(|usage| usage.get(field)))
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+    })
+}
+
 fn metadata_usage_number(metadata: &Value, field: &str) -> u64 {
     metadata
         .get("usage")
@@ -544,6 +663,26 @@ fn metadata_usage_number(metadata: &Value, field: &str) -> u64 {
         .or_else(|| metadata.get(field))
         .and_then(Value::as_u64)
         .unwrap_or(0)
+}
+
+fn metadata_service_tier(metadata: &Value) -> Option<&str> {
+    let direct = metadata_service_tier_value(metadata);
+    direct.or_else(|| metadata.get("usage").and_then(metadata_service_tier_value))
+}
+
+fn metadata_service_tier_value(value: &Value) -> Option<&str> {
+    [
+        "billingServiceTier",
+        "billing_service_tier",
+        "actualServiceTier",
+        "actual_service_tier",
+        "serviceTier",
+        "service_tier",
+    ]
+    .into_iter()
+    .find_map(|field| value.get(field).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
 }
 
 fn is_error_log(log: &EventLog) -> bool {
@@ -688,7 +827,7 @@ fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
         },
         DashboardServiceStatusData {
             label: "更新时间".to_string(),
-            value: fingerprint.updated_at.unwrap_or_else(|| "-".to_string()),
+            value: format_beijing_datetime(fingerprint.updated_at),
             detail: String::new(),
             tone: "normal".to_string(),
         },
@@ -707,6 +846,29 @@ fn empty_dash(value: String) -> String {
     } else {
         value
     }
+}
+
+fn format_beijing_datetime(value: Option<String>) -> String {
+    let Some(value) = value else {
+        return "-".to_string();
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return "-".to_string();
+    }
+
+    let Some(offset) = FixedOffset::east_opt(8 * 60 * 60) else {
+        return value.to_string();
+    };
+
+    DateTime::parse_from_rfc3339(value)
+        .map(|datetime| {
+            datetime
+                .with_timezone(&offset)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn empty_usage_summary() -> AdminUsageSummary {
@@ -740,4 +902,138 @@ fn hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
         .and_hms_opt(value.hour(), 0, 0)
         .expect("valid hour")
         .and_utc()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+
+    use super::{
+        cost_window, dashboard_cards, day_start, empty_usage_summary, format_beijing_datetime,
+        total_cost, BillingContext,
+    };
+    use crate::admin::monitoring::events::{EventLevel, EventLog};
+
+    #[test]
+    fn format_beijing_datetime_should_render_rfc3339_as_beijing_time() {
+        let actual =
+            format_beijing_datetime(Some("2026-06-23T11:36:46.965574590+00:00".to_string()));
+
+        assert_eq!(actual, "2026-06-23 19:36:46");
+    }
+
+    #[test]
+    fn format_beijing_datetime_should_render_dash_when_missing() {
+        assert_eq!(format_beijing_datetime(None), "-");
+    }
+
+    #[test]
+    fn cost_window_should_calculate_from_event_model_and_service_tier() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 6, 24, 8, 0, 0).unwrap();
+        let logs = vec![usage_log(
+            timestamp,
+            "gpt-5.5",
+            json!({
+                "usage": {
+                    "inputTokens": 100_000u64,
+                    "outputTokens": 100_000u64,
+                    "cachedTokens": 0u64
+                },
+                "serviceTier": "priority"
+            }),
+        )];
+
+        let actual = cost_window(
+            &logs,
+            timestamp - chrono::Duration::hours(1),
+            timestamp + chrono::Duration::hours(1),
+            BillingContext {
+                default_model: "gpt-4o",
+                default_service_tier: None,
+            },
+        );
+
+        assert_eq!(actual, Some(8.75));
+    }
+
+    #[test]
+    fn total_cost_should_fallback_to_usage_summary_when_logs_have_no_usage() {
+        let mut summary = empty_usage_summary();
+        summary.input_tokens = 100_000;
+        summary.output_tokens = 100_000;
+
+        let actual = total_cost(
+            &[],
+            &summary,
+            BillingContext {
+                default_model: "gpt-5.5",
+                default_service_tier: None,
+            },
+        );
+
+        assert_eq!(actual, 3.5);
+    }
+
+    #[test]
+    fn dashboard_cards_should_calculate_rpm_tpm_from_today_window() {
+        let now = Utc::now();
+        let logs = vec![
+            usage_log_with_tokens(now, 10),
+            usage_log_with_tokens(now, 20),
+            usage_log_with_tokens(day_start(now) - chrono::Duration::seconds(1), 30),
+        ];
+
+        let actual = dashboard_cards(&[], &empty_usage_summary(), &logs, "gpt-5.5", None);
+
+        assert_eq!((actual.traffic.rpm, actual.traffic.tpm), (2, 30));
+    }
+
+    #[test]
+    fn dashboard_cards_should_report_first_token_and_completion_latency_separately() {
+        let now = Utc::now();
+        let mut first = usage_log_with_tokens(now, 10);
+        first.latency_ms = Some(1_000);
+        first.metadata["firstTokenMs"] = json!(200u64);
+        let mut second = usage_log_with_tokens(now, 20);
+        second.latency_ms = Some(2_000);
+        second.metadata["firstTokenMs"] = json!(400u64);
+        let logs = vec![first, second];
+
+        let actual = dashboard_cards(&[], &empty_usage_summary(), &logs, "gpt-5.5", None);
+
+        assert_eq!(
+            (
+                actual.cache.first_token_latency_ms,
+                actual.cache.completion_latency_ms,
+            ),
+            (Some(300), Some(1_500)),
+        );
+    }
+
+    fn usage_log_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> EventLog {
+        usage_log(
+            created_at,
+            "gpt-5.5",
+            json!({
+                "usage": {
+                    "inputTokens": total_tokens,
+                    "outputTokens": 0u64,
+                    "cachedTokens": 0u64
+                }
+            }),
+        )
+    }
+
+    fn usage_log(
+        created_at: chrono::DateTime<Utc>,
+        model: &str,
+        metadata: serde_json::Value,
+    ) -> EventLog {
+        let mut log = EventLog::new("v1.response", EventLevel::Info, "completed");
+        log.model = Some(model.to_string());
+        log.created_at = created_at;
+        log.metadata = metadata;
+        log
+    }
 }

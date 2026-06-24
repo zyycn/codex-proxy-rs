@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use thiserror::Error;
 
-use crate::infra::json::{decode_cursor, encode_cursor, Page};
+use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
 
 const LIST_USAGE_AFTER_CURSOR_SQL: &str = r"
 select
@@ -53,6 +53,31 @@ from account_usage au
 left join accounts a on a.id = au.account_id
 order by au.last_used_at desc, au.account_id desc
 limit ?";
+
+const LIST_USAGE_PAGE_SQL: &str = r"
+select
+  au.account_id,
+  a.email,
+  a.label,
+  a.plan_type,
+  au.request_count,
+  au.empty_response_count,
+  au.input_tokens,
+  au.output_tokens,
+  au.cached_tokens,
+  au.reasoning_tokens,
+  au.total_tokens,
+  au.image_input_tokens,
+  au.image_output_tokens,
+  au.image_request_count,
+  au.image_request_failed_count,
+  au.last_used_at
+from account_usage au
+left join accounts a on a.id = au.account_id
+order by au.last_used_at desc, au.account_id desc
+limit ? offset ?";
+
+const COUNT_USAGE_SQL: &str = "select count(*) from account_usage";
 
 const USAGE_SUMMARY_SQL: &str = r"
 select
@@ -195,6 +220,35 @@ impl SqliteUsageStore {
                 .await?;
             Ok(to_page(rows, limit))
         }
+    }
+
+    /// 按页码列出账号用量。
+    pub async fn list_usage_page(
+        &self,
+        page: u32,
+        page_size: u32,
+    ) -> SqliteUsageStoreResult<NumberedPage<UsageListRecord>> {
+        let page_size = page_size.clamp(1, 200);
+        let offset = page_offset(page, page_size);
+        let rows = sqlx::query(LIST_USAGE_PAGE_SQL)
+            .bind(i64::from(page_size))
+            .bind(offset.min(i64::MAX as u64) as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        let items = rows
+            .iter()
+            .map(usage_list_from_row)
+            .collect::<SqliteUsageStoreResult<Vec<_>>>()?;
+        let (total,): (i64,) = sqlx::query_as(COUNT_USAGE_SQL)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(NumberedPage {
+            items,
+            total: total.max(0) as u64,
+            page: page.max(1),
+            page_size,
+        })
     }
 
     /// 汇总账号用量。

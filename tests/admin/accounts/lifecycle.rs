@@ -157,6 +157,74 @@ async fn admin_account_status_update_should_update_proxy_account_pool() {
 }
 
 #[tokio::test]
+async fn admin_account_refresh_should_not_mark_valid_account_banned_when_refresh_token_reused() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+            "error_description": "refresh_token_reused"
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir, secret_box) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-account-refresh-rt-reused.sqlite",
+        124,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+    seed_encrypted_account(
+        &pool,
+        secret_box.clone(),
+        NewAccount {
+            id: "acct_refresh_rt_reused".to_string(),
+            email: Some("rt-reused@example.com".to_string()),
+            account_id: Some("chatgpt-rt-reused".to_string()),
+            user_id: Some("user-rt-reused".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-rt-reused",
+                    Some("user-rt-reused"),
+                    Some("rt-reused@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-reused".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/refresh")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({"id": "acct_refresh_rt_reused"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let stored = SqliteAccountStore::new(pool, secret_box)
+        .get("acct_refresh_rt_reused")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(stored.status, AccountStatus::Active);
+}
+
+#[tokio::test]
 async fn admin_account_update_should_accept_batch_status_payload() {
     let (app, _state, pool, _dir, _secret_box) =
         admin_accounts_test_app("admin-account-batch-status-update.sqlite", 122).await;

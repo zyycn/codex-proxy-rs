@@ -9,14 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{
-    proxy::auth::authorize_client_api_key, runtime::state::AppState, upstream::models::ModelCatalog,
-};
+use crate::{proxy::auth::authorize_client_api_key, runtime::state::AppState};
 
-use super::{
-    diagnostics::{is_local_debug_request, local_debug_forbidden_response},
-    errors::{missing_client_api_key_response, model_not_found_response},
-};
+use super::errors::{missing_client_api_key_response, model_not_found_response};
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
 
@@ -109,20 +104,7 @@ pub async fn model_info(
     (StatusCode::OK, Json(json!(info)))
 }
 
-/// `GET /debug/models`
-pub async fn debug_models(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> axum::response::Response {
-    if !is_local_debug_request(&headers) {
-        return local_debug_forbidden_response();
-    }
-
-    let catalog = model_catalog_for_state(&state).await;
-    (StatusCode::OK, Json(json!(catalog.debug()))).into_response()
-}
-
-pub async fn model_catalog_for_state(state: &AppState) -> ModelCatalog {
+pub async fn model_catalog_for_state(state: &AppState) -> crate::upstream::models::ModelCatalog {
     state.services.models.catalog().await
 }
 

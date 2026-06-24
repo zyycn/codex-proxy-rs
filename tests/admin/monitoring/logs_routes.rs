@@ -77,8 +77,44 @@ async fn admin_logs_should_cursor_page_events_and_include_request_id() {
         .unwrap();
     let body = response_json(response).await;
     assert_eq!(body["code"], 200);
-    assert_eq!(body["requestId"], "req_logs_cursor");
-    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn admin_logs_should_return_numbered_page_metadata() {
+    let (app, store, _dir) = admin_logs_test_app("admin-logs-numbered.sqlite").await;
+    let now = Utc::now();
+    for (id, message, offset) in [
+        ("log_old", "older timeout", 0),
+        ("log_new", "newer timeout", 1),
+    ] {
+        let mut event = EventLog::new("request", EventLevel::Error, message);
+        event.id = id.to_string();
+        event.created_at = now + Duration::seconds(offset);
+        store.append(&event).await.unwrap();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/logs?page=1&pageSize=1&level=error&search=timeout")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_logs_numbered")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["items"][0]["id"], "log_new");
+    assert_eq!(body["data"]["page"]["page"], 1);
+    assert_eq!(body["data"]["page"]["pageSize"], 1);
+    assert_eq!(body["data"]["page"]["total"], 2);
+    assert_eq!(body["data"]["page"]["totalPages"], 2);
 }
 
 #[tokio::test]
@@ -118,8 +154,7 @@ async fn admin_logs_should_filter_and_cursor_page_events() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_logs_filter");
-    assert_eq!(body["data"][0]["id"], "log_matching");
+    assert_eq!(body["data"]["items"][0]["id"], "log_matching");
 }
 
 #[tokio::test]
@@ -188,7 +223,10 @@ async fn admin_logs_should_return_state_detail_and_clear_events() {
         .await
         .unwrap();
     assert_eq!(
-        response_json(empty).await["data"].as_array().unwrap().len(),
+        response_json(empty).await["data"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
         0
     );
 }

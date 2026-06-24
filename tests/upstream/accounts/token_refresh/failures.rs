@@ -344,7 +344,7 @@ async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_confirm_invalid_grant_before_disabling_account() {
+async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-permanent-failure.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -404,7 +404,7 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_disabling_accoun
 
     assert_eq!(summary.status_updated, 1);
     assert_eq!(observed_statuses, [AccountStatus::Refreshing; 2]);
-    assert_eq!(stored.status, AccountStatus::Disabled);
+    assert_eq!(stored.status, AccountStatus::Expired);
     assert_eq!(
         stored.access_token.expose_secret(),
         old_access_token.as_str()

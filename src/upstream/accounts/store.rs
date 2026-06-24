@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
-use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
 use crate::infra::crypto::{CryptoError, SecretBox};
-use crate::infra::json::{decode_cursor, Page};
+use crate::infra::json::{decode_cursor, page_offset, NumberedPage, Page};
 use crate::upstream::accounts::model::{Account, AccountStatus, AccountUsageDelta};
 
 // ============================================================================
@@ -238,6 +238,20 @@ select
 from accounts
 order by added_at desc, id desc
 limit ?";
+
+const LIST_ACCOUNT_METADATA_SELECT_SQL: &str = r"
+select
+  id,
+  email,
+  chatgpt_account_id as account_id,
+  chatgpt_user_id as user_id,
+  label,
+  plan_type,
+  access_token_expires_at,
+  status,
+  added_at,
+  updated_at
+from accounts";
 
 const RECORD_USAGE_SQL: &str = r"
 insert into account_usage (
@@ -1005,6 +1019,39 @@ impl SqliteAccountStore {
                 .await?;
             Ok(to_page(rows, limit, metadata_from_row, ("added_at", "id")))
         }
+    }
+
+    /// 按页码列出账号元数据（不含 token）。
+    pub async fn list_metadata_page(
+        &self,
+        page: u32,
+        page_size: u32,
+        search: Option<&str>,
+    ) -> SqliteAccountStoreResult<NumberedPage<StoredAccountMetadata>> {
+        let page_size = page_size.clamp(1, 200);
+        let search = search.map(str::trim).filter(|value| !value.is_empty());
+        let total = count_account_metadata(&self.pool, search).await?;
+        let offset = page_offset(page, page_size);
+
+        let mut builder = QueryBuilder::<Sqlite>::new(LIST_ACCOUNT_METADATA_SELECT_SQL);
+        push_account_metadata_search(&mut builder, search);
+        builder.push(" order by added_at desc, id desc limit ");
+        builder.push_bind(i64::from(page_size));
+        builder.push(" offset ");
+        builder.push_bind(offset.min(i64::MAX as u64) as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        let items = rows
+            .iter()
+            .map(metadata_from_row)
+            .collect::<SqliteAccountStoreResult<Vec<_>>>()?;
+
+        Ok(NumberedPage {
+            items,
+            total,
+            page: page.max(1),
+            page_size,
+        })
     }
 
     /// 读取单个账号元数据（不含 token）。
@@ -1858,6 +1905,34 @@ fn optional_positive_i64_to_u64(value: Option<i64>) -> Option<u64> {
     value
         .and_then(|value| u64::try_from(value).ok())
         .filter(|value| *value > 0)
+}
+
+async fn count_account_metadata(
+    pool: &SqlitePool,
+    search: Option<&str>,
+) -> SqliteAccountStoreResult<u64> {
+    let mut builder = QueryBuilder::<Sqlite>::new("select count(*) from accounts");
+    push_account_metadata_search(&mut builder, search);
+    let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
+    Ok(total.max(0) as u64)
+}
+
+fn push_account_metadata_search(builder: &mut QueryBuilder<Sqlite>, search: Option<&str>) {
+    let Some(search) = search else {
+        return;
+    };
+
+    let pattern = format!("%{search}%");
+    builder.push(" where id like ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or email like ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or label like ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or chatgpt_account_id like ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or chatgpt_user_id like ");
+    builder.push_bind(pattern);
 }
 
 fn to_page<T>(

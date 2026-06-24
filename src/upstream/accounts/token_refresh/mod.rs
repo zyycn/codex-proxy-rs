@@ -324,7 +324,7 @@ pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
 pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Account {
     let mut updated = account.clone();
     updated.status = match failure {
-        RefreshFailure::InvalidGrant => AccountStatus::Disabled,
+        RefreshFailure::InvalidGrant => AccountStatus::Expired,
         RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
         RefreshFailure::Banned => AccountStatus::Banned,
         RefreshFailure::Disabled => AccountStatus::Disabled,

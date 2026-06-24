@@ -8,6 +8,7 @@ const props = withDefaults(
     minThumbSize?: number
     wrapClass?: string
     viewClass?: string
+    maxHeight?: string
   }>(),
   {
     tag: 'div',
@@ -15,6 +16,7 @@ const props = withDefaults(
     minThumbSize: 32,
     wrapClass: '',
     viewClass: '',
+    maxHeight: undefined,
   },
 )
 
@@ -40,6 +42,10 @@ const thumbStyle = computed(() => ({
   height: `${thumbHeight.value}px`,
   transform: `translateY(${thumbTop.value}px)`,
 }))
+const rootClasses = computed(() => [
+  'relative min-h-0 overflow-hidden',
+  props.maxHeight ? undefined : 'h-full',
+])
 
 function trackHeight(wrap: HTMLElement) {
   return Math.max(wrap.clientHeight - 8, 0)
@@ -202,10 +208,10 @@ defineExpose({
 </script>
 
 <template>
-  <div class="relative h-full min-h-0 overflow-hidden">
+  <div :class="rootClasses" :style="{ maxHeight }">
     <div
       ref="wrap"
-      class="base-scrollbar-wrap h-full min-h-0 overflow-auto"
+      class="h-full min-h-0 overflow-auto [max-height:inherit] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent"
       :class="wrapClass"
       @mouseenter="showScrollbar"
       @scroll="handleScroll"
@@ -230,14 +236,3 @@ defineExpose({
     </div>
   </div>
 </template>
-
-<style scoped>
-.base-scrollbar-wrap {
-  scrollbar-width: none;
-}
-
-.base-scrollbar-wrap::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-</style>

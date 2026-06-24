@@ -1,5 +1,6 @@
 //! 管理面监控模块：日志、用量统计和 Dashboard 聚合。
 
+mod billing;
 pub mod dashboard;
 pub mod diagnostics;
 pub mod event_store;

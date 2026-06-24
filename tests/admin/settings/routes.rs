@@ -45,26 +45,6 @@ async fn admin_settings_should_require_admin_session_cookie() {
 }
 
 #[tokio::test]
-async fn admin_diagnostics_should_return_runtime_summary_without_secrets() {
-    let (app, _dir) = admin_settings_test_app("admin-diagnostics.sqlite").await;
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/admin/diagnostics")
-                .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_diagnostics")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_diagnostics");
-    assert_eq!(body["data"]["status"], "ok");
-}
-
-#[tokio::test]
 async fn admin_settings_should_return_runtime_fields() {
     let (app, _dir) = admin_settings_test_app("admin-settings-get.sqlite").await;
     let response = app
@@ -80,7 +60,6 @@ async fn admin_settings_should_return_runtime_fields() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_settings_get");
     assert_eq!(body["data"]["defaultModel"], "gpt-5.5");
 }
 
@@ -160,7 +139,6 @@ async fn admin_settings_update_should_persist_retained_fields_to_config_yaml() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_settings_update");
     assert_eq!(body["data"]["defaultModel"], "gpt-6");
 
     let get_response = app

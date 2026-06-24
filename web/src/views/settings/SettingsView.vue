@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Save, RefreshCw } from '@lucide/vue'
+import { Cpu, Database, Gauge, RefreshCw, RotateCw, Save, ShieldCheck, Timer } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
+import { withMinimumDuration } from '@/utils/async'
 
 import type { Settings } from '@/api'
 import { getSettings, updateSettings } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
+const refreshing = ref(false)
 const saving = ref(false)
 
 const form = ref<Settings>({
@@ -59,6 +61,16 @@ async function loadSettings() {
   }
 }
 
+async function refreshSettings() {
+  if (refreshing.value || loading.value) return
+  refreshing.value = true
+  try {
+    await withMinimumDuration(loadSettings)
+  } finally {
+    refreshing.value = false
+  }
+}
+
 async function handleSave() {
   try {
     saving.value = true
@@ -99,118 +111,198 @@ onMounted(() => {
         </p>
       </div>
 
-      <AppTopbar class="mt-0.5" />
+      <AppTopbar class="mt-0.5" :refreshing="refreshing" @refresh="refreshSettings" />
     </header>
-    <div v-loading="loading" class="mt-6 grid gap-6 max-w-4xl">
-      <!-- 模型配置 -->
-      <BaseCard>
-        <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">模型配置</h2>
-        <div>
-          <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
-            >默认模型</label
+    <section
+      v-loading="loading"
+      class="mt-6 overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) p-5 shadow-(--cp-shadow-card) md:p-6"
+    >
+      <header class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="m-0 text-xl font-[760] leading-[1.15] text-(--cp-text-primary)">运行参数</h2>
+          <p
+            class="mt-1.75 mb-0 text-[13px] font-semibold leading-[1.15] text-(--cp-text-secondary)"
           >
-          <BaseInput v-model="form.defaultModel" class="w-64" />
+            控制模型调度、刷新策略和事件日志保留。
+          </p>
         </div>
-      </BaseCard>
 
-      <!-- 调度配置 -->
-      <BaseCard>
-        <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">调度配置</h2>
-        <div class="grid gap-5">
-          <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
-              >单账号最大并发</label
+        <div class="flex shrink-0 items-center gap-3">
+          <BaseButton
+            variant="ghost"
+            size="md"
+            :loading="refreshing"
+            :disabled="loading"
+            @click="refreshSettings"
+          >
+            <template #icon>
+              <RefreshCw class="size-4" />
+            </template>
+            重置
+          </BaseButton>
+          <BaseButton variant="primary" size="md" :disabled="saving" @click="handleSave">
+            <Save class="size-4" />
+            {{ saving ? '保存中...' : '保存设置' }}
+          </BaseButton>
+        </div>
+      </header>
+
+      <div class="mt-5 grid gap-4 xl:grid-cols-12">
+        <section class="min-w-0 rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5 xl:col-span-7">
+          <div class="mb-5 flex items-center gap-3">
+            <span
+              class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-info-bg) text-(--cp-info)"
             >
-            <BaseInput v-model="maxConcurrentPerAccountValue" type="number" class="w-48" />
-          </div>
-          <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
-              >请求间隔 (ms)</label
-            >
-            <BaseInput v-model="requestIntervalMsValue" type="number" class="w-48" />
-          </div>
-          <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
-              >轮换策略</label
-            >
-            <BaseSelect v-model="form.rotationStrategy" :options="rotationOptions" class="w-48" />
-          </div>
-          <div class="flex items-center justify-between">
-            <div>
-              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
-                >跳过配额耗尽账号</label
-              >
-              <p class="m-0 text-[13px] text-(--cp-text-secondary)">
-                调度时自动跳过已触发配额的账号
+              <Cpu class="size-4.5" />
+            </span>
+            <div class="min-w-0">
+              <h3 class="m-0 text-[15px] font-[760] leading-[1.15] text-(--cp-text-primary)">
+                调度配置
+              </h3>
+              <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                模型、并发与账号轮换策略。
               </p>
             </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input v-model="form.quotaSkipExhausted" type="checkbox" class="sr-only peer" />
-              <div
-                class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-              />
-            </label>
           </div>
-        </div>
-      </BaseCard>
 
-      <!-- 日志配置 -->
-      <BaseCard>
-        <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">日志配置</h2>
-        <div class="grid gap-5">
-          <div class="flex items-center justify-between">
-            <div>
-              <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
-                >启用日志记录</label
-              >
-              <p class="m-0 text-[13px] text-(--cp-text-secondary)">记录系统运行事件和错误</p>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div class="grid gap-2 md:col-span-2">
+              <span class="text-xs font-bold leading-[1.15] text-(--cp-text-secondary)">
+                默认模型
+              </span>
+              <BaseInput v-model="form.defaultModel">
+                <template #prefix>
+                  <Cpu class="size-4 text-(--cp-text-muted)" />
+                </template>
+              </BaseInput>
             </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input v-model="form.logsEnabled" type="checkbox" class="sr-only peer" />
+
+            <div class="grid gap-2">
+              <span class="text-xs font-bold leading-[1.15] text-(--cp-text-secondary)">
+                单账号最大并发
+              </span>
+              <BaseInput v-model="maxConcurrentPerAccountValue" type="number">
+                <template #prefix>
+                  <Gauge class="size-4 text-(--cp-text-muted)" />
+                </template>
+              </BaseInput>
+            </div>
+
+            <div class="grid gap-2">
+              <span class="text-xs font-bold leading-[1.15] text-(--cp-text-secondary)">
+                请求间隔 ms
+              </span>
+              <BaseInput v-model="requestIntervalMsValue" type="number">
+                <template #prefix>
+                  <Timer class="size-4 text-(--cp-text-muted)" />
+                </template>
+              </BaseInput>
+            </div>
+
+            <div class="grid gap-2 md:col-span-2">
+              <span class="text-xs font-bold leading-[1.15] text-(--cp-text-secondary)">
+                轮换策略
+              </span>
+              <BaseSelect v-model="form.rotationStrategy" :options="rotationOptions" />
+            </div>
+          </div>
+        </section>
+
+        <div class="grid min-w-0 content-start gap-4 xl:col-span-5">
+          <section class="rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5">
+            <div class="mb-4 flex items-center gap-3">
+              <span
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-success-bg) text-(--cp-success-text)"
+              >
+                <RotateCw class="size-4.5" />
+              </span>
+              <div class="min-w-0">
+                <h3 class="m-0 text-[15px] font-[760] leading-[1.15] text-(--cp-text-primary)">
+                  运行策略
+                </h3>
+                <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                  影响调度健康度与账号可用性。
+                </p>
+              </div>
+            </div>
+
+            <div class="grid gap-3">
               <div
-                class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-              />
-            </label>
-          </div>
-          <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-2"
-              >日志容量上限</label
-            >
-            <BaseInput v-model="logsCapacityValue" type="number" class="w-48" />
-          </div>
-        </div>
-      </BaseCard>
+                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+              >
+                <div class="min-w-0">
+                  <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">
+                    自动刷新
+                  </p>
+                  <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                    定时刷新令牌和账号配额
+                  </p>
+                </div>
+                <BaseSwitch v-model="form.refreshEnabled" label="启用自动刷新" />
+              </div>
 
-      <!-- 刷新配置 -->
-      <BaseCard>
-        <h2 class="m-0 text-[20px] font-bold text-(--cp-text-primary) mb-5">自动刷新</h2>
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="block text-[14px] font-medium text-(--cp-text-primary) mb-1"
-              >启用自动刷新</label
-            >
-            <p class="m-0 text-[13px] text-(--cp-text-secondary)">定时刷新账号令牌和配额信息</p>
-          </div>
-          <label class="relative inline-flex items-center cursor-pointer">
-            <input v-model="form.refreshEnabled" type="checkbox" class="sr-only peer" />
-            <div
-              class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"
-            />
-          </label>
-        </div>
-      </BaseCard>
+              <div
+                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+              >
+                <div class="min-w-0">
+                  <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">
+                    跳过耗尽账号
+                  </p>
+                  <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                    调度时避开配额受限账号
+                  </p>
+                </div>
+                <BaseSwitch v-model="form.quotaSkipExhausted" label="跳过配额耗尽账号" />
+              </div>
+            </div>
+          </section>
 
-      <!-- 保存按钮 -->
-      <div class="flex items-center gap-3">
-        <BaseButton variant="primary" size="md" :disabled="saving" @click="handleSave">
-          <Save class="size-4" />
-          {{ saving ? '保存中...' : '保存设置' }}
-        </BaseButton>
-        <BaseButton variant="ghost" size="md" :disabled="loading" @click="loadSettings">
-          <RefreshCw class="size-4" />
-          重置
-        </BaseButton>
+          <section class="rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5">
+            <div class="mb-4 flex items-center gap-3">
+              <span
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-warning-bg) text-(--cp-warning-text)"
+              >
+                <ShieldCheck class="size-4.5" />
+              </span>
+              <div class="min-w-0">
+                <h3 class="m-0 text-[15px] font-[760] leading-[1.15] text-(--cp-text-primary)">
+                  日志策略
+                </h3>
+                <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                  控制事件日志采集与保留容量。
+                </p>
+              </div>
+            </div>
+
+            <div class="grid gap-3">
+              <div
+                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+              >
+                <div class="min-w-0">
+                  <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">
+                    启用事件日志
+                  </p>
+                  <p class="mt-1 mb-0 text-xs font-[650] leading-[1.15] text-(--cp-text-secondary)">
+                    记录代理请求和上游状态
+                  </p>
+                </div>
+                <BaseSwitch v-model="form.logsEnabled" label="启用事件日志" />
+              </div>
+
+              <div class="grid gap-2">
+                <span class="text-xs font-bold leading-[1.15] text-(--cp-text-secondary)">
+                  容量上限
+                </span>
+                <BaseInput v-model="logsCapacityValue" type="number">
+                  <template #prefix>
+                    <Database class="size-4 text-(--cp-text-muted)" />
+                  </template>
+                </BaseInput>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
-    </div>
+    </section>
   </div>
 </template>

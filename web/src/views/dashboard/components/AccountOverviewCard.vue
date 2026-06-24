@@ -141,11 +141,11 @@ const quotaToneClasses: Record<SemanticTone, string> = {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="h-112.5 w-full">
+  <BaseCard as="article" :padded="false" class="w-full xl:h-112.5">
     <div
-      class="grid grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] gap-7 px-7 pt-6"
+      class="grid gap-7 px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] xl:pb-0"
     >
-      <section class="h-100.5 w-full">
+      <section class="w-full xl:h-100.5">
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           容量、并发与分配策略
@@ -268,7 +268,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
         </div>
       </section>
 
-      <section class="h-100.5 w-full">
+      <section class="w-full xl:h-100.5">
         <header class="flex h-12.5 items-start justify-between">
           <div>
             <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号状态</h2>
