@@ -57,8 +57,8 @@ async fn admin_client_keys_route_should_create_list_and_authorize_v1_requests() 
         .await
         .unwrap();
     let list_body = response_json(list_response).await;
-    assert_eq!(list_body["data"][0]["name"], "cursor");
-    assert!(list_body["data"][0].get("plaintext").is_none());
+    assert_eq!(list_body["data"]["items"][0]["name"], "cursor");
+    assert!(list_body["data"]["items"][0].get("plaintext").is_none());
 
     let models_response = app
         .oneshot(

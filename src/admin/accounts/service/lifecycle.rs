@@ -1,7 +1,7 @@
 use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::infra::json::Page;
+use crate::infra::json::{NumberedPage, Page};
 
 use super::{types::*, AdminAccountService};
 
@@ -25,6 +25,30 @@ impl AdminAccountService {
             next_cursor: page.next_cursor,
         })
     }
+
+    pub async fn list_page(
+        &self,
+        page: u32,
+        page_size: u32,
+        search: Option<String>,
+    ) -> Result<NumberedPage<AdminAccountMetadata>, AdminAccountError> {
+        let page = self
+            .store
+            .list_metadata_page(page, page_size, search.as_deref())
+            .await
+            .map_err(|_| AdminAccountError::List)?;
+        Ok(NumberedPage {
+            items: page
+                .items
+                .into_iter()
+                .map(AdminAccountMetadata::from)
+                .collect(),
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
+        })
+    }
+
     pub async fn get(
         &self,
         account_id: &str,
@@ -267,30 +291,32 @@ impl AdminAccountService {
                 self.sync_account_pool(account_id).await?;
             }
             Err(failure) => {
-                let status =
-                    crate::upstream::accounts::import_export::refresh_failure_status(&failure);
-                let updated = self
-                    .store
-                    .set_status(account_id, status)
-                    .await
-                    .map_err(|_| AdminAccountError::UpdateStatus)?;
-                if !updated {
-                    return Err(AdminAccountError::NotFound);
-                }
-                if crate::upstream::accounts::import_export::refresh_failure_status_clears_next_refresh_at(
-                    status,
-                ) {
-                    let cleared = self
+                if let Some(status) =
+                    manual_refresh_failure_status(&failure, account.access_token.expose_secret())
+                {
+                    let updated = self
                         .store
-                        .set_next_refresh_at(account_id, None)
+                        .set_status(account_id, status)
                         .await
                         .map_err(|_| AdminAccountError::UpdateStatus)?;
-                    if !cleared {
+                    if !updated {
                         return Err(AdminAccountError::NotFound);
                     }
+                    if crate::upstream::accounts::import_export::refresh_failure_status_clears_next_refresh_at(
+                        status,
+                    ) {
+                        let cleared = self
+                            .store
+                            .set_next_refresh_at(account_id, None)
+                            .await
+                            .map_err(|_| AdminAccountError::UpdateStatus)?;
+                        if !cleared {
+                            return Err(AdminAccountError::NotFound);
+                        }
+                    }
+                    self.sync_account_pool_best_effort(account_id, "account refresh failure")
+                        .await;
                 }
-                self.sync_account_pool_best_effort(account_id, "account refresh failure")
-                    .await;
                 return Err(AdminAccountError::RefreshTokenExchange(failure));
             }
         }
@@ -342,5 +368,36 @@ impl AdminAccountService {
             }
         }
         Ok(BatchUpdateAccountStatus { updated, not_found })
+    }
+}
+
+fn manual_refresh_failure_status(
+    failure: &crate::upstream::accounts::token_refresh::RefreshFailure,
+    current_access_token: &str,
+) -> Option<crate::upstream::accounts::model::AccountStatus> {
+    match failure {
+        crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted => {
+            Some(crate::upstream::accounts::model::AccountStatus::QuotaExhausted)
+        }
+        crate::upstream::accounts::token_refresh::RefreshFailure::Banned => {
+            Some(crate::upstream::accounts::model::AccountStatus::Banned)
+        }
+        crate::upstream::accounts::token_refresh::RefreshFailure::Disabled => {
+            Some(crate::upstream::accounts::model::AccountStatus::Disabled)
+        }
+        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
+            if matches!(
+                crate::upstream::accounts::token_refresh::jwt_expiry(
+                    current_access_token,
+                    Utc::now()
+                ),
+                crate::upstream::accounts::token_refresh::JwtExpiry::Expired
+            ) =>
+        {
+            Some(crate::upstream::accounts::model::AccountStatus::Expired)
+        }
+        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
+        | crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
+        | crate::upstream::accounts::token_refresh::RefreshFailure::Transport => None,
     }
 }

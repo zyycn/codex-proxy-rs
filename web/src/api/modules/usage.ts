@@ -1,4 +1,5 @@
-import { requestJson } from '../request'
+import { requestJson, requestPageJson } from '../request'
+import type { PaginatedResult } from '../types'
 
 // ==================== 使用统计 ====================
 
@@ -40,6 +41,30 @@ export interface AccountUsageStats {
   lastUsedAt?: string
 }
 
-export function getUsageStats() {
-  return requestJson<AccountUsageStats[]>('/api/admin/usage')
+export interface UsageStatsQuery {
+  page?: number
+  pageSize?: number
+}
+
+export type UsageStatsPageQuery = UsageStatsQuery & {
+  page: number
+  pageSize: number
+}
+
+export function getUsageStats(
+  query: UsageStatsPageQuery,
+): Promise<PaginatedResult<AccountUsageStats>>
+export function getUsageStats(query?: UsageStatsQuery): Promise<AccountUsageStats[]>
+export async function getUsageStats(query: UsageStatsQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('pageSize', String(query.pageSize))
+  const url = `/api/admin/usage${params.toString() ? `?${params}` : ''}`
+
+  if (query.page || query.pageSize) {
+    return requestPageJson<AccountUsageStats>(url)
+  }
+
+  const result = await requestPageJson<AccountUsageStats>(url)
+  return result.items
 }

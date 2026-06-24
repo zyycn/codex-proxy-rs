@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::admin::monitoring::usage_store::{SqliteUsageStore, UsageListRecord, UsageSummary};
-use crate::infra::json::Page;
+use crate::infra::json::{NumberedPage, Page};
 use crate::upstream::accounts::model::AccountUsageDelta;
 use crate::upstream::protocol::events::TokenUsage;
 
@@ -123,6 +123,24 @@ impl AdminUsageService {
         Ok(Page {
             items: page.items.into_iter().map(AdminUsageRecord::from).collect(),
             next_cursor: page.next_cursor,
+        })
+    }
+
+    pub async fn list_page(
+        &self,
+        page: u32,
+        page_size: u32,
+    ) -> Result<NumberedPage<AdminUsageRecord>, AdminUsageError> {
+        let page = self
+            .store
+            .list_usage_page(page, page_size)
+            .await
+            .map_err(|_| AdminUsageError::List)?;
+        Ok(NumberedPage {
+            items: page.items.into_iter().map(AdminUsageRecord::from).collect(),
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
         })
     }
 

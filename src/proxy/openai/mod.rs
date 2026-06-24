@@ -1,7 +1,6 @@
 //! OpenAI 兼容 API 模块。
 
 pub mod chat;
-pub mod diagnostics;
 pub mod errors;
 pub mod models;
 pub mod responses;

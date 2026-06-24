@@ -39,7 +39,7 @@ async fn admin_usage_stats_should_return_page_and_summary() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/usage?limit=10")
+                .uri("/api/admin/usage?page=1&pageSize=10")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_usage_page")
                 .body(Body::empty())
@@ -49,8 +49,12 @@ async fn admin_usage_stats_should_return_page_and_summary() {
         .unwrap();
     assert_eq!(page.status(), StatusCode::OK);
     let page_body = response_json(page).await;
-    assert_eq!(page_body["data"][0]["accountId"], "acct_usage");
-    assert_eq!(page_body["data"][0]["requestCount"], 3);
+    assert_eq!(page_body["data"]["items"][0]["accountId"], "acct_usage");
+    assert_eq!(page_body["data"]["items"][0]["requestCount"], 3);
+    assert_eq!(page_body["data"]["page"]["page"], 1);
+    assert_eq!(page_body["data"]["page"]["pageSize"], 10);
+    assert_eq!(page_body["data"]["page"]["total"], 1);
+    assert_eq!(page_body["data"]["page"]["totalPages"], 1);
 
     let summary = app
         .oneshot(
@@ -181,8 +185,8 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
         .unwrap();
     let first_body = response_json(first).await;
     assert_eq!(first_body["code"], 200);
-    assert_eq!(first_body["data"].as_array().unwrap().len(), 1);
-    let cursor = first_body["page"]["nextCursor"].as_str().unwrap();
+    assert_eq!(first_body["data"]["items"].as_array().unwrap().len(), 1);
+    let cursor = first_body["data"]["page"]["nextCursor"].as_str().unwrap();
 
     let second = app
         .oneshot(
@@ -197,7 +201,7 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
         .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
     assert_eq!(
-        response_json(second).await["data"][0]["accountId"],
+        response_json(second).await["data"]["items"][0]["accountId"],
         "acct_a"
     );
 }

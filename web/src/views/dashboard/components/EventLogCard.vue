@@ -92,17 +92,7 @@ const filteredRows = computed(() => {
           rows.length === 0 ? '请求经过代理后会在这里显示最近事件。' : '调整筛选条件后再查看。'
         "
       />
-      <BaseTable
-        v-else
-        class="min-w-0 flex-1"
-        :columns="eventLogColumns"
-        :rows="filteredRows"
-        table-class="min-w-full"
-        header-row-class="h-10 rounded-xl bg-(--cp-bg-subtle) text-xs leading-[1.15] font-bold text-(--cp-text-secondary)"
-        body-row-class="h-14 rounded-[10px] transition-colors duration-200 hover:bg-(--cp-bg-subtle)"
-        header-cell-class="min-w-0 overflow-hidden bg-(--cp-bg-subtle) px-5 text-ellipsis whitespace-nowrap first:rounded-l-xl last:rounded-r-xl"
-        body-cell-class="min-w-0 overflow-hidden px-5 text-ellipsis whitespace-nowrap text-xs leading-[1.15] font-[650] text-(--cp-text-primary) first:rounded-l-[10px] last:rounded-r-[10px]"
-      >
+      <BaseTable v-else class="min-w-0 flex-1" :columns="eventLogColumns" :rows="filteredRows">
         <template #time="{ value }">
           <span class="font-mono tabular-nums">{{ value }}</span>
         </template>

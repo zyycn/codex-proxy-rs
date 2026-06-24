@@ -90,30 +90,6 @@ pub struct ParsedModelName {
     pub service_tier: Option<String>,
 }
 
-/// 模型目录调试视图。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelStoreDebug {
-    /// 模型总数。
-    pub total_models: usize,
-    /// 静态模型数。
-    pub static_models: usize,
-    /// 别名数量。
-    pub alias_count: usize,
-    /// 调试模型条目。
-    pub models: Vec<ModelDebugEntry>,
-}
-
-/// 单个调试模型条目。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelDebugEntry {
-    /// 模型 ID。
-    pub id: String,
-    /// 来源标记。
-    pub source: String,
-}
-
 /// 按计划类型持久化的模型快照。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -458,23 +434,6 @@ impl ModelCatalog {
             .iter()
             .find(|model| model.id == model_id)
             .cloned()
-    }
-
-    /// 返回模型目录调试视图。
-    pub fn debug(&self) -> ModelStoreDebug {
-        ModelStoreDebug {
-            total_models: self.models.len(),
-            static_models: self.models.len(),
-            alias_count: self.aliases.len(),
-            models: self
-                .models
-                .iter()
-                .map(|model| ModelDebugEntry {
-                    id: model.id.clone(),
-                    source: model.source.clone(),
-                })
-                .collect(),
-        }
     }
 
     /// 返回 model -> plans allowlist。

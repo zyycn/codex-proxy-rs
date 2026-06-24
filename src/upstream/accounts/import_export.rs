@@ -329,7 +329,7 @@ pub fn refresh_failure_status(
 ) -> AccountStatus {
     match failure {
         crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant => {
-            AccountStatus::Disabled
+            AccountStatus::Expired
         }
         crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted => {
             AccountStatus::QuotaExhausted

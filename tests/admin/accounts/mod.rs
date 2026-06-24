@@ -135,6 +135,41 @@ async fn admin_accounts_test_app_with_api_base_url(
     tempfile::TempDir,
     SecretBox,
 ) {
+    admin_accounts_test_app_with_overrides(db_name, key_byte, api_base_url, None).await
+}
+
+async fn admin_accounts_test_app_with_oauth_token_endpoint(
+    db_name: &str,
+    key_byte: u8,
+    oauth_token_endpoint: String,
+) -> (
+    axum::Router,
+    AppState,
+    SqlitePool,
+    tempfile::TempDir,
+    SecretBox,
+) {
+    admin_accounts_test_app_with_overrides(
+        db_name,
+        key_byte,
+        "https://chatgpt.com/backend-api".to_string(),
+        Some(oauth_token_endpoint),
+    )
+    .await
+}
+
+async fn admin_accounts_test_app_with_overrides(
+    db_name: &str,
+    key_byte: u8,
+    api_base_url: String,
+    oauth_token_endpoint: Option<String>,
+) -> (
+    axum::Router,
+    AppState,
+    SqlitePool,
+    tempfile::TempDir,
+    SecretBox,
+) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
     let url = format!("sqlite://{}", db.display());
@@ -144,6 +179,9 @@ async fn admin_accounts_test_app_with_api_base_url(
     let hasher = ApiKeyHasher::new([key_byte; 32]);
     let mut config = test_config(url);
     config.api.base_url = api_base_url;
+    if let Some(oauth_token_endpoint) = oauth_token_endpoint {
+        config.auth.oauth_token_endpoint = oauth_token_endpoint;
+    }
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),

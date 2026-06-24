@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Plus, RefreshCw, Trash2, Download, Upload, Search, Copy } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseEmpty from '@/components/base/BaseEmpty.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+import BaseTable from '@/components/base/BaseTable.vue'
 import AppTopbar from '@/layout/components/AppTopbar.vue'
+import { withMinimumDuration } from '@/utils/async'
 
 import type { ClientApiKey } from '@/api'
 import {
@@ -24,18 +26,35 @@ import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
 const apiKeys = ref<ClientApiKey[]>([])
+const page = ref(1)
+const pageSize = ref(20)
 const searchQuery = ref('')
 const selectedIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
+const showSingleDeleteModal = ref(false)
 const showKeyModal = ref(false)
 const createdKey = ref('')
 const editingLabel = ref<{ id: string; value: string } | null>(null)
+const pendingDeleteKey = ref<ClientApiKey | null>(null)
+const refreshingList = ref(false)
+const deletingKey = ref(false)
+const batchDeleting = ref(false)
 
 const createForm = ref({
   name: '',
   label: '',
 })
+
+const apiKeyColumns = [
+  { key: 'selection', label: '', width: '48px', align: 'center' as const },
+  { key: 'identity', label: '名称 / 标签' },
+  { key: 'prefix', label: '密钥前缀' },
+  { key: 'enabled', label: '状态' },
+  { key: 'createdAt', label: '创建时间' },
+  { key: 'lastUsedAt', label: '最后使用' },
+  { key: 'actions', label: '操作', width: '80px', align: 'right' as const },
+]
 
 const filteredKeys = computed(() => {
   if (!searchQuery.value) return apiKeys.value
@@ -48,13 +67,26 @@ const filteredKeys = computed(() => {
   )
 })
 
+const pagedKeys = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filteredKeys.value.slice(start, start + pageSize.value)
+})
+
 const allSelected = computed(
-  () => selectedIds.value.size === filteredKeys.value.length && filteredKeys.value.length > 0,
+  () => pagedKeys.value.length > 0 && pagedKeys.value.every((key) => selectedIds.value.has(key.id)),
 )
 
 const indeterminate = computed(
-  () => selectedIds.value.size > 0 && selectedIds.value.size < filteredKeys.value.length,
+  () => pagedKeys.value.some((key) => selectedIds.value.has(key.id)) && !allSelected.value,
 )
+
+const selectedRowKeys = computed(() => [...selectedIds.value])
+const apiKeyPagination = computed(() => ({
+  page: page.value,
+  pageSize: pageSize.value,
+  total: filteredKeys.value.length,
+  pageSizes: [10, 20, 50, 100],
+}))
 
 async function loadApiKeys() {
   try {
@@ -65,6 +97,16 @@ async function loadApiKeys() {
     toast.error(error.message || '加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function refreshApiKeys() {
+  if (refreshingList.value || loading.value) return
+  refreshingList.value = true
+  try {
+    await withMinimumDuration(loadApiKeys)
+  } finally {
+    refreshingList.value = false
   }
 }
 
@@ -92,13 +134,26 @@ async function handleCreate() {
   }
 }
 
-async function handleDelete(keyId: string) {
+function requestDeleteKey(key: ClientApiKey) {
+  pendingDeleteKey.value = key
+  showSingleDeleteModal.value = true
+}
+
+async function handleDelete() {
+  const keyId = pendingDeleteKey.value?.id
+  if (!keyId) return
+
   try {
+    deletingKey.value = true
     await deleteApiKey(keyId)
+    showSingleDeleteModal.value = false
+    pendingDeleteKey.value = null
     await loadApiKeys()
     toast.success('删除成功')
   } catch (error: any) {
     toast.error(error.message || '删除失败')
+  } finally {
+    deletingKey.value = false
   }
 }
 
@@ -106,13 +161,17 @@ async function handleBatchDelete() {
   if (selectedIds.value.size === 0) return
 
   try {
+    batchDeleting.value = true
+    const deleteCount = selectedIds.value.size
     await batchDeleteApiKeys([...selectedIds.value])
-    selectedIds.value.clear()
+    selectedIds.value = new Set()
     showDeleteModal.value = false
     await loadApiKeys()
-    toast.success(`已删除 ${selectedIds.value.size} 个 API Key`)
+    toast.success(`已删除 ${deleteCount} 个 API Key`)
   } catch (error: any) {
     toast.error(error.message || '批量删除失败')
+  } finally {
+    batchDeleting.value = false
   }
 }
 
@@ -145,6 +204,22 @@ function cancelEditLabel() {
   editingLabel.value = null
 }
 
+function currentEditingLabelValue() {
+  return editingLabel.value?.value ?? ''
+}
+
+function submitEditingLabel(keyId: string) {
+  void handleUpdateLabel(keyId, currentEditingLabelValue())
+}
+
+function updateEditingLabelValue(event: Event) {
+  if (!editingLabel.value) {
+    return
+  }
+
+  editingLabel.value.value = (event.target as HTMLInputElement).value
+}
+
 function toggleSelection(keyId: string) {
   if (selectedIds.value.has(keyId)) {
     selectedIds.value.delete(keyId)
@@ -154,11 +229,20 @@ function toggleSelection(keyId: string) {
 }
 
 function toggleAll() {
-  if (selectedIds.value.size === filteredKeys.value.length) {
-    selectedIds.value.clear()
+  if (allSelected.value) {
+    pagedKeys.value.forEach((key) => selectedIds.value.delete(key.id))
   } else {
-    filteredKeys.value.forEach((key) => selectedIds.value.add(key.id))
+    pagedKeys.value.forEach((key) => selectedIds.value.add(key.id))
   }
+}
+
+function handlePageChange(nextPage: number) {
+  page.value = nextPage
+}
+
+function handlePageSizeChange(nextPageSize: number) {
+  pageSize.value = nextPageSize
+  page.value = 1
 }
 
 function copyToClipboard(text: string) {
@@ -195,11 +279,22 @@ function maskKey(prefix: string): string {
 onMounted(() => {
   loadApiKeys()
 })
+
+watch(searchQuery, () => {
+  page.value = 1
+})
+
+watch(filteredKeys, () => {
+  const totalPages = Math.max(1, Math.ceil(filteredKeys.value.length / pageSize.value))
+  if (page.value > totalPages) {
+    page.value = totalPages
+  }
+})
 </script>
 
 <template>
-  <div class="w-full">
-    <header class="flex h-17 items-start justify-between">
+  <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
+    <header class="flex h-17 shrink-0 items-start justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
           API Keys
@@ -209,10 +304,10 @@ onMounted(() => {
         </p>
       </div>
 
-      <AppTopbar class="mt-0.5" />
+      <AppTopbar class="mt-0.5" :refreshing="refreshingList" @refresh="refreshApiKeys" />
     </header>
 
-    <div class="mt-6 flex items-center justify-between gap-4">
+    <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <BaseInput v-model="searchQuery" placeholder="搜索名称、标签或 ID..." class="w-80">
           <template #prefix>
@@ -224,6 +319,7 @@ onMounted(() => {
           v-if="selectedIds.size > 0"
           variant="danger"
           size="md"
+          :disabled="batchDeleting"
           @click="showDeleteModal = true"
         >
           <Trash2 class="size-4" />
@@ -240,7 +336,14 @@ onMounted(() => {
           <Upload class="size-4.5" />
         </BaseIconButton>
 
-        <BaseIconButton variant="ghost" size="md" title="刷新列表" @click="loadApiKeys">
+        <BaseIconButton
+          variant="ghost"
+          size="md"
+          title="刷新列表"
+          :loading="refreshingList"
+          :disabled="loading"
+          @click="refreshApiKeys"
+        >
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
@@ -251,135 +354,125 @@ onMounted(() => {
       </div>
     </div>
 
-    <BaseCard v-loading="loading" class="mt-5 p-0">
-      <BaseEmpty
-        v-if="filteredKeys.length === 0 && !loading"
-        message="暂无 API Keys"
-        class="py-20"
-      />
+    <BaseCard v-loading="loading" class="mt-5 flex min-h-0 flex-1 p-0">
+      <BaseTable
+        :columns="apiKeyColumns"
+        :rows="pagedKeys"
+        :selected-row-keys="selectedRowKeys"
+        :pagination="apiKeyPagination"
+        empty-text="暂无 API Keys"
+        @page-change="handlePageChange"
+        @page-size-change="handlePageSizeChange"
+      >
+        <template #header-selection>
+          <BaseCheckbox
+            :model-value="allSelected"
+            :indeterminate="indeterminate"
+            label="选择当前页密钥"
+            size="table"
+            @update:model-value="toggleAll"
+          />
+        </template>
 
-      <BaseScrollbar v-else max-height="calc(100vh - 280px)">
-        <table class="w-full border-separate border-spacing-y-2 text-left">
-          <thead>
-            <tr class="h-10 text-[11px] font-bold text-(--cp-text-muted)">
-              <th class="w-12 px-3">
-                <input
-                  type="checkbox"
-                  class="cursor-pointer"
-                  :checked="allSelected"
-                  :indeterminate="indeterminate"
-                  @change="toggleAll"
-                />
-              </th>
-              <th class="px-3">名称 / 标签</th>
-              <th class="px-3">密钥前缀</th>
-              <th class="px-3">状态</th>
-              <th class="px-3">创建时间</th>
-              <th class="px-3">最后使用</th>
-              <th class="px-3 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="key in filteredKeys"
-              :key="key.id"
-              class="h-13 transition-colors"
-              :class="{ 'bg-(--cp-bg-tertiary)': selectedIds.has(key.id) }"
+        <template #selection="{ row }">
+          <BaseCheckbox
+            :model-value="selectedIds.has(row.id)"
+            label="选择密钥"
+            size="table"
+            @update:model-value="toggleSelection(row.id)"
+          />
+        </template>
+
+        <template #identity="{ row }">
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[14px] font-medium text-(--cp-text-primary)">
+              {{ row.name }}
+            </span>
+            <div v-if="editingLabel?.id === row.id" class="flex items-center gap-2">
+              <input
+                :value="currentEditingLabelValue()"
+                type="text"
+                class="h-(--cp-input-height-inline) min-w-34 rounded-(--cp-input-radius-small) border-0 bg-(--cp-input-soft-bg) px-2.5 text-[13px] font-[650] text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition placeholder:text-(--cp-text-muted) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus)"
+                @input="updateEditingLabelValue"
+                @keyup.enter="submitEditingLabel(row.id)"
+                @keyup.escape="cancelEditLabel"
+              />
+              <button
+                class="text-[12px] text-(--cp-accent-primary) hover:underline"
+                @click="submitEditingLabel(row.id)"
+              >
+                保存
+              </button>
+              <button
+                class="text-[12px] text-(--cp-text-tertiary) hover:underline"
+                @click="cancelEditLabel"
+              >
+                取消
+              </button>
+            </div>
+            <button
+              v-else-if="row.label"
+              class="text-left text-[13px] text-(--cp-text-tertiary) hover:text-(--cp-accent-primary)"
+              @click="startEditLabel(row)"
             >
-              <td class="px-3 rounded-l-lg">
-                <input
-                  type="checkbox"
-                  class="cursor-pointer"
-                  :checked="selectedIds.has(key.id)"
-                  @change="toggleSelection(key.id)"
-                />
-              </td>
-              <td class="px-3">
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-[14px] font-medium text-(--cp-text-primary)">
-                    {{ key.name }}
-                  </span>
-                  <div v-if="editingLabel?.id === key.id" class="flex items-center gap-2">
-                    <input
-                      v-model="editingLabel.value"
-                      type="text"
-                      class="text-[13px] px-2 py-0.5 rounded border border-(--cp-border-primary) bg-(--cp-bg-primary)"
-                      @keyup.enter="handleUpdateLabel(key.id, editingLabel.value)"
-                      @keyup.escape="cancelEditLabel"
-                    />
-                    <button
-                      class="text-[12px] text-(--cp-accent-primary) hover:underline"
-                      @click="handleUpdateLabel(key.id, editingLabel.value)"
-                    >
-                      保存
-                    </button>
-                    <button
-                      class="text-[12px] text-(--cp-text-tertiary) hover:underline"
-                      @click="cancelEditLabel"
-                    >
-                      取消
-                    </button>
-                  </div>
-                  <button
-                    v-else
-                    class="text-[13px] text-(--cp-text-tertiary) hover:text-(--cp-accent-primary) text-left"
-                    @click="startEditLabel(key)"
-                  >
-                    {{ key.label || '添加标签...' }}
-                  </button>
-                </div>
-              </td>
-              <td class="px-3">
-                <div class="flex items-center gap-2">
-                  <code class="text-[13px] font-mono text-(--cp-text-primary)">
-                    {{ maskKey(key.prefix) }}
-                  </code>
-                  <button
-                    class="p-0 border-0 bg-transparent cursor-pointer text-(--cp-text-tertiary) hover:text-(--cp-accent-primary)"
-                    @click="copyToClipboard(key.prefix)"
-                  >
-                    <Copy class="size-3.5" />
-                  </button>
-                </div>
-              </td>
-              <td class="px-3">
-                <button
-                  class="inline-flex items-center px-2 py-0.5 rounded-full text-[12px] font-medium border-0 cursor-pointer"
-                  :class="{
-                    'bg-green-50 text-green-700': key.enabled,
-                    'bg-gray-50 text-gray-700': !key.enabled,
-                  }"
-                  @click="handleToggleStatus(key)"
-                >
-                  {{ key.enabled ? '已启用' : '已禁用' }}
-                </button>
-              </td>
-              <td class="px-3">
-                <span class="text-[13px] text-(--cp-text-secondary)">
-                  {{ formatDate(key.createdAt) }}
-                </span>
-              </td>
-              <td class="px-3">
-                <span class="text-[13px] text-(--cp-text-secondary)">
-                  {{ formatDate(key.lastUsedAt) }}
-                </span>
-              </td>
-              <td class="px-3 rounded-r-lg">
-                <div class="flex items-center justify-end gap-1">
-                  <BaseIconButton
-                    variant="ghost"
-                    size="sm"
-                    title="删除密钥"
-                    @click="handleDelete(key.id)"
-                  >
-                    <Trash2 class="size-3.5" />
-                  </BaseIconButton>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </BaseScrollbar>
+              {{ row.label }}
+            </button>
+          </div>
+        </template>
+
+        <template #prefix="{ row }">
+          <div class="flex items-center gap-2">
+            <code class="font-mono text-(--cp-text-primary)">
+              {{ maskKey(row.prefix) }}
+            </code>
+            <button
+              class="cursor-pointer border-0 bg-transparent p-0 text-(--cp-text-tertiary) hover:text-(--cp-accent-primary)"
+              @click="copyToClipboard(row.prefix)"
+            >
+              <Copy class="size-3.5" />
+            </button>
+          </div>
+        </template>
+
+        <template #enabled="{ row }">
+          <button
+            class="inline-flex cursor-pointer items-center rounded-full border-0 px-2 py-0.5 text-[12px] font-medium"
+            :class="{
+              'bg-green-50 text-green-700': row.enabled,
+              'bg-gray-50 text-gray-700': !row.enabled,
+            }"
+            @click="handleToggleStatus(row)"
+          >
+            {{ row.enabled ? '已启用' : '已禁用' }}
+          </button>
+        </template>
+
+        <template #createdAt="{ row }">
+          <span class="text-(--cp-text-secondary)">
+            {{ formatDate(row.createdAt) }}
+          </span>
+        </template>
+
+        <template #lastUsedAt="{ row }">
+          <span class="text-(--cp-text-secondary)">
+            {{ formatDate(row.lastUsedAt) }}
+          </span>
+        </template>
+
+        <template #actions="{ row }">
+          <div class="flex items-center justify-end gap-1">
+            <BaseIconButton
+              variant="ghost"
+              size="sm"
+              title="删除密钥"
+              :disabled="deletingKey"
+              @click="requestDeleteKey(row)"
+            >
+              <Trash2 class="size-3.5" />
+            </BaseIconButton>
+          </div>
+        </template>
+      </BaseTable>
     </BaseCard>
 
     <!-- 创建 API Key 模态框 -->
@@ -451,22 +544,28 @@ onMounted(() => {
       </template>
     </BaseModal>
 
-    <!-- 批量删除确认 -->
-    <BaseModal
+    <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
       description="删除后这些 API Key 将立即失效，此操作不可撤销。"
-      variant="warning"
+      :message="`确定要删除选中的 ${selectedIds.size} 个 API Key 吗？此操作不可撤销。`"
+      variant="danger"
+      confirm-text="确认删除"
+      :loading="batchDeleting"
       width="480px"
-    >
-      <p class="text-[14px] text-(--cp-text-secondary)">
-        确定要删除选中的 <strong>{{ selectedIds.size }}</strong> 个 API Key 吗？此操作不可撤销。
-      </p>
+      @confirm="handleBatchDelete"
+    />
 
-      <template #footer>
-        <BaseButton variant="ghost" @click="showDeleteModal = false"> 取消 </BaseButton>
-        <BaseButton variant="danger" @click="handleBatchDelete"> 确认删除 </BaseButton>
-      </template>
-    </BaseModal>
+    <BaseConfirmModal
+      v-model="showSingleDeleteModal"
+      title="删除 API Key"
+      description="删除后该 API Key 将立即失效，此操作不可撤销。"
+      :message="`确定要删除 ${pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key'} 吗？`"
+      variant="danger"
+      confirm-text="确认删除"
+      :loading="deletingKey"
+      width="480px"
+      @confirm="handleDelete"
+    />
   </div>
 </template>

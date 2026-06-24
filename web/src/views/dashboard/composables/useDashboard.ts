@@ -31,6 +31,7 @@ import type {
   TrendPoint,
   TrendSummaryItem,
 } from '../types'
+import { withMinimumDuration } from '@/utils/async'
 
 export function useDashboard(): {
   loading: Ref<boolean>
@@ -62,11 +63,19 @@ export function useDashboard(): {
 
   async function loadDashboardData() {
     try {
+      loading.value = true
       const summary = await getDashboardSummary()
       applySummary(summary)
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
+    } finally {
+      loading.value = false
     }
+  }
+
+  async function refreshDashboardData() {
+    if (loading.value) return
+    await withMinimumDuration(loadDashboardData)
   }
 
   async function loadTrend(tab: string) {
@@ -93,8 +102,8 @@ export function useDashboard(): {
       requestId: log.requestId || '-',
       route: log.route || '-',
       model: log.model || '-',
-      statusCode: log.statusCode ? String(log.statusCode) : '-',
-      latency: log.latencyMs ? formatLatency(log.latencyMs) : '-',
+      statusCode: log.statusCode !== undefined ? String(log.statusCode) : '-',
+      latency: log.latencyMs !== undefined ? formatLatency(log.latencyMs) : '-',
       tone: eventTone(log.level, log.statusCode),
     }))
     poolSummary.value = summary.poolSummary
@@ -206,7 +215,7 @@ export function useDashboard(): {
           { label: '总 Token', value: formatTokens(tokens.totalTokens), tone: 'success' },
           {
             label: '计费',
-            value: `${formatCost(tokens.todayCostUsd)} / ${formatCost(tokens.totalCostUsd)}`,
+            value: `${formatCost(tokens.totalCostUsd)} / ${formatCost(tokens.todayCostUsd)}`,
             tone: 'success',
           },
         ],
@@ -364,7 +373,10 @@ export function useDashboard(): {
 
   function formatCost(value: number | null | undefined): string {
     if (value === null || value === undefined) return '-'
-    return `$${value.toFixed(4)}`
+    if (Math.abs(value) >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`
+    if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`
+    if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(2)}K`
+    return `$${value.toFixed(2)}`
   }
 
   function formatLatency(ms: number | null | undefined): string {
@@ -433,7 +445,7 @@ export function useDashboard(): {
     poolSummary,
     capacityInfo,
     rotationStrategy,
-    refresh: loadDashboardData,
+    refresh: refreshDashboardData,
     loadTrend,
   }
 }

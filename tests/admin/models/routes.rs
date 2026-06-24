@@ -172,7 +172,6 @@ async fn admin_refresh_models_should_store_snapshots_for_distinct_active_plans()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_models_refresh");
     assert_eq!(body["data"]["refreshedPlans"], 2);
     assert_eq!(body["data"]["modelCount"], 2);
 }

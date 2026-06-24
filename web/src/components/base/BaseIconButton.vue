@@ -9,12 +9,14 @@ const props = withDefaults(
     variant?: 'default' | 'ghost'
     active?: boolean
     disabled?: boolean
+    loading?: boolean
   }>(),
   {
     size: 'default',
     variant: 'default',
     active: false,
     disabled: false,
+    loading: false,
   },
 )
 
@@ -34,13 +36,16 @@ const sizeClasses = computed(() => {
         ? 'bg-transparent text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) shadow-none'
         : 'bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal)',
       active ? 'bg-(--cp-default-bg-hover) text-(--cp-normal)' : '',
-      disabled ? 'cursor-not-allowed opacity-50' : '',
+      disabled || loading ? 'cursor-not-allowed opacity-50' : '',
     ]"
     :aria-label="label || title"
     :title="title || label"
-    :disabled="disabled"
+    :aria-busy="loading"
+    :disabled="disabled || loading"
     type="button"
   >
-    <slot />
+    <span class="inline-flex items-center justify-center" :class="loading ? 'animate-spin' : ''">
+      <slot />
+    </span>
   </button>
 </template>

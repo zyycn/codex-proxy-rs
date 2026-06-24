@@ -1,4 +1,5 @@
-import { requestJson } from '../request'
+import { requestJson, requestPageJson } from '../request'
+import type { PaginatedResult } from '../types'
 
 export interface Account {
   id: string
@@ -13,8 +14,32 @@ export interface Account {
   updatedAt: string
 }
 
-export function getAccounts() {
-  return requestJson<Account[]>('/api/admin/accounts')
+export interface AccountsQuery {
+  page: number
+  pageSize: number
+  search?: string
+}
+
+export function getAccounts(): Promise<Account[]>
+export function getAccounts(query: AccountsQuery): Promise<PaginatedResult<Account>>
+export async function getAccounts(query?: AccountsQuery) {
+  if (query) {
+    return requestPageJson<Account>('/api/admin/accounts', {
+      method: 'GET',
+      params: compactQuery(query),
+    })
+  }
+
+  const result = await requestPageJson<Account>('/api/admin/accounts')
+  return result.items
+}
+
+function compactQuery(query: AccountsQuery) {
+  return {
+    page: query.page,
+    pageSize: query.pageSize,
+    search: query.search?.trim() || undefined,
+  }
 }
 
 export interface CreateAccountPayload {

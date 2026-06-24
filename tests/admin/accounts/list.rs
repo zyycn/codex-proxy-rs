@@ -47,7 +47,66 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_accounts_list");
-    assert_eq!(body["data"][0]["id"], "acct_corrupt");
-    assert_eq!(body["data"][0]["email"], "user@example.com");
+    assert_eq!(body["data"]["items"][0]["id"], "acct_corrupt");
+    assert_eq!(body["data"]["items"][0]["email"], "user@example.com");
+}
+
+#[tokio::test]
+async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
+    let (app, _state, pool, _dir, _secret_box) =
+        admin_accounts_test_app("admin-accounts-numbered.sqlite", 67).await;
+    for (id, email, label, added_at) in [
+        (
+            "acct_prod_new",
+            "new-prod@example.com",
+            "prod primary",
+            "2026-06-18T00:02:00Z",
+        ),
+        (
+            "acct_stage",
+            "stage@example.com",
+            "stage",
+            "2026-06-18T00:01:00Z",
+        ),
+        (
+            "acct_prod_old",
+            "old@example.com",
+            "prod backup",
+            "2026-06-18T00:00:00Z",
+        ),
+    ] {
+        sqlx::query("insert into accounts (id, email, label, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(email)
+            .bind(label)
+            .bind("cipher")
+            .bind("active")
+            .bind(added_at)
+            .bind(added_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=1&search=prod")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_numbered")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["items"][0]["id"], "acct_prod_new");
+    assert_eq!(body["data"]["page"]["page"], 1);
+    assert_eq!(body["data"]["page"]["pageSize"], 1);
+    assert_eq!(body["data"]["page"]["total"], 2);
+    assert_eq!(body["data"]["page"]["totalPages"], 2);
 }

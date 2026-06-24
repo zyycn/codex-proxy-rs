@@ -5,6 +5,8 @@
   --cp-bg-surface: #ffffff;
   --cp-bg-subtle: #f8fafc;
   --cp-bg-muted: #f1f5f9;
+  --cp-bg-primary: #ffffff;
+  --cp-bg-tertiary: #eef6ff;
   --cp-bg-nav-active: #e9eef5;
   --cp-bg-dark: #111827;
   --cp-white: #ffffff;
@@ -14,7 +16,9 @@
   --cp-text-primary: #0e1726;
   --cp-text-strong: #111827;
   --cp-text-secondary: #64748b;
+  --cp-text-tertiary: #94a3b8;
   --cp-text-muted: #94a3b8;
+  --cp-accent-primary: #2563eb;
 
   --cp-default-bg: #f8fafc;
   --cp-default-bg-hover: #f1f5f9;
@@ -24,6 +28,22 @@
   --cp-default-text: #0e1726;
   --cp-default-text-hover: #111827;
   --cp-default-text-active: #0b1220;
+  --cp-border-primary: #d8e0ea;
+
+  --cp-control-bg: #ffffff;
+  --cp-control-bg-hover: #fbfdff;
+  --cp-control-highlight: #ffffffcc;
+  --cp-control-border: #d8e0ea;
+  --cp-control-border-hover: #bdc9d8;
+  --cp-control-boundary: #d8e0ea;
+  --cp-control-boundary-focus: #93c5fd;
+  --cp-control-focus-ring: #dbeafe;
+  --cp-input-soft-bg: #eef2f7;
+  --cp-input-soft-bg-hover: #f2f6fa;
+  --cp-input-soft-bg-focus: #f8fafc;
+  --cp-input-context-bg: #ffffff;
+  --cp-input-context-bg-hover: #fbfdff;
+  --cp-input-error-soft-bg: #fff1f1;
 
   --cp-disabled-bg: #f1f5f9;
   --cp-disabled-border: #e2e8f0;
@@ -79,13 +99,23 @@
   --cp-danger-border: #fca5a5;
   --cp-danger-text: #b91c1c;
   --cp-danger-on: #0b1220;
+  --cp-danger-ring: #fee2e2;
 
-  --cp-control-height-small: 24px;
-  --cp-control-height-default: 32px;
-  --cp-control-height-large: 40px;
+  --cp-control-height-small: 28px;
+  --cp-control-height-default: 38px;
+  --cp-control-height-large: 44px;
   --cp-control-padding-x: 12px;
   --cp-control-radius-small: 2px;
   --cp-control-radius-base: 4px;
+  --cp-input-height-large: 44px;
+  --cp-input-height-default: 38px;
+  --cp-input-height-compact: 28px;
+  --cp-input-height-inline: 32px;
+  --cp-input-radius-small: 6px;
+  --cp-input-radius-base: 8px;
+  --cp-popover-radius: 4px;
+  --cp-popper-radius: 4px;
+  --cp-checkbox-radius: 5px;
   --cp-button-radius-small: 4px;
   --cp-button-radius-base: 6px;
   --cp-icon-button-radius: 8px;
@@ -95,8 +125,13 @@
   --cp-radius-circle: 999px;
 
   --cp-shadow-card: 0 10px 22px -18px #0e172614;
-  --cp-shadow-control: 0 8px 18px -16px #0e172614;
-  --cp-shadow-popover: 0 16px 34px -18px #0e172622;
+  --cp-shadow-control: 0 9px 18px -14px #0e172616;
+  --cp-shadow-popover: 0 18px 38px -18px #0e17262b;
+  --cp-shadow-input: inset 0 1px 0 #ffffff66, 0 9px 18px -14px #0e172616;
+  --cp-shadow-input-hover:
+    inset 0 1px 0 #ffffffcc, 0 0 0 3px var(--cp-control-focus-ring), 0 12px 24px -16px #0e17261f;
+  --cp-shadow-input-focus: inset 0 1px 0 #ffffff, 0 0 0 3px #dbeafe;
+  --cp-shadow-input-error: inset 0 1px 0 #ffffffcc, 0 0 0 3px #fee2e2;
   --cp-shadow-sidebar: 2px 0 12px -12px #0e172607;
   --cp-scrollbar-track: #eef3f8;
   --cp-scrollbar-thumb: #cbd7e6;

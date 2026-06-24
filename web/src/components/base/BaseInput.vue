@@ -25,20 +25,24 @@ const props = withDefaults(
 const model = defineModel<string>({ default: '' })
 
 const sizeClasses = {
-  large: 'h-10 px-4 gap-2.5 text-sm rounded-(--cp-control-radius-base)',
-  default: 'h-8 px-3 gap-2.5 text-sm rounded-(--cp-control-radius-base)',
-  small: 'h-6 px-2 gap-1.5 text-xs rounded-(--cp-control-radius-small)',
+  large: 'h-(--cp-input-height-large) px-4 gap-2.5 text-sm rounded-(--cp-input-radius-base)',
+  default:
+    'h-(--cp-input-height-default) px-3.5 gap-2.5 text-[13px] rounded-(--cp-input-radius-base)',
+  small: 'h-(--cp-input-height-compact) px-2.5 gap-1.5 text-xs rounded-(--cp-input-radius-small)',
 }
 
 const containerClasses = computed(() => [
-  'inline-flex w-full items-center border transition-all',
-  'focus-within:bg-(--cp-bg-surface) focus-within:border-(--cp-info-border) focus-within:shadow-(--cp-shadow-control)',
+  'relative inline-flex w-full min-w-0 items-center overflow-visible border-0 text-(--cp-text-primary) shadow-(--cp-shadow-input) transition-[background-color,box-shadow,color] duration-[160ms]',
   sizeClasses[props.size],
   props.disabled
-    ? 'border-(--cp-disabled-border) bg-(--cp-disabled-bg)'
+    ? 'cursor-not-allowed bg-(--cp-disabled-bg) text-(--cp-disabled-text) shadow-none'
     : props.error
-      ? 'border-(--cp-danger-border) bg-(--cp-danger-bg)'
-      : 'border-transparent bg-(--cp-bg-subtle)',
+      ? 'bg-(--cp-input-error-soft-bg) shadow-(--cp-shadow-input-error)'
+      : [
+          'bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))]',
+          'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-(--cp-shadow-input-hover)',
+          'focus-within:bg-(--cp-input-soft-bg-focus) focus-within:shadow-(--cp-shadow-input-focus)',
+        ],
 ])
 
 const iconClasses = computed(() => [
@@ -51,8 +55,8 @@ const iconClasses = computed(() => [
 ])
 
 const inputClasses = computed(() => [
-  'min-w-0 flex-1 border-0 bg-transparent font-[650] leading-[1.15] outline-0',
-  'placeholder:text-(--cp-text-muted) disabled:text-(--cp-disabled-text)',
+  'h-full min-w-0 flex-1 border-0 bg-transparent font-[650] leading-[1.15] outline-0',
+  'placeholder:text-(--cp-text-muted) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)',
   props.error
     ? 'text-(--cp-danger-text)'
     : props.disabled
@@ -62,7 +66,7 @@ const inputClasses = computed(() => [
 </script>
 
 <template>
-  <label class="grid gap-2">
+  <label class="grid box-content gap-2 overflow-visible p-[3px]">
     <span :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
@@ -74,6 +78,7 @@ const inputClasses = computed(() => [
         :type="type"
         :disabled="disabled"
         :autocomplete="autocomplete"
+        :aria-invalid="error ? 'true' : undefined"
       />
       <span v-if="$slots.suffix" :class="iconClasses">
         <slot name="suffix" />

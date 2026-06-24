@@ -4,7 +4,7 @@ use wiremock::{
 };
 
 use codex_proxy_rs::{
-    upstream::accounts::token_refresh::TokenRefresher,
+    upstream::accounts::token_refresh::{RefreshFailure, TokenRefresher},
     upstream::token_client::{OpenAiTokenClient, TokenClientConfig},
 };
 
@@ -30,6 +30,42 @@ async fn openai_token_client_should_exchange_refresh_token_with_form_body() {
     assert!(body.contains("grant_type=refresh_token"));
     assert!(body.contains("client_id=codex-client"));
     assert!(body.contains("refresh_token=refresh-secret"));
+}
+
+#[tokio::test]
+async fn openai_token_client_should_not_treat_refresh_token_reuse_as_banned() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "refresh_token_reused"
+        })))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::InvalidGrant);
+}
+
+#[tokio::test]
+async fn openai_token_client_should_treat_explicit_banned_signal_as_banned() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": "access_denied",
+            "error_description": "account is banned"
+        })))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::Banned);
 }
 
 fn test_token_client(server: &MockServer) -> OpenAiTokenClient {

@@ -12,6 +12,7 @@ import ServiceStatusCard from './components/ServiceStatusCard.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
+  loading,
   trendLoading,
   metrics,
   trendPoints,
@@ -28,8 +29,8 @@ const {
 </script>
 
 <template>
-  <div class="w-full">
-    <header class="flex h-17 items-start justify-between">
+  <div class="w-full pb-6">
+    <header class="flex min-h-17 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
           系统概览
@@ -39,19 +40,30 @@ const {
         </p>
       </div>
 
-      <div class="flex items-center gap-2">
-        <BaseIconButton variant="ghost" size="md" title="刷新数据" @click="refresh">
+      <div class="flex items-center gap-2 self-end lg:self-auto">
+        <BaseIconButton
+          variant="ghost"
+          size="md"
+          title="刷新数据"
+          :loading="loading"
+          @click="refresh"
+        >
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
-        <AppTopbar class="mt-0.5" />
+        <AppTopbar class="mt-0.5" :refreshing="loading" @refresh="refresh" />
       </div>
     </header>
 
-    <section class="mt-6 grid grid-cols-4 gap-6" aria-label="核心指标">
+    <section
+      class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 xl:gap-6"
+      aria-label="核心指标"
+    >
       <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
     </section>
 
-    <section class="mt-6 grid grid-cols-[minmax(0,948fr)_minmax(0,608fr)] gap-7">
+    <section
+      class="mt-6 grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,948fr)_minmax(0,608fr)] 2xl:gap-7"
+    >
       <RequestTrendCard
         :points="trendPoints"
         :summary="trendSummary"

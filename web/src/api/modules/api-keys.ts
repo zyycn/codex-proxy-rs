@@ -1,4 +1,4 @@
-import { requestJson } from '../request'
+import { requestJson, requestPageJson } from '../request'
 
 // ==================== API Keys 管理 ====================
 
@@ -23,8 +23,9 @@ export interface CreateApiKeyResponse {
   prefix: string
 }
 
-export function getApiKeys() {
-  return requestJson<ClientApiKey[]>('/api/admin/keys')
+export async function getApiKeys() {
+  const result = await requestPageJson<ClientApiKey>('/api/admin/keys')
+  return result.items
 }
 
 export function createApiKey(payload: CreateApiKeyPayload) {

@@ -200,8 +200,8 @@ function formatLatency(ms: number): string {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="h-95 w-full px-7 pt-5.5">
-    <header class="flex items-start justify-between">
+  <BaseCard as="article" :padded="false" class="min-h-95 w-full px-4 pt-5.5 pb-6 lg:px-7">
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="pt-0.5">
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">使用趋势</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
@@ -209,7 +209,9 @@ function formatLatency(ms: number): string {
         </p>
       </div>
 
-      <div class="grid h-9.5 w-61.5 grid-cols-3 gap-1 rounded-xl bg-(--cp-bg-muted) p-1">
+      <div
+        class="grid h-9.5 w-full max-w-61.5 grid-cols-3 gap-1 rounded-xl bg-(--cp-bg-muted) p-1 sm:w-61.5"
+      >
         <button
           v-for="tab in tabs"
           :key="tab"
@@ -227,7 +229,9 @@ function formatLatency(ms: number): string {
       </div>
     </header>
 
-    <div class="mt-4.75 grid grid-cols-[minmax(0,1fr)_minmax(150px,180px)] gap-7.5">
+    <div
+      class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
+    >
       <div
         v-loading="props.loading"
         class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white"

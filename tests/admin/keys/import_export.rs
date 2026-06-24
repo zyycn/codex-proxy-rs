@@ -19,7 +19,6 @@ async fn admin_client_keys_export_should_return_metadata_without_secret_material
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["requestId"], "req_api_key_export");
     assert_eq!(body["data"]["apiKeys"][0]["id"], key_id);
     assert_eq!(body["data"]["apiKeys"][0]["name"], "export-key");
     assert!(body["data"]["apiKeys"][0].get("plaintext").is_none());

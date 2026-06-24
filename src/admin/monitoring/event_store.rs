@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::admin::monitoring::events::{
     EventLevel, EventLog, EventLogStore, EventLogStoreError, EventLogStoreResult,
 };
-use crate::infra::json::{decode_cursor, encode_cursor, Page};
+use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
 
 /// SQLite 事件日志错误。
 #[derive(Debug, Error)]
@@ -121,6 +121,39 @@ impl SqliteEventLogStore {
         };
 
         Ok(Page { items, next_cursor })
+    }
+
+    /// 按页码查询事件日志。
+    pub async fn list_page(
+        &self,
+        filter: EventLogFilter,
+        page: u32,
+        page_size: u32,
+    ) -> SqliteEventLogStoreResult<NumberedPage<EventLog>> {
+        let page_size = page_size.clamp(1, 200);
+        let total = count_events(&self.pool, &filter).await?;
+        let offset = page_offset(page, page_size);
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from event_logs",
+        );
+        push_filter(&mut builder, &filter, None)?;
+        builder.push(" order by created_at desc, id desc limit ");
+        builder.push_bind(i64::from(page_size));
+        builder.push(" offset ");
+        builder.push_bind(offset.min(i64::MAX as u64) as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        let items = rows
+            .iter()
+            .map(event_from_row)
+            .collect::<SqliteEventLogStoreResult<Vec<_>>>()?;
+
+        Ok(NumberedPage {
+            items,
+            total,
+            page: page.max(1),
+            page_size,
+        })
     }
 
     /// 按 ID 读取事件日志。
@@ -269,6 +302,16 @@ async fn trim_to_capacity(pool: &SqlitePool, capacity: u32) -> SqliteEventLogSto
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+async fn count_events(
+    pool: &SqlitePool,
+    filter: &EventLogFilter,
+) -> SqliteEventLogStoreResult<u64> {
+    let mut builder = QueryBuilder::<Sqlite>::new("select count(*) from event_logs");
+    push_filter(&mut builder, filter, None)?;
+    let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
+    Ok(total.max(0) as u64)
 }
 
 fn push_filter(
@@ -553,6 +596,19 @@ impl AdminLogService {
     ) -> Result<Page<EventLog>, AdminLogError> {
         self.store
             .list(filter.into(), cursor, limit)
+            .await
+            .map_err(|_| AdminLogError::List)
+    }
+
+    /// 按页码查询日志。
+    pub async fn list_page(
+        &self,
+        page: u32,
+        page_size: u32,
+        filter: AdminLogFilter,
+    ) -> Result<NumberedPage<EventLog>, AdminLogError> {
+        self.store
+            .list_page(filter.into(), page, page_size)
             .await
             .map_err(|_| AdminLogError::List)
     }

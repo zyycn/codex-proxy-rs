@@ -13,7 +13,7 @@ use crate::{
     admin::monitoring::service::{AdminUsageError, AdminUsageRecord, AdminUsageSummary},
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
-    infra::json::{clamp_limit, Page},
+    infra::json::{clamp_limit, clamp_page, Page},
     runtime::state::AppState,
 };
 
@@ -23,6 +23,8 @@ use crate::{
 pub struct UsageStatsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
 }
 
 /// 管理端账号用量响应。
@@ -75,7 +77,36 @@ pub async fn usage_stats(
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
 
-    let limit = clamp_limit(query.limit.unwrap_or(50));
+    let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
+    let use_numbered_page = query.page.is_some() || query.page_size.is_some();
+
+    if use_numbered_page {
+        return match state
+            .services
+            .usage
+            .list_page(clamp_page(query.page.unwrap_or(1)), limit)
+            .await
+        {
+            Ok(page) => {
+                let page = crate::infra::json::NumberedPage {
+                    items: page
+                        .items
+                        .into_iter()
+                        .map(AdminUsageStatsData::from)
+                        .collect(),
+                    total: page.total,
+                    page: page.page,
+                    page_size: page.page_size,
+                };
+                Ok(AdminResponse::new(
+                    StatusCode::OK,
+                    AdminPageEnvelope::numbered(page, request_id),
+                ))
+            }
+            Err(error) => Err(usage_error(error, request_id)),
+        };
+    }
+
     match state.services.usage.list(query.cursor, limit).await {
         Ok(page) => {
             let page = Page {

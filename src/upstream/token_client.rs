@@ -82,11 +82,11 @@ fn classify_refresh_failure(status: StatusCode, body: &str) -> RefreshFailure {
     if lower.contains("quota") {
         return RefreshFailure::QuotaExhausted;
     }
-    if lower.contains("account has been deactivated")
-        || lower.contains("refresh_token_reused")
-        || lower.contains("banned")
-    {
+    if lower.contains("banned") || lower.contains("account has been deactivated") {
         return RefreshFailure::Banned;
+    }
+    if lower.contains("account disabled") {
+        return RefreshFailure::Disabled;
     }
     if status == StatusCode::BAD_REQUEST
         || status == StatusCode::UNAUTHORIZED
@@ -94,6 +94,7 @@ fn classify_refresh_failure(status: StatusCode, body: &str) -> RefreshFailure {
         || lower.contains("invalid_token")
         || lower.contains("access_denied")
         || lower.contains("refresh_token_expired")
+        || lower.contains("refresh_token_reused")
         || lower.contains("token_revoked")
     {
         return RefreshFailure::InvalidGrant;

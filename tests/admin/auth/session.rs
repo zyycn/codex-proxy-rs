@@ -94,7 +94,6 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     assert!(cookie.contains("HttpOnly"));
     assert!(cookie.contains("SameSite=Lax"));
     assert_eq!(body["code"], 200);
-    assert_eq!(body["requestId"], "req_login");
     assert!(body["data"]["expiresAt"].is_string());
 }
 

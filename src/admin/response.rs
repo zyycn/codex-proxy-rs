@@ -1,6 +1,6 @@
 //! 管理端响应封装与 From 转换。
 
-use crate::infra::json::Page;
+use crate::infra::json::{total_pages, NumberedPage, Page};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -13,7 +13,6 @@ pub struct AdminError {
     pub status: StatusCode,
     pub code: u32,
     pub message: String,
-    pub request_id: String,
 }
 
 impl AdminError {
@@ -21,13 +20,12 @@ impl AdminError {
         status: StatusCode,
         code: u32,
         message: impl Into<String>,
-        request_id: impl Into<String>,
+        _request_id: impl Into<String>,
     ) -> Self {
         Self {
             status,
             code,
             message: message.into(),
-            request_id: request_id.into(),
         }
     }
 }
@@ -40,7 +38,6 @@ impl IntoResponse for AdminError {
                 "code": self.code,
                 "message": self.message,
                 "data": null,
-                "requestId": self.request_id,
             })),
         )
             .into_response()
@@ -54,7 +51,6 @@ pub struct AdminEnvelope<T> {
     pub code: u32,
     pub message: String,
     pub data: T,
-    pub request_id: String,
 }
 
 impl<T> AdminEnvelope<T> {
@@ -62,13 +58,12 @@ impl<T> AdminEnvelope<T> {
         code: u32,
         message: impl Into<String>,
         data: T,
-        request_id: impl Into<String>,
+        _request_id: impl Into<String>,
     ) -> Self {
         Self {
             code,
             message: message.into(),
             data,
-            request_id: request_id.into(),
         }
     }
     pub fn ok(data: T, request_id: impl Into<String>) -> Self {
@@ -79,9 +74,28 @@ impl<T> AdminEnvelope<T> {
 /// 分页元数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PageMeta {
+pub struct CursorPageMeta {
     pub limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+/// 页码分页元数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NumberedPageMeta {
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u64,
+    pub total_pages: u32,
+}
+
+/// 分页元数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum PageMeta {
+    Cursor(CursorPageMeta),
+    Numbered(NumberedPageMeta),
 }
 
 /// 分页响应信封。
@@ -90,20 +104,49 @@ pub struct PageMeta {
 pub struct AdminPageEnvelope<T> {
     pub code: u32,
     pub message: String,
-    pub data: Vec<T>,
+    pub data: PageData<T>,
+}
+
+/// 分页响应数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageData<T> {
+    pub items: Vec<T>,
     pub page: PageMeta,
-    pub request_id: String,
 }
 
 impl<T> AdminPageEnvelope<T> {
-    pub fn ok(page: Page<T>, limit: u32, request_id: impl Into<String>) -> Self {
+    pub fn ok(page: Page<T>, limit: u32, _request_id: impl Into<String>) -> Self {
         let Page { items, next_cursor } = page;
         Self {
             code: 200,
             message: "OK".into(),
-            data: items,
-            page: PageMeta { limit, next_cursor },
-            request_id: request_id.into(),
+            data: PageData {
+                items,
+                page: PageMeta::Cursor(CursorPageMeta { limit, next_cursor }),
+            },
+        }
+    }
+
+    pub fn numbered(page: NumberedPage<T>, _request_id: impl Into<String>) -> Self {
+        let NumberedPage {
+            items,
+            total,
+            page,
+            page_size,
+        } = page;
+        Self {
+            code: 200,
+            message: "OK".into(),
+            data: PageData {
+                items,
+                page: PageMeta::Numbered(NumberedPageMeta {
+                    page,
+                    page_size,
+                    total,
+                    total_pages: total_pages(total, page_size),
+                }),
+            },
         }
     }
 }

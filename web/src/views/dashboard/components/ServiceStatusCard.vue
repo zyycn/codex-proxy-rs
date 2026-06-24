@@ -40,7 +40,7 @@ const valueToneClasses: Record<SemanticTone, string> = {
         <div
           v-for="item in items"
           :key="item.label"
-          class="grid h-12.5 w-full grid-cols-[24px_16px_1fr_1fr_1fr] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
+          class="grid h-12.5 w-full grid-cols-[22px_12px_1fr_1fr_1fr] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
         >
           <span
             class="inline-flex size-6 items-center justify-center rounded-lg"

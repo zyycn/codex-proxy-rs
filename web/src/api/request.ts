@@ -6,7 +6,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 
-import type { ApiEnvelope } from './types'
+import type { ApiEnvelope, ApiPageEnvelope, PaginatedResult } from './types'
 
 export class ApiError extends Error {
   constructor(
@@ -66,7 +66,7 @@ http.interceptors.response.use(
     const status = response?.status || 0
     const message = response?.data?.message || error.message || '请求失败'
     const code = response?.data?.code
-    const requestId = response?.headers?.['x-request-id'] || response?.data?.requestId
+    const requestId = response?.headers?.['x-request-id']
 
     switch (status) {
       case 401:
@@ -99,6 +99,16 @@ function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   )
 }
 
+function isApiPageEnvelope<T>(value: unknown): value is ApiPageEnvelope<T> {
+  return (
+    isApiEnvelope<unknown>(value) &&
+    typeof value.data === 'object' &&
+    value.data !== null &&
+    'items' in value.data &&
+    'page' in value.data
+  )
+}
+
 export async function requestJson<T = any, D = any>(
   url: string,
   config?: RequestConfig,
@@ -113,6 +123,25 @@ export async function requestJson<T = any, D = any>(
   }
 
   return response.data
+}
+
+export async function requestPageJson<T = any, D = any>(
+  url: string,
+  config?: RequestConfig,
+): Promise<PaginatedResult<T>> {
+  const response = await http.request<ApiPageEnvelope<T>, AxiosResponse<ApiPageEnvelope<T>>, D>({
+    url,
+    ...config,
+  })
+
+  if (!isApiPageEnvelope<T>(response.data)) {
+    throw new ApiError('分页响应格式无效', response.status)
+  }
+
+  return {
+    items: response.data.data.items,
+    page: response.data.data.page,
+  }
 }
 
 export function get<T = any>(url: string, params?: any, config?: RequestConfig): Promise<T> {
@@ -136,6 +165,7 @@ export { http }
 export default {
   http,
   request: requestJson,
+  requestPage: requestPageJson,
   get,
   post,
 }

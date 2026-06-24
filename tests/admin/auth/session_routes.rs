@@ -83,7 +83,6 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     assert!(cookie.starts_with("cpr_admin_session="));
     assert!(cookie.contains("HttpOnly"));
     assert_eq!(body["code"], 200);
-    assert_eq!(body["requestId"], "req_login");
 
     let logs_response = app
         .oneshot(

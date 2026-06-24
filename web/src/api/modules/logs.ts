@@ -1,4 +1,5 @@
-import { requestJson } from '../request'
+import { requestJson, requestPageJson } from '../request'
+import type { PaginatedResult } from '../types'
 
 export interface EventLog {
   id: string
@@ -22,8 +23,8 @@ export interface EventLog {
 }
 
 export interface LogsQuery {
-  limit?: number
-  cursor?: string
+  page?: number
+  pageSize?: number
   level?: EventLog['level']
   kind?: string
   accountId?: string
@@ -35,10 +36,17 @@ export interface LogsQuery {
   search?: string
 }
 
-export function getLogs(query: LogsQuery = {}) {
+export type LogsPageQuery = LogsQuery & {
+  page: number
+  pageSize: number
+}
+
+export function getLogs(query: LogsPageQuery): Promise<PaginatedResult<EventLog>>
+export function getLogs(query?: LogsQuery): Promise<EventLog[]>
+export async function getLogs(query: LogsQuery = {}) {
   const params = new URLSearchParams()
-  if (query.limit) params.set('limit', String(query.limit))
-  if (query.cursor) params.set('cursor', query.cursor)
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('pageSize', String(query.pageSize))
   if (query.level) params.set('level', query.level)
   if (query.kind) params.set('kind', query.kind)
   if (query.accountId) params.set('accountId', query.accountId)
@@ -50,7 +58,12 @@ export function getLogs(query: LogsQuery = {}) {
   if (query.search) params.set('search', query.search)
 
   const url = `/api/admin/logs${params.toString() ? `?${params}` : ''}`
-  return requestJson<EventLog[]>(url)
+  if (query.page || query.pageSize) {
+    return requestPageJson<EventLog>(url)
+  }
+
+  const result = await requestPageJson<EventLog>(url)
+  return result.items
 }
 
 export function getLogDetail(logId: string) {

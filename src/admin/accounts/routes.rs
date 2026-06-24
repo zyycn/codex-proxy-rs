@@ -16,7 +16,7 @@ use crate::{
     admin::auth::session::require_admin_session,
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
-    infra::json::{clamp_limit, Page},
+    infra::json::{clamp_limit, clamp_page, Page},
     runtime::state::AppState,
     upstream::accounts::store::StoredAccount,
 };
@@ -30,6 +30,9 @@ use crate::{
 pub struct AccountsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +232,32 @@ pub async fn accounts(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
-    let limit = clamp_limit(params.limit.unwrap_or(50));
+    let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
+    let use_numbered_page = params.page.is_some() || params.page_size.is_some();
+
+    if use_numbered_page {
+        return match state
+            .services
+            .admin_accounts
+            .list_page(clamp_page(params.page.unwrap_or(1)), limit, params.search)
+            .await
+        {
+            Ok(page) => {
+                let page = crate::infra::json::NumberedPage {
+                    items: page.items.into_iter().map(AdminAccountData::from).collect(),
+                    total: page.total,
+                    page: page.page,
+                    page_size: page.page_size,
+                };
+                Ok(AdminResponse::new(
+                    StatusCode::OK,
+                    AdminPageEnvelope::numbered(page, request_id),
+                ))
+            }
+            Err(error) => Err(account_error(error, request_id)),
+        };
+    }
+
     match state
         .services
         .admin_accounts
