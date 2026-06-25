@@ -1,4 +1,4 @@
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use codex_proxy_rs::{
     infra::{crypto::SecretBox, database::connect_sqlite},
     upstream::accounts::{
@@ -146,10 +146,16 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
         .fetch_one(&pool)
         .await
         .unwrap();
+    let updated_at: (String,) = sqlx::query_as("select updated_at from accounts where id = ?")
+        .bind("acct_a")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let loaded = repo.get("acct_a").await.unwrap().unwrap();
     assert_eq!(after.0, before.0);
     assert_eq!(loaded.status, AccountStatus::Disabled);
     assert_eq!(loaded.label.as_deref(), Some("work"));
+    assert!(updated_at.0.parse::<DateTime<Utc>>().is_ok());
 }
 
 #[tokio::test]

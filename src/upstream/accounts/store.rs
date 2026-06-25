@@ -1463,13 +1463,15 @@ impl SqliteAccountStore {
         account_id: &str,
         label: Option<String>,
     ) -> Result<bool, SqliteAccountStoreError> {
-        sqlx::query("UPDATE accounts SET label = ?1, updated_at = datetime('now') WHERE id = ?2")
+        let updated_at = Utc::now().to_rfc3339();
+        let result = sqlx::query("UPDATE accounts SET label = ?1, updated_at = ?2 WHERE id = ?3")
             .bind(&label)
+            .bind(updated_at)
             .bind(account_id)
             .execute(&self.pool)
             .await
             .map_err(SqliteAccountStoreError::Database)?;
-        Ok(true)
+        Ok(result.rows_affected() > 0)
     }
 
     /// 按 ID 删除账号。

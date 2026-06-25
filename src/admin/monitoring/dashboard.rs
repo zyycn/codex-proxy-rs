@@ -8,7 +8,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,7 +27,10 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
     http::middleware::request_id::RequestId,
-    infra::time::{china_datetime, china_datetime_rfc3339_str, china_relative_time, china_time},
+    infra::time::{
+        china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour, china_hour_start,
+        china_quarter_hour_start, china_relative_time, china_time,
+    },
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
 };
@@ -341,8 +344,25 @@ fn dashboard_cards(
     default_model: &str,
     default_service_tier: Option<&str>,
 ) -> DashboardCardsData {
-    let now = Utc::now();
-    let today_start = day_start(now);
+    dashboard_cards_at(
+        accounts,
+        summary,
+        logs,
+        default_model,
+        default_service_tier,
+        Utc::now(),
+    )
+}
+
+fn dashboard_cards_at(
+    accounts: &[Account],
+    summary: &AdminUsageSummary,
+    logs: &[EventLog],
+    default_model: &str,
+    default_service_tier: Option<&str>,
+    now: DateTime<Utc>,
+) -> DashboardCardsData {
+    let today_start = china_day_start(now);
     let yesterday_start = today_start - Duration::days(1);
     let billing_context = BillingContext {
         default_model,
@@ -407,8 +427,15 @@ fn dashboard_cards(
 }
 
 fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> DashboardTrendData {
-    let now = Utc::now();
-    let current_hour = hour_start(now);
+    dashboard_trend_data_at(logs, kind, Utc::now())
+}
+
+fn dashboard_trend_data_at(
+    logs: &[EventLog],
+    kind: DashboardTrendKind,
+    now: DateTime<Utc>,
+) -> DashboardTrendData {
+    let current_hour = china_hour_start(now);
     let start = current_hour - Duration::hours(23);
     let mut buckets = (0..24)
         .map(|index| {
@@ -421,7 +448,7 @@ fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> Dashboar
         if log.created_at < start || log.created_at > now {
             continue;
         }
-        let log_hour = hour_start(log.created_at);
+        let log_hour = china_hour_start(log.created_at);
         if let Some((_, bucket)) = buckets
             .iter_mut()
             .find(|(bucket_start, _)| *bucket_start == log_hour)
@@ -435,7 +462,7 @@ fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> Dashboar
         .map(|(bucket_start, bucket)| {
             let latency = bucket.avg_latency().unwrap_or(0);
             DashboardTrendPointData {
-                time: format!("{:02}", bucket_start.hour()),
+                time: format!("{:02}", china_hour(bucket_start)),
                 requests: bucket.requests,
                 input_tokens: bucket.input_tokens,
                 output_tokens: bucket.output_tokens,
@@ -464,8 +491,14 @@ fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> Dashboar
 }
 
 fn dashboard_health_timeline_data(logs: &[EventLog]) -> DashboardHealthTimelineData {
-    let now = Utc::now();
-    let current_slot = quarter_hour_start(now);
+    dashboard_health_timeline_data_at(logs, Utc::now())
+}
+
+fn dashboard_health_timeline_data_at(
+    logs: &[EventLog],
+    now: DateTime<Utc>,
+) -> DashboardHealthTimelineData {
+    let current_slot = china_quarter_hour_start(now);
     let start = current_slot
         - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (HEALTH_TIMELINE_SLOTS - 1));
     let mut buckets = (0..HEALTH_TIMELINE_SLOTS)
@@ -479,7 +512,7 @@ fn dashboard_health_timeline_data(logs: &[EventLog]) -> DashboardHealthTimelineD
         if log.created_at < start || log.created_at > now {
             continue;
         }
-        let log_slot = quarter_hour_start(log.created_at);
+        let log_slot = china_quarter_hour_start(log.created_at);
         if let Some((_, bucket)) = buckets
             .iter_mut()
             .find(|(bucket_start, _)| *bucket_start == log_slot)
@@ -988,26 +1021,53 @@ fn empty_usage_summary() -> AdminUsageSummary {
     }
 }
 
-fn day_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    value
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .expect("valid midnight")
-        .and_utc()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    value
-        .date_naive()
-        .and_hms_opt(value.hour(), 0, 0)
-        .expect("valid hour")
-        .and_utc()
-}
+    #[test]
+    fn dashboard_cards_should_use_china_day_boundary() {
+        let now = utc("2026-06-24T18:00:00Z");
+        let logs = vec![
+            usage_log_at("2026-06-24T16:30:00Z", 10),
+            usage_log_at("2026-06-24T15:30:00Z", 20),
+        ];
 
-fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
-    value
-        .date_naive()
-        .and_hms_opt(value.hour(), value.minute() / 15 * 15, 0)
-        .expect("valid quarter hour")
-        .and_utc()
+        let cards = dashboard_cards_at(&[], &empty_usage_summary(), &logs, "gpt-5.5", None, now);
+
+        assert_eq!(cards.traffic.today_requests, 1);
+        assert_eq!(cards.traffic.yesterday_requests, 1);
+        assert_eq!(cards.tokens.today_tokens, 10);
+        assert_eq!(cards.tokens.yesterday_tokens, 20);
+    }
+
+    #[test]
+    fn dashboard_trend_should_bucket_and_label_by_china_hour() {
+        let now = utc("2026-06-24T18:37:00Z");
+        let logs = vec![usage_log_at("2026-06-24T18:15:00Z", 10)];
+
+        let trend = dashboard_trend_data_at(&logs, DashboardTrendKind::Usage, now);
+        let last = trend.points.last().expect("trend should contain points");
+
+        assert_eq!(last.time, "02");
+        assert_eq!(last.requests, 1);
+    }
+
+    fn usage_log_at(created_at: &str, input_tokens: u64) -> EventLog {
+        let mut log = EventLog::new("v1.response", EventLevel::Info, "completed");
+        log.created_at = utc(created_at);
+        log.model = Some("gpt-5.5".to_string());
+        log.metadata = serde_json::json!({
+            "usage": {
+                "inputTokens": input_tokens,
+                "outputTokens": 0u64,
+                "cachedTokens": 0u64
+            }
+        });
+        log
+    }
+
+    fn utc(value: &str) -> DateTime<Utc> {
+        value.parse::<DateTime<Utc>>().expect("valid RFC3339 UTC")
+    }
 }

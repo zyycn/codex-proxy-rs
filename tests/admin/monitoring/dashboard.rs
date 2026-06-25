@@ -12,7 +12,9 @@ use codex_proxy_rs::{
             events::{EventLevel, EventLog},
         },
     },
-    infra::{crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher},
+    infra::{
+        crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher, time::china_day_start,
+    },
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
         services::{BackgroundTaskStores, Services},
@@ -68,16 +70,24 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_event
     )
     .await;
     let now = Utc::now();
-    let mut first = usage_log_with_tokens(now, 10);
+    let today_start = china_day_start(now);
+    let today_log_at = if now - today_start > Duration::minutes(1) {
+        today_start + Duration::minutes(1)
+    } else {
+        now - Duration::seconds(1)
+    };
+    let yesterday_log_at = today_start - Duration::minutes(1);
+
+    let mut first = usage_log_with_tokens(today_log_at, 10);
     first.latency_ms = Some(1_000);
     first.metadata["firstTokenMs"] = json!(200u64);
-    let mut second = usage_log_with_tokens(now, 20);
+    let mut second = usage_log_with_tokens(today_log_at, 20);
     second.latency_ms = Some(2_000);
     second.metadata["firstTokenMs"] = json!(400u64);
     store.append(&first).await.unwrap();
     store.append(&second).await.unwrap();
     store
-        .append(&usage_log_with_tokens(now - Duration::days(2), 30))
+        .append(&usage_log_with_tokens(yesterday_log_at, 30))
         .await
         .unwrap();
 
@@ -85,6 +95,10 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_event
 
     assert_eq!(body["data"]["cards"]["traffic"]["rpm"], 2);
     assert_eq!(body["data"]["cards"]["traffic"]["tpm"], 30);
+    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], 2);
+    assert_eq!(body["data"]["cards"]["traffic"]["yesterdayRequests"], 1);
+    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], 30);
+    assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokens"], 30);
     assert_eq!(
         body["data"]["cards"]["cache"]["firstTokenLatencyMs"]
             .as_u64()
