@@ -103,6 +103,30 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         }
     });
     store.append(&log).await.unwrap();
+    let mut second_gpt55_log = EventLog::new("response", EventLevel::Info, "ok");
+    second_gpt55_log.account_id = Some("acct_stats".to_string());
+    second_gpt55_log.model = Some("gpt-5.5".to_string());
+    second_gpt55_log.created_at = "2026-06-23T08:51:13Z".parse().unwrap();
+    second_gpt55_log.metadata = json!({
+        "usage": {
+            "inputTokens": 100u64,
+            "outputTokens": 20u64,
+            "cachedTokens": 10u64
+        }
+    });
+    store.append(&second_gpt55_log).await.unwrap();
+    let mut gpt5_log = EventLog::new("response", EventLevel::Info, "ok");
+    gpt5_log.account_id = Some("acct_stats".to_string());
+    gpt5_log.model = Some("gpt-5".to_string());
+    gpt5_log.created_at = "2026-06-23T08:52:13Z".parse().unwrap();
+    gpt5_log.metadata = json!({
+        "usage": {
+            "inputTokens": 200u64,
+            "outputTokens": 30u64,
+            "cachedTokens": 20u64
+        }
+    });
+    store.append(&gpt5_log).await.unwrap();
 
     let response = app
         .oneshot(
@@ -127,7 +151,10 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         .is_some_and(|value| value.contains(" / 7.0d")));
     assert_eq!(item["usage"]["createdTokens"], 100_000);
     assert_eq!(item["usage"]["readTokens"], 3_400_000);
-    assert_eq!(item["usage"]["modelTop"]["model"], "gpt-5.5");
+    assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 2);
+    assert_eq!(item["usage"]["models"][0]["model"], "gpt-5.5");
+    assert_eq!(item["usage"]["models"][0]["requestCount"], 2);
+    assert_eq!(item["usage"]["models"][1]["model"], "gpt-5");
 }
 
 #[tokio::test]

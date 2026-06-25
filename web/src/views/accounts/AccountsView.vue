@@ -497,7 +497,9 @@ onBeforeUnmount(() => {
                   :style="{ width: quotaBarWidth(row) }"
                 />
               </div>
-              <div class="mt-3 flex justify-between text-[12px] font-[620] text-(--cp-text-secondary)">
+              <div
+                class="mt-3 flex justify-between text-[12px] font-[620] text-(--cp-text-secondary)"
+              >
                 <span>重置时间: {{ row.quota.resetAtDisplay }}</span>
                 <span>窗口已用: {{ row.quota.windowUsedDisplay }}</span>
               </div>
@@ -507,9 +509,7 @@ onBeforeUnmount(() => {
               class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
             >
               <div>
-                <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">
-                  Token 结构
-                </h3>
+                <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">Token 结构</h3>
                 <div class="grid gap-2">
                   <div class="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
                     <span class="text-[12px] font-[700] text-green-700">输入 Tokens</span>
@@ -544,14 +544,16 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]">
+              <div
+                class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]"
+              >
                 <div class="mb-3 flex items-center justify-between">
-                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
-                    模型使用 Top 1
-                  </h3>
+                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">模型使用排行</h3>
                 </div>
 
-                <div class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]">
+                <div
+                  class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]"
+                >
                   <span>模型</span>
                   <span>调用</span>
                   <span>成功率</span>
@@ -562,19 +564,29 @@ onBeforeUnmount(() => {
                   <span>总花费</span>
                   <span>最近请求时间</span>
                 </div>
-                <div class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)">
-                  <span class="truncate">{{ row.usage.modelTop?.model || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.requestCountDisplay || '-' }}</span>
-                  <span class="text-amber-600">
-                    {{ row.usage.modelTop?.successRateDisplay || '-' }}
-                  </span>
-                  <span>{{ row.usage.modelTop?.inputTokensDisplay || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.outputTokensDisplay || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.cachedTokensDisplay || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.totalTokensDisplay || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.totalCostUsdDisplay || '-' }}</span>
-                  <span>{{ row.usage.modelTop?.lastUsedAtDisplay || '-' }}</span>
+                <div
+                  v-if="row.usage.models.length === 0"
+                  class="pt-3 text-[12px] font-[650] text-(--cp-text-muted)"
+                >
+                  -
                 </div>
+                <template v-else>
+                  <div
+                    v-for="model in row.usage.models"
+                    :key="model.model"
+                    class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)"
+                  >
+                    <span class="truncate">{{ model.model }}</span>
+                    <span>{{ model.requestCountDisplay }}</span>
+                    <span class="text-amber-600">{{ model.successRateDisplay }}</span>
+                    <span>{{ model.inputTokensDisplay }}</span>
+                    <span>{{ model.outputTokensDisplay }}</span>
+                    <span>{{ model.cachedTokensDisplay }}</span>
+                    <span>{{ model.totalTokensDisplay }}</span>
+                    <span>{{ model.totalCostUsdDisplay }}</span>
+                    <span>{{ model.lastUsedAtDisplay }}</span>
+                  </div>
+                </template>
               </div>
             </section>
           </div>

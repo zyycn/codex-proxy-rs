@@ -51,7 +51,7 @@ export interface AccountUsage {
   readTokensDisplay: string
   lastUsedAt?: string
   lastUsedAtDisplay: string
-  modelTop?: AccountModelUsage | null
+  models: AccountModelUsage[]
 }
 
 export interface AccountModelUsage {
