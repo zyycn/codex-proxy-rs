@@ -9,7 +9,9 @@ export interface ClientApiKey {
   prefix: string
   enabled: boolean
   createdAt: string
+  createdAtDisplay: string
   lastUsedAt?: string
+  lastUsedAtDisplay: string
 }
 
 export interface CreateApiKeyPayload {

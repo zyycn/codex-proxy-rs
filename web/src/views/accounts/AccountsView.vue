@@ -231,25 +231,6 @@ function handlePageSizeChange(nextPageSize: number) {
   void loadAccounts()
 }
 
-function formatDate(dateStr?: string): string {
-  if (!dateStr) return '—'
-  const date = new Date(dateStr)
-  if (Number.isNaN(date.getTime())) return dateStr
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
-    .format(date)
-    .replaceAll('/', '-')
-}
-
 onMounted(() => {
   loadAccounts()
 })
@@ -399,13 +380,13 @@ onBeforeUnmount(() => {
 
         <template #updatedAt="{ row }">
           <span class="text-(--cp-text-secondary)">
-            {{ formatDate(row.updatedAt) }}
+            {{ row.updatedAtDisplay }}
           </span>
         </template>
 
         <template #accessTokenExpiresAt="{ row }">
           <span class="text-(--cp-text-secondary)">
-            {{ formatDate(row.accessTokenExpiresAt) }}
+            {{ row.accessTokenExpiresAtDisplay || '—' }}
           </span>
         </template>
 

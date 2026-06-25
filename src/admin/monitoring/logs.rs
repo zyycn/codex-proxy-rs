@@ -11,14 +11,17 @@ use serde::{Deserialize, Serialize};
 use crate::{
     admin::monitoring::{
         event_store::{AdminLogError, AdminLogFilter, AdminLogState, AdminLogStateUpdate},
-        events::EventLevel,
+        events::{EventLevel, EventLog},
     },
     admin::{
         auth::session::require_admin_session,
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     },
     http::middleware::request_id::RequestId,
-    infra::json::{clamp_limit, clamp_page},
+    infra::{
+        json::{clamp_limit, clamp_page, NumberedPage, Page},
+        time::china_datetime,
+    },
     runtime::state::AppState,
 };
 
@@ -94,6 +97,17 @@ pub struct ClearLogsData {
     pub cleared: u64,
 }
 
+/// 管理端日志响应。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogData {
+    /// 原始日志字段。
+    #[serde(flatten)]
+    pub log: EventLog,
+    /// 中国时区展示时间。
+    pub created_at_display: String,
+}
+
 /// 更新日志状态请求。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,19 +142,33 @@ pub async fn logs(
             .list_page(clamp_page(page.unwrap_or(1)), limit, filter)
             .await
         {
-            Ok(page) => Ok(AdminResponse::new(
-                StatusCode::OK,
-                AdminPageEnvelope::numbered(page, request_id),
-            )),
+            Ok(page) => {
+                let page = NumberedPage {
+                    items: page.items.into_iter().map(LogData::from).collect(),
+                    total: page.total,
+                    page: page.page,
+                    page_size: page.page_size,
+                };
+                Ok(AdminResponse::new(
+                    StatusCode::OK,
+                    AdminPageEnvelope::numbered(page, request_id),
+                ))
+            }
             Err(error) => Err(log_error(error, request_id)),
         };
     }
 
     match state.services.logs.list(cursor, limit, filter).await {
-        Ok(page) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminPageEnvelope::ok(page, limit, request_id),
-        )),
+        Ok(page) => {
+            let page = Page {
+                items: page.items.into_iter().map(LogData::from).collect(),
+                next_cursor: page.next_cursor,
+            };
+            Ok(AdminResponse::new(
+                StatusCode::OK,
+                AdminPageEnvelope::ok(page, limit, request_id),
+            ))
+        }
         Err(error) => Err(log_error(error, request_id)),
     }
 }
@@ -157,7 +185,7 @@ pub async fn log_detail(
     match state.services.logs.get(&query.id).await {
         Ok(Some(log)) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(log, request_id),
+            AdminEnvelope::ok(LogData::from(log), request_id),
         )),
         Ok(None) => Err(AdminError::new(
             StatusCode::NOT_FOUND,
@@ -286,6 +314,15 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+impl From<EventLog> for LogData {
+    fn from(log: EventLog) -> Self {
+        Self {
+            created_at_display: china_datetime(&log.created_at),
+            log,
+        }
+    }
 }
 
 impl From<AdminLogState> for LogStateData {

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     http::middleware::request_id::RequestId,
-    infra::china_rfc3339,
+    infra::time::china_rfc3339,
     runtime::state::AppState,
 };
 
