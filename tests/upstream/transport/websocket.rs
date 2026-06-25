@@ -100,7 +100,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
     let mut request =
@@ -1043,7 +1043,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     let mut response = backend
@@ -1099,7 +1099,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     let mut response = backend
@@ -1192,7 +1192,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
 

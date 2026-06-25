@@ -29,7 +29,10 @@ struct FakeAccountStore;
 #[async_trait]
 impl AccountStore for FakeAccountStore {
     async fn list_pool_accounts(&self) -> AccountStoreResult<Vec<Account>> {
-        Ok(vec![Account::test("acct-1", AccountStatus::Active)])
+        Ok(vec![crate::support::accounts::test_account(
+            "acct-1",
+            AccountStatus::Active,
+        )])
     }
 
     async fn mark_quota_limited_until(

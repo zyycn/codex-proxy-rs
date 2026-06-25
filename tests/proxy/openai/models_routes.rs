@@ -20,7 +20,7 @@ use codex_proxy_rs::{
     runtime::state::AppState,
     upstream::accounts::token_refresh::RefreshLeaseStore,
     upstream::accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
-    upstream::fingerprint::{Fingerprint, FingerprintRepository},
+    upstream::fingerprint::FingerprintRepository,
 };
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
@@ -44,7 +44,7 @@ async fn models_route_should_reject_unknown_client_api_key() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -86,7 +86,7 @@ async fn models_route_should_accept_stored_client_api_key() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

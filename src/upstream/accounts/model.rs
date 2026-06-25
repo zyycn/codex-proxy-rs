@@ -1,6 +1,6 @@
 //! 账号领域模型。
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// 账号当前状态。
@@ -104,48 +104,6 @@ pub struct Account {
     pub added_at: String,
     /// 最近一次使用时间。
     pub last_used_at: Option<String>,
-}
-
-impl Account {
-    /// 构造测试默认账号。
-    pub fn test(id: &str, status: AccountStatus) -> Self {
-        Self {
-            id: id.to_string(),
-            email: None,
-            account_id: None,
-            user_id: None,
-            label: None,
-            plan_type: None,
-            access_token: format!("token-{id}"),
-            refresh_token: Some(format!("refresh-{id}")),
-            access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
-            next_refresh_at: None,
-            status,
-            quota_limit_reached: false,
-            quota_verify_required: false,
-            quota_cooldown_until: None,
-            cloudflare_cooldown_until: None,
-            request_count: 0,
-            empty_response_count: 0,
-            image_input_tokens: 0,
-            image_output_tokens: 0,
-            image_request_count: 0,
-            image_request_failed_count: 0,
-            window_request_count: 0,
-            window_input_tokens: 0,
-            window_output_tokens: 0,
-            window_cached_tokens: 0,
-            window_image_input_tokens: 0,
-            window_image_output_tokens: 0,
-            window_image_request_count: 0,
-            window_image_request_failed_count: 0,
-            window_started_at: None,
-            window_reset_at: None,
-            limit_window_seconds: None,
-            added_at: Utc::now().to_rfc3339(),
-            last_used_at: None,
-        }
-    }
 }
 
 /// 账号用量增量（来自 usage.rs）。

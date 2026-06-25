@@ -6,7 +6,6 @@ use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::quota::RuntimeQuotaRefreshService;
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
-use codex_proxy_rs::upstream::fingerprint::Fingerprint;
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
 use secrecy::SecretString;
 use serde_json::{json, Value};
@@ -78,7 +77,7 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
     let service = RuntimeQuotaRefreshService::new(store.clone(), Arc::new(codex));
 
@@ -141,7 +140,7 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
     let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex))
         .with_request_spacing(StdDuration::from_millis(200));

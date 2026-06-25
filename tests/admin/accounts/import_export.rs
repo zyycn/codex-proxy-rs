@@ -42,7 +42,7 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -100,7 +100,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -301,7 +301,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -490,7 +490,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

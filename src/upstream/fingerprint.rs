@@ -90,11 +90,6 @@ impl Fingerprint {
         }
     }
 
-    /// 返回测试用默认指纹。
-    pub fn default_for_tests() -> Self {
-        Self::default_codex_desktop()
-    }
-
     /// 返回默认请求头集合。
     pub fn default_headers() -> IndexMap<String, String> {
         let mut headers = IndexMap::new();

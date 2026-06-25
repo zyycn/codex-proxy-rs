@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn reset_usage_should_clear_runtime_counters_and_preserve_window_reset() {
     let now = fixed_time();
-    let mut account = Account::test("acct_a", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
     account.request_count = 7;
     account.empty_response_count = 2;
     account.image_input_tokens = 11;
@@ -59,7 +59,10 @@ fn account_pool_should_return_previous_slot_time_for_request_staggering() {
         max_concurrent_per_account: 2,
         ..AccountPoolOptions::default()
     });
-    pool.insert(Account::test("acct_a", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
 
     let first = pool
         .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
@@ -82,8 +85,14 @@ fn account_pool_should_report_capacity_summary() {
         max_concurrent_per_account: 2,
         ..AccountPoolOptions::default()
     });
-    pool.insert(Account::test("acct_a", AccountStatus::Active));
-    pool.insert(Account::test("acct_b", AccountStatus::Disabled));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Disabled,
+    ));
 
     pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
     let summary = pool.capacity_summary(now);
@@ -100,10 +109,12 @@ fn least_used_should_compare_request_count_when_only_one_account_has_window_rese
         rotation_strategy: RotationStrategy::LeastUsed,
         ..AccountPoolOptions::default()
     });
-    let mut reset_known = Account::test("reset_known", AccountStatus::Active);
+    let mut reset_known =
+        crate::support::accounts::test_account("reset_known", AccountStatus::Active);
     reset_known.window_reset_at = Some(now + Duration::seconds(30));
     reset_known.request_count = 10;
-    let mut reset_unknown = Account::test("reset_unknown", AccountStatus::Active);
+    let mut reset_unknown =
+        crate::support::accounts::test_account("reset_unknown", AccountStatus::Active);
     reset_unknown.request_count = 2;
     pool.insert(reset_known);
     pool.insert(reset_unknown);
@@ -119,7 +130,7 @@ fn least_used_should_compare_request_count_when_only_one_account_has_window_rese
 fn acquire_should_mark_runtime_usage_window() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
-    let mut account = Account::test("acct_a", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
     account.limit_window_seconds = Some(60);
     pool.insert(account);
 
@@ -144,7 +155,10 @@ fn acquire_should_mark_runtime_usage_window() {
 fn record_window_token_usage_should_accumulate_runtime_window_tokens() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
-    pool.insert(Account::test("acct_a", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
 
     pool.record_window_token_usage(
         "acct_a",

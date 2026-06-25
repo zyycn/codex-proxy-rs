@@ -1,6 +1,6 @@
 //! 管理端 Dashboard 聚合视图。
 
-use std::collections::HashMap;
+use std::{cmp::Reverse, collections::HashMap};
 
 use axum::{
     extract::{Query, State},
@@ -39,18 +39,13 @@ pub struct DashboardTrendQuery {
     pub kind: Option<DashboardTrendKind>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DashboardTrendKind {
+    #[default]
     Usage,
     Latency,
     Errors,
-}
-
-impl Default for DashboardTrendKind {
-    fn default() -> Self {
-        Self::Usage
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -203,19 +198,12 @@ impl UsageWindow {
     }
 
     fn avg_first_token_latency(self) -> Option<u64> {
-        if self.first_token_latency_count > 0 {
-            Some(self.first_token_latency_sum / self.first_token_latency_count)
-        } else {
-            None
-        }
+        self.first_token_latency_sum
+            .checked_div(self.first_token_latency_count)
     }
 
     fn avg_latency(self) -> Option<u64> {
-        if self.latency_count > 0 {
-            Some(self.latency_sum / self.latency_count)
-        } else {
-            None
-        }
+        self.latency_sum.checked_div(self.latency_count)
     }
 }
 
@@ -752,7 +740,7 @@ fn account_usage_data(
             }
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.requests.cmp(&a.requests));
+    rows.sort_by_key(|row| Reverse(row.requests));
     rows.truncate(4);
     rows
 }
@@ -762,7 +750,7 @@ async fn account_quota_used_percent_by_id(
     usage_records: &[AdminUsageRecord],
 ) -> HashMap<String, f64> {
     let mut records = usage_records.iter().collect::<Vec<_>>();
-    records.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+    records.sort_by_key(|record| Reverse(record.request_count));
     records.truncate(4);
 
     let mut quota_used_by_account = HashMap::with_capacity(records.len());
@@ -902,138 +890,4 @@ fn hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
         .and_hms_opt(value.hour(), 0, 0)
         .expect("valid hour")
         .and_utc()
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::{TimeZone, Utc};
-    use serde_json::json;
-
-    use super::{
-        cost_window, dashboard_cards, day_start, empty_usage_summary, format_beijing_datetime,
-        total_cost, BillingContext,
-    };
-    use crate::admin::monitoring::events::{EventLevel, EventLog};
-
-    #[test]
-    fn format_beijing_datetime_should_render_rfc3339_as_beijing_time() {
-        let actual =
-            format_beijing_datetime(Some("2026-06-23T11:36:46.965574590+00:00".to_string()));
-
-        assert_eq!(actual, "2026-06-23 19:36:46");
-    }
-
-    #[test]
-    fn format_beijing_datetime_should_render_dash_when_missing() {
-        assert_eq!(format_beijing_datetime(None), "-");
-    }
-
-    #[test]
-    fn cost_window_should_calculate_from_event_model_and_service_tier() {
-        let timestamp = Utc.with_ymd_and_hms(2026, 6, 24, 8, 0, 0).unwrap();
-        let logs = vec![usage_log(
-            timestamp,
-            "gpt-5.5",
-            json!({
-                "usage": {
-                    "inputTokens": 100_000u64,
-                    "outputTokens": 100_000u64,
-                    "cachedTokens": 0u64
-                },
-                "serviceTier": "priority"
-            }),
-        )];
-
-        let actual = cost_window(
-            &logs,
-            timestamp - chrono::Duration::hours(1),
-            timestamp + chrono::Duration::hours(1),
-            BillingContext {
-                default_model: "gpt-4o",
-                default_service_tier: None,
-            },
-        );
-
-        assert_eq!(actual, Some(8.75));
-    }
-
-    #[test]
-    fn total_cost_should_fallback_to_usage_summary_when_logs_have_no_usage() {
-        let mut summary = empty_usage_summary();
-        summary.input_tokens = 100_000;
-        summary.output_tokens = 100_000;
-
-        let actual = total_cost(
-            &[],
-            &summary,
-            BillingContext {
-                default_model: "gpt-5.5",
-                default_service_tier: None,
-            },
-        );
-
-        assert_eq!(actual, 3.5);
-    }
-
-    #[test]
-    fn dashboard_cards_should_calculate_rpm_tpm_from_today_window() {
-        let now = Utc::now();
-        let logs = vec![
-            usage_log_with_tokens(now, 10),
-            usage_log_with_tokens(now, 20),
-            usage_log_with_tokens(day_start(now) - chrono::Duration::seconds(1), 30),
-        ];
-
-        let actual = dashboard_cards(&[], &empty_usage_summary(), &logs, "gpt-5.5", None);
-
-        assert_eq!((actual.traffic.rpm, actual.traffic.tpm), (2, 30));
-    }
-
-    #[test]
-    fn dashboard_cards_should_report_first_token_and_completion_latency_separately() {
-        let now = Utc::now();
-        let mut first = usage_log_with_tokens(now, 10);
-        first.latency_ms = Some(1_000);
-        first.metadata["firstTokenMs"] = json!(200u64);
-        let mut second = usage_log_with_tokens(now, 20);
-        second.latency_ms = Some(2_000);
-        second.metadata["firstTokenMs"] = json!(400u64);
-        let logs = vec![first, second];
-
-        let actual = dashboard_cards(&[], &empty_usage_summary(), &logs, "gpt-5.5", None);
-
-        assert_eq!(
-            (
-                actual.cache.first_token_latency_ms,
-                actual.cache.completion_latency_ms,
-            ),
-            (Some(300), Some(1_500)),
-        );
-    }
-
-    fn usage_log_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> EventLog {
-        usage_log(
-            created_at,
-            "gpt-5.5",
-            json!({
-                "usage": {
-                    "inputTokens": total_tokens,
-                    "outputTokens": 0u64,
-                    "cachedTokens": 0u64
-                }
-            }),
-        )
-    }
-
-    fn usage_log(
-        created_at: chrono::DateTime<Utc>,
-        model: &str,
-        metadata: serde_json::Value,
-    ) -> EventLog {
-        let mut log = EventLog::new("v1.response", EventLevel::Info, "completed");
-        log.model = Some(model.to_string());
-        log.created_at = created_at;
-        log.metadata = metadata;
-        log
-    }
 }

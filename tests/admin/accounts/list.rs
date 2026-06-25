@@ -24,7 +24,7 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

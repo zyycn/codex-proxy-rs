@@ -106,7 +106,7 @@ async fn codex_backend_client_probe_should_return_models_endpoint_status() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     let probe = client
@@ -146,7 +146,7 @@ async fn codex_backend_client_should_cap_non_success_error_body_at_one_mib() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
     let mut request =
         codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(

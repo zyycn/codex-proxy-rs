@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::upstream::accounts::{
-    model::{Account, AccountStatus},
+    model::AccountStatus,
     pool::{
         AccountAcquireRequest, AccountPool, AccountPoolOptions, AccountWindowUsageDelta,
         RotationStrategy,

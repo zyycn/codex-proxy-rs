@@ -35,7 +35,7 @@ use codex_proxy_rs::{
     upstream::accounts::{
         cookies::SqliteCookieStore, store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
     },
-    upstream::fingerprint::{Fingerprint, FingerprintRepository},
+    upstream::fingerprint::FingerprintRepository,
 };
 use futures::{SinkExt, StreamExt};
 use secrecy::SecretString;
@@ -257,7 +257,7 @@ fn test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
     let services = Services::with_installation_id(
         &config,
         stores,
-        Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
         Some(installation_id),
     );
     AppState { config, services }

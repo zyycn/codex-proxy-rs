@@ -54,7 +54,7 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -143,7 +143,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-busy");
@@ -214,7 +214,7 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
     let first_request = pooled_websocket_request("conversation-cap-one");
@@ -320,7 +320,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_during_maintenan
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -393,7 +393,7 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-no-pong");
@@ -466,7 +466,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let request = pooled_websocket_request("conversation-gc");
@@ -569,7 +569,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -674,7 +674,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -778,7 +778,7 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -882,7 +882,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::clone(&pool));
     let mut request =
@@ -977,7 +977,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
     let mut request =

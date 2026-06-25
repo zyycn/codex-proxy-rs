@@ -53,7 +53,7 @@ async fn admin_login_should_issue_http_only_session_cookie() {
             pool.clone(),
         ),
     };
-    let fingerprint = codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,
@@ -137,7 +137,7 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
             pool.clone(),
         ),
     };
-    let fingerprint = codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,

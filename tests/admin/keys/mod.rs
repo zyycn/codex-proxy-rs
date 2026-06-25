@@ -20,7 +20,7 @@ use codex_proxy_rs::{
     runtime::state::AppState,
     upstream::accounts::token_refresh::RefreshLeaseStore,
     upstream::accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
-    upstream::fingerprint::{Fingerprint, FingerprintRepository},
+    upstream::fingerprint::FingerprintRepository,
 };
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
@@ -50,7 +50,7 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

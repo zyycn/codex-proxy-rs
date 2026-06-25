@@ -227,7 +227,7 @@ fn backend_models(model_id: &str) -> Vec<BackendModelEntry> {
 }
 
 fn active_account(id: &str, plan_type: &str) -> Account {
-    let mut account = Account::test(id, AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account(id, AccountStatus::Active);
     account.account_id = Some(format!("upstream-{id}"));
     account.plan_type = Some(plan_type.to_string());
     account
