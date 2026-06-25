@@ -331,18 +331,65 @@ pub fn rate_limit_quota(
     plan_type: Option<&str>,
     existing_quota: Option<&Value>,
 ) -> Value {
-    let mut quota = json!({
-        "plan_type": plan_type.unwrap_or("unknown"),
-        "rate_limit": quota_window(rate_limits.primary, true),
-        "secondary_rate_limit": rate_limits.secondary.map(|window| quota_window(Some(window), false)).unwrap_or(Value::Null),
-        "code_review_rate_limit": rate_limits.code_review.map(code_review_quota_window).unwrap_or(Value::Null),
-    });
-
-    if let Some(credits) = existing_quota.and_then(|quota| quota.get("credits")) {
-        quota["credits"] = credits.clone();
+    let mut snapshots = Vec::new();
+    if let Some(snapshot) = quota_snapshot_from_windows(
+        "core",
+        None,
+        None,
+        rate_limits.primary,
+        rate_limits.secondary,
+        None,
+        None,
+    ) {
+        snapshots.push(snapshot);
     }
 
-    quota
+    let has_code_review_update = rate_limits.code_review.is_some();
+    if let Some(details) = rate_limits.code_review {
+        if let Some(snapshot) = quota_snapshot_from_windows(
+            "code_review",
+            Some("code_review"),
+            None,
+            details.primary,
+            details.secondary,
+            details.allowed,
+            details.limit_reached,
+        ) {
+            snapshots.push(snapshot);
+        }
+    }
+
+    if let Some(existing_quota) = existing_quota {
+        if let Some(existing_snapshots) = existing_quota.get("snapshots").and_then(Value::as_array)
+        {
+            for snapshot in existing_snapshots {
+                let source = snapshot.get("source").and_then(Value::as_str);
+                if source == Some("additional")
+                    || (!has_code_review_update && source == Some("code_review"))
+                {
+                    snapshots.push(snapshot.clone());
+                }
+            }
+        }
+    }
+
+    let monthly_limit = monthly_limit_from_snapshots(&snapshots)
+        .or_else(|| existing_quota.and_then(|quota| quota.get("monthly_limit").cloned()))
+        .unwrap_or(Value::Null);
+    let credits = existing_quota
+        .and_then(|quota| quota.get("credits").cloned())
+        .unwrap_or(Value::Null);
+    let spend_control = existing_quota
+        .and_then(|quota| quota.get("spend_control").cloned())
+        .unwrap_or(Value::Null);
+
+    json!({
+        "plan_type": plan_type.unwrap_or("unknown"),
+        "snapshots": snapshots,
+        "monthly_limit": monthly_limit,
+        "credits": credits,
+        "spend_control": spend_control,
+    })
 }
 
 /// 将限流状态转换回 HTTP 头键值对。
@@ -559,37 +606,78 @@ fn parse_window_from_object(value: &Value) -> Option<RateLimitWindow> {
     })
 }
 
-fn quota_window(window: Option<RateLimitWindow>, include_allowed: bool) -> Value {
+fn quota_snapshot_from_windows(
+    source: &str,
+    limit_name: Option<&str>,
+    metered_feature: Option<&str>,
+    primary: Option<RateLimitWindow>,
+    secondary: Option<RateLimitWindow>,
+    allowed: Option<bool>,
+    limit_reached: Option<bool>,
+) -> Option<Value> {
+    if primary.is_none() && secondary.is_none() {
+        return None;
+    }
+    let blocked = limit_reached.unwrap_or_else(|| {
+        allowed.is_some_and(|allowed| !allowed)
+            || primary.is_some_and(|window| window.used_percent >= 100.0)
+            || secondary.is_some_and(|window| window.used_percent >= 100.0)
+    });
+    Some(json!({
+        "source": source,
+        "limit_name": limit_name,
+        "metered_feature": metered_feature,
+        "allowed": allowed,
+        "limit_reached": limit_reached,
+        "blocked": blocked,
+        "primary": quota_window(primary),
+        "secondary": quota_window(secondary),
+    }))
+}
+
+fn quota_window(window: Option<RateLimitWindow>) -> Value {
     let Some(window) = window else {
         return Value::Null;
     };
     let limit_reached = window.used_percent >= 100.0;
-    let mut value = json!({
+    json!({
         "used_percent": window.used_percent,
         "remaining_percent": remaining_percent(window.used_percent),
         "reset_at": window.reset_at,
-        "limit_window_seconds": window.limit_window_seconds(),
+        "window_minutes": window.window_minutes,
         "limit_reached": limit_reached,
-    });
-    if include_allowed {
-        value["allowed"] = Value::Bool(!limit_reached);
-    }
-    value
+    })
 }
 
-fn code_review_quota_window(details: RateLimitDetails) -> Value {
-    let used_percent = details.primary.map(|window| window.used_percent);
-    let limit_reached = details
-        .limit_reached
-        .unwrap_or_else(|| used_percent.is_some_and(|used| used >= 100.0));
-    json!({
-        "allowed": details.allowed.unwrap_or(true),
-        "limit_reached": limit_reached,
-        "used_percent": used_percent,
-        "remaining_percent": used_percent.map(remaining_percent),
-        "reset_at": details.primary.and_then(|window| window.reset_at),
-        "limit_window_seconds": details.primary.and_then(RateLimitWindow::limit_window_seconds),
-    })
+fn monthly_limit_from_snapshots(snapshots: &[Value]) -> Option<Value> {
+    for snapshot in snapshots {
+        if snapshot.get("source").and_then(Value::as_str) != Some("core") {
+            continue;
+        }
+        for key in ["primary", "secondary"] {
+            let Some(bucket) = snapshot.get(key).filter(|value| !value.is_null()) else {
+                continue;
+            };
+            if bucket
+                .get("window_minutes")
+                .and_then(Value::as_u64)
+                .is_some_and(|minutes| minutes.abs_diff(43_200) <= 2_160)
+            {
+                return Some(json!({
+                    "key": "core-monthly",
+                    "source": "rate_limit",
+                    "used_percent": bucket.get("used_percent").cloned().unwrap_or(Value::Null),
+                    "remaining_percent": bucket.get("remaining_percent").cloned().unwrap_or(Value::Null),
+                    "reset_at": bucket.get("reset_at").cloned().unwrap_or(Value::Null),
+                    "window_minutes": bucket.get("window_minutes").cloned().unwrap_or(Value::Null),
+                    "limit_reached": bucket.get("limit_reached").cloned().unwrap_or(Value::Bool(false)),
+                    "used_credits": Value::Null,
+                    "limit_credits": Value::Null,
+                }));
+            }
+        }
+    }
+    None
 }
 
 fn remaining_percent(used_percent: f64) -> i64 {

@@ -271,8 +271,9 @@ async fn responses_should_passively_cache_rate_limit_headers() {
     .await
     .unwrap();
     let quota: Value = serde_json::from_str(&stored.0).unwrap();
-    assert_eq!(quota["rate_limit"]["limit_reached"], true);
-    assert_eq!(quota["rate_limit"]["reset_at"], reset_at);
+    assert_eq!(quota["snapshots"][0]["source"], "core");
+    assert_eq!(quota["snapshots"][0]["primary"]["limit_reached"], true);
+    assert_eq!(quota["snapshots"][0]["primary"]["reset_at"], reset_at);
     assert_eq!(quota["credits"]["balance"], 12);
     assert_eq!(stored.1, 1);
     assert!(stored.2.is_some());

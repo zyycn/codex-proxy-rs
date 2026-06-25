@@ -36,6 +36,9 @@ use crate::{
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
+const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
+const WEEK_WINDOW_SECONDS: u64 = 604_800;
+const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
 
 // ============================================================================
 // Query / Request types
@@ -161,21 +164,28 @@ impl AdminAccountData {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminAccountQuotaData {
+    refreshed_at_display: String,
+    windows: Vec<AdminAccountQuotaWindowData>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccountQuotaWindowData {
+    key: String,
+    group: String,
+    window_seconds: Option<u64>,
+    label_display: String,
     used_percent: Option<f64>,
     used_percent_display: String,
     reset_at_display: String,
-    refreshed_at_display: String,
     window_used_display: String,
 }
 
 impl Default for AdminAccountQuotaData {
     fn default() -> Self {
         Self {
-            used_percent: None,
-            used_percent_display: "-".to_string(),
-            reset_at_display: "-".to_string(),
             refreshed_at_display: "-".to_string(),
-            window_used_display: "-".to_string(),
+            windows: Vec::new(),
         }
     }
 }
@@ -1024,19 +1034,61 @@ fn model_usage_data(usage: ModelUsageAggregate) -> AdminAccountModelUsageData {
 
 fn quota_data(quota_json: &str, fetched_at: Option<DateTime<Utc>>) -> AdminAccountQuotaData {
     let quota = serde_json::from_str::<Value>(quota_json).unwrap_or(Value::Null);
-    let used_percent = quota
-        .pointer("/rate_limit/used_percent")
-        .and_then(number_value)
-        .map(|value| value.clamp(0.0, 100.0));
-    let reset_at = quota
-        .pointer("/rate_limit/reset_at")
-        .and_then(Value::as_i64)
-        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0));
-    let window_seconds = quota
-        .pointer("/rate_limit/limit_window_seconds")
-        .and_then(Value::as_u64);
+    let windows = quota_windows(&quota);
 
     AdminAccountQuotaData {
+        refreshed_at_display: china_relative_time(fetched_at, Utc::now()),
+        windows,
+    }
+}
+
+fn quota_windows(quota: &Value) -> Vec<AdminAccountQuotaWindowData> {
+    let mut windows = Vec::new();
+
+    let has_monthly_limit = push_monthly_quota_window(&mut windows, quota.get("monthly_limit"));
+    if let Some(snapshots) = quota.get("snapshots").and_then(Value::as_array) {
+        for snapshot in snapshots {
+            push_snapshot_quota_windows(&mut windows, snapshot, has_monthly_limit);
+        }
+    }
+
+    windows.sort_by_key(quota_window_sort_key);
+    windows
+}
+
+fn push_monthly_quota_window(
+    windows: &mut Vec<AdminAccountQuotaWindowData>,
+    monthly_limit: Option<&Value>,
+) -> bool {
+    let Some(monthly_limit) = monthly_limit.filter(|value| !value.is_null()) else {
+        return false;
+    };
+    let used_percent = monthly_limit
+        .get("used_percent")
+        .and_then(number_value)
+        .map(|value| value.clamp(0.0, 100.0));
+    let reset_at = monthly_limit
+        .get("reset_at")
+        .and_then(Value::as_i64)
+        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0));
+    let window_seconds = monthly_limit
+        .get("window_minutes")
+        .and_then(Value::as_u64)
+        .and_then(|minutes| minutes.checked_mul(60))
+        .or(Some(MONTH_WINDOW_SECONDS));
+    if used_percent.is_none() && reset_at.is_none() {
+        return false;
+    }
+
+    let key = monthly_limit
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or("monthly");
+    windows.push(AdminAccountQuotaWindowData {
+        key: quota_key_segment(key),
+        group: "monthly".to_string(),
+        window_seconds,
+        label_display: "月限额".to_string(),
         used_percent,
         used_percent_display: used_percent
             .map(format_percent)
@@ -1045,8 +1097,210 @@ fn quota_data(quota_json: &str, fetched_at: Option<DateTime<Utc>>) -> AdminAccou
             .as_ref()
             .map(china_datetime)
             .unwrap_or_else(|| "-".to_string()),
-        refreshed_at_display: china_relative_time(fetched_at, Utc::now()),
         window_used_display: quota_window_used_display(reset_at, window_seconds),
+    });
+    true
+}
+
+fn push_snapshot_quota_windows(
+    windows: &mut Vec<AdminAccountQuotaWindowData>,
+    snapshot: &Value,
+    skip_core_monthly: bool,
+) {
+    let source = snapshot
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("quota");
+    let source_key = snapshot_source_key(source, snapshot);
+    let label_prefix = snapshot_label(snapshot);
+    for role in ["primary", "secondary"] {
+        let Some(window) = snapshot.get(role).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let window_seconds = window
+            .get("window_minutes")
+            .and_then(Value::as_u64)
+            .and_then(|minutes| minutes.checked_mul(60));
+        if skip_core_monthly
+            && source == "core"
+            && window_seconds
+                .is_some_and(|seconds| quota_window_matches(seconds, MONTH_WINDOW_SECONDS))
+        {
+            continue;
+        }
+        push_quota_window(
+            windows,
+            &source_key,
+            role,
+            label_prefix.as_deref(),
+            Some(window),
+        );
+    }
+}
+
+fn push_quota_window(
+    windows: &mut Vec<AdminAccountQuotaWindowData>,
+    source_key: &str,
+    role: &str,
+    label_prefix: Option<&str>,
+    window: Option<&Value>,
+) {
+    let Some(window) = window.filter(|value| !value.is_null()) else {
+        return;
+    };
+    let used_percent = window
+        .get("used_percent")
+        .and_then(number_value)
+        .map(|value| value.clamp(0.0, 100.0));
+    let reset_at = window
+        .get("reset_at")
+        .and_then(Value::as_i64)
+        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0));
+    let window_seconds = window
+        .get("window_minutes")
+        .and_then(Value::as_u64)
+        .and_then(|minutes| minutes.checked_mul(60));
+    if used_percent.is_none() && reset_at.is_none() && window_seconds.is_none() {
+        return;
+    }
+    let base_label = quota_window_label_display(window_seconds);
+    let label_display = label_prefix
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("{} · {}", value.trim(), base_label))
+        .unwrap_or(base_label);
+
+    windows.push(AdminAccountQuotaWindowData {
+        key: unique_quota_window_key(windows, source_key, role, window_seconds),
+        group: quota_window_group(window_seconds).to_string(),
+        window_seconds,
+        label_display,
+        used_percent,
+        used_percent_display: used_percent
+            .map(format_percent)
+            .unwrap_or_else(|| "-".to_string()),
+        reset_at_display: reset_at
+            .as_ref()
+            .map(china_datetime)
+            .unwrap_or_else(|| "-".to_string()),
+        window_used_display: quota_window_used_display(reset_at, window_seconds),
+    });
+}
+
+fn snapshot_source_key(source: &str, snapshot: &Value) -> String {
+    let label = snapshot
+        .get("limit_name")
+        .and_then(Value::as_str)
+        .or_else(|| snapshot.get("metered_feature").and_then(Value::as_str))
+        .unwrap_or(source);
+    format!("{}-{}", quota_key_segment(source), quota_key_segment(label))
+}
+
+fn snapshot_label(snapshot: &Value) -> Option<String> {
+    let source = snapshot.get("source").and_then(Value::as_str);
+    if source == Some("core") {
+        return None;
+    }
+    let label = snapshot
+        .get("limit_name")
+        .and_then(Value::as_str)
+        .or_else(|| snapshot.get("metered_feature").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if label.eq_ignore_ascii_case("codex") {
+        return None;
+    }
+    if is_review_limit_label(Some(label)) {
+        return Some("代码审查".to_string());
+    }
+    Some(label.to_string())
+}
+
+fn unique_quota_window_key(
+    windows: &[AdminAccountQuotaWindowData],
+    source_key: &str,
+    role: &str,
+    window_seconds: Option<u64>,
+) -> String {
+    let bucket = quota_window_key_part(window_seconds).unwrap_or(role);
+    let key = format!("{source_key}-{bucket}");
+    if windows.iter().any(|window| window.key == key) {
+        format!("{key}-{role}")
+    } else {
+        key
+    }
+}
+
+fn quota_window_key_part(window_seconds: Option<u64>) -> Option<&'static str> {
+    match window_seconds {
+        Some(seconds) if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
+            Some("five-hour")
+        }
+        Some(seconds) if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => Some("weekly"),
+        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => Some("monthly"),
+        _ => None,
+    }
+}
+
+fn quota_key_segment(value: &str) -> String {
+    let mut segment = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            segment.push(ch.to_ascii_lowercase());
+        } else if !segment.ends_with('-') {
+            segment.push('-');
+        }
+    }
+    let segment = segment.trim_matches('-');
+    if segment.is_empty() {
+        "quota".to_string()
+    } else {
+        segment.to_string()
+    }
+}
+
+fn quota_window_sort_key(window: &AdminAccountQuotaWindowData) -> (u8, u64, String) {
+    let group_order = match window.group.as_str() {
+        "monthly" => 0,
+        "shortTerm" => 1,
+        _ => 2,
+    };
+    (
+        group_order,
+        window.window_seconds.unwrap_or(0),
+        window.key.clone(),
+    )
+}
+
+fn quota_window_group(window_seconds: Option<u64>) -> &'static str {
+    match window_seconds {
+        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => "monthly",
+        Some(seconds)
+            if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS)
+                || quota_window_matches(seconds, WEEK_WINDOW_SECONDS) =>
+        {
+            "shortTerm"
+        }
+        _ => "other",
+    }
+}
+
+fn quota_window_matches(actual: u64, expected: u64) -> bool {
+    actual > 0 && actual.abs_diff(expected) <= expected / 20
+}
+
+fn quota_window_label_display(window_seconds: Option<u64>) -> String {
+    let Some(window_seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
+        return "额度".to_string();
+    };
+    match window_seconds {
+        seconds if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
+            "5小时限额".to_string()
+        }
+        seconds if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => "周限额".to_string(),
+        seconds if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => "月限额".to_string(),
+        seconds if seconds % 86_400 == 0 => format!("{}天限额", seconds / 86_400),
+        seconds if seconds % 3_600 == 0 => format!("{}小时限额", seconds / 3_600),
+        seconds => format!("{}分钟限额", seconds.div_ceil(60)),
     }
 }
 
@@ -1091,6 +1345,21 @@ fn number_value(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+        .filter(|value| value.is_finite())
+}
+
+fn is_review_limit_label(value: Option<&str>) -> bool {
+    let normalized = value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_");
+    normalized == "review"
+        || normalized == "code_review"
+        || normalized == "codex_review"
+        || normalized == "codex_code_review"
+        || normalized.contains("code_review")
+        || normalized.contains("codex_review")
 }
 
 fn nonnegative_i64_to_u64(value: i64) -> u64 {

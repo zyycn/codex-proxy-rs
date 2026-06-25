@@ -232,10 +232,45 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
         },
     )
     .await;
-    sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ?, updated_at = ? where id = ?")
-        .bind(json!({"rate_limit": {"used_percent": 85, "reset_at": 1770000100}, "secondary_rate_limit": {"used_percent": 91, "reset_at": 1770000200}}).to_string())
-        .bind("2026-06-13T00:00:00Z").bind("2026-06-13T00:00:00Z").bind("acct_warn")
-        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "update accounts set quota_json = ?, quota_fetched_at = ?, updated_at = ? where id = ?",
+    )
+    .bind(
+        json!({
+            "snapshots": [{
+                "source": "core",
+                "limit_name": null,
+                "metered_feature": null,
+                "allowed": true,
+                "limit_reached": false,
+                "blocked": false,
+                "primary": {
+                    "used_percent": 85,
+                    "remaining_percent": 15,
+                    "reset_at": 1770000100,
+                    "window_minutes": 300,
+                    "limit_reached": false
+                },
+                "secondary": {
+                    "used_percent": 91,
+                    "remaining_percent": 9,
+                    "reset_at": 1770000200,
+                    "window_minutes": 10080,
+                    "limit_reached": false
+                }
+            }],
+            "monthly_limit": null,
+            "credits": null,
+            "spend_control": null
+        })
+        .to_string(),
+    )
+    .bind("2026-06-13T00:00:00Z")
+    .bind("2026-06-13T00:00:00Z")
+    .bind("acct_warn")
+    .execute(&pool)
+    .await
+    .unwrap();
     let config = test_config(url);
     let hasher = ApiKeyHasher::new([90u8; 32]);
     let stores = BackgroundTaskStores {

@@ -20,10 +20,18 @@ export interface Account {
 }
 
 export interface AccountQuota {
+  refreshedAtDisplay: string
+  windows: AccountQuotaWindow[]
+}
+
+export interface AccountQuotaWindow {
+  key: string
+  group: 'monthly' | 'shortTerm' | 'other'
+  windowSeconds?: number | null
+  labelDisplay: string
   usedPercent?: number | null
   usedPercentDisplay: string
   resetAtDisplay: string
-  refreshedAtDisplay: string
   windowUsedDisplay: string
 }
 

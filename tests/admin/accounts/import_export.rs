@@ -364,7 +364,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
     assert_eq!(stored.account_id.as_deref(), Some("usage-account"));
     assert_eq!(stored.user_id.as_deref(), Some("supplement-user"));
     assert_eq!(quota["plan_type"], "free");
-    assert_eq!(quota["rate_limit"]["limit_reached"], false);
+    assert_eq!(quota["snapshots"][0]["blocked"], false);
 
     let second_response = app
         .oneshot(
@@ -433,24 +433,55 @@ async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_
     sqlx::query("update accounts set quota_limit_reached = 1, quota_cooldown_until = ?, quota_verify_required = 1 where id = ?")
         .bind("2026-06-25T00:00:00Z").bind("acct_import_update").execute(&pool).await.unwrap();
 
-    let response = app.clone().oneshot(
-        Request::builder().method("POST").uri("/api/admin/accounts/import")
-            .header("content-type", "application/json")
-            .header("cookie", "cpr_admin_session=session_1")
-            .header("x-request-id", "req_accounts_import_update")
-            .body(Body::from(json!({
-                "accounts": [{
-                    "id": "acct_import_update", "email": "new@example.com",
-                    "accountId": "chatgpt-import-update", "userId": "user-import-update",
-                    "label": "new-label", "planType": "plus",
-                    "token": new_access_token, "refreshToken": "new-refresh",
-                    "status": "active",
-                    "cachedQuota": { "rate_limit": { "allowed": true, "limit_reached": false, "used_percent": 5 } },
-                    "quotaFetchedAt": "2026-06-19T14:00:00Z", "quotaVerifyRequired": false,
-                    "proxyApiKey": "exported-key-prefix", "usage": {"requestCount": 9}
-                }]
-            }).to_string())).unwrap(),
-    ).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_update")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_import_update", "email": "new@example.com",
+                            "accountId": "chatgpt-import-update", "userId": "user-import-update",
+                            "label": "new-label", "planType": "plus",
+                            "token": new_access_token, "refreshToken": "new-refresh",
+                            "status": "active",
+                            "cachedQuota": {
+                                "plan_type": "plus",
+                                "snapshots": [{
+                                    "source": "core",
+                                    "limit_name": null,
+                                    "metered_feature": null,
+                                    "allowed": true,
+                                    "limit_reached": false,
+                                    "blocked": false,
+                                    "primary": {
+                                        "used_percent": 5,
+                                        "remaining_percent": 95,
+                                        "reset_at": null,
+                                        "window_minutes": 300,
+                                        "limit_reached": false
+                                    },
+                                    "secondary": null
+                                }],
+                                "monthly_limit": null,
+                                "credits": null,
+                                "spend_control": null
+                            },
+                            "quotaFetchedAt": "2026-06-19T14:00:00Z", "quotaVerifyRequired": false,
+                            "proxyApiKey": "exported-key-prefix", "usage": {"requestCount": 9}
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     let status = response.status();
     let body = response_json(response).await;
     let stored = SqliteAccountStore::new(pool.clone(), secret_box)

@@ -143,10 +143,10 @@ const quotaToneClasses: Record<SemanticTone, string> = {
 <template>
   <BaseCard as="article" :padded="false" class="w-full xl:h-112.5">
     <div
-      class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] xl:gap-7 xl:pb-0"
+      class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
     >
       <section
-        class="w-full pb-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:h-100.5 xl:pb-0 xl:shadow-none"
+        class="min-w-0 w-full pb-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:h-100.5 xl:pb-0 xl:shadow-none"
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
@@ -198,7 +198,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
       </section>
 
       <section
-        class="w-full py-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:py-0 xl:shadow-none"
+        class="min-w-0 w-full py-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:py-0 xl:shadow-none"
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
@@ -217,7 +217,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
             <article
               v-for="(account, index) in accounts"
               :key="account.name"
-              class="grid w-full grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] px-3.5 py-3.5 hover:bg-(--cp-bg-subtle) xl:h-19.5 xl:grid-cols-[34px_minmax(150px,1fr)_76px_84px_84px] xl:items-center xl:gap-x-3 xl:py-0"
+              class="grid w-full grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] px-3.5 py-3.5 hover:bg-(--cp-bg-subtle) xl:h-19.5 xl:grid-cols-[34px_minmax(0,1.28fr)_minmax(132px,0.86fr)] xl:items-center xl:gap-x-3 xl:py-0"
               :class="['bg-(--cp-bg-subtle)', 'bg-white'][index % 2]"
             >
               <span
@@ -226,39 +226,43 @@ const quotaToneClasses: Record<SemanticTone, string> = {
               >
                 {{ account.name[0] }}
               </span>
-              <span class="grid min-w-0 gap-1.5 xl:gap-4.25">
-                <span class="flex min-w-0 items-start">
-                  <strong class="text-sm leading-[1.15] font-[650] text-(--cp-text-primary)">{{
-                    account.name
-                  }}</strong>
+              <span class="flex min-w-0 max-w-full flex-col gap-1.5 xl:gap-4.25">
+                <span class="flex min-w-0 max-w-full items-start gap-1.5">
+                  <strong
+                    class="min-w-0 truncate text-sm leading-[1.15] font-[650] text-(--cp-text-primary)"
+                    :title="account.name"
+                    >{{ account.name }}</strong
+                  >
                   <small
-                    class="ml-1.5 mt-0.75 text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted)"
+                    class="mt-0.75 shrink-0 text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted)"
                     >{{ account.plan }}</small
                   >
                 </span>
                 <span
-                  class="min-w-0 truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
+                  class="block min-w-0 max-w-full truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
+                  :title="account.email"
                   >{{ account.email }}</span
                 >
               </span>
               <span
-                class="col-span-2 mt-3 grid grid-cols-3 gap-3 pl-11 xl:col-span-3 xl:mt-0 xl:grid-cols-[76px_84px_84px] xl:pl-0"
+                class="col-span-2 mt-3 grid grid-cols-3 gap-3 pl-11 xl:col-span-1 xl:mt-0 xl:grid-cols-[minmax(0,56px)_minmax(72px,1fr)] xl:gap-6 xl:pl-0"
               >
-                <span class="grid min-w-0 gap-1.5">
+                <span class="grid min-w-0 gap-1.5 xl:gap-1">
                   <span
                     class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
-                    >请求</span
+                    >最近</span
                   >
                   <strong
-                    class="w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
-                    >{{ account.requests }}</strong
+                    class="hidden shrink-0 font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary) xl:block"
+                    >{{ account.tokens }}</strong
                   >
                   <span
-                    class="w-full truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary) xl:w-20 xl:whitespace-nowrap"
-                    >{{ account.lastUsed }}</span
+                    class="min-w-0 truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary) xl:whitespace-nowrap"
                   >
+                    {{ account.lastUsed }}
+                  </span>
                 </span>
-                <span class="grid min-w-0 gap-1.5">
+                <span class="grid min-w-0 gap-1.5 xl:hidden">
                   <span
                     class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
                     >Token</span
@@ -292,7 +296,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
         </div>
       </section>
 
-      <section class="w-full pt-6 xl:h-100.5 xl:pt-0">
+      <section class="min-w-0 w-full pt-6 xl:h-100.5 xl:pt-0">
         <header class="flex h-12.5 items-start justify-between">
           <div>
             <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号状态</h2>

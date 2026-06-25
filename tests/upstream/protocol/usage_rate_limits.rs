@@ -322,7 +322,7 @@ fn parse_rate_limits_event_should_extract_internal_websocket_rate_limits() {
 }
 
 #[test]
-fn rate_limit_quota_should_preserve_existing_credits_when_passive_data_lacks_credits() {
+fn rate_limit_quota_should_preserve_existing_monthly_and_credits_when_passive_data_lacks_them() {
     let headers = vec![
         ("x-codex-primary-used-percent".to_string(), "25".to_string()),
         (
@@ -335,6 +335,15 @@ fn rate_limit_quota_should_preserve_existing_credits_when_passive_data_lacks_cre
         ),
     ];
     let existing = json!({
+        "monthly_limit": {
+            "key": "spend-control-monthly",
+            "source": "spend_control",
+            "used_percent": 52,
+            "remaining_percent": 48,
+            "reset_at": 1896048000,
+            "window_minutes": 43200,
+            "limit_reached": false
+        },
         "credits": {
             "has_credits": true,
             "unlimited": false,
@@ -346,7 +355,8 @@ fn rate_limit_quota_should_preserve_existing_credits_when_passive_data_lacks_cre
     let quota = rate_limit_quota(&parsed, Some("plus"), Some(&existing));
 
     assert_eq!(quota["plan_type"], "plus");
-    assert_eq!(quota["rate_limit"]["remaining_percent"], 75);
+    assert_eq!(quota["snapshots"][0]["primary"]["remaining_percent"], 75);
+    assert_eq!(quota["monthly_limit"]["used_percent"], 52);
     assert_eq!(quota["credits"]["balance"], 12);
 }
 

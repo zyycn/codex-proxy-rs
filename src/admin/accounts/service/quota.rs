@@ -70,15 +70,13 @@ impl AdminAccountService {
                     "level": "exhausted"
                 }));
             } else {
-                // 按阈值检查 used_percent。
-                let mut check_threshold = |quota_key: &str, thresholds: &[u8]| {
-                    let used_percent = quota
-                        .get(quota_key)
-                        .and_then(|v| v.get("used_percent"))
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0);
+                for (quota_key, used_percent, role) in quota_warning_windows(&quota) {
+                    let thresholds = match role {
+                        "secondary" => &self.quota_thresholds.secondary,
+                        _ => &self.quota_thresholds.primary,
+                    };
                     for threshold in thresholds {
-                        if used_percent >= u64::from(*threshold) {
+                        if used_percent >= f64::from(*threshold) {
                             warnings.push(serde_json::json!({
                                 "accountId": snap.account_id,
                                 "email": snap.email,
@@ -90,9 +88,7 @@ impl AdminAccountService {
                             break;
                         }
                     }
-                };
-                check_threshold("rate_limit", &self.quota_thresholds.primary);
-                check_threshold("secondary_rate_limit", &self.quota_thresholds.secondary);
+                }
             }
         }
 
@@ -198,4 +194,45 @@ impl AdminAccountService {
             "results": results
         }))
     }
+}
+
+fn quota_warning_windows(quota: &serde_json::Value) -> Vec<(String, f64, &'static str)> {
+    let mut windows = Vec::new();
+    if let Some(monthly) = quota.get("monthly_limit").filter(|value| !value.is_null()) {
+        if let Some(used_percent) = used_percent(monthly) {
+            windows.push(("monthly_limit".to_string(), used_percent, "primary"));
+        }
+    }
+    if let Some(snapshots) = quota.get("snapshots").and_then(serde_json::Value::as_array) {
+        for snapshot in snapshots {
+            let source = snapshot
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("quota");
+            let limit_name = snapshot
+                .get("limit_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(source);
+            for role in ["primary", "secondary"] {
+                let Some(window) = snapshot.get(role).filter(|value| !value.is_null()) else {
+                    continue;
+                };
+                if let Some(used_percent) = used_percent(window) {
+                    windows.push((format!("{source}:{limit_name}:{role}"), used_percent, role));
+                }
+            }
+        }
+    }
+    windows
+}
+
+fn used_percent(value: &serde_json::Value) -> Option<f64> {
+    value
+        .get("used_percent")
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+        })
+        .filter(|value| value.is_finite())
 }

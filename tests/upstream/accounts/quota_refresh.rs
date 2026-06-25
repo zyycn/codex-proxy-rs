@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
-use codex_proxy_rs::upstream::accounts::quota::RuntimeQuotaRefreshService;
+use codex_proxy_rs::upstream::accounts::quota::{quota_from_usage, RuntimeQuotaRefreshService};
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
 use secrecy::SecretString;
@@ -19,6 +19,121 @@ fn quota_refresh_service_should_expose_default_request_spacing() {
     assert_eq!(
         RuntimeQuotaRefreshService::default_request_spacing(),
         StdDuration::from_secs(3)
+    );
+}
+
+#[test]
+fn quota_from_usage_should_preserve_spend_control_individual_limit() {
+    let usage = json!({
+        "plan_type": "plus",
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {
+                "used_percent": 18,
+                "reset_at": 1_800_000_000,
+                "limit_window_seconds": 18_000
+            }
+        },
+        "spend_control": {
+            "reached": false,
+            "individual_limit": {
+                "used_percent": 52,
+                "remaining_percent": 48,
+                "reset_at": 1_802_592_000
+            }
+        }
+    });
+
+    let quota = quota_from_usage(&usage);
+
+    assert_eq!(
+        quota
+            .pointer("/monthly_limit/source")
+            .and_then(Value::as_str),
+        Some("spend_control")
+    );
+    assert_eq!(
+        quota
+            .pointer("/monthly_limit/used_percent")
+            .and_then(Value::as_f64),
+        Some(52.0)
+    );
+}
+
+#[test]
+fn quota_from_usage_should_preserve_additional_limit_snapshot_by_limit_name() {
+    let usage = json!({
+        "plan_type": "plus",
+        "additional_rate_limits": [{
+            "limit_name": "gpt-5.3-codex-spark",
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {
+                    "used_percent": 100,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                },
+                "secondary_window": {
+                    "used_percent": 45,
+                    "reset_at": 1_800_604_800,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }]
+    });
+
+    let quota = quota_from_usage(&usage);
+
+    assert_eq!(
+        quota.pointer("/snapshots/0/source"),
+        Some(&Value::String("additional".to_string()))
+    );
+    assert_eq!(
+        quota.pointer("/snapshots/0/limit_name"),
+        Some(&Value::String("gpt-5.3-codex-spark".to_string()))
+    );
+    assert_eq!(
+        quota.pointer("/snapshots/0/blocked"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        quota
+            .pointer("/snapshots/0/secondary/window_minutes")
+            .and_then(Value::as_u64),
+        Some(10_080)
+    );
+}
+
+#[test]
+fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() {
+    let usage = json!({
+        "plan_type": "plus",
+        "additional_rate_limits": [{
+            "metered_feature": "review",
+            "limit_name": "Code review",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 35,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }]
+    });
+
+    let quota = quota_from_usage(&usage);
+
+    assert_eq!(
+        quota.pointer("/snapshots/0/limit_name"),
+        Some(&Value::String("Code review".to_string()))
+    );
+    assert_eq!(
+        quota.pointer("/snapshots/0/metered_feature"),
+        Some(&Value::String("review".to_string()))
     );
 }
 
@@ -96,13 +211,13 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
         (
             summary.refreshed,
             quota
-                .pointer("/rate_limit/limit_reached")
+                .pointer("/snapshots/0/blocked")
                 .and_then(Value::as_bool),
             quota
-                .pointer("/rate_limit/remaining_percent")
+                .pointer("/snapshots/0/primary/remaining_percent")
                 .and_then(Value::as_i64),
             quota
-                .pointer("/secondary_rate_limit/limit_reached")
+                .pointer("/snapshots/0/secondary/limit_reached")
                 .and_then(Value::as_bool),
         ),
         (1, Some(false), Some(28), Some(false))
