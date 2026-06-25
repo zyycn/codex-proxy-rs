@@ -488,30 +488,20 @@ impl AccountPool {
     }
 
     fn refresh_account_statuses(&mut self, now: DateTime<Utc>) -> Vec<String> {
-        let account_ids = self.accounts.keys().cloned().collect::<Vec<_>>();
-        account_ids
-            .into_iter()
-            .filter(|account_id| self.refresh_account_status(account_id, now))
-            .collect()
-    }
-
-    fn refresh_account_status(&mut self, account_id: &str, now: DateTime<Utc>) -> bool {
-        let mut should_clear_slots = false;
-        let mut expired = false;
-        if let Some(account) = self.accounts.get_mut(account_id) {
+        let mut expired_account_ids = Vec::new();
+        for (account_id, account) in &mut self.accounts {
             if account.status == AccountStatus::Active && access_token_expired(account, now) {
                 account.status = AccountStatus::Expired;
-                should_clear_slots = true;
-                expired = true;
+                expired_account_ids.push(account_id.clone());
             } else {
                 refresh_quota_window(account, now);
                 refresh_cloudflare_cooldown(account, now);
             }
         }
-        if should_clear_slots {
+        for account_id in &expired_account_ids {
             self.slots.remove(account_id);
         }
-        expired
+        expired_account_ids
     }
 
     /// 释放指定账号的一个在途槽位。
@@ -669,7 +659,7 @@ impl AccountPool {
     fn previous_slot_at(&self, account_id: &str) -> Option<DateTime<Utc>> {
         self.slots
             .get(account_id)
-            .and_then(|slots| slots.back().cloned())
+            .and_then(|slots| slots.back().copied())
     }
 
     fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>) {
@@ -687,8 +677,8 @@ impl AccountPool {
         if account.window_started_at.is_none() {
             if let Some(seconds) = account.limit_window_seconds {
                 account.window_started_at = Some(now);
-                account.window_reset_at =
-                    Some(now + Duration::seconds(seconds.min(i64::MAX as u64) as i64));
+                let seconds = i64::try_from(seconds).unwrap_or(i64::MAX);
+                account.window_reset_at = Some(now + Duration::seconds(seconds));
             }
         }
         Some(account.clone())

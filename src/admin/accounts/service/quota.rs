@@ -1,7 +1,7 @@
 use chrono::Utc;
 use secrecy::ExposeSecret;
 
-use super::{types::*, AdminAccountService};
+use super::{types::AdminAccountError, AdminAccountService};
 
 impl AdminAccountService {
     pub async fn account_quota(
@@ -75,8 +75,8 @@ impl AdminAccountService {
                         .and_then(|v| v.get("used_percent"))
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
-                    for threshold in thresholds.iter() {
-                        if used_percent >= *threshold as u64 {
+                    for threshold in thresholds {
+                        if used_percent >= u64::from(*threshold) {
                             warnings.push(serde_json::json!({
                                 "accountId": snap.account_id,
                                 "email": snap.email,
@@ -110,7 +110,7 @@ impl AdminAccountService {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();

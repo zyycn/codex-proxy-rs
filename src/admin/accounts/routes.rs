@@ -135,7 +135,7 @@ pub struct BatchUpdateAccountStatusData {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum AccountUpdateData {
-    Account(AdminAccountData),
+    Account(Box<AdminAccountData>),
     BatchStatus(BatchUpdateAccountStatusData),
 }
 
@@ -625,7 +625,10 @@ pub async fn update_account(
             match state.services.admin_accounts.get(&id).await {
                 Ok(Some(account)) => Ok(AdminResponse::new(
                     StatusCode::OK,
-                    AdminEnvelope::ok(AccountUpdateData::Account(account.into()), request_id),
+                    AdminEnvelope::ok(
+                        AccountUpdateData::Account(Box::new(account.into())),
+                        request_id,
+                    ),
                 )),
                 Ok(None) => Err(account_not_found(request_id)),
                 Err(error) => Err(account_error(error, request_id)),
