@@ -15,7 +15,7 @@ use crate::{
     http::middleware::request_id::RequestId,
     infra::{
         json::{clamp_limit, clamp_page, Page},
-        time::china_rfc3339,
+        time::{china_relative_time, china_rfc3339},
     },
     runtime::state::AppState,
 };
@@ -50,6 +50,7 @@ pub struct AdminUsageStatsData {
     pub image_request_count: i64,
     pub image_request_failed_count: i64,
     pub last_used_at: Option<String>,
+    pub last_used_at_display: String,
 }
 
 /// 管理端账号用量汇总响应。
@@ -174,6 +175,7 @@ impl From<AdminUsageRecord> for AdminUsageStatsData {
             image_output_tokens: usage.image_output_tokens,
             image_request_count: usage.image_request_count,
             image_request_failed_count: usage.image_request_failed_count,
+            last_used_at_display: china_relative_time(usage.last_used_at, chrono::Utc::now()),
             last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
         }
     }

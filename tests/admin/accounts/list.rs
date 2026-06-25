@@ -1,4 +1,5 @@
 use super::*;
+use codex_proxy_rs::admin::monitoring::events::{EventLevel, EventLog};
 
 #[tokio::test]
 async fn admin_accounts_list_should_not_decrypt_account_tokens() {
@@ -53,6 +54,80 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
         body["data"]["items"][0]["addedAt"],
         "2026-06-18T08:00:00+08:00"
     );
+}
+
+#[tokio::test]
+async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
+    let (app, _state, pool, _dir, _secret_box) =
+        admin_accounts_test_app("admin-accounts-stats.sqlite", 68).await;
+    seed_usage_account(
+        &pool,
+        "acct_stats",
+        "stats@example.com",
+        "stats",
+        "free",
+        41,
+        5,
+        3_500_000,
+        13_900,
+        3_400_000,
+        "2026-06-23T08:50:13Z",
+    )
+    .await;
+    sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ? where id = ?")
+        .bind(
+            json!({
+                "rate_limit": {
+                    "used_percent": 87.8,
+                    "reset_at": 1782737460,
+                    "limit_window_seconds": 604800
+                }
+            })
+            .to_string(),
+        )
+        .bind("2026-06-23T08:51:09Z")
+        .bind("acct_stats")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = SqliteEventLogStore::new(pool.clone());
+    let mut log = EventLog::new("response", EventLevel::Info, "ok");
+    log.account_id = Some("acct_stats".to_string());
+    log.model = Some("gpt-5.5".to_string());
+    log.created_at = "2026-06-23T08:50:13Z".parse().unwrap();
+    log.metadata = json!({
+        "usage": {
+            "inputTokens": 3_500_000u64,
+            "outputTokens": 13_900u64,
+            "cachedTokens": 3_400_000u64
+        }
+    });
+    store.append(&log).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["usage"]["requestCount"], 41);
+    assert_eq!(item["quota"]["usedPercentDisplay"], "87.8%");
+    assert!(item["quota"]["windowUsedDisplay"]
+        .as_str()
+        .is_some_and(|value| value.contains(" / 7.0d")));
+    assert_eq!(item["usage"]["createdTokens"], 100_000);
+    assert_eq!(item["usage"]["readTokens"], 3_400_000);
+    assert_eq!(item["usage"]["modelTop"]["model"], "gpt-5.5");
 }
 
 #[tokio::test]

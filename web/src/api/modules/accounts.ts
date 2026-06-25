@@ -15,6 +15,63 @@ export interface Account {
   addedAtDisplay: string
   updatedAt: string
   updatedAtDisplay: string
+  quota: AccountQuota
+  usage: AccountUsage
+}
+
+export interface AccountQuota {
+  usedPercent?: number | null
+  usedPercentDisplay: string
+  resetAtDisplay: string
+  refreshedAtDisplay: string
+  windowUsedDisplay: string
+}
+
+export interface AccountUsage {
+  requestCount: number
+  requestCountDisplay: string
+  emptyResponseCount: number
+  inputTokens: number
+  inputTokensDisplay: string
+  outputTokens: number
+  outputTokensDisplay: string
+  cachedTokens: number
+  cachedTokensDisplay: string
+  reasoningTokens: number
+  totalTokens: number
+  totalTokensDisplay: string
+  imageInputTokens: number
+  imageOutputTokens: number
+  imageTokensDisplay: string
+  imageRequestCount: number
+  imageRequestFailedCount: number
+  createdTokens: number
+  createdTokensDisplay: string
+  readTokens: number
+  readTokensDisplay: string
+  lastUsedAt?: string
+  lastUsedAtDisplay: string
+  modelTop?: AccountModelUsage | null
+}
+
+export interface AccountModelUsage {
+  model: string
+  requestCount: number
+  requestCountDisplay: string
+  successRate: number
+  successRateDisplay: string
+  inputTokens: number
+  inputTokensDisplay: string
+  outputTokens: number
+  outputTokensDisplay: string
+  cachedTokens: number
+  cachedTokensDisplay: string
+  totalTokens: number
+  totalTokensDisplay: string
+  totalCostUsd: number
+  totalCostUsdDisplay: string
+  lastUsedAt?: string
+  lastUsedAtDisplay: string
 }
 
 export interface AccountsQuery {
