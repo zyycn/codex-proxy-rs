@@ -40,10 +40,12 @@ const props = withDefaults(
     emptyText?: string
     maxHeight?: string
     pagination?: BaseTablePagination
+    expandedRowKeys?: Array<string | number>
   }>(),
   {
     rowKey: 'id',
     selectedRowKeys: () => [],
+    expandedRowKeys: () => [],
     stripe: true,
     loading: false,
     emptyText: '暂无数据',
@@ -201,6 +203,10 @@ function isRowSelected(row: TableRow, index: number) {
   return props.selectedRowKeys.includes(getRowKey(row, index))
 }
 
+function isRowExpanded(row: TableRow, index: number) {
+  return props.expandedRowKeys.includes(getRowKey(row, index))
+}
+
 function alignClass(column: BaseTableColumn) {
   if (column.align === 'center') {
     return 'text-center'
@@ -342,36 +348,45 @@ function paginationPageClass(page: number) {
                 </td>
               </tr>
 
-              <tr
-                v-for="(row, index) in rows"
-                :key="getRowKey(row, index)"
-                :class="rowClass(row, index)"
-                role="row"
-              >
-                <td
-                  v-for="(column, columnIndex) in computedColumns"
-                  :key="column.key"
-                  :class="[
-                    bodyCellClass,
-                    alignClass(column),
-                    isLastColumn(columnIndex) ? 'rounded-r-lg pr-3' : undefined,
-                    column.cellClass,
-                  ]"
-                  role="cell"
+              <template v-for="(row, index) in rows" :key="getRowKey(row, index)">
+                <tr
+                  :class="rowClass(row, index)"
+                  role="row"
                 >
-                  <div :class="cellContentClass(column)">
-                    <slot
-                      :name="column.key"
-                      :row="row"
-                      :value="cellValue(row, column.key)"
-                      :index="index"
-                    >
-                      {{ cellValue(row, column.key) }}
-                    </slot>
-                  </div>
-                </td>
-                <td class="p-0" aria-hidden="true" />
-              </tr>
+                  <td
+                    v-for="(column, columnIndex) in computedColumns"
+                    :key="column.key"
+                    :class="[
+                      bodyCellClass,
+                      alignClass(column),
+                      isLastColumn(columnIndex) ? 'rounded-r-lg pr-3' : undefined,
+                      column.cellClass,
+                    ]"
+                    role="cell"
+                  >
+                    <div :class="cellContentClass(column)">
+                      <slot
+                        :name="column.key"
+                        :row="row"
+                        :value="cellValue(row, column.key)"
+                        :index="index"
+                      >
+                        {{ cellValue(row, column.key) }}
+                      </slot>
+                    </div>
+                  </td>
+                  <td class="p-0" aria-hidden="true" />
+                </tr>
+                <tr v-if="isRowExpanded(row, index)" role="row">
+                  <td
+                    :colspan="computedColumns.length + 1"
+                    class="rounded-lg bg-(--cp-info-bg) p-0"
+                    role="cell"
+                  >
+                    <slot name="expanded" :row="row" :index="index" />
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </BaseScrollbar>

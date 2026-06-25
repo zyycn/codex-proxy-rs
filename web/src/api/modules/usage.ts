@@ -39,6 +39,7 @@ export interface AccountUsageStats {
   imageRequestCount: number
   imageRequestFailedCount: number
   lastUsedAt?: string
+  lastUsedAtDisplay: string
 }
 
 export interface UsageStatsQuery {

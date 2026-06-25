@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Plus, RefreshCw, Trash2, Download, Upload, Search } from '@lucide/vue'
+import { ChevronDown, Plus, RefreshCw, Trash2, Download, Upload, Search } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -18,6 +18,7 @@ import {
   batchDeleteAccounts,
   createAccount,
   deleteAccount,
+  getAccountQuota,
   getAccounts,
   refreshAccount,
 } from '@/api'
@@ -29,12 +30,14 @@ const page = ref(1)
 const pageSize = ref(20)
 const searchQuery = ref('')
 const selectedIds = ref<Set<string>>(new Set())
+const expandedAccountIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
 const showSingleDeleteModal = ref(false)
 const pendingDeleteAccount = ref<Account | null>(null)
 const refreshingList = ref(false)
 const refreshingAccountIds = ref<Set<string>>(new Set())
+const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
 const deletingAccount = ref(false)
 const batchDeleting = ref(false)
 let searchTimer: number | undefined
@@ -196,6 +199,23 @@ async function handleRefresh(accountId: string) {
   }
 }
 
+async function handleRefreshQuota(accountId: string) {
+  if (refreshingQuotaAccountIds.value.has(accountId)) return
+  refreshingQuotaAccountIds.value = new Set(refreshingQuotaAccountIds.value).add(accountId)
+  try {
+    await withMinimumDuration(async () => {
+      await getAccountQuota(accountId)
+      await loadAccounts()
+    })
+  } catch (error) {
+    console.error('Failed to refresh account quota:', error)
+  } finally {
+    const next = new Set(refreshingQuotaAccountIds.value)
+    next.delete(accountId)
+    refreshingQuotaAccountIds.value = next
+  }
+}
+
 function statusTone(status: Account['status']) {
   return statusTones[status]
 }
@@ -210,6 +230,16 @@ function toggleSelection(accountId: string) {
   } else {
     selectedIds.value.add(accountId)
   }
+}
+
+function toggleExpanded(accountId: string) {
+  const next = new Set(expandedAccountIds.value)
+  if (next.has(accountId)) {
+    next.delete(accountId)
+  } else {
+    next.add(accountId)
+  }
+  expandedAccountIds.value = next
 }
 
 function toggleAll() {
@@ -229,6 +259,10 @@ function handlePageSizeChange(nextPageSize: number) {
   pageSize.value = nextPageSize
   page.value = 1
   void loadAccounts()
+}
+
+function quotaBarWidth(account: Account) {
+  return `${Math.max(0, Math.min(account.quota.usedPercent ?? 0, 100))}%`
 }
 
 onMounted(() => {
@@ -319,6 +353,7 @@ onBeforeUnmount(() => {
         :columns="accountColumns"
         :rows="filteredAccounts"
         :selected-row-keys="selectedRowKeys"
+        :expanded-row-keys="[...expandedAccountIds]"
         :pagination="accountPagination"
         empty-text="暂无账号数据"
         @page-change="handlePageChange"
@@ -335,12 +370,25 @@ onBeforeUnmount(() => {
         </template>
 
         <template #selection="{ row }">
-          <BaseCheckbox
-            :model-value="selectedIds.has(row.id)"
-            label="选择账号"
-            size="table"
-            @update:model-value="toggleSelection(row.id)"
-          />
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-(--cp-text-secondary) transition hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary)"
+              :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+              @click.stop="toggleExpanded(row.id)"
+            >
+              <ChevronDown
+                class="size-3.5 transition-transform"
+                :class="expandedAccountIds.has(row.id) ? 'rotate-180' : '-rotate-90'"
+              />
+            </button>
+            <BaseCheckbox
+              :model-value="selectedIds.has(row.id)"
+              label="选择账号"
+              size="table"
+              @update:model-value="toggleSelection(row.id)"
+            />
+          </div>
         </template>
 
         <template #identity="{ row }">
@@ -370,12 +418,16 @@ onBeforeUnmount(() => {
           </span>
         </template>
 
-        <template #requests>
-          <span class="font-mono text-[14px] text-(--cp-text-secondary)"> — </span>
+        <template #requests="{ row }">
+          <span class="font-mono text-[14px] text-(--cp-text-primary)">
+            {{ row.usage.requestCountDisplay }}
+          </span>
         </template>
 
-        <template #tokens>
-          <span class="font-mono text-[14px] text-(--cp-text-secondary)"> — </span>
+        <template #tokens="{ row }">
+          <span class="font-mono text-[14px] text-(--cp-text-primary)">
+            {{ row.usage.totalTokensDisplay }}
+          </span>
         </template>
 
         <template #updatedAt="{ row }">
@@ -410,6 +462,121 @@ onBeforeUnmount(() => {
             >
               <Trash2 class="size-3.5" />
             </BaseIconButton>
+          </div>
+        </template>
+
+        <template #expanded="{ row }">
+          <div class="grid gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr]">
+            <section class="rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control)">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">账号额度</h3>
+                  <p class="m-0 mt-1 text-[12px] font-[620] text-(--cp-text-secondary)">
+                    Codex 额度 · 套餐: {{ row.planType || 'Free' }} · 最近刷新:
+                    {{ row.quota.refreshedAtDisplay }}
+                  </p>
+                </div>
+                <BaseIconButton
+                  variant="ghost"
+                  size="sm"
+                  title="刷新额度"
+                  :loading="refreshingQuotaAccountIds.has(row.id)"
+                  @click="handleRefreshQuota(row.id)"
+                >
+                  <RefreshCw class="size-3.5" />
+                </BaseIconButton>
+              </div>
+
+              <div class="flex items-center justify-between text-[12px] font-[720]">
+                <span class="text-(--cp-text-secondary)">周限额</span>
+                <span class="text-(--cp-text-primary)">{{ row.quota.usedPercentDisplay }}</span>
+              </div>
+              <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                <div
+                  class="h-full rounded-full bg-(--cp-info)"
+                  :style="{ width: quotaBarWidth(row) }"
+                />
+              </div>
+              <div class="mt-3 flex justify-between text-[12px] font-[620] text-(--cp-text-secondary)">
+                <span>重置时间: {{ row.quota.resetAtDisplay }}</span>
+                <span>窗口已用: {{ row.quota.windowUsedDisplay }}</span>
+              </div>
+            </section>
+
+            <section
+              class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
+            >
+              <div>
+                <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">
+                  Token 结构
+                </h3>
+                <div class="grid gap-2">
+                  <div class="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
+                    <span class="text-[12px] font-[700] text-green-700">输入 Tokens</span>
+                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                      {{ row.usage.inputTokensDisplay }}
+                    </strong>
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2">
+                    <span class="text-[12px] font-[700] text-amber-700">输出 Tokens</span>
+                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                      {{ row.usage.outputTokensDisplay }}
+                    </strong>
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg bg-cyan-50 px-3 py-2">
+                    <span class="text-[12px] font-[700] text-cyan-700">缓存 Tokens</span>
+                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                      {{ row.usage.cachedTokensDisplay }}
+                    </strong>
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
+                    <span class="text-[12px] font-[700] text-sky-700">创建</span>
+                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                      {{ row.usage.createdTokensDisplay }}
+                    </strong>
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
+                    <span class="text-[12px] font-[700] text-sky-700">读取</span>
+                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                      {{ row.usage.readTokensDisplay }}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]">
+                <div class="mb-3 flex items-center justify-between">
+                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
+                    模型使用 Top 1
+                  </h3>
+                </div>
+
+                <div class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]">
+                  <span>模型</span>
+                  <span>调用</span>
+                  <span>成功率</span>
+                  <span>输入</span>
+                  <span>输出</span>
+                  <span>缓存</span>
+                  <span>总TOKEN</span>
+                  <span>总花费</span>
+                  <span>最近请求时间</span>
+                </div>
+                <div class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)">
+                  <span class="truncate">{{ row.usage.modelTop?.model || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.requestCountDisplay || '-' }}</span>
+                  <span class="text-amber-600">
+                    {{ row.usage.modelTop?.successRateDisplay || '-' }}
+                  </span>
+                  <span>{{ row.usage.modelTop?.inputTokensDisplay || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.outputTokensDisplay || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.cachedTokensDisplay || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.totalTokensDisplay || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.totalCostUsdDisplay || '-' }}</span>
+                  <span>{{ row.usage.modelTop?.lastUsedAtDisplay || '-' }}</span>
+                </div>
+              </div>
+            </section>
           </div>
         </template>
       </BaseTable>
