@@ -1,6 +1,7 @@
 use super::*;
 use codex_proxy_rs::upstream::transport::build_ordered_codex_headers;
 use codex_proxy_rs::upstream::transport::websocket::CodexWebSocketConnection;
+use serde_json::Value;
 
 #[test]
 fn ordered_codex_headers_should_preserve_fingerprint_priority_and_request_fields() {
@@ -306,9 +307,22 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let payload = server.await.unwrap();
 
     assert!(response.body.contains("resp_ws_security"));
+    let metadata = payload["client_metadata"]
+        .as_object()
+        .expect("client metadata should be an object");
+    let start_ms = metadata
+        .get("x-codex-ws-stream-request-start-ms")
+        .and_then(Value::as_str)
+        .expect("websocket request start timestamp should be stamped");
+    assert!(
+        start_ms.parse::<u128>().is_ok_and(|value| value > 0),
+        "websocket request start timestamp should be positive milliseconds"
+    );
+    let mut stable_metadata = metadata.clone();
+    stable_metadata.remove("x-codex-ws-stream-request-start-ms");
     assert_eq!(payload["prompt_cache_key"], "cp_derived");
     assert_eq!(
-        payload["client_metadata"],
+        Value::Object(stable_metadata),
         json!({
             "safe": "yes",
             "x-openai-subagent": "review",

@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -53,6 +53,8 @@ use super::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolKey};
 // ---------------------------------------------------------------------------
 
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
+const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-start-ms";
 type ReqwestClientCacheKey = (bool, Option<String>);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
@@ -500,18 +502,19 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendResponse> {
-        let headers = self.request_headers_for_http_response(upstream_request, context)?;
+        let websocket_request = websocket_upstream_request(upstream_request);
+        let headers = self.request_headers_for_http_response(&websocket_request, context)?;
         let prepared = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
             websocket_header_pairs(&headers),
-            upstream_request,
+            &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
         let artifact = websocket_audit_artifact_from_attempt(
-            upstream_request,
+            &websocket_request,
             prepared.connection().opening_audit_snapshot(),
-            websocket_payload_audit_snapshot(upstream_request),
+            websocket_payload_audit_snapshot(&websocket_request),
         );
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
@@ -540,18 +543,19 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        let headers = self.request_headers_for_http_response(upstream_request, context)?;
+        let websocket_request = websocket_upstream_request(upstream_request);
+        let headers = self.request_headers_for_http_response(&websocket_request, context)?;
         let prepared = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
             websocket_header_pairs(&headers),
-            upstream_request,
+            &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
         let artifact = websocket_audit_artifact_from_attempt(
-            upstream_request,
+            &websocket_request,
             prepared.connection().opening_audit_snapshot(),
-            websocket_payload_audit_snapshot(upstream_request),
+            websocket_payload_audit_snapshot(&websocket_request),
         );
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
@@ -1004,6 +1008,31 @@ fn response_upstream_request(
     }
     upstream.client_metadata = response_client_metadata(request.client_metadata.as_ref(), context);
     upstream
+}
+
+fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
+    let mut request = request.clone();
+    stamp_ws_stream_request_start_ms(&mut request);
+    request
+}
+
+fn stamp_ws_stream_request_start_ms(request: &mut CodexResponsesRequest) {
+    let mut metadata = match request.client_metadata.take() {
+        Some(Value::Object(metadata)) => metadata,
+        _ => Map::new(),
+    };
+    metadata.insert(
+        X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
+        Value::String(now_unix_timestamp_millis().to_string()),
+    );
+    request.client_metadata = Some(Value::Object(metadata));
+}
+
+fn now_unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn response_client_metadata(
