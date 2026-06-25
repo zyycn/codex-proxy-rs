@@ -49,6 +49,10 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
     let body = response_json(response).await;
     assert_eq!(body["data"]["items"][0]["id"], "acct_corrupt");
     assert_eq!(body["data"]["items"][0]["email"], "user@example.com");
+    assert_eq!(
+        body["data"]["items"][0]["addedAt"],
+        "2026-06-18T08:00:00+08:00"
+    );
 }
 
 #[tokio::test]

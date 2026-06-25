@@ -1,6 +1,8 @@
 use chrono::Utc;
 use secrecy::ExposeSecret;
 
+use crate::infra::china_rfc3339;
+
 use super::{types::AdminAccountError, AdminAccountService};
 
 impl AdminAccountService {
@@ -96,7 +98,7 @@ impl AdminAccountService {
 
         Ok(serde_json::json!({
             "warnings": warnings,
-            "updatedAt": Utc::now().to_rfc3339()
+            "updatedAt": china_rfc3339(&Utc::now())
         }))
     }
     pub async fn health_check_accounts(

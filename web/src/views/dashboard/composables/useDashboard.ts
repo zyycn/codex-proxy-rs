@@ -398,12 +398,13 @@ export function useDashboard(): {
     if (minutes < 60) return `${minutes}分钟前`
     if (hours < 24) return `${hours}小时前`
     if (days < 7) return `${days}天前`
-    return date.toLocaleDateString('zh-CN')
+    return date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })
   }
 
   function formatTime(dateStr: string): string {
     const date = new Date(dateStr)
     return date.toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',

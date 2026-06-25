@@ -8,7 +8,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use chrono::{DateTime, Duration, FixedOffset, Timelike, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,6 +27,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
     http::middleware::request_id::RequestId,
+    infra::{china_datetime_rfc3339_str, china_rfc3339},
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
 };
@@ -736,7 +737,7 @@ fn account_usage_data(
                 requests: nonnegative_i64_to_u64(usage.request_count),
                 tokens: nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens),
                 quota_used_percent,
-                last_used_at: usage.last_used_at.map(|value| value.to_rfc3339()),
+                last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
                 status,
             }
         })
@@ -820,7 +821,7 @@ fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
         },
         DashboardServiceStatusData {
             label: "更新时间".to_string(),
-            value: format_beijing_datetime(fingerprint.updated_at),
+            value: format_fingerprint_updated_at(fingerprint.updated_at),
             detail: String::new(),
             tone: "normal".to_string(),
         },
@@ -841,7 +842,7 @@ fn empty_dash(value: String) -> String {
     }
 }
 
-fn format_beijing_datetime(value: Option<String>) -> String {
+fn format_fingerprint_updated_at(value: Option<String>) -> String {
     let Some(value) = value else {
         return "-".to_string();
     };
@@ -849,19 +850,7 @@ fn format_beijing_datetime(value: Option<String>) -> String {
     if value.is_empty() {
         return "-".to_string();
     }
-
-    let Some(offset) = FixedOffset::east_opt(8 * 60 * 60) else {
-        return value.to_string();
-    };
-
-    DateTime::parse_from_rfc3339(value)
-        .map(|datetime| {
-            datetime
-                .with_timezone(&offset)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|_| value.to_string())
+    china_datetime_rfc3339_str(value)
 }
 
 fn empty_usage_summary() -> AdminUsageSummary {

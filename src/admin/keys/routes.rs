@@ -16,7 +16,10 @@ use crate::{
     },
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
-    infra::json::{clamp_limit, Page},
+    infra::{
+        china_rfc3339_str,
+        json::{clamp_limit, Page},
+    },
     runtime::state::AppState,
 };
 
@@ -111,8 +114,8 @@ impl From<AdminStoredClientApiKey> for ClientApiKeyData {
             label: k.label,
             prefix: k.prefix,
             enabled: k.enabled,
-            created_at: k.created_at,
-            last_used_at: k.last_used_at,
+            created_at: china_rfc3339_str(&k.created_at),
+            last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
         }
     }
 }
@@ -125,8 +128,8 @@ impl From<AdminStoredClientApiKey> for ClientApiKeyExportEntry {
             label: k.label,
             prefix: k.prefix,
             enabled: k.enabled,
-            created_at: k.created_at,
-            last_used_at: k.last_used_at,
+            created_at: china_rfc3339_str(&k.created_at),
+            last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
         }
     }
 }
@@ -139,8 +142,8 @@ impl From<AdminCreatedClientApiKey> for CreatedClientApiKeyData {
             label: k.label,
             prefix: k.prefix,
             enabled: k.enabled,
-            created_at: k.created_at,
-            last_used_at: k.last_used_at,
+            created_at: china_rfc3339_str(&k.created_at),
+            last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
             plaintext: k.plaintext,
         }
     }

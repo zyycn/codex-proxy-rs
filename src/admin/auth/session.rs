@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     http::middleware::request_id::RequestId,
+    infra::china_rfc3339,
     runtime::state::AppState,
 };
 
@@ -80,7 +81,7 @@ pub async fn login(
         StatusCode::OK,
         AdminEnvelope::ok(
             AdminLoginData {
-                expires_at: session.expires_at.to_rfc3339(),
+                expires_at: china_rfc3339(&session.expires_at),
             },
             request_id.clone(),
         ),
