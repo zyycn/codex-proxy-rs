@@ -311,6 +311,9 @@ fn response_dispatch_error_type_and_code(
         | ResponseDispatchError::EmptyUpstreamResponse => {
             ("server_error", "invalid_upstream_response")
         }
+        ResponseDispatchError::Failed(_) => responses_error_type_and_code_for_status(
+            status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
+        ),
         _ => ("server_error", "upstream_error"),
     }
 }

@@ -192,6 +192,7 @@
 - 首个文本帧是 `response.create`，payload 由 `CodexResponsesRequest` 序列化而来。
 - WebSocket opening 会移除 `content-type` 和 `accept`，因为这两个是 HTTP/SSE 请求头，不属于 WS opening 业务头。
 - 连接池 key 为 `base_url + account_id + conversation_id`，conversation id 优先取 `prompt_cache_key`，其次 `client_conversation_id`，再其次 `previous_response_id`。
+- 官方二进制有 60 分钟连接限制文案；当前项目连接池默认 `max_age_ms = 3_300_000`（55 分钟），低于官方限制。连接在 acquire、put 和后台 maintenance sweep 时都会按 `max_age` 回收，避免复用接近官方 60 分钟上限的 socket。
 
 当前 WebSocket fallback：
 
@@ -322,8 +323,8 @@ WebSocket 事件：
 - 403 body 命中 `cf-mitigated`、`cf-chl-bypass`、`_cf_chl`、`cf_chl`、`attention required`、`just a moment` 时进入 Cloudflare challenge cooldown。
 - 404 空 body 作为 path-block，立即删除账号 cookie，多次后禁用账号。
 - 调度层会在 Cloudflare challenge/path-block 后换号或返回明确错误。
-- 官方二进制出现 `This request has been flagged for possible cybersecurity risk.`。当前项目没有单独识别这个文案，若真实链路遇到，应作为独立风控/安全策略错误，而不是归入 quota 或 Cloudflare。
-- 官方错误枚举还包含 `usage_limit_exceeded`、`cyber_policy`、`response_stream_connection_failed`、`response_stream_disconnected` 等 CodexErrorInfo 类别；当前项目主要按 HTTP status、SSE failure code/message 和 WS wrapped error 分类。
+- 官方二进制出现 `This request has been flagged for possible cybersecurity risk.`。当前项目把 `cyber_policy` 归为请求内容/安全策略类 400，不作为 quota、Cloudflare 或账号封禁信号。
+- 官方错误枚举还包含 `context_window_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`cyber_policy`、`response_stream_connection_failed`、`response_stream_disconnected` 等 CodexErrorInfo 类别。当前项目按 HTTP status、SSE failure code/message 和 WS wrapped error 分类；其中 WS `cyber_policy`/`invalid_prompt`/`context_length_exceeded`/`invalid_request` 会映射 400，SSE `cyber_policy`/`invalid_prompt`/`context_window*`/`bad_request` 也会映射 400。
 
 ### 额度和限流
 
@@ -402,8 +403,8 @@ Usage 请求路径按 base URL 选择：
 - 原生二进制不能在当前 Linux 环境执行，无法做动态断点或真实 app-server 调用链追踪。
 - 官方包里没有 source map，JS bundle 为压缩产物；函数名和局部变量名不能视为稳定 API。
 - WebSocket 降级策略目前按现有项目实现理解为连接/transport 错误可降级，显式上游状态错误不降级；官方二进制字符串能证明有降级路径，但不能单独证明完整条件矩阵。
-- 官方有 WebSocket 60 分钟连接限制文案；当前项目 WebSocket pool 只按本地 pool TTL 控制，未显式实现官方 60 分钟上限。
-- 官方有 `cyber_policy` 风控语义；当前项目还没有把对应文案/错误码拆成独立错误类型。
+- 官方有 WebSocket 60 分钟连接限制文案；当前项目用 55 分钟默认 pool TTL 主动规避该上限，但没有实现从上游错误中动态调整 TTL。
+- 官方有 `cyber_policy` 风控语义；当前项目已将 WS/SSE 中的 `cyber_policy` 归入 400 类请求失败，但没有创建单独的账号状态或轮换策略。
 
 ## 实现建议
 
