@@ -90,6 +90,7 @@
 - 官方二进制包含源码路径字符串：`codex-api/src/endpoint/responses_websocket.rs`、`codex-api/src/endpoint/responses.rs`、`codex-api/src/endpoint/compact.rs`、`codex-api/src/endpoint/models.rs`、`codex-client/src/request.rs`、`codex-client/src/default_client.rs`、`core/src/client.rs`。
 - WebSocket 相关符号包含 `ResponsesWebsocketClient`、`ResponsesWebsocketConnection`、`merge_request_headers`、`serialize_websocket_request`、`send_websocket_request`、`run_websocket_response_stream`、`map_wrapped_websocket_error_event`。
 - 官方连接日志包含 `responses_websocket.connect`、`responses_websocket.stream_request`、`responses.stream_request`、`transport`、`pre_compression_bytes`、`post_compression_bytes`、`compression_duration_ms`。
+- 官方二进制静态字符串还能看到 `tokio_tungstenite::tls::encryption::rustls`、`tungstenite::handshake`、`reqwest`、`h2`、`gzip`、`deflate` 等传输栈痕迹。这只能证明 Desktop 包内存在这些 Rust HTTP/WS/TLS/压缩组件，不能单独还原完整调用图。
 - 官方协议能力包含 `requestAttestation`，注释为允许 client 接收 `attestation/generate` 请求并为上游生成 `x-oai-attestation`。
 - 官方 WebSocket 头相关字段包含 `ws_request_header_traceparent`、`ws_request_header_tracestate`、`ws_request_header_x_openai_internal_codex_responses_lite`。
 - Desktop 原生二进制还出现 `add_responses_lite_header`、`stamp_ws_stream_request_start_ms`、`x-openai-internal-codex-responses-lite`、`x-codex-ws-stream-request-start-ms`、`x-codex-beta-features`。公开 `openai/codex` 同名源码只能作为辅助解释：
@@ -111,6 +112,7 @@
 确认点：
 
 - `thread-context-inputs` 查询 `/wham/usage`，query key 为 `rate-limit-status`，失败 401/403/404 时返回 `null`。
+- `thread-context-inputs` 对 `rate-limit-status` 设置 `refetchInterval = ONE_MINUTE`，且 `refetchIntervalInBackground = false`，说明 Desktop webview 打开且不在后台时会约每分钟刷新一次 usage。
 - `use-rate-limit` 把 `rate_limit.primary_window`、`secondary_window` 转成 `primary`、`secondary` bucket，并遍历 `additional_rate_limits`。每个 additional item 会按 `limit_name` 建一个独立 snapshot。
 - `rate-limit-rows` 将每个 snapshot 的 `primary` 和 `secondary` 按 `windowDurationMins` 从小到大排序为多行，5 小时、周、月分别映射成 `five-hour`、`weekly`、`monthly` key。
 - `usage-settings` 识别：
