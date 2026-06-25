@@ -146,6 +146,7 @@ async function handleViewDetail(log: EventLog) {
 function formatTime(dateStr: string): string {
   const date = new Date(dateStr)
   return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

@@ -13,7 +13,10 @@ use crate::{
     admin::monitoring::service::{AdminUsageError, AdminUsageRecord, AdminUsageSummary},
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
-    infra::json::{clamp_limit, clamp_page, Page},
+    infra::{
+        china_rfc3339,
+        json::{clamp_limit, clamp_page, Page},
+    },
     runtime::state::AppState,
 };
 
@@ -171,7 +174,7 @@ impl From<AdminUsageRecord> for AdminUsageStatsData {
             image_output_tokens: usage.image_output_tokens,
             image_request_count: usage.image_request_count,
             image_request_failed_count: usage.image_request_failed_count,
-            last_used_at: usage.last_used_at.map(|v| v.to_rfc3339()),
+            last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
         }
     }
 }

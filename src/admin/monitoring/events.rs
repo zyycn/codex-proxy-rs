@@ -60,6 +60,7 @@ pub struct EventLog {
     /// 结构化元数据。
     pub metadata: Value,
     /// 创建时间。
+    #[serde(serialize_with = "crate::infra::serialize_china_rfc3339")]
     pub created_at: DateTime<Utc>,
 }
 
