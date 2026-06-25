@@ -1,6 +1,10 @@
 use std::{fs, io::Write};
 
-use codex_proxy_rs::infra::logging::{build_file_appender, RotationConfig};
+use chrono::Utc;
+use codex_proxy_rs::infra::{
+    logging::{build_file_appender, RotationConfig},
+    time::china_date,
+};
 
 #[test]
 fn rolling_appender_should_write_daily_codex_log_file() {
@@ -16,11 +20,10 @@ fn rolling_appender_should_write_daily_codex_log_file() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
+    let expected = format!("codex-proxy-rs.{}.log", china_date(&Utc::now()));
     assert!(
-        names
-            .iter()
-            .any(|name| name.starts_with("codex-proxy-rs.") && name.ends_with(".log")),
-        "expected a daily codex log file, found {names:?}"
+        names.iter().any(|name| name == &expected),
+        "expected China-date codex log file {expected}, found {names:?}"
     );
 }
 

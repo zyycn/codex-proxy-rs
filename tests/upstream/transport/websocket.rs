@@ -30,6 +30,14 @@ async fn websocket_audit_artifact_should_require_explicit_directory() {
         .await
         .expect("enabled audit should write")
         .expect("enabled audit path");
+    let file_name = written
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("audit file name");
+    assert!(
+        file_name.contains("+0800"),
+        "expected China-time audit file name, got {file_name}"
+    );
     let body = std::fs::read_to_string(&written).expect("audit file");
     let json = serde_json::from_str::<serde_json::Value>(&body).expect("audit json");
 

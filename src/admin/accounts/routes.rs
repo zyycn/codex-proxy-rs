@@ -43,59 +43,59 @@ const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountsQuery {
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-    pub page: Option<u32>,
-    pub page_size: Option<u32>,
-    pub search: Option<String>,
+pub(crate) struct AccountsQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    search: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateAccountRequest {
-    pub token: Option<String>,
-    pub refresh_token: Option<String>,
+pub(crate) struct CreateAccountRequest {
+    token: Option<String>,
+    refresh_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchDeleteAccountsRequest {
-    pub ids: Vec<String>,
+pub(crate) struct BatchDeleteAccountsRequest {
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SetAccountCookiesRequest {
-    pub id: String,
-    pub cookies: Value,
+pub(crate) struct SetAccountCookiesRequest {
+    id: String,
+    cookies: Value,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountActionRequest {
-    pub id: String,
+pub(crate) struct AccountActionRequest {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountIdQuery {
-    pub id: String,
+pub(crate) struct AccountIdQuery {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountExportQuery {
-    pub ids: Option<String>,
-    pub format: Option<String>,
+pub(crate) struct AccountExportQuery {
+    ids: Option<String>,
+    format: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HealthCheckRequest {
-    pub ids: Option<Vec<String>>,
-    pub stagger_ms: Option<u64>,
-    pub concurrency: Option<u8>,
+pub(crate) struct HealthCheckRequest {
+    ids: Option<Vec<String>>,
+    stagger_ms: Option<u64>,
+    concurrency: Option<u8>,
 }
 
 // ============================================================================
@@ -104,22 +104,22 @@ pub struct HealthCheckRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AdminAccountData {
-    pub id: String,
-    pub email: Option<String>,
-    pub account_id: Option<String>,
-    pub user_id: Option<String>,
-    pub label: Option<String>,
-    pub plan_type: Option<String>,
-    pub status: String,
-    pub access_token_expires_at: Option<String>,
-    pub access_token_expires_at_display: Option<String>,
-    pub added_at: String,
-    pub added_at_display: String,
-    pub updated_at: String,
-    pub updated_at_display: String,
-    pub quota: AdminAccountQuotaData,
-    pub usage: AdminAccountUsageData,
+struct AdminAccountData {
+    id: String,
+    email: Option<String>,
+    account_id: Option<String>,
+    user_id: Option<String>,
+    label: Option<String>,
+    plan_type: Option<String>,
+    status: String,
+    access_token_expires_at: Option<String>,
+    access_token_expires_at_display: Option<String>,
+    added_at: String,
+    added_at_display: String,
+    updated_at: String,
+    updated_at_display: String,
+    quota: AdminAccountQuotaData,
+    usage: AdminAccountUsageData,
 }
 
 impl From<AdminAccountMetadata> for AdminAccountData {
@@ -160,12 +160,12 @@ impl AdminAccountData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AdminAccountQuotaData {
-    pub used_percent: Option<f64>,
-    pub used_percent_display: String,
-    pub reset_at_display: String,
-    pub refreshed_at_display: String,
-    pub window_used_display: String,
+struct AdminAccountQuotaData {
+    used_percent: Option<f64>,
+    used_percent_display: String,
+    reset_at_display: String,
+    refreshed_at_display: String,
+    window_used_display: String,
 }
 
 impl Default for AdminAccountQuotaData {
@@ -182,31 +182,31 @@ impl Default for AdminAccountQuotaData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AdminAccountUsageData {
-    pub request_count: i64,
-    pub request_count_display: String,
-    pub empty_response_count: i64,
-    pub input_tokens: i64,
-    pub input_tokens_display: String,
-    pub output_tokens: i64,
-    pub output_tokens_display: String,
-    pub cached_tokens: i64,
-    pub cached_tokens_display: String,
-    pub reasoning_tokens: i64,
-    pub total_tokens: i64,
-    pub total_tokens_display: String,
-    pub image_input_tokens: i64,
-    pub image_output_tokens: i64,
-    pub image_tokens_display: String,
-    pub image_request_count: i64,
-    pub image_request_failed_count: i64,
-    pub created_tokens: i64,
-    pub created_tokens_display: String,
-    pub read_tokens: i64,
-    pub read_tokens_display: String,
-    pub last_used_at: Option<String>,
-    pub last_used_at_display: String,
-    pub models: Vec<AdminAccountModelUsageData>,
+struct AdminAccountUsageData {
+    request_count: i64,
+    request_count_display: String,
+    empty_response_count: i64,
+    input_tokens: i64,
+    input_tokens_display: String,
+    output_tokens: i64,
+    output_tokens_display: String,
+    cached_tokens: i64,
+    cached_tokens_display: String,
+    reasoning_tokens: i64,
+    total_tokens: i64,
+    total_tokens_display: String,
+    image_input_tokens: i64,
+    image_output_tokens: i64,
+    image_tokens_display: String,
+    image_request_count: i64,
+    image_request_failed_count: i64,
+    created_tokens: i64,
+    created_tokens_display: String,
+    read_tokens: i64,
+    read_tokens_display: String,
+    last_used_at: Option<String>,
+    last_used_at_display: String,
+    models: Vec<AdminAccountModelUsageData>,
 }
 
 impl AdminAccountUsageData {
@@ -262,24 +262,24 @@ impl AdminAccountUsageData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AdminAccountModelUsageData {
-    pub model: String,
-    pub request_count: u64,
-    pub request_count_display: String,
-    pub success_rate: f64,
-    pub success_rate_display: String,
-    pub input_tokens: u64,
-    pub input_tokens_display: String,
-    pub output_tokens: u64,
-    pub output_tokens_display: String,
-    pub cached_tokens: u64,
-    pub cached_tokens_display: String,
-    pub total_tokens: u64,
-    pub total_tokens_display: String,
-    pub total_cost_usd: f64,
-    pub total_cost_usd_display: String,
-    pub last_used_at: Option<String>,
-    pub last_used_at_display: String,
+struct AdminAccountModelUsageData {
+    model: String,
+    request_count: u64,
+    request_count_display: String,
+    success_rate: f64,
+    success_rate_display: String,
+    input_tokens: u64,
+    input_tokens_display: String,
+    output_tokens: u64,
+    output_tokens_display: String,
+    cached_tokens: u64,
+    cached_tokens_display: String,
+    total_tokens: u64,
+    total_tokens_display: String,
+    total_cost_usd: f64,
+    total_cost_usd_display: String,
+    last_used_at: Option<String>,
+    last_used_at_display: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -306,53 +306,53 @@ impl AccountListStats {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchDeleteAccountsData {
-    pub deleted: u32,
-    pub not_found: Vec<String>,
+struct BatchDeleteAccountsData {
+    deleted: u32,
+    not_found: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchUpdateAccountStatusData {
-    pub updated: u32,
-    pub not_found: Vec<String>,
+struct BatchUpdateAccountStatusData {
+    updated: u32,
+    not_found: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub enum AccountUpdateData {
+enum AccountUpdateData {
     Account(Box<AdminAccountData>),
     BatchStatus(BatchUpdateAccountStatusData),
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResetAccountUsageData {
-    pub id: String,
-    pub reset: bool,
+struct ResetAccountUsageData {
+    id: String,
+    reset: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountCookiesData {
-    pub cookies: Option<String>,
+struct AccountCookiesData {
+    cookies: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AdminAccountExportData {
-    pub id: String,
-    pub email: Option<String>,
-    pub account_id: Option<String>,
-    pub user_id: Option<String>,
-    pub label: Option<String>,
-    pub plan_type: Option<String>,
-    pub status: String,
-    pub access_token_expires_at: Option<String>,
-    pub added_at: String,
-    pub updated_at: String,
-    pub token: String,
-    pub refresh_token: Option<String>,
+struct AdminAccountExportData {
+    id: String,
+    email: Option<String>,
+    account_id: Option<String>,
+    user_id: Option<String>,
+    label: Option<String>,
+    plan_type: Option<String>,
+    status: String,
+    access_token_expires_at: Option<String>,
+    added_at: String,
+    updated_at: String,
+    token: String,
+    refresh_token: Option<String>,
 }
 
 impl From<StoredAccount> for AdminAccountExportData {
@@ -376,14 +376,14 @@ impl From<StoredAccount> for AdminAccountExportData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountExportData {
+struct AccountExportData {
     source_format: &'static str,
     accounts: Vec<AdminAccountExportData>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountImportData {
+struct AccountImportData {
     imported: u32,
     skipped: u32,
     source_format: String,
@@ -391,18 +391,18 @@ pub struct AccountImportData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HealthCheckData {
-    pub summary: HealthCheckSummary,
-    pub results: Vec<Value>,
+struct HealthCheckData {
+    summary: HealthCheckSummary,
+    results: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HealthCheckSummary {
-    pub total: usize,
-    pub alive: usize,
-    pub dead: usize,
-    pub skipped: usize,
+struct HealthCheckSummary {
+    total: usize,
+    alive: usize,
+    dead: usize,
+    skipped: usize,
 }
 
 // ============================================================================
@@ -410,7 +410,7 @@ pub struct HealthCheckSummary {
 // ============================================================================
 
 /// `GET /api/admin/accounts`
-pub async fn accounts(
+pub(crate) async fn accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -474,7 +474,7 @@ pub async fn accounts(
 }
 
 /// `POST /api/admin/accounts`
-pub async fn create_account(
+pub(crate) async fn create_account(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -497,7 +497,7 @@ pub async fn create_account(
 }
 
 /// `POST /api/admin/accounts/refresh`
-pub async fn refresh_account(
+pub(crate) async fn refresh_account(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -521,7 +521,7 @@ pub async fn refresh_account(
 }
 
 /// `POST /api/admin/accounts/reset-usage`
-pub async fn reset_account_usage(
+pub(crate) async fn reset_account_usage(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -546,7 +546,7 @@ pub async fn reset_account_usage(
 }
 
 /// `GET /api/admin/accounts/cookies`
-pub async fn get_account_cookies(
+pub(crate) async fn get_account_cookies(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -565,7 +565,7 @@ pub async fn get_account_cookies(
 }
 
 /// `POST /api/admin/accounts/cookies`
-pub async fn set_account_cookies(
+pub(crate) async fn set_account_cookies(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -589,7 +589,7 @@ pub async fn set_account_cookies(
 }
 
 /// `GET /api/admin/accounts/quota`
-pub async fn account_quota(
+pub(crate) async fn account_quota(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -629,7 +629,7 @@ pub async fn account_quota(
 }
 
 /// `GET /api/admin/accounts/quota-warnings`
-pub async fn quota_warnings(
+pub(crate) async fn quota_warnings(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -646,7 +646,7 @@ pub async fn quota_warnings(
 }
 
 /// `POST /api/admin/accounts/health-check`
-pub async fn health_check_accounts(
+pub(crate) async fn health_check_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -702,7 +702,7 @@ pub async fn health_check_accounts(
 }
 
 /// `GET /api/admin/accounts/export`
-pub async fn export_accounts(
+pub(crate) async fn export_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -732,7 +732,7 @@ pub async fn export_accounts(
 }
 
 /// `POST /api/admin/accounts/import`
-pub async fn import_accounts(
+pub(crate) async fn import_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -757,7 +757,7 @@ pub async fn import_accounts(
 }
 
 /// `POST /api/admin/accounts/delete`
-pub async fn batch_delete_accounts(
+pub(crate) async fn batch_delete_accounts(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
@@ -786,7 +786,7 @@ pub async fn batch_delete_accounts(
 }
 
 /// `POST /api/admin/accounts/update`
-pub async fn update_account(
+pub(crate) async fn update_account(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,

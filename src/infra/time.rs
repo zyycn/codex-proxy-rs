@@ -1,6 +1,6 @@
 //! 时间格式化辅助。
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset, SecondsFormat, TimeZone, Timelike, Utc};
 use serde::Serializer;
 
 const CHINA_OFFSET_SECONDS: i32 = 8 * 60 * 60;
@@ -8,6 +8,13 @@ const CHINA_OFFSET_SECONDS: i32 = 8 * 60 * 60;
 /// 将 UTC 时间输出为中国时区 RFC3339 字符串。
 pub fn china_rfc3339(value: &DateTime<Utc>) -> String {
     value.with_timezone(&china_offset()).to_rfc3339()
+}
+
+/// 将 UTC 时间输出为中国时区毫秒精度 RFC3339 字符串。
+pub fn china_rfc3339_millis(value: &DateTime<Utc>) -> String {
+    value
+        .with_timezone(&china_offset())
+        .to_rfc3339_opts(SecondsFormat::Millis, false)
 }
 
 /// 将 RFC3339 字符串输出为中国时区 RFC3339 字符串。
@@ -51,6 +58,67 @@ pub fn china_time(value: &DateTime<Utc>) -> String {
         .with_timezone(&china_offset())
         .format("%H:%M:%S")
         .to_string()
+}
+
+/// 将 UTC 时间输出为适合文件名的中国时区时间戳。
+pub fn china_filename_timestamp_millis(value: &DateTime<Utc>) -> String {
+    value
+        .with_timezone(&china_offset())
+        .format("%Y%m%dT%H%M%S%.3f%z")
+        .to_string()
+}
+
+/// 返回 UTC 时间所在中国自然日的起点。
+pub fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let offset = china_offset();
+    let local = value.with_timezone(&offset);
+    offset
+        .from_local_datetime(
+            &local
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .expect("valid midnight"),
+        )
+        .single()
+        .expect("fixed offset has a single local datetime")
+        .with_timezone(&Utc)
+}
+
+/// 返回 UTC 时间所在中国小时的起点。
+pub fn china_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let offset = china_offset();
+    let local = value.with_timezone(&offset);
+    offset
+        .from_local_datetime(
+            &local
+                .date_naive()
+                .and_hms_opt(local.hour(), 0, 0)
+                .expect("valid hour"),
+        )
+        .single()
+        .expect("fixed offset has a single local datetime")
+        .with_timezone(&Utc)
+}
+
+/// 返回 UTC 时间所在中国 15 分钟时间槽的起点。
+pub fn china_quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    let offset = china_offset();
+    let local = value.with_timezone(&offset);
+    offset
+        .from_local_datetime(
+            &local
+                .date_naive()
+                .and_hms_opt(local.hour(), local.minute() / 15 * 15, 0)
+                .expect("valid quarter hour"),
+        )
+        .single()
+        .expect("fixed offset has a single local datetime")
+        .with_timezone(&Utc)
+}
+
+/// 返回 UTC 时间对应的中国小时。
+pub fn china_hour(value: &DateTime<Utc>) -> u32 {
+    value.with_timezone(&china_offset()).hour()
 }
 
 /// 将 UTC 时间输出为相对时间，超过 7 天时返回中国时区日期。

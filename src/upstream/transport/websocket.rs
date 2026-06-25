@@ -24,6 +24,7 @@ use tungstenite::{
     Message,
 };
 
+use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::protocol::events::{self, TokenUsage};
 use crate::upstream::protocol::responses::CodexResponsesRequest;
 use crate::upstream::protocol::sse::SseError;
@@ -1104,6 +1105,6 @@ fn is_sensitive_opening_header(name: &str) -> bool {
 }
 
 fn websocket_audit_file_name() -> String {
-    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let timestamp = china_filename_timestamp_millis(&Utc::now());
     format!("codex-ws-audit-{timestamp}-{}.json", Uuid::new_v4())
 }
