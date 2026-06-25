@@ -243,7 +243,7 @@ export function useDashboard(): {
         ],
       },
       {
-        title: '缓存命中',
+        title: '今日缓存命中',
         value: formatRate(cache.todayHitRate),
         icon: Timer,
         tone: cache.todayHitRate && cache.todayHitRate > 0 ? 'warning' : 'normal',
@@ -255,8 +255,8 @@ export function useDashboard(): {
         details: [
           { label: '总缓存命中', value: formatRate(cache.totalHitRate), tone: 'warning' },
           {
-            label: '首字 / 完成',
-            value: `${formatLatency(cache.firstTokenLatencyMs)} / ${formatLatency(cache.completionLatencyMs)}`,
+            label: '缓存 Token',
+            value: formatTokens(cache.totalCachedTokens),
             tone: 'warning',
           },
         ],

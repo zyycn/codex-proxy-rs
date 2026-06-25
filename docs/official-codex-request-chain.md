@@ -156,7 +156,7 @@
 - `free`：常见只看到 monthly/30d，是因为短周期窗口可能不存在，或者月限额由 spend control 提供。
 - model/additional：例如 `gpt-5.3-codex-spark` 这类 additional limit 会按 `limit_name` 单独组成 snapshot，和 core 限额不是同一行。
 
-官方阻断判断也不是单看 `rate_limit.limit_reached`：`rate_limit.allowed === false`、`credits` 不可用、`spend_control.reached === true` 都会进入“额度不可用”的判断路径。additional limit 的阻断是按对应 `limit_name` 独立判断，不能简单等同于整个账号不可用。
+官方阻断判断也不是单看 `rate_limit.limit_reached`：`rate_limit.allowed === false`、明确的 credit overage、`spend_control.reached === true` 都会进入“额度不可用”的判断路径。free 账号可出现 `credits.has_credits = false` 且 `rate_limit.allowed = true`，不能把 `has_credits = false` 单独当成账号不可用。additional limit 的阻断是按对应 `limit_name` 独立判断，不能简单等同于整个账号不可用。
 
 ### 官方响应事件
 
@@ -418,6 +418,15 @@ Usage 请求路径按 base URL 选择：
 2026-06-26 使用临时 18080 本地实例复用 `.runtime` 数据，登录管理端后调用 `GET /api/admin/accounts/quota?id=acct_fbed55cb574b4aee81760d0e8ac84ba6`。请求真实官方 `/wham/usage` 返回 200，`quota_fetched_at` 从 `2026-06-25T16:32:12.697845388+00:00` 更新为 `2026-06-25T16:53:08.898420541+00:00`。
 
 本地 `account_cookies` 当前没有该 active 账号的 `cf_clearance`，所以这次真实链路只验证 usage 主刷新路径未被 cookie 改动破坏；cookie 头携带行为由 `tests/admin/accounts/quota.rs` 和 `tests/upstream/accounts/quota_refresh.rs` 的 route/mock 请求头测试覆盖。
+
+2026-06-26 使用当前本地 8080 实例验证修复后的真实请求链路。先调用管理端 `GET /api/admin/accounts/quota?id=acct_fbed55cb574b4aee81760d0e8ac84ba6` 刷新真实官方 usage，返回 `allowed = true`、`limit_reached = false`、`credits.has_credits = false`、月窗口 `used_percent = 6`；账号保持 `active`，没有被写入本地 quota lock。
+
+随后使用同一 active free 账号发起真实 Responses 请求：
+
+- HTTP SSE：`/v1/responses`、`use_websocket = false` 返回 200，`responseId = resp_030daafe01e3005a016a3d723972348194bfd3508fd170d13f`，输出 `ok`，日志 `transport = http_sse`，`total_tokens = 14`。
+- WebSocket：`/v1/responses`、`use_websocket = true` 返回 200，`responseId = resp_08f5f7aa3db3c93d016a3d724cd85c819a8d41afa2221047c0`，输出 `ws-ok`，日志 `transport = websocket`，`total_tokens = 16`。
+- 连续 WS 对话：同一 `prompt_cache_key = ws-stability-20260626` 下连续 5 轮自然语言请求，第二轮起携带上一轮 `previous_response_id` 续链；5 条日志全部为 `statusCode = 200`、`transport = websocket`，没有 fallback 到 HTTP。5 轮输出均正常完成，最新账号状态仍为 `active`，管理端账号列表显示请求数增长到 11，月限额仍为 6.0%。
+- 今日缓存命中：同一 `prompt_cache_key = ws-cache-hit-20260626` 下发送两轮长前缀自然语言对话，第一轮 `cached_tokens = 0`，第二轮 `cached_tokens = 1792`，对应 dashboard `todayHitRate = 0.23938017632914774`、`totalCachedTokens = 7936`。这说明今天的缓存命中路径是通的，之前显示 0 只是因为短对话没有触发缓存。
 
 结论：本地真实 free 账号确认为 30d/月限额单独展示。当前本地没有 active 的 5h+7d 账号可实时验证组合返回；该组合路径由官方 bundle 证据和项目测试覆盖。
 

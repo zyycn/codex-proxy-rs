@@ -5,7 +5,9 @@ use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
-use codex_proxy_rs::upstream::accounts::quota::{quota_from_usage, RuntimeQuotaRefreshService};
+use codex_proxy_rs::upstream::accounts::quota::{
+    quota_from_usage, quota_snapshot_limit_reached, RuntimeQuotaRefreshService,
+};
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
 use secrecy::SecretString;
@@ -136,6 +138,45 @@ fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() 
         quota.pointer("/snapshots/0/metered_feature"),
         Some(&Value::String("review".to_string()))
     );
+}
+
+#[test]
+fn quota_snapshot_limit_reached_should_keep_allowed_free_account_without_reset_credits_available() {
+    let usage = json!({
+        "plan_type": "free",
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {
+                "used_percent": 6,
+                "reset_at": 1_806_364_800,
+                "limit_window_seconds": 2_592_000
+            }
+        },
+        "credits": {
+            "has_credits": false,
+            "unlimited": false,
+            "overage_limit_reached": false,
+            "balance": 0
+        }
+    });
+    let quota = quota_from_usage(&usage);
+
+    assert!(!quota_snapshot_limit_reached(&quota));
+}
+
+#[test]
+fn quota_snapshot_limit_reached_should_block_explicit_credit_overage_limit() {
+    let quota = json!({
+        "credits": {
+            "has_credits": false,
+            "unlimited": false,
+            "overage_limit_reached": true,
+            "balance": 0
+        }
+    });
+
+    assert!(quota_snapshot_limit_reached(&quota));
 }
 
 #[tokio::test]

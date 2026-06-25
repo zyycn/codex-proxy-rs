@@ -16,7 +16,7 @@ pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
     core_snapshot_blocked(quota)
         || spend_control_limit_reached(quota)
         || monthly_limit_reached(quota)
-        || credits_exhausted(quota)
+        || credits_overage_limit_reached(quota)
 }
 
 /// 从配额快照读取 UTC 重置时间。
@@ -306,15 +306,11 @@ fn bucket_window_minutes(bucket: &Value) -> Option<u64> {
         .filter(|value| *value > 0)
 }
 
-fn credits_exhausted(quota: &Value) -> bool {
+fn credits_overage_limit_reached(quota: &Value) -> bool {
     quota
-        .pointer("/credits/unlimited")
+        .pointer("/credits/overage_limit_reached")
         .and_then(Value::as_bool)
-        .is_some_and(|unlimited| !unlimited)
-        && quota
-            .pointer("/credits/has_credits")
-            .and_then(Value::as_bool)
-            .is_some_and(|has_credits| !has_credits)
+        .unwrap_or(false)
 }
 
 fn number_value(value: &Value) -> Option<f64> {
