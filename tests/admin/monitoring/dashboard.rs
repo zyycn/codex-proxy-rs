@@ -191,6 +191,28 @@ async fn dashboard_summary_should_fallback_total_cost_to_usage_summary_when_logs
     );
 }
 
+#[tokio::test]
+async fn dashboard_summary_should_return_backend_formatted_time_fields() {
+    let (app, store, pool, _dir) = dashboard_test_app(
+        "dashboard-backend-formatted-time.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    store
+        .append(&usage_log_with_tokens(
+            "2026-06-18T12:34:56Z".parse().unwrap(),
+            10,
+        ))
+        .await
+        .unwrap();
+    seed_usage_summary_with_last_used(&pool, 1, 1, "2000-01-01T00:00:00Z").await;
+
+    let body = dashboard_summary(app).await;
+
+    assert_eq!(body["data"]["eventLogs"][0]["time"], "20:34:56");
+    assert_eq!(body["data"]["accountUsage"][0]["lastUsed"], "2000-01-01");
+}
+
 async fn dashboard_summary_total_cost_for_log(db_name: &str, model: &str, metadata: Value) -> f64 {
     let (app, store, _pool, _dir) =
         dashboard_test_app(db_name, crate::support::fingerprint::test_fingerprint()).await;
@@ -286,6 +308,16 @@ async fn seed_admin_session(pool: &SqlitePool, session_id: &str) {
 }
 
 async fn seed_usage_summary(pool: &SqlitePool, input_tokens: u64, output_tokens: u64) {
+    seed_usage_summary_with_last_used(pool, input_tokens, output_tokens, "2026-06-18T00:00:00Z")
+        .await;
+}
+
+async fn seed_usage_summary_with_last_used(
+    pool: &SqlitePool,
+    input_tokens: u64,
+    output_tokens: u64,
+    last_used_at: &str,
+) {
     sqlx::query(
         "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
     )
@@ -305,7 +337,7 @@ async fn seed_usage_summary(pool: &SqlitePool, input_tokens: u64, output_tokens:
     .bind(input_tokens as i64)
     .bind(output_tokens as i64)
     .bind((input_tokens + output_tokens) as i64)
-    .bind("2026-06-18T00:00:00Z")
+    .bind(last_used_at)
     .execute(pool)
     .await
     .unwrap();

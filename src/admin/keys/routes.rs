@@ -17,8 +17,8 @@ use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
     infra::{
-        china_rfc3339_str,
         json::{clamp_limit, Page},
+        time::{china_relative_time_str, china_rfc3339_str},
     },
     runtime::state::AppState,
 };
@@ -61,7 +61,9 @@ pub struct ClientApiKeyData {
     pub prefix: String,
     pub enabled: bool,
     pub created_at: String,
+    pub created_at_display: String,
     pub last_used_at: Option<String>,
+    pub last_used_at_display: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,7 +75,9 @@ pub struct CreatedClientApiKeyData {
     pub prefix: String,
     pub enabled: bool,
     pub created_at: String,
+    pub created_at_display: String,
     pub last_used_at: Option<String>,
+    pub last_used_at_display: String,
     pub plaintext: String,
 }
 
@@ -114,7 +118,9 @@ impl From<AdminStoredClientApiKey> for ClientApiKeyData {
             label: k.label,
             prefix: k.prefix,
             enabled: k.enabled,
+            created_at_display: china_relative_time_str(Some(&k.created_at)),
             created_at: china_rfc3339_str(&k.created_at),
+            last_used_at_display: china_relative_time_str(k.last_used_at.as_deref()),
             last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
         }
     }
@@ -142,7 +148,9 @@ impl From<AdminCreatedClientApiKey> for CreatedClientApiKeyData {
             label: k.label,
             prefix: k.prefix,
             enabled: k.enabled,
+            created_at_display: china_relative_time_str(Some(&k.created_at)),
             created_at: china_rfc3339_str(&k.created_at),
+            last_used_at_display: china_relative_time_str(k.last_used_at.as_deref()),
             last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
             plaintext: k.plaintext,
         }

@@ -10,8 +10,11 @@ export interface Account {
   status: 'active' | 'expired' | 'disabled' | 'banned' | 'quota_exhausted' | 'refreshing'
   label?: string
   accessTokenExpiresAt?: string
+  accessTokenExpiresAtDisplay?: string
   addedAt: string
+  addedAtDisplay: string
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 export interface AccountsQuery {

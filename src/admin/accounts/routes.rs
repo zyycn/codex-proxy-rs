@@ -17,8 +17,8 @@ use crate::{
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     http::middleware::request_id::RequestId,
     infra::{
-        china_rfc3339, china_rfc3339_str,
         json::{clamp_limit, clamp_page, Page},
+        time::{china_datetime, china_rfc3339, china_rfc3339_str},
     },
     runtime::state::AppState,
     upstream::accounts::store::StoredAccount,
@@ -100,12 +100,18 @@ pub struct AdminAccountData {
     pub plan_type: Option<String>,
     pub status: String,
     pub access_token_expires_at: Option<String>,
+    pub access_token_expires_at_display: Option<String>,
     pub added_at: String,
+    pub added_at_display: String,
     pub updated_at: String,
+    pub updated_at_display: String,
 }
 
 impl From<AdminAccountMetadata> for AdminAccountData {
     fn from(a: AdminAccountMetadata) -> Self {
+        let access_token_expires_at = a.access_token_expires_at.as_ref().map(china_rfc3339);
+        let access_token_expires_at_display =
+            a.access_token_expires_at.as_ref().map(china_datetime);
         Self {
             id: a.id,
             email: a.email,
@@ -114,9 +120,12 @@ impl From<AdminAccountMetadata> for AdminAccountData {
             label: a.label,
             plan_type: a.plan_type,
             status: account_status_str(a.status).to_string(),
-            access_token_expires_at: a.access_token_expires_at.map(|dt| china_rfc3339(&dt)),
+            access_token_expires_at,
+            access_token_expires_at_display,
             added_at: china_rfc3339(&a.added_at),
+            added_at_display: china_datetime(&a.added_at),
             updated_at: china_rfc3339(&a.updated_at),
+            updated_at_display: china_datetime(&a.updated_at),
         }
     }
 }

@@ -20,6 +20,7 @@ export interface EventLog {
   message: string
   metadata?: any
   createdAt: string
+  createdAtDisplay: string
 }
 
 export interface LogsQuery {

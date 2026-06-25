@@ -1,5 +1,4 @@
 import { requestJson } from '../request'
-import type { EventLog } from './logs'
 
 export type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 
@@ -8,7 +7,7 @@ export interface DashboardSummary {
   trend: DashboardTrend
   accountUsage: DashboardAccountUsage[]
   serviceStatuses: DashboardServiceStatus[]
-  eventLogs: EventLog[]
+  eventLogs: DashboardEventLog[]
   poolSummary: DashboardAccountPoolSummary
   capacityInfo: DashboardAccountCapacityInfo
   rotationStrategy?: string
@@ -85,8 +84,19 @@ export interface DashboardAccountUsage {
   requests: number
   tokens: number
   quotaUsedPercent?: number | null
-  lastUsedAt?: string | null
+  lastUsed: string
   status: 'active' | 'expired' | 'disabled' | 'banned' | 'quota_exhausted' | 'refreshing'
+}
+
+export interface DashboardEventLog {
+  id: string
+  time: string
+  level: 'debug' | 'info' | 'warn' | 'error'
+  requestId?: string
+  route?: string
+  model?: string
+  statusCode?: number
+  latencyMs?: number
 }
 
 export interface DashboardServiceStatus {

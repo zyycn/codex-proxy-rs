@@ -143,19 +143,6 @@ async function handleViewDetail(log: EventLog) {
   }
 }
 
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  return date.toLocaleString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-}
-
 function getLevelLabel(level: string): string {
   const labels: Record<string, string> = {
     info: '信息',
@@ -249,7 +236,7 @@ onBeforeUnmount(() => {
       >
         <template #createdAt="{ row }">
           <span class="font-mono text-(--cp-text-secondary)">
-            {{ formatTime(row.createdAt) }}
+            {{ row.createdAtDisplay }}
           </span>
         </template>
 
@@ -345,7 +332,7 @@ onBeforeUnmount(() => {
           <div>
             <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">时间</label>
             <p class="m-0 text-[13px] text-(--cp-text-primary)">
-              {{ formatTime(selectedLog.createdAt) }}
+              {{ selectedLog.createdAtDisplay }}
             </p>
           </div>
           <div>

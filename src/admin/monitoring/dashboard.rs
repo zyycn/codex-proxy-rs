@@ -27,7 +27,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
     http::middleware::request_id::RequestId,
-    infra::{china_datetime_rfc3339_str, china_rfc3339},
+    infra::time::{china_datetime_rfc3339_str, china_relative_time, china_time},
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
 };
@@ -56,7 +56,7 @@ pub struct DashboardSummaryData {
     pub trend: DashboardTrendData,
     pub account_usage: Vec<DashboardAccountUsageData>,
     pub service_statuses: Vec<DashboardServiceStatusData>,
-    pub event_logs: Vec<EventLog>,
+    pub event_logs: Vec<DashboardEventLogData>,
     pub pool_summary: AccountPoolDiagnostics,
     pub capacity_info: AccountCapacityDiagnostics,
     pub rotation_strategy: Option<String>,
@@ -151,8 +151,21 @@ pub struct DashboardAccountUsageData {
     pub requests: u64,
     pub tokens: u64,
     pub quota_used_percent: Option<f64>,
-    pub last_used_at: Option<String>,
+    pub last_used: String,
     pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardEventLogData {
+    pub id: String,
+    pub time: String,
+    pub level: EventLevel,
+    pub request_id: Option<String>,
+    pub route: Option<String>,
+    pub model: Option<String>,
+    pub status_code: Option<i64>,
+    pub latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,7 +259,7 @@ pub async fn dashboard_summary(
         .unwrap_or_default();
 
     let pool_summary = account_pool_summary(&accounts);
-    let dashboard_logs = logs.iter().take(10).cloned().collect();
+    let dashboard_logs = logs.iter().take(10).map(dashboard_event_log_data).collect();
     let trend = dashboard_trend_data(&logs, DashboardTrendKind::Usage);
     let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
     let settings = state.services.settings.current();
@@ -737,7 +750,7 @@ fn account_usage_data(
                 requests: nonnegative_i64_to_u64(usage.request_count),
                 tokens: nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens),
                 quota_used_percent,
-                last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
+                last_used: china_relative_time(usage.last_used_at, Utc::now()),
                 status,
             }
         })
@@ -745,6 +758,19 @@ fn account_usage_data(
     rows.sort_by_key(|row| Reverse(row.requests));
     rows.truncate(4);
     rows
+}
+
+fn dashboard_event_log_data(log: &EventLog) -> DashboardEventLogData {
+    DashboardEventLogData {
+        id: log.id.clone(),
+        time: china_time(&log.created_at),
+        level: log.level,
+        request_id: log.request_id.clone(),
+        route: log.route.clone(),
+        model: log.model.clone(),
+        status_code: log.status_code,
+        latency_ms: log.latency_ms,
+    }
 }
 
 async fn account_quota_used_percent_by_id(
