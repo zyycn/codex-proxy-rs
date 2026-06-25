@@ -124,7 +124,7 @@ pub struct AdminAccountData {
 
 impl From<AdminAccountMetadata> for AdminAccountData {
     fn from(a: AdminAccountMetadata) -> Self {
-        Self::from_parts(a, None, None, None)
+        Self::from_parts(a, None, None, Vec::new())
     }
 }
 
@@ -133,7 +133,7 @@ impl AdminAccountData {
         a: AdminAccountMetadata,
         usage: Option<&AdminUsageRecord>,
         quota: Option<AdminAccountQuotaData>,
-        model_top: Option<AdminAccountModelUsageData>,
+        models: Vec<AdminAccountModelUsageData>,
     ) -> Self {
         let access_token_expires_at = a.access_token_expires_at.as_ref().map(china_rfc3339);
         let access_token_expires_at_display =
@@ -153,7 +153,7 @@ impl AdminAccountData {
             updated_at: china_rfc3339(&a.updated_at),
             updated_at_display: china_datetime(&a.updated_at),
             quota: quota.unwrap_or_default(),
-            usage: AdminAccountUsageData::from_usage(usage, model_top),
+            usage: AdminAccountUsageData::from_usage(usage, models),
         }
     }
 }
@@ -206,13 +206,13 @@ pub struct AdminAccountUsageData {
     pub read_tokens_display: String,
     pub last_used_at: Option<String>,
     pub last_used_at_display: String,
-    pub model_top: Option<AdminAccountModelUsageData>,
+    pub models: Vec<AdminAccountModelUsageData>,
 }
 
 impl AdminAccountUsageData {
     fn from_usage(
         usage: Option<&AdminUsageRecord>,
-        model_top: Option<AdminAccountModelUsageData>,
+        models: Vec<AdminAccountModelUsageData>,
     ) -> Self {
         let request_count = usage.map_or(0, |usage| usage.request_count);
         let empty_response_count = usage.map_or(0, |usage| usage.empty_response_count);
@@ -255,7 +255,7 @@ impl AdminAccountUsageData {
             read_tokens_display: format_tokens(nonnegative_i64_to_u64(read_tokens)),
             last_used_at: last_used_at.map(|value| china_rfc3339(&value)),
             last_used_at_display: china_relative_time(last_used_at, Utc::now()),
-            model_top,
+            models,
         }
     }
 }
@@ -286,7 +286,7 @@ pub struct AdminAccountModelUsageData {
 struct AccountListStats {
     usage_by_account: HashMap<String, AdminUsageRecord>,
     quota_by_account: HashMap<String, AdminAccountQuotaData>,
-    model_top_by_account: HashMap<String, AdminAccountModelUsageData>,
+    models_by_account: HashMap<String, Vec<AdminAccountModelUsageData>>,
 }
 
 impl AccountListStats {
@@ -296,7 +296,10 @@ impl AccountListStats {
             account,
             self.usage_by_account.get(&account_id),
             self.quota_by_account.get(&account_id).cloned(),
-            self.model_top_by_account.get(&account_id).cloned(),
+            self.models_by_account
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_default(),
         )
     }
 }
@@ -872,7 +875,7 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
                 )
             })
             .collect(),
-        model_top_by_account: model_top_by_account(&logs),
+        models_by_account: models_by_account(&logs),
     }
 }
 
@@ -927,7 +930,7 @@ struct ModelUsageAggregate {
     last_used_at: Option<DateTime<Utc>>,
 }
 
-fn model_top_by_account(logs: &[EventLog]) -> HashMap<String, AdminAccountModelUsageData> {
+fn models_by_account(logs: &[EventLog]) -> HashMap<String, Vec<AdminAccountModelUsageData>> {
     let mut by_account_model = HashMap::<(String, String), ModelUsageAggregate>::new();
     for log in logs {
         let Some(account_id) = log
@@ -960,19 +963,24 @@ fn model_top_by_account(logs: &[EventLog]) -> HashMap<String, AdminAccountModelU
         );
     }
 
-    let mut by_account = HashMap::<String, ModelUsageAggregate>::new();
+    let mut by_account = HashMap::<String, Vec<ModelUsageAggregate>>::new();
     for ((account_id, _), aggregate) in by_account_model {
-        let replace = by_account
-            .get(&account_id)
-            .is_none_or(|current| aggregate.request_count > current.request_count);
-        if replace {
-            by_account.insert(account_id, aggregate);
-        }
+        by_account.entry(account_id).or_default().push(aggregate);
     }
 
     by_account
         .into_iter()
-        .map(|(account_id, aggregate)| (account_id, model_usage_data(aggregate)))
+        .map(|(account_id, mut aggregates)| {
+            aggregates.sort_by(|a, b| {
+                b.request_count
+                    .cmp(&a.request_count)
+                    .then_with(|| b.last_used_at.cmp(&a.last_used_at))
+            });
+            (
+                account_id,
+                aggregates.into_iter().map(model_usage_data).collect(),
+            )
+        })
         .collect()
 }
 
