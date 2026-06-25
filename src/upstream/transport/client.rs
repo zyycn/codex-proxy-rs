@@ -747,7 +747,8 @@ impl CodexBackendClient {
             "x-codex-installation-id",
             context.installation_id,
         )?;
-        insert_optional_header(&mut headers, "session_id", context.session_id)?;
+        insert_optional_header(&mut headers, "session-id", context.session_id)?;
+        insert_optional_header(&mut headers, "thread-id", context.session_id)?;
         insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
         insert_optional_header(&mut headers, "x-codex-turn-state", context.turn_state)?;
         insert_optional_header(&mut headers, "x-codex-turn-metadata", context.turn_metadata)?;
@@ -1053,6 +1054,8 @@ fn response_client_metadata(
         "x-codex-installation-id",
         context.installation_id,
     );
+    insert_metadata_string(&mut metadata, "session_id", context.session_id);
+    insert_metadata_string(&mut metadata, "thread_id", context.session_id);
     insert_metadata_string(&mut metadata, "x-codex-window-id", context.codex_window_id);
     insert_metadata_string(
         &mut metadata,

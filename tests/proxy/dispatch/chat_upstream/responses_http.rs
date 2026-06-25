@@ -513,6 +513,14 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         TEST_INSTALLATION_ID
     );
     assert_eq!(
+        upstream_body["client_metadata"]["session_id"],
+        conversation_id
+    );
+    assert_eq!(
+        upstream_body["client_metadata"]["thread_id"],
+        conversation_id
+    );
+    assert_eq!(
         upstream_body["client_metadata"]["x-codex-window-id"],
         window_id
     );
@@ -524,7 +532,9 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         upstream_body["client_metadata"]["x-codex-parent-thread-id"],
         "parent-metadata"
     );
-    assert_eq!(upstream_header("session_id"), Some(conversation_id));
+    assert_eq!(upstream_header("session-id"), Some(conversation_id));
+    assert_eq!(upstream_header("thread-id"), Some(conversation_id));
+    assert_eq!(upstream_header("session_id"), None);
     assert_eq!(upstream_header("x-codex-window-id"), Some(window_id));
     assert_eq!(upstream_header("x-codex-turn-state"), Some("turn-body"));
     assert_eq!(
