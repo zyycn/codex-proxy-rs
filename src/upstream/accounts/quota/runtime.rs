@@ -14,7 +14,10 @@ use crate::upstream::accounts::{
     },
     store::{AccountStore, AccountStoreError, SqliteAccountStore, SqliteAccountStoreError},
 };
-use crate::upstream::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
+use crate::upstream::{
+    accounts::cookies::SqliteCookieStore,
+    transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
+};
 
 const MIN_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
 const DEFAULT_REQUEST_SPACING_SECS: u64 = 3;
@@ -26,6 +29,7 @@ pub struct RuntimeQuotaRefreshService {
     min_refresh_interval_secs: u64,
     request_spacing: Duration,
     installation_id: Option<String>,
+    cookie_store: Option<SqliteCookieStore>,
 }
 
 impl RuntimeQuotaRefreshService {
@@ -37,6 +41,7 @@ impl RuntimeQuotaRefreshService {
             min_refresh_interval_secs: MIN_REFRESH_INTERVAL_SECS,
             request_spacing: Self::default_request_spacing(),
             installation_id: None,
+            cookie_store: None,
         }
     }
 
@@ -57,6 +62,7 @@ impl RuntimeQuotaRefreshService {
             min_refresh_interval_secs,
             request_spacing: Self::default_request_spacing(),
             installation_id: None,
+            cookie_store: None,
         }
     }
 
@@ -69,6 +75,12 @@ impl RuntimeQuotaRefreshService {
     /// 设置 Codex installation id。
     pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
         self.installation_id = installation_id.filter(|id| !id.trim().is_empty());
+        self
+    }
+
+    /// 设置 usage 请求可复用的账号 Cookie 存储。
+    pub fn with_cookie_store(mut self, cookie_store: SqliteCookieStore) -> Self {
+        self.cookie_store = Some(cookie_store);
         self
     }
 
@@ -117,6 +129,7 @@ impl RuntimeQuotaRefreshService {
             last_refreshed.insert(account.id.clone(), now);
 
             let request_id = uuid::Uuid::new_v4().to_string();
+            let cookie_header = self.usage_cookie_header(&account.id).await;
             match self
                 .codex
                 .fetch_usage(CodexRequestContext {
@@ -130,7 +143,7 @@ impl RuntimeQuotaRefreshService {
                     version: None,
                     codex_window_id: None,
                     parent_thread_id: None,
-                    cookie_header: None,
+                    cookie_header: cookie_header.as_deref(),
                     installation_id: self.installation_id.as_deref(),
                     session_id: None,
                 })
@@ -180,6 +193,15 @@ impl RuntimeQuotaRefreshService {
         }
 
         Ok(summary)
+    }
+
+    async fn usage_cookie_header(&self, account_id: &str) -> Option<String> {
+        self.cookie_store
+            .as_ref()?
+            .cookie_header_for_request(account_id, "chatgpt.com", "/codex/usage")
+            .await
+            .ok()
+            .flatten()
     }
 }
 

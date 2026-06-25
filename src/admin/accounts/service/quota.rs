@@ -19,6 +19,7 @@ impl AdminAccountService {
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let token = stored.access_token.expose_secret().to_string();
+        let cookie_header = self.usage_cookie_header(account_id).await;
         let context = crate::upstream::transport::CodexRequestContext {
             access_token: &token,
             account_id: stored.account_id.as_deref(),
@@ -30,7 +31,7 @@ impl AdminAccountService {
             version: None,
             codex_window_id: None,
             parent_thread_id: None,
-            cookie_header: None,
+            cookie_header: cookie_header.as_deref(),
             installation_id: self.installation_id.as_deref(),
             session_id: None,
         };
@@ -143,6 +144,7 @@ impl AdminAccountService {
         let request_id = uuid::Uuid::new_v4().to_string();
         for account in &accounts {
             let token = account.access_token.expose_secret().to_string();
+            let cookie_header = self.usage_cookie_header(&account.id).await;
             let start = std::time::Instant::now();
             let context = crate::upstream::transport::CodexRequestContext {
                 access_token: &token,
@@ -155,7 +157,7 @@ impl AdminAccountService {
                 version: None,
                 codex_window_id: None,
                 parent_thread_id: None,
-                cookie_header: None,
+                cookie_header: cookie_header.as_deref(),
                 installation_id: self.installation_id.as_deref(),
                 session_id: None,
             };

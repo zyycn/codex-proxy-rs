@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration as StdDuration};
 use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
+use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::quota::{quota_from_usage, RuntimeQuotaRefreshService};
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
@@ -134,6 +135,67 @@ fn quota_from_usage_should_preserve_additional_limit_name_and_metered_feature() 
     assert_eq!(
         quota.pointer("/snapshots/0/metered_feature"),
         Some(&Value::String("review".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_configured() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 12.0,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("quota-refresh-cookie.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let secret_box = SecretBox::new([14u8; 32]);
+    let store = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let cookies = SqliteCookieStore::new(pool.clone(), secret_box);
+    insert_quota_locked_account(&store, &pool, "acct-quota-cookie", "access-token-cookie").await;
+    cookies
+        .set_cookie_header("acct-quota-cookie", "cf_clearance=quota-refresh")
+        .await
+        .expect("cookie should be stored");
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let service =
+        RuntimeQuotaRefreshService::new(store, Arc::new(codex)).with_cookie_store(cookies);
+
+    let summary = service
+        .refresh_locked_accounts_once()
+        .await
+        .expect("quota refresh should succeed");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received requests should load");
+    let cookie_header = requests
+        .iter()
+        .find(|request| request.url.path() == "/api/codex/usage")
+        .and_then(|request| request.headers.get("cookie"))
+        .and_then(|value| value.to_str().ok());
+
+    assert_eq!(
+        (summary.refreshed, cookie_header),
+        (1, Some("cf_clearance=quota-refresh"))
     );
 }
 

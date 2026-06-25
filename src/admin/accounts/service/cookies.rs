@@ -1,6 +1,14 @@
 use super::{types::*, AdminAccountService};
 
 impl AdminAccountService {
+    pub(crate) async fn usage_cookie_header(&self, account_id: &str) -> Option<String> {
+        self.cookies
+            .cookie_header_for_request(account_id, "chatgpt.com", "/codex/usage")
+            .await
+            .ok()
+            .flatten()
+    }
+
     pub async fn cookies(&self, account_id: &str) -> Result<Option<String>, AdminAccountError> {
         self.ensure_cookie_account_exists(account_id).await?;
         self.cookies

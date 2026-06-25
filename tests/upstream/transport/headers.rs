@@ -522,7 +522,10 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
             .and_then(|value| value.to_str().ok()),
         Some("Codex Desktop")
     );
-    assert!(headers.get("cookie").is_none());
+    assert_eq!(
+        headers.get("cookie").and_then(|value| value.to_str().ok()),
+        Some("cf_clearance=old")
+    );
     assert!(headers.get("content-type").is_none());
     assert!(headers.get("sec-ch-ua").is_none());
     assert!(headers.get("openai-beta").is_none());

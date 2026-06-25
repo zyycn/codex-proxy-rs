@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     upstream::accounts::{
+        cookies::SqliteCookieStore,
         quota::{QuotaRefreshSummary, RuntimeQuotaRefreshService},
         store::SqliteAccountStore,
     },
@@ -52,6 +53,12 @@ impl QuotaRefreshTask {
     /// 设置 Codex installation id。
     pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
         self.service = self.service.with_installation_id(installation_id);
+        self
+    }
+
+    /// 设置 usage 请求可复用的账号 Cookie 存储。
+    pub fn with_cookie_store(mut self, cookie_store: SqliteCookieStore) -> Self {
+        self.service = self.service.with_cookie_store(cookie_store);
         self
     }
 
