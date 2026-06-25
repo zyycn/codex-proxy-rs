@@ -2740,6 +2740,13 @@ fn status_code_for_stream_failure(failure: &ResponsesSseFailure) -> i64 {
     if code.contains("invalid_request") || code.contains("not_found") {
         return 400;
     }
+    if code.contains("context_window")
+        || code.contains("invalid_prompt")
+        || code.contains("cyber_policy")
+        || code.contains("bad_request")
+    {
+        return 400;
+    }
     if code.contains("rate_limit") || code.contains("usage_limit") {
         return 429;
     }
@@ -2756,6 +2763,9 @@ fn status_code_for_stream_failure(failure: &ResponsesSseFailure) -> i64 {
     }
     if code.contains("payment") || code.contains("quota") {
         return 402;
+    }
+    if code.contains("server_overloaded") {
+        return 503;
     }
     502
 }
@@ -2927,8 +2937,8 @@ impl ResponseDispatchError {
             | Self::CloudflarePathBlocked { .. }
             | Self::InvalidSse(_)
             | Self::MissingCompleted
-            | Self::EmptyUpstreamResponse
-            | Self::Failed(_) => 502,
+            | Self::EmptyUpstreamResponse => 502,
+            Self::Failed(failure) => stream_failure_http_status(failure),
             Self::ModelUnsupported { .. } => 400,
             Self::Upstream(error) => upstream_error_http_status(error),
         }

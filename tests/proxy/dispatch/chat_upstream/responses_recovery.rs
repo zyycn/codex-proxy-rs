@@ -47,6 +47,51 @@ async fn responses_should_dispatch_to_codex_and_return_completed_response() {
 }
 
 #[tokio::test]
+async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "event: response.failed\n",
+                    "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_cyber_policy\",\"object\":\"response\",\"status\":\"failed\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"This request has been flagged for possible cybersecurity risk.\"}}}\n\n"
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "Security assessment"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "codex_api_error");
+}
+
+#[tokio::test]
 async fn responses_should_return_no_available_accounts_error_when_no_accounts_are_available() {
     let server = MockServer::start().await;
     let (app, api_key, _dir) = test_app_without_accounts(server.uri()).await;
