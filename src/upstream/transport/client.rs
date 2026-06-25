@@ -806,6 +806,7 @@ impl CodexBackendClient {
             HeaderValue::from_str(&self.fingerprint.originator)?,
         );
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
+        insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         Ok(headers)
     }

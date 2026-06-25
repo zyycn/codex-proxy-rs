@@ -101,6 +101,7 @@ impl TaskCoordinator {
                 30 * 60,
             )
             .with_installation_id(services.installation_id.clone())
+            .with_cookie_store(stores.cookies.clone())
             .start(),
         );
         coordinator.push(
