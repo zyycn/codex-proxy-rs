@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
+import BaseSegmented from '../../../components/base/BaseSegmented.vue'
 import BaseTable from '../../../components/base/BaseTable.vue'
 import type { EventLogItem, SemanticTone } from '../types'
 
@@ -16,13 +17,13 @@ const filters = [
   { label: '错误', value: 'error' },
 ]
 const eventLogColumns = [
-  { key: 'time', label: '时间', width: '11.5%' },
-  { key: 'level', label: '级别', width: '7.5%' },
-  { key: 'requestId', label: '请求 ID', width: '17%' },
-  { key: 'route', label: '路由', width: '18.5%' },
-  { key: 'model', label: '模型', width: '13%' },
-  { key: 'statusCode', label: '状态码', width: '8.5%' },
-  { key: 'latency', label: '延迟', width: '24%' },
+  { key: 'time', label: '时间', width: 86, fixed: 'left' as const },
+  { key: 'level', label: '级别' },
+  { key: 'requestId', label: '请求 ID' },
+  { key: 'route', label: '路由' },
+  { key: 'model', label: '模型' },
+  { key: 'statusCode', label: '状态码' },
+  { key: 'latency', label: '延迟' },
 ]
 
 const levelToneClasses: Record<SemanticTone, string> = {
@@ -62,24 +63,7 @@ const filteredRows = computed(() => {
         </p>
       </div>
 
-      <div
-        class="grid h-9 w-51.5 grid-cols-[62px_58px_58px] gap-1 rounded-xl bg-(--cp-bg-muted) p-1"
-      >
-        <button
-          v-for="filter in filters"
-          :key="filter.value"
-          class="h-7 rounded-[9px] border-0 text-xs leading-[1.15] font-[650] cursor-pointer"
-          :class="
-            activeFilter === filter.value
-              ? 'bg-white text-(--cp-text-primary) shadow-(--cp-shadow-control)'
-              : 'bg-transparent text-(--cp-text-secondary)'
-          "
-          type="button"
-          @click="activeFilter = filter.value"
-        >
-          {{ filter.label }}
-        </button>
-      </div>
+      <BaseSegmented v-model="activeFilter" :options="filters" class="w-51.5" />
     </header>
 
     <div class="mt-4.25 flex h-60 w-full justify-between overflow-hidden">
@@ -92,7 +76,13 @@ const filteredRows = computed(() => {
           rows.length === 0 ? '请求经过代理后会在这里显示最近事件。' : '调整筛选条件后再查看。'
         "
       />
-      <BaseTable v-else class="min-w-0 flex-1" :columns="eventLogColumns" :rows="filteredRows">
+      <BaseTable
+        v-else
+        class="min-w-0 flex-1"
+        :columns="eventLogColumns"
+        :rows="filteredRows"
+        min-width="760px"
+      >
         <template #time="{ value }">
           <span class="font-mono tabular-nums">{{ value }}</span>
         </template>

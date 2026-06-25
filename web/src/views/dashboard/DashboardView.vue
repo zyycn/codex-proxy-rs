@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
 
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import AppTopbar from '@/layout/components/AppTopbar.vue'
-
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
 import EventLogCard from './components/EventLogCard.vue'
 import MetricCard from './components/MetricCard.vue'
+import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
 import RequestTrendCard from './components/RequestTrendCard.vue'
 import ServiceStatusCard from './components/ServiceStatusCard.vue'
 import { useDashboard } from './composables/useDashboard'
@@ -17,6 +15,7 @@ const {
   metrics,
   trendPoints,
   trendSummary,
+  healthTimeline,
   accountUsage,
   serviceStatuses,
   eventLogs,
@@ -30,7 +29,7 @@ const {
 
 <template>
   <div class="w-full pb-6">
-    <header class="flex min-h-17 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <header class="flex min-h-17 items-start justify-between gap-4">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
           系统概览
@@ -40,18 +39,16 @@ const {
         </p>
       </div>
 
-      <div class="flex items-center gap-2 self-end lg:self-auto">
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新数据"
-          :loading="loading"
-          @click="refresh"
-        >
-          <RefreshCw class="size-4.5" />
-        </BaseIconButton>
-        <AppTopbar class="mt-0.5" :refreshing="loading" @refresh="refresh" />
-      </div>
+      <button
+        class="mt-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-xl border-0 bg-white text-(--cp-normal) shadow-(--cp-shadow-control) disabled:cursor-not-allowed disabled:opacity-50"
+        type="button"
+        aria-label="刷新概览"
+        :aria-busy="loading"
+        :disabled="loading"
+        @click="refresh"
+      >
+        <RefreshCw :size="19" :class="loading ? 'animate-spin' : ''" />
+      </button>
     </header>
 
     <section
@@ -80,6 +77,8 @@ const {
       :rotation-strategy="rotationStrategy"
       class="mt-6"
     />
+
+    <RequestHealthTimelineCard :timeline="healthTimeline" class="mt-6" />
 
     <EventLogCard :rows="eventLogs" class="mt-6" />
   </div>

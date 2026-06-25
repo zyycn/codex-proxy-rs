@@ -10,7 +10,6 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
-import AppTopbar from '@/layout/components/AppTopbar.vue'
 import { withMinimumDuration } from '@/utils/async'
 
 import type { Account } from '@/api'
@@ -297,8 +296,6 @@ onBeforeUnmount(() => {
           管理 Codex 账号 · 共 {{ totalAccounts }} 个账号
         </p>
       </div>
-
-      <AppTopbar class="mt-0.5" :refreshing="refreshingList" @refresh="refreshAccounts" />
     </header>
 
     <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
@@ -312,7 +309,6 @@ onBeforeUnmount(() => {
         <BaseButton
           v-if="selectedIds.size > 0"
           variant="danger"
-          size="md"
           :disabled="batchDeleting"
           @click="showDeleteModal = true"
         >
@@ -341,7 +337,7 @@ onBeforeUnmount(() => {
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton variant="primary" size="md" @click="showCreateModal = true">
+        <BaseButton variant="primary" @click="showCreateModal = true">
           <Plus class="size-4" />
           添加账号
         </BaseButton>
@@ -364,7 +360,6 @@ onBeforeUnmount(() => {
             :model-value="allSelected"
             :indeterminate="indeterminate"
             label="选择当前页账号"
-            size="table"
             @update:model-value="toggleAll"
           />
         </template>
@@ -385,7 +380,6 @@ onBeforeUnmount(() => {
             <BaseCheckbox
               :model-value="selectedIds.has(row.id)"
               label="选择账号"
-              size="table"
               @update:model-value="toggleSelection(row.id)"
             />
           </div>
@@ -512,31 +506,31 @@ onBeforeUnmount(() => {
                 <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">Token 结构</h3>
                 <div class="grid gap-2">
                   <div class="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
-                    <span class="text-[12px] font-[700] text-green-700">输入 Tokens</span>
+                    <span class="text-[12px] font-bold text-green-700">输入 Tokens</span>
                     <strong class="font-mono text-[13px] text-(--cp-text-primary)">
                       {{ row.usage.inputTokensDisplay }}
                     </strong>
                   </div>
                   <div class="flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2">
-                    <span class="text-[12px] font-[700] text-amber-700">输出 Tokens</span>
+                    <span class="text-[12px] font-bold text-amber-700">输出 Tokens</span>
                     <strong class="font-mono text-[13px] text-(--cp-text-primary)">
                       {{ row.usage.outputTokensDisplay }}
                     </strong>
                   </div>
                   <div class="flex items-center justify-between rounded-lg bg-cyan-50 px-3 py-2">
-                    <span class="text-[12px] font-[700] text-cyan-700">缓存 Tokens</span>
+                    <span class="text-[12px] font-bold text-cyan-700">缓存 Tokens</span>
                     <strong class="font-mono text-[13px] text-(--cp-text-primary)">
                       {{ row.usage.cachedTokensDisplay }}
                     </strong>
                   </div>
                   <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
-                    <span class="text-[12px] font-[700] text-sky-700">创建</span>
+                    <span class="text-[12px] font-bold text-sky-700">创建</span>
                     <strong class="font-mono text-[13px] text-(--cp-text-primary)">
                       {{ row.usage.createdTokensDisplay }}
                     </strong>
                   </div>
                   <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
-                    <span class="text-[12px] font-[700] text-sky-700">读取</span>
+                    <span class="text-[12px] font-bold text-sky-700">读取</span>
                     <strong class="font-mono text-[13px] text-(--cp-text-primary)">
                       {{ row.usage.readTokensDisplay }}
                     </strong>

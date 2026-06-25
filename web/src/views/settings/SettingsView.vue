@@ -6,7 +6,6 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
-import AppTopbar from '@/layout/components/AppTopbar.vue'
 import { withMinimumDuration } from '@/utils/async'
 
 import type { Settings } from '@/api'
@@ -110,8 +109,6 @@ onMounted(() => {
           配置系统运行参数
         </p>
       </div>
-
-      <AppTopbar class="mt-0.5" :refreshing="refreshing" @refresh="refreshSettings" />
     </header>
     <section
       v-loading="loading"
@@ -130,7 +127,6 @@ onMounted(() => {
         <div class="flex shrink-0 items-center gap-3">
           <BaseButton
             variant="ghost"
-            size="md"
             :loading="refreshing"
             :disabled="loading"
             @click="refreshSettings"
@@ -140,7 +136,7 @@ onMounted(() => {
             </template>
             重置
           </BaseButton>
-          <BaseButton variant="primary" size="md" :disabled="saving" @click="handleSave">
+          <BaseButton variant="primary" :disabled="saving" @click="handleSave">
             <Save class="size-4" />
             {{ saving ? '保存中...' : '保存设置' }}
           </BaseButton>

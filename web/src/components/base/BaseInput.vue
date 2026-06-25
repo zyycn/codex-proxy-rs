@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-type InputSize = 'small' | 'default' | 'large'
-
 const props = withDefaults(
   defineProps<{
     placeholder?: string
     type?: string
     disabled?: boolean
     error?: string
-    size?: InputSize
     autocomplete?: string
   }>(),
   {
@@ -17,23 +14,14 @@ const props = withDefaults(
     type: 'text',
     disabled: false,
     error: undefined,
-    size: 'default',
     autocomplete: undefined,
   },
 )
 
 const model = defineModel<string>({ default: '' })
 
-const sizeClasses = {
-  large: 'h-(--cp-input-height-large) px-4 gap-2.5 text-sm rounded-(--cp-input-radius-base)',
-  default:
-    'h-(--cp-input-height-default) px-3.5 gap-2.5 text-[13px] rounded-(--cp-input-radius-base)',
-  small: 'h-(--cp-input-height-compact) px-2.5 gap-1.5 text-xs rounded-(--cp-input-radius-small)',
-}
-
 const containerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center overflow-visible border-0 text-(--cp-text-primary) shadow-(--cp-shadow-input) transition-[background-color,box-shadow,color] duration-[160ms]',
-  sizeClasses[props.size],
+  'relative inline-flex h-(--cp-input-height-default) w-full min-w-0 items-center gap-2.5 overflow-visible rounded-(--cp-input-radius-base) border-0 px-3.5 text-[13px] text-(--cp-text-primary) shadow-(--cp-shadow-input) transition-[background-color,box-shadow,color] duration-[160ms]',
   props.disabled
     ? 'cursor-not-allowed bg-(--cp-disabled-bg) text-(--cp-disabled-text) shadow-none'
     : props.error
@@ -66,7 +54,7 @@ const inputClasses = computed(() => [
 </script>
 
 <template>
-  <label class="grid box-content gap-2 overflow-visible p-[3px]">
+  <label class="grid box-content gap-2 overflow-visible p-0.75">
     <span :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />

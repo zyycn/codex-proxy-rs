@@ -9,6 +9,7 @@ const props = defineProps<{
   description?: string
   icon?: Component
   compact?: boolean
+  plain?: boolean
 }>()
 
 const resolvedTitle = computed(() => props.title ?? props.message ?? '暂无数据')
@@ -17,8 +18,11 @@ const resolvedIcon = computed(() => props.icon ?? Inbox)
 
 <template>
   <div
-    class="grid justify-items-center rounded-[14px] bg-(--cp-bg-subtle) text-center"
-    :class="compact ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8'"
+    class="grid justify-items-center text-center"
+    :class="[
+      plain ? 'bg-transparent' : 'rounded-[14px] bg-(--cp-bg-subtle)',
+      compact ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8',
+    ]"
   >
     <span
       class="inline-flex items-center justify-center rounded-[10px] bg-(--cp-bg-muted) text-(--cp-text-muted)"

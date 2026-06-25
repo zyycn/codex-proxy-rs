@@ -4,6 +4,7 @@ import type { EChartsOption } from 'echarts'
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
+import BaseSegmented from '../../../components/base/BaseSegmented.vue'
 import type { TrendPoint, TrendSummaryItem } from '../types'
 
 const props = defineProps<{
@@ -16,7 +17,11 @@ const emit = defineEmits<{
   trendChange: [tab: string]
 }>()
 
-const tabs = ['用量', '延迟', '错误']
+const tabs = [
+  { label: '用量', value: '用量' },
+  { label: '延迟', value: '延迟' },
+  { label: '错误', value: '错误' },
+]
 const activeTab = ref('用量')
 
 const hasSamples = computed(() =>
@@ -182,16 +187,6 @@ function lineSeries(name: string, data: number[], color: string, area = false, y
   }
 }
 
-function selectTab(tab: string) {
-  if (activeTab.value === tab) return
-  activeTab.value = tab
-  emit('trendChange', tab)
-}
-
-const activeSummary = computed(() => {
-  return props.summary
-})
-
 function formatLatency(ms: number): string {
   if (!ms) return '—'
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
@@ -209,24 +204,12 @@ function formatLatency(ms: number): string {
         </p>
       </div>
 
-      <div
-        class="grid h-9.5 w-full max-w-61.5 grid-cols-3 gap-1 rounded-xl bg-(--cp-bg-muted) p-1 sm:w-61.5"
-      >
-        <button
-          v-for="tab in tabs"
-          :key="tab"
-          class="h-7.5 rounded-[9px] border-0 text-xs leading-[1.15] font-[650] cursor-pointer transition-colors"
-          :class="
-            activeTab === tab
-              ? 'bg-white text-(--cp-text-primary) shadow-[0_10px_24px_-18px_#0E172614]'
-              : 'bg-transparent text-(--cp-text-secondary)'
-          "
-          type="button"
-          @click="selectTab(tab)"
-        >
-          {{ tab }}
-        </button>
-      </div>
+      <BaseSegmented
+        v-model="activeTab"
+        :options="tabs"
+        class="w-full max-w-61.5 sm:w-61.5"
+        @update:model-value="emit('trendChange', $event)"
+      />
     </header>
 
     <div
@@ -248,7 +231,7 @@ function formatLatency(ms: number): string {
 
       <aside class="grid h-67 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5">
         <div
-          v-for="item in activeSummary"
+          v-for="item in props.summary"
           :key="item.label"
           class="grid grid-cols-[minmax(0,1fr)_8px] items-center gap-x-3 py-2"
         >

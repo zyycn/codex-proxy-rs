@@ -10,7 +10,6 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
-import AppTopbar from '@/layout/components/AppTopbar.vue'
 import { withMinimumDuration } from '@/utils/async'
 
 import type { ClientApiKey } from '@/api'
@@ -287,8 +286,6 @@ watch(filteredKeys, () => {
           管理客户端访问密钥 · 共 {{ apiKeys.length }} 个
         </p>
       </div>
-
-      <AppTopbar class="mt-0.5" :refreshing="refreshingList" @refresh="refreshApiKeys" />
     </header>
 
     <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
@@ -302,7 +299,6 @@ watch(filteredKeys, () => {
         <BaseButton
           v-if="selectedIds.size > 0"
           variant="danger"
-          size="md"
           :disabled="batchDeleting"
           @click="showDeleteModal = true"
         >
@@ -331,7 +327,7 @@ watch(filteredKeys, () => {
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton variant="primary" size="md" @click="showCreateModal = true">
+        <BaseButton variant="primary" @click="showCreateModal = true">
           <Plus class="size-4" />
           创建 API Key
         </BaseButton>
@@ -353,7 +349,6 @@ watch(filteredKeys, () => {
             :model-value="allSelected"
             :indeterminate="indeterminate"
             label="选择当前页密钥"
-            size="table"
             @update:model-value="toggleAll"
           />
         </template>
@@ -362,7 +357,6 @@ watch(filteredKeys, () => {
           <BaseCheckbox
             :model-value="selectedIds.has(row.id)"
             label="选择密钥"
-            size="table"
             @update:model-value="toggleSelection(row.id)"
           />
         </template>

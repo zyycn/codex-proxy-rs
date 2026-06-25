@@ -3,18 +3,22 @@ import { gsap } from 'gsap'
 import { nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  Cat,
   KeyRound,
   LayoutDashboard,
   List,
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  SquareTerminal,
   Users,
 } from '@lucide/vue'
 
+import { useAuthStore } from '@/stores/modules/auth'
+
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -31,6 +35,11 @@ const isActive = (path: string) => {
 
 function navigate(path: string) {
   router.push(path)
+}
+
+async function handleLogout() {
+  await authStore.logout()
+  router.push('/login')
 }
 
 const props = withDefaults(
@@ -196,27 +205,27 @@ watch(
     :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
   >
     <div
-      class="mt-5 grid h-11.5 grid-cols-[46px_minmax(0,1fr)] gap-2.5"
-      :class="collapsed ? 'w-11.5' : 'w-full'"
+      class="mt-5 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
+      :class="collapsed ? 'w-12 justify-start' : 'w-full gap-3'"
     >
       <span
-        class="inline-flex size-11 items-center justify-center rounded-[13px] bg-gray-900 text-white shadow-[0_8px_18px_-16px_#0E172614]"
+        class="inline-flex size-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700"
       >
-        <SquareTerminal :size="22" />
+        <Cat :size="27" stroke-width="2.05" />
       </span>
       <span
         v-show="brandLabelVisible"
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-[17px] leading-[1.1] font-[720] text-gray-900">Codex</strong>
+        <strong class="text-base leading-[1.1] font-[760] text-gray-900">Codex</strong>
         <span class="mt-1 text-xs leading-[1.1] font-semibold text-slate-500"
           >Proxy RS · v0.1.0</span
         >
       </span>
     </div>
 
-    <nav class="mt-6 grid gap-3" :class="collapsed ? '' : 'w-full'" aria-label="主导航">
+    <nav class="mt-7 grid gap-3" :class="collapsed ? '' : 'w-full'" aria-label="主导航">
       <button
         v-for="item in navItems"
         :key="item.label"
@@ -239,16 +248,49 @@ watch(
       </button>
     </nav>
 
-    <button
-      class="mt-auto mb-8 inline-flex items-center justify-center rounded-xl border-0 text-slate-500 transition-colors duration-200"
-      :class="collapsed ? 'h-9 w-11 bg-transparent' : 'size-9 self-end bg-slate-50'"
-      type="button"
-      data-sidebar-toggle
-      :aria-label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
-      @click="$emit('toggle')"
-    >
-      <PanelLeftOpen v-if="collapsed" :size="20" />
-      <PanelLeftClose v-else :size="20" />
-    </button>
+    <div class="mt-auto mb-8" :class="collapsed ? 'w-11' : 'w-full'">
+      <div
+        class="bg-slate-50/80"
+        :class="
+          collapsed
+            ? 'grid gap-1 rounded-xl p-1'
+            : 'flex h-11 items-center justify-between rounded-2xl px-2'
+        "
+      >
+        <span
+          v-if="!collapsed"
+          class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-[650] text-(--cp-success-text)"
+        >
+          <i class="size-1.5 rounded-full bg-(--cp-success)" />
+          在线
+        </span>
+
+        <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
+          <button
+            class="inline-flex items-center justify-center rounded-xl border-0 bg-transparent text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-700"
+            :class="collapsed ? 'size-9' : 'size-8'"
+            type="button"
+            data-sidebar-toggle
+            :aria-label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
+            :title="collapsed ? '展开侧边栏' : '收缩侧边栏'"
+            @click="$emit('toggle')"
+          >
+            <PanelLeftOpen v-if="collapsed" :size="19" />
+            <PanelLeftClose v-else :size="18" />
+          </button>
+
+          <button
+            class="inline-flex items-center justify-center rounded-xl border-0 bg-transparent text-slate-500 transition-colors duration-200 hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
+            :class="collapsed ? 'size-9' : 'size-8'"
+            type="button"
+            aria-label="退出登录"
+            title="退出登录"
+            @click="handleLogout"
+          >
+            <LogOut :size="collapsed ? 19 : 18" />
+          </button>
+        </div>
+      </div>
+    </div>
   </aside>
 </template>

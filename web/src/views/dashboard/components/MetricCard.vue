@@ -1,8 +1,12 @@
 <script setup lang="ts">
+import type { EChartsOption } from 'echarts'
+import { computed } from 'vue'
+
 import BaseCard from '../../../components/base/BaseCard.vue'
+import BaseChart from '../../../components/charts/BaseChart.vue'
 import type { MetricCardItem, SemanticTone } from '../types'
 
-defineProps<{
+const props = defineProps<{
   metric: MetricCardItem
 }>()
 
@@ -29,10 +33,59 @@ const trendToneClasses: Record<SemanticTone, string> = {
   warning: 'bg-(--cp-warning-text)',
   danger: 'bg-(--cp-danger-text)',
 }
+
+const sparklineColors: Record<SemanticTone, string> = {
+  normal: '#94A3B8',
+  info: '#60A5FA',
+  success: '#5CCB8A',
+  warning: '#E3B658',
+  danger: '#E87972',
+}
+
+const sparklineOption = computed<EChartsOption | null>(() => {
+  const values = props.metric.sparkline?.values ?? []
+  if (values.length < 2) return null
+
+  const color = sparklineColors[props.metric.sparkline?.tone ?? 'normal']
+  return {
+    animation: false,
+    grid: { left: 0, right: 0, top: 4, bottom: 4 },
+    xAxis: { type: 'category', show: false, data: values.map((_, index) => index) },
+    yAxis: { type: 'value', show: false, min: 'dataMin', max: 'dataMax' },
+    series: [
+      {
+        type: 'line',
+        data: values,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { color, width: 1.75, opacity: 0.9 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: `${color}18` },
+              { offset: 1, color: `${color}00` },
+            ],
+          },
+        },
+      },
+    ],
+    tooltip: { show: false },
+  }
+})
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" radius-class="rounded-2xl" class="h-38.5 w-full px-6 pt-5">
+  <BaseCard
+    as="article"
+    :padded="false"
+    radius-class="rounded-2xl"
+    class="relative h-38.5 w-full px-6 pt-5"
+  >
     <div class="flex items-start gap-3">
       <span
         class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-[10px]"
@@ -61,6 +114,10 @@ const trendToneClasses: Record<SemanticTone, string> = {
             : '[clip-path:polygon(34%_0,66%_0,66%_42%,100%_42%,50%_100%,0_42%,34%_42%)]',
         ]"
       />
+    </div>
+
+    <div v-if="sparklineOption" class="pointer-events-none absolute top-7 right-6 h-16 w-[42%]">
+      <BaseChart :option="sparklineOption" :height="64" />
     </div>
 
     <div

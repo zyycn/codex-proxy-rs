@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
 
 import BaseEmpty from './BaseEmpty.vue'
 import BaseScrollbar from './BaseScrollbar.vue'
@@ -13,6 +13,7 @@ export interface BaseTableColumn {
   minWidth?: number | string
   maxWidth?: number | string
   flex?: number
+  fixed?: 'left'
   align?: 'left' | 'right' | 'center'
   headerClass?: string
   cellClass?: string
@@ -39,6 +40,7 @@ const props = withDefaults(
     loading?: boolean
     emptyText?: string
     maxHeight?: string
+    minWidth?: number | string
     pagination?: BaseTablePagination
     expandedRowKeys?: Array<string | number>
   }>(),
@@ -50,6 +52,7 @@ const props = withDefaults(
     loading: false,
     emptyText: '暂无数据',
     maxHeight: undefined,
+    minWidth: undefined,
   },
 )
 
@@ -58,9 +61,8 @@ const emit = defineEmits<{
   'page-size-change': [pageSize: number]
 }>()
 
-const scrollbarGutterWidth = '16px'
 const headerRowClass = 'h-10 text-[11px] font-bold text-(--cp-text-muted)'
-const bodyRowClass = 'h-13 transition-colors hover:bg-(--cp-default-bg-hover)'
+const bodyRowClass = 'h-13'
 const headerCellClass =
   'min-w-0 bg-(--cp-bg-subtle) px-4 first:pl-3 shadow-[0_10px_16px_-18px_#0e172638]'
 const bodyCellClass =
@@ -70,17 +72,24 @@ const computedColumns = computed(() => {
   const fixedPercentTotal = props.columns.reduce((sum, column) => {
     return column.width === undefined ? sum : sum + numericPercentWidth(column.width)
   }, 0)
+  const fixedPixelTotal = props.columns.reduce((sum, column) => {
+    return column.width === undefined ? sum : sum + numericPixelWidth(column.width)
+  }, 0)
+  const minWidthPixels = props.minWidth === undefined ? 0 : numericPixelWidth(props.minWidth)
   const flexibleColumns = props.columns.filter((column) => column.width === undefined)
   const flexTotal = flexibleColumns.reduce((sum, column) => sum + (column.flex ?? 1), 0)
   const available = Math.max(100 - fixedPercentTotal, 0)
+  const availablePixels = Math.max(minWidthPixels - fixedPixelTotal, 0)
 
   return props.columns.map((column) => {
     const flex = column.flex ?? 1
     const width =
       column.width === undefined
-        ? flexTotal > 0
-          ? `${(available * flex) / flexTotal}%`
-          : `${available / Math.max(flexibleColumns.length, 1)}%`
+        ? minWidthPixels > 0 && fixedPercentTotal === 0
+          ? `${availablePixels / Math.max(flexibleColumns.length, 1)}px`
+          : flexTotal > 0
+            ? `${(available * flex) / flexTotal}%`
+            : `${available / Math.max(flexibleColumns.length, 1)}%`
         : normalizeWidth(column.width)
 
     return {
@@ -128,6 +137,25 @@ const pageSizeModel = computed({
     }
   },
 })
+
+const headerWrapRef = useTemplateRef<HTMLDivElement>('headerWrap')
+const bodyScrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('bodyScrollbar')
+const tableViewRef = useTemplateRef<HTMLTableElement>('tableView')
+const horizontalThumbWidth = shallowRef(0)
+const horizontalThumbLeft = shallowRef(0)
+const horizontalHovering = shallowRef(false)
+const horizontalDragging = shallowRef(false)
+const horizontalScrolled = shallowRef(false)
+
+let resizeObserver: ResizeObserver | undefined
+let horizontalDragStartX = 0
+let horizontalDragStartScrollLeft = 0
+
+const canScrollX = computed(() => horizontalThumbWidth.value > 0)
+const horizontalThumbStyle = computed(() => ({
+  width: `${horizontalThumbWidth.value}px`,
+  transform: `translateX(${horizontalThumbLeft.value}px)`,
+}))
 
 const pagerItems = computed<PagerItem[]>(() => {
   const total = totalPages.value
@@ -178,12 +206,60 @@ function numericPercentWidth(width: number | string) {
   return 0
 }
 
+function numericPixelWidth(width: number | string) {
+  if (typeof width === 'number') {
+    return width
+  }
+
+  if (width.endsWith('px')) {
+    const parsed = Number.parseFloat(width)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  return 0
+}
+
 function columnStyle(column: (typeof computedColumns.value)[number]) {
   return {
     width: column.resolvedWidth,
     minWidth: column.resolvedMinWidth,
     maxWidth: column.resolvedMaxWidth,
   }
+}
+
+function tableStyle() {
+  if (props.minWidth === undefined) {
+    return undefined
+  }
+
+  return { width: `max(100%, ${normalizeWidth(props.minWidth)})` }
+}
+
+function fixedHeaderClass(column: BaseTableColumn) {
+  if (column.fixed !== 'left') {
+    return undefined
+  }
+
+  return [
+    'sticky left-0 z-30 bg-(--cp-bg-subtle)',
+    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_rgba(15,23,42,0.38)]' : undefined,
+  ]
+}
+
+function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
+  if (column.fixed !== 'left') {
+    return undefined
+  }
+
+  return [
+    'sticky left-0 z-20',
+    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_rgba(15,23,42,0.38)]' : undefined,
+    isRowSelected(row, index)
+      ? 'bg-(--cp-bg-tertiary)'
+      : props.stripe && index % 2 === 1
+        ? 'bg-(--cp-bg-subtle)'
+        : 'bg-(--cp-bg-surface)',
+  ]
 }
 
 function cellValue(row: TableRow, key: string) {
@@ -222,10 +298,132 @@ function alignClass(column: BaseTableColumn) {
 function rowClass(row: TableRow, index: number) {
   return [
     bodyRowClass,
+    'hover:[&>td]:bg-(--cp-default-bg-hover)',
     props.stripe && index % 2 === 1 ? 'bg-(--cp-bg-subtle)' : undefined,
     isRowSelected(row, index) ? 'bg-(--cp-bg-tertiary)' : undefined,
   ]
 }
+
+function horizontalTrackWidth(wrap: HTMLElement) {
+  return Math.max(wrap.clientWidth - 8, 0)
+}
+
+function maxScrollLeft(wrap: HTMLElement) {
+  return Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
+}
+
+function maxHorizontalThumbLeft(wrap: HTMLElement) {
+  return Math.max(horizontalTrackWidth(wrap) - horizontalThumbWidth.value, 0)
+}
+
+function scrollWrap() {
+  return bodyScrollbarRef.value?.wrapRef ?? null
+}
+
+function updateHorizontalScrollbar() {
+  const wrap = scrollWrap()
+  if (!wrap) {
+    return
+  }
+
+  const scrollRange = maxScrollLeft(wrap)
+  const trackWidth = horizontalTrackWidth(wrap)
+  if (scrollRange <= 0 || trackWidth <= 0) {
+    horizontalThumbWidth.value = 0
+    horizontalThumbLeft.value = 0
+    horizontalScrolled.value = false
+    return
+  }
+
+  horizontalThumbWidth.value = Math.min(
+    trackWidth,
+    Math.max(trackWidth * (wrap.clientWidth / wrap.scrollWidth), 32),
+  )
+  horizontalThumbLeft.value = (wrap.scrollLeft / scrollRange) * maxHorizontalThumbLeft(wrap)
+  horizontalScrolled.value = wrap.scrollLeft > 0
+}
+
+function handleTableScroll() {
+  const wrap = scrollWrap()
+  if (wrap && headerWrapRef.value) {
+    headerWrapRef.value.scrollLeft = wrap.scrollLeft
+  }
+  updateHorizontalScrollbar()
+}
+
+function handleHorizontalTrackPointerDown(event: PointerEvent) {
+  if (event.target !== event.currentTarget) {
+    return
+  }
+
+  const wrap = scrollWrap()
+  if (!wrap) {
+    return
+  }
+
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const nextThumbLeft = event.clientX - rect.left - horizontalThumbWidth.value / 2
+  const scrollRange = maxScrollLeft(wrap)
+  const thumbRange = maxHorizontalThumbLeft(wrap)
+  wrap.scrollLeft =
+    thumbRange > 0
+      ? (Math.max(0, Math.min(nextThumbLeft, thumbRange)) / thumbRange) * scrollRange
+      : 0
+}
+
+function handleHorizontalThumbPointerDown(event: PointerEvent) {
+  const wrap = scrollWrap()
+  if (!wrap) {
+    return
+  }
+
+  event.preventDefault()
+  horizontalDragging.value = true
+  horizontalDragStartX = event.clientX
+  horizontalDragStartScrollLeft = wrap.scrollLeft
+  document.addEventListener('pointermove', handleHorizontalThumbPointerMove)
+  document.addEventListener('pointerup', handleHorizontalThumbPointerUp, { once: true })
+}
+
+function handleHorizontalThumbPointerMove(event: PointerEvent) {
+  const wrap = scrollWrap()
+  if (!wrap) {
+    return
+  }
+
+  const thumbRange = maxHorizontalThumbLeft(wrap)
+  if (thumbRange <= 0) {
+    return
+  }
+
+  const scrollRange = maxScrollLeft(wrap)
+  wrap.scrollLeft =
+    horizontalDragStartScrollLeft +
+    ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
+}
+
+function handleHorizontalThumbPointerUp() {
+  horizontalDragging.value = false
+  document.removeEventListener('pointermove', handleHorizontalThumbPointerMove)
+}
+
+onMounted(async () => {
+  await nextTick()
+  updateHorizontalScrollbar()
+  resizeObserver = new ResizeObserver(updateHorizontalScrollbar)
+  const wrap = scrollWrap()
+  if (wrap) {
+    resizeObserver.observe(wrap)
+  }
+  if (tableViewRef.value) {
+    resizeObserver.observe(tableViewRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  document.removeEventListener('pointermove', handleHorizontalThumbPointerMove)
+})
 
 function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
@@ -278,52 +476,17 @@ function paginationPageClass(page: number) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 max-w-full flex-col overflow-hidden">
-    <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden pb-1">
-      <div class="flex min-h-0 min-w-full flex-1 flex-col">
-        <table
-          class="w-full shrink-0 table-fixed border-separate border-spacing-y-2 text-left"
-          role="table"
-        >
-          <colgroup>
-            <col v-for="column in computedColumns" :key="column.key" :style="columnStyle(column)" />
-            <col :style="{ width: scrollbarGutterWidth }" />
-          </colgroup>
-
-          <thead>
-            <tr :class="headerRowClass" role="row">
-              <th
-                v-for="(column, index) in computedColumns"
-                :key="column.key"
-                class="bg-(--cp-bg-subtle)"
-                :class="[
-                  headerCellClass,
-                  alignClass(column),
-                  isLastColumn(index) ? 'rounded-r-lg pr-3' : undefined,
-                  column.headerClass,
-                ]"
-                role="columnheader"
-                scope="col"
-              >
-                <div :class="cellContentClass(column)">
-                  <slot :name="`header-${column.key}`" :column="column">
-                    {{ column.label }}
-                  </slot>
-                </div>
-              </th>
-              <th class="bg-(--cp-bg-subtle) p-0" aria-hidden="true" scope="col" />
-            </tr>
-          </thead>
-        </table>
-
-        <BaseScrollbar
-          always
-          class="min-h-0 flex-1"
-          :max-height="maxHeight"
-          wrap-class="overflow-x-hidden overflow-y-auto"
-        >
+  <div
+    class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden"
+    @mouseenter="horizontalHovering = true"
+    @mouseleave="horizontalHovering = false"
+  >
+    <div class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3">
+      <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
+        <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
-            class="w-full table-fixed border-separate border-spacing-y-2 text-left"
+            class="w-full shrink-0 table-fixed border-separate border-spacing-y-2 text-left"
+            :style="tableStyle()"
             role="table"
           >
             <colgroup>
@@ -332,27 +495,67 @@ function paginationPageClass(page: number) {
                 :key="column.key"
                 :style="columnStyle(column)"
               />
-              <col :style="{ width: scrollbarGutterWidth }" />
+            </colgroup>
+
+            <thead>
+              <tr :class="headerRowClass" role="row">
+                <th
+                  v-for="(column, index) in computedColumns"
+                  :key="column.key"
+                  class="bg-(--cp-bg-subtle)"
+                  :class="[
+                    headerCellClass,
+                    alignClass(column),
+                    isLastColumn(index) ? 'rounded-r-lg pr-3' : undefined,
+                    fixedHeaderClass(column),
+                    column.headerClass,
+                  ]"
+                  role="columnheader"
+                  scope="col"
+                >
+                  <div :class="cellContentClass(column)">
+                    <slot :name="`header-${column.key}`" :column="column">
+                      {{ column.label }}
+                    </slot>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+
+        <BaseScrollbar
+          ref="bodyScrollbar"
+          class="min-h-0 flex-1"
+          :force-visible="horizontalHovering"
+          :max-height="maxHeight"
+          @scroll="handleTableScroll"
+        >
+          <table
+            ref="tableView"
+            class="w-full table-fixed border-separate border-spacing-y-2 text-left"
+            :style="tableStyle()"
+            role="table"
+          >
+            <colgroup>
+              <col
+                v-for="column in computedColumns"
+                :key="column.key"
+                :style="columnStyle(column)"
+              />
             </colgroup>
 
             <tbody>
               <tr v-if="!loading && rows.length === 0" role="row">
-                <td
-                  :colspan="computedColumns.length + 1"
-                  class="h-72 rounded-lg bg-(--cp-bg-surface) p-0"
-                  role="cell"
-                >
-                  <div class="flex h-full min-h-72 items-start justify-center pt-12">
-                    <BaseEmpty :message="emptyText" compact class="w-full max-w-68" />
+                <td :colspan="computedColumns.length" class="h-72 p-0" role="cell">
+                  <div class="grid h-full min-h-72 place-items-center">
+                    <BaseEmpty :message="emptyText" plain class="w-full max-w-80" />
                   </div>
                 </td>
               </tr>
 
               <template v-for="(row, index) in rows" :key="getRowKey(row, index)">
-                <tr
-                  :class="rowClass(row, index)"
-                  role="row"
-                >
+                <tr :class="rowClass(row, index)" role="row">
                   <td
                     v-for="(column, columnIndex) in computedColumns"
                     :key="column.key"
@@ -360,6 +563,7 @@ function paginationPageClass(page: number) {
                       bodyCellClass,
                       alignClass(column),
                       isLastColumn(columnIndex) ? 'rounded-r-lg pr-3' : undefined,
+                      fixedBodyClass(column, row, index),
                       column.cellClass,
                     ]"
                     role="cell"
@@ -375,11 +579,10 @@ function paginationPageClass(page: number) {
                       </slot>
                     </div>
                   </td>
-                  <td class="p-0" aria-hidden="true" />
                 </tr>
                 <tr v-if="isRowExpanded(row, index)" role="row">
                   <td
-                    :colspan="computedColumns.length + 1"
+                    :colspan="computedColumns.length"
                     class="rounded-lg bg-(--cp-info-bg) p-0"
                     role="cell"
                   >
@@ -390,6 +593,20 @@ function paginationPageClass(page: number) {
             </tbody>
           </table>
         </BaseScrollbar>
+      </div>
+
+      <div
+        v-show="canScrollX"
+        class="absolute right-1 bottom-1 left-1 z-30 h-1.5 rounded-full transition-opacity duration-200"
+        :class="horizontalHovering || horizontalDragging ? 'opacity-100' : 'opacity-0'"
+        @pointerdown="handleHorizontalTrackPointerDown"
+      >
+        <div
+          class="h-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
+          :class="horizontalDragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
+          :style="horizontalThumbStyle"
+          @pointerdown="handleHorizontalThumbPointerDown"
+        />
       </div>
     </div>
 

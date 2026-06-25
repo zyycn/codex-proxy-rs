@@ -3,20 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplate
 
 const props = withDefaults(
   defineProps<{
-    tag?: string
-    always?: boolean
-    minThumbSize?: number
-    wrapClass?: string
     viewClass?: string
     maxHeight?: string
+    forceVisible?: boolean
   }>(),
   {
-    tag: 'div',
-    always: false,
-    minThumbSize: 32,
-    wrapClass: '',
     viewClass: '',
     maxHeight: undefined,
+    forceVisible: false,
   },
 )
 
@@ -32,12 +26,11 @@ const visible = shallowRef(false)
 const dragging = shallowRef(false)
 
 let resizeObserver: ResizeObserver | undefined
-let hideTimer: number | undefined
 let dragStartY = 0
 let dragStartScrollTop = 0
 
 const canScrollY = computed(() => thumbHeight.value > 0)
-const scrollbarVisible = computed(() => props.always || dragging.value || visible.value)
+const scrollbarVisible = computed(() => props.forceVisible || dragging.value || visible.value)
 const thumbStyle = computed(() => ({
   height: `${thumbHeight.value}px`,
   transform: `translateY(${thumbTop.value}px)`,
@@ -61,13 +54,11 @@ function maxThumbTop(wrap: HTMLElement) {
 
 function showScrollbar() {
   visible.value = true
-  if (hideTimer) {
-    window.clearTimeout(hideTimer)
-  }
-  if (!props.always && !dragging.value) {
-    hideTimer = window.setTimeout(() => {
-      visible.value = false
-    }, 900)
+}
+
+function hideScrollbar() {
+  if (!dragging.value) {
+    visible.value = false
   }
 }
 
@@ -86,10 +77,7 @@ function update() {
   }
 
   const ratio = wrap.clientHeight / wrap.scrollHeight
-  thumbHeight.value = Math.min(
-    availableTrackHeight,
-    Math.max(availableTrackHeight * ratio, props.minThumbSize),
-  )
+  thumbHeight.value = Math.min(availableTrackHeight, Math.max(availableTrackHeight * ratio, 32))
   thumbTop.value = (wrap.scrollTop / scrollRange) * maxThumbTop(wrap)
 }
 
@@ -163,22 +151,6 @@ function handleThumbPointerUp() {
   showScrollbar()
 }
 
-function scrollTo(options: ScrollToOptions): void
-function scrollTo(x: number, y?: number): void
-function scrollTo(arg1: ScrollToOptions | number, arg2?: number) {
-  if (typeof arg1 === 'number') {
-    wrapRef.value?.scrollTo(arg1, arg2 ?? 0)
-    return
-  }
-  wrapRef.value?.scrollTo(arg1)
-}
-
-function setScrollTop(value: number) {
-  if (wrapRef.value) {
-    wrapRef.value.scrollTop = value
-  }
-}
-
 onMounted(async () => {
   await nextTick()
   update()
@@ -193,16 +165,11 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
-  if (hideTimer) {
-    window.clearTimeout(hideTimer)
-  }
   document.removeEventListener('pointermove', handleThumbPointerMove)
 })
 
 defineExpose({
   update,
-  scrollTo,
-  setScrollTop,
   wrapRef,
 })
 </script>
@@ -211,14 +178,14 @@ defineExpose({
   <div :class="rootClasses" :style="{ maxHeight }">
     <div
       ref="wrap"
-      class="h-full min-h-0 overflow-auto [max-height:inherit] [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent"
-      :class="wrapClass"
+      class="h-full min-h-0 overflow-auto max-h-[inherit] [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent"
       @mouseenter="showScrollbar"
+      @mouseleave="hideScrollbar"
       @scroll="handleScroll"
     >
-      <component :is="tag" ref="view" :class="viewClass">
+      <div ref="view" :class="viewClass">
         <slot />
-      </component>
+      </div>
     </div>
 
     <div
