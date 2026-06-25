@@ -327,6 +327,8 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
             "safe": "yes",
             "x-openai-subagent": "review",
             "x-codex-installation-id": "install-123",
+            "session_id": "cp_derived",
+            "thread_id": "cp_derived",
             "x-codex-window-id": "cw_derived",
             "x-codex-turn-metadata": "{\"thread_source\":\"subagent\"}",
             "x-codex-parent-thread-id": "parent-456"
@@ -366,11 +368,13 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
         .any(|(name, value)| name == "x-openai-subagent" && value == "review"));
     assert!(headers
         .iter()
-        .any(|(name, value)| name == "session_id" && value == "cp_derived"));
+        .any(|(name, value)| name == "session-id" && value == "cp_derived"));
+    assert!(headers
+        .iter()
+        .any(|(name, value)| name == "thread-id" && value == "cp_derived"));
     assert!(headers.iter().all(|(name, _)| name != "content-type"));
     assert!(headers.iter().all(|(name, _)| name != "accept"));
-    assert!(headers.iter().all(|(name, _)| name != "session-id"));
-    assert!(headers.iter().all(|(name, _)| name != "thread-id"));
+    assert!(headers.iter().all(|(name, _)| name != "session_id"));
 }
 
 #[tokio::test]
@@ -547,6 +551,8 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
     assert!(headers.get("x-client-request-id").is_none());
     assert!(headers.get("x-codex-installation-id").is_none());
     assert!(headers.get("session_id").is_none());
+    assert!(headers.get("session-id").is_none());
+    assert!(headers.get("thread-id").is_none());
 }
 
 #[tokio::test]
@@ -602,6 +608,8 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         Some("install-1")
     );
     assert!(headers.get("session_id").is_none());
+    assert!(headers.get("session-id").is_none());
+    assert!(headers.get("thread-id").is_none());
 }
 
 #[tokio::test]
@@ -680,7 +688,8 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
             "x-openai-internal-codex-residency",
             "x-client-request-id",
             "x-codex-installation-id",
-            "session_id",
+            "session-id",
+            "thread-id",
             "x-codex-window-id",
             "x-codex-turn-state",
             "x-codex-turn-metadata",

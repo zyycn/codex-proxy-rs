@@ -16,7 +16,7 @@
 
 - 对话主通道同时存在 `responses_http` 和 `responses_websocket` 两类 transport。
 - WebSocket beta 头为 `OpenAI-Beta: responses_websockets=2026-02-06`。
-- 请求头会携带 `Authorization`、`ChatGPT-Account-Id`、`originator`、`User-Agent`。
+- WebSocket opening 请求头会携带 `Authorization`、`ChatGPT-Account-Id`、`originator`、`User-Agent`、`x-client-request-id`、`session-id`、`thread-id`、`x-codex-window-id`、`x-codex-turn-metadata`。
 - 原生二进制包含 `x-client-request-id`、`x-oai-attestation`、`x-responsesapi-include-timing-metrics`、`x-codex-installation-id`、`x-codex-turn-state` 等请求相关字段。
 - 请求体/WS payload 关键字段包含 `model`、`instructions`、`input`、`parallel_tool_calls`、`previous_response_id`、`store`、`include`、`client_metadata`。
 - 官方响应处理以 `response.completed` 作为完成边界；二进制里有 `stream closed before response.completed` 和 `remote compaction v2 stream closed before response.completed`。
@@ -98,6 +98,21 @@
   - `add_responses_lite_header` 在辅助源码里依赖模型信息 `use_responses_lite = true`，这不能单独证明 Desktop 当前所有触发条件。
 - 官方错误文案包含 `Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.`，说明 WebSocket 连接有 60 分钟生命周期或服务端连接限制。
 - 官方安全拦截文案包含 `This request has been flagged for possible cybersecurity risk.`，属于请求内容/工具调用侧风控信号，不是普通额度不足。
+
+### 运行态 WebSocket 抓包
+
+文件：本地取证 `docs/flows.all.txt` 和已提交的 `docs/openai-res.txt`。`flows.all.txt` 是完整抓包，内容较大且包含大量请求正文，不作为普通文档资产提交。
+
+确认点：
+
+- Flow #41/#44/#48/#59/#60 均为 `GET /backend-api/codex/responses` WebSocket opening。
+- opening 基础头包含 `Host`、`Connection: Upgrade`、`Upgrade: websocket`、`Sec-WebSocket-Version: 13`、`Sec-WebSocket-Key`。
+- opening 业务头包含 `chatgpt-account-id`、`authorization`、`user-agent: Codex Desktop/...`、`originator: Codex Desktop`、`openai-beta: responses_websockets=2026-02-06`。
+- opening 会话头包含 `x-client-request-id`、`session-id`、`thread-id`、`x-codex-window-id`、`x-codex-turn-metadata`，随后是 `sec-websocket-extensions: permessage-deflate; client_max_window_bits`。
+- payload 的 `client_metadata` 可见 `session_id`、`thread_id`、`x-codex-installation-id`、`x-codex-window-id`、`x-codex-turn-metadata` 和 `x-codex-ws-stream-request-start-ms`。
+- 服务端会下发内部 `codex.rate_limits` 事件；本次 free 样本为 `plan_type = "free"`、`primary.window_minutes = 43200`、`secondary = null`、`additional_rate_limits = null`、`credits = null`。
+
+证据边界：本抓包只覆盖 WebSocket opening 和 WebSocket 事件；HTTP SSE 是否完全同头只能结合官方二进制的 shared request header 线索和当前项目的 shared header builder 推断。
 
 ### Webview 额度逻辑
 
@@ -216,7 +231,7 @@
 
 | 请求类型 | 路径 | 传输 | 当前头部规则 |
 | --- | --- | --- | --- |
-| Responses HTTP SSE | `/codex/responses` | `reqwest` POST | 指纹基础头 + `content-type: application/json` + 可选 `cookie` + `accept: text/event-stream` + `openai-beta: responses_websockets=2026-02-06` + `x-openai-internal-codex-residency: us` + `x-client-request-id` + Codex 上下文头 |
+| Responses HTTP SSE | `/codex/responses` | `reqwest` POST | 指纹基础头 + `content-type: application/json` + 可选 `cookie` + `accept: text/event-stream` + `openai-beta: responses_websockets=2026-02-06` + `x-openai-internal-codex-residency: us` + `x-client-request-id` + `session-id` + `thread-id` + Codex 上下文头 |
 | Responses WebSocket | `/codex/responses` | `tokio-tungstenite` GET upgrade + 首帧 `response.create` | 先按 Responses HTTP 头构造，再移除 `content-type` 和 `accept`，追加标准 WebSocket upgrade 头和 `sec-websocket-extensions` |
 | Compact | `/codex/responses/compact` | `reqwest` POST | 指纹基础头 + `content-type` + 可选 `cookie` + `openai-beta` + `x-openai-internal-codex-residency` + 新生成的 `x-client-request-id` + 可选 `x-codex-installation-id` |
 | Models/探测 | `/codex/models`、`/models`、`/sentinel/chat-requirements` | `reqwest` GET | 指纹基础头 + 可选 `cookie` + `accept: application/json` + `accept-encoding: gzip, deflate` + 可选 `x-codex-installation-id` |
@@ -231,19 +246,22 @@
 - `sec-ch-ua`
 - fingerprint 默认 header 和 header order，例如 `accept-encoding`、`accept-language`、`sec-ch-ua-mobile`、`sec-ch-ua-platform`、`sec-fetch-*`
 
-Responses/WS/Compact 的 Codex 上下文头：
+Responses/WS 的 Codex 上下文头：
 
-- `x-client-request-id`：主 Responses 请求优先使用 `session_id`，没有 session 时使用本次 `request_id`；Compact 每次新生成 UUID。
+- `x-client-request-id`：主 Responses 请求优先使用 conversation identity，没有 session 时使用本次 `request_id`；Compact 每次新生成 UUID。
 - `x-codex-installation-id`：有 installation id 时写入。
-- `session_id`：仅主 Responses 请求有 conversation identity 时写入。
+- `session-id` / `thread-id`：仅主 Responses 请求有 conversation identity 时写入；当前运行态 WS 抓包里二者同值。
 - `x-codex-window-id`：由请求 `codex_window_id` 或会话身份推导。
 - `x-codex-turn-state`：显式续链或历史恢复时携带。
 - `x-codex-turn-metadata`、`x-codex-beta-features`、`x-responsesapi-include-timing-metrics`、`version`、`x-codex-parent-thread-id`：客户端 body/header 透传后写入。
 - `x-openai-subagent`：只接受 `review`、`compact`、`memory_consolidation`、`collab_spawn`。
 
+Compact 只保留 `x-client-request-id` 和 `x-codex-installation-id`，不带会话/线程头。
+
 WebSocket payload metadata：
 
-- 当前项目会在每次 WebSocket 请求发出前向 `client_metadata` 写 `x-codex-ws-stream-request-start-ms`，值为当前 Unix 毫秒字符串；HTTP SSE 不写该字段。
+- 当前项目会在 Responses payload `client_metadata` 写入 `session_id`、`thread_id`、`x-codex-installation-id`、`x-codex-window-id`、`x-codex-turn-metadata`、`x-codex-parent-thread-id`。
+- 当前项目会在每次 WebSocket 请求发出前额外向 `client_metadata` 写 `x-codex-ws-stream-request-start-ms`，值为当前 Unix 毫秒字符串；HTTP SSE 不写该字段。
 
 Desktop 二进制还出现 `x-oai-attestation`、`requestAttestation`、`ws_request_header_traceparent`、`ws_request_header_tracestate`、`x-openai-internal-codex-responses-lite`。这些字段不能按固定值补齐，需要满足各自触发条件。
 
@@ -422,6 +440,7 @@ Usage 请求路径按 base URL 选择：
 
 - `responses_websockets=2026-02-06` beta 头。
 - `x-client-request-id`、`x-codex-installation-id`、`x-codex-window-id`、`x-codex-turn-state`、`x-codex-turn-metadata` 的透传。
+- `session-id`、`thread-id` 请求头，以及 payload `client_metadata.session_id`、`client_metadata.thread_id`。
 - `previous_response_id` 强制 WebSocket。
 - `WebSocketPreferred` 可降级 HTTP SSE，`WebSocketRequired` 不降级。
 - `codex.rate_limits` 内部事件不下发给客户端，但用于刷新账号限额状态。
