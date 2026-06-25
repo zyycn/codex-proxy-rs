@@ -925,9 +925,27 @@ async fn account_quota_used_percent_by_id(
 
 fn quota_used_percent(quota_json: &str) -> Option<f64> {
     let quota = serde_json::from_str::<Value>(quota_json).ok()?;
-    quota
-        .pointer("/rate_limit/used_percent")
+    let mut values = Vec::new();
+    if let Some(used_percent) = quota
+        .pointer("/monthly_limit/used_percent")
         .and_then(percent_value)
+    {
+        values.push(used_percent);
+    }
+    if let Some(snapshots) = quota.get("snapshots").and_then(Value::as_array) {
+        for snapshot in snapshots {
+            for role in ["primary", "secondary"] {
+                if let Some(used_percent) = snapshot
+                    .get(role)
+                    .and_then(|window| window.get("used_percent"))
+                    .and_then(percent_value)
+                {
+                    values.push(used_percent);
+                }
+            }
+        }
+    }
+    values.into_iter().max_by(f64::total_cmp)
 }
 
 fn percent_value(value: &Value) -> Option<f64> {

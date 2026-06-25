@@ -77,10 +77,45 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ? where id = ?")
         .bind(
             json!({
-                "rate_limit": {
-                    "used_percent": 87.8,
-                    "reset_at": 1782737460,
-                    "limit_window_seconds": 604800
+                "plan_type": "free",
+                "snapshots": [{
+                    "source": "core",
+                    "limit_name": null,
+                    "metered_feature": null,
+                    "allowed": true,
+                    "limit_reached": false,
+                    "blocked": false,
+                    "primary": {
+                        "used_percent": 87.8,
+                        "remaining_percent": 12,
+                        "reset_at": 1782737460,
+                        "window_minutes": 10080,
+                        "limit_reached": false
+                    },
+                    "secondary": {
+                        "used_percent": 12.4,
+                        "remaining_percent": 88,
+                        "reset_at": 1782140000,
+                        "window_minutes": 300,
+                        "limit_reached": false
+                    }
+                }],
+                "monthly_limit": {
+                    "key": "spend-control-monthly",
+                    "source": "spend_control",
+                    "used_percent": 32,
+                    "remaining_percent": 68,
+                    "reset_at": 1784268840,
+                    "window_minutes": 43200,
+                    "limit_reached": false
+                },
+                "spend_control": {
+                    "reached": false,
+                    "individual_limit": {
+                        "used_percent": 32,
+                        "remaining_percent": 68,
+                        "reset_at": 1784268840
+                    }
                 }
             })
             .to_string(),
@@ -145,8 +180,13 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     let body = response_json(response).await;
     let item = &body["data"]["items"][0];
     assert_eq!(item["usage"]["requestCount"], 41);
-    assert_eq!(item["quota"]["usedPercentDisplay"], "87.8%");
-    assert!(item["quota"]["windowUsedDisplay"]
+    assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
+    assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
+    assert_eq!(item["quota"]["windows"][1]["labelDisplay"], "5小时限额");
+    assert_eq!(item["quota"]["windows"][1]["group"], "shortTerm");
+    assert_eq!(item["quota"]["windows"][2]["labelDisplay"], "周限额");
+    assert_eq!(item["quota"]["windows"][2]["group"], "shortTerm");
+    assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
         .as_str()
         .is_some_and(|value| value.contains(" / 7.0d")));
     assert_eq!(item["usage"]["createdTokens"], 100_000);

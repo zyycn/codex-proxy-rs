@@ -12,7 +12,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import { withMinimumDuration } from '@/utils/async'
 
-import type { Account } from '@/api'
+import type { Account, AccountQuotaWindow } from '@/api'
 import {
   batchDeleteAccounts,
   createAccount,
@@ -46,7 +46,22 @@ const createForm = ref({
 })
 
 const accountColumns = [
-  { key: 'selection', label: '', width: '56px', align: 'left' as const },
+  {
+    key: 'expander',
+    label: '',
+    width: '40px',
+    align: 'center' as const,
+    headerClass: '!px-2',
+    cellClass: '!px-2',
+  },
+  {
+    key: 'selection',
+    label: '',
+    width: '40px',
+    align: 'center' as const,
+    headerClass: '!px-2',
+    cellClass: '!px-2',
+  },
   { key: 'identity', label: '邮箱', flex: 2.6, minWidth: '260px' },
   { key: 'status', label: '状态', flex: 0.8 },
   { key: 'planType', label: '套餐', flex: 0.8 },
@@ -260,8 +275,16 @@ function handlePageSizeChange(nextPageSize: number) {
   void loadAccounts()
 }
 
-function quotaBarWidth(account: Account) {
-  return `${Math.max(0, Math.min(account.quota.usedPercent ?? 0, 100))}%`
+function quotaWindows(account: Account) {
+  return account.quota.windows
+}
+
+function quotaWindowsByGroup(account: Account, group: AccountQuotaWindow['group']) {
+  return quotaWindows(account).filter((window) => window.group === group)
+}
+
+function quotaWindowBarWidth(window: AccountQuotaWindow) {
+  return `${Math.max(0, Math.min(window.usedPercent ?? 0, 100))}%`
 }
 
 onMounted(() => {
@@ -355,6 +378,20 @@ onBeforeUnmount(() => {
         @page-change="handlePageChange"
         @page-size-change="handlePageSizeChange"
       >
+        <template #expander="{ row }">
+          <button
+            type="button"
+            class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-(--cp-text-secondary) transition hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary)"
+            :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+            @click.stop="toggleExpanded(row.id)"
+          >
+            <ChevronDown
+              class="size-3.5 transition-transform"
+              :class="expandedAccountIds.has(row.id) ? '' : '-rotate-90'"
+            />
+          </button>
+        </template>
+
         <template #header-selection>
           <BaseCheckbox
             :model-value="allSelected"
@@ -365,24 +402,11 @@ onBeforeUnmount(() => {
         </template>
 
         <template #selection="{ row }">
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-(--cp-text-secondary) transition hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary)"
-              :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
-              @click.stop="toggleExpanded(row.id)"
-            >
-              <ChevronDown
-                class="size-3.5 transition-transform"
-                :class="expandedAccountIds.has(row.id) ? 'rotate-180' : '-rotate-90'"
-              />
-            </button>
-            <BaseCheckbox
-              :model-value="selectedIds.has(row.id)"
-              label="选择账号"
-              @update:model-value="toggleSelection(row.id)"
-            />
-          </div>
+          <BaseCheckbox
+            :model-value="selectedIds.has(row.id)"
+            label="选择账号"
+            @update:model-value="toggleSelection(row.id)"
+          />
         </template>
 
         <template #identity="{ row }">
@@ -481,21 +505,80 @@ onBeforeUnmount(() => {
                 </BaseIconButton>
               </div>
 
-              <div class="flex items-center justify-between text-[12px] font-[720]">
-                <span class="text-(--cp-text-secondary)">周限额</span>
-                <span class="text-(--cp-text-primary)">{{ row.quota.usedPercentDisplay }}</span>
-              </div>
-              <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+              <div class="grid gap-3">
                 <div
-                  class="h-full rounded-full bg-(--cp-info)"
-                  :style="{ width: quotaBarWidth(row) }"
-                />
-              </div>
-              <div
-                class="mt-3 flex justify-between text-[12px] font-[620] text-(--cp-text-secondary)"
-              >
-                <span>重置时间: {{ row.quota.resetAtDisplay }}</span>
-                <span>窗口已用: {{ row.quota.windowUsedDisplay }}</span>
+                  v-for="window in quotaWindowsByGroup(row, 'monthly')"
+                  :key="window.key"
+                  class="rounded-lg bg-(--cp-bg-secondary) py-2"
+                >
+                  <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
+                    <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
+                    <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+                  </div>
+                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                    <div
+                      class="h-full rounded-full bg-(--cp-info)"
+                      :style="{ width: quotaWindowBarWidth(window) }"
+                    />
+                  </div>
+                  <div
+                    class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                  >
+                    <span>重置时间: {{ window.resetAtDisplay }}</span>
+                    <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                  </div>
+                </div>
+
+                <div
+                  v-if="quotaWindowsByGroup(row, 'shortTerm').length > 0"
+                  class="grid gap-2 sm:grid-cols-2"
+                >
+                  <div
+                    v-for="window in quotaWindowsByGroup(row, 'shortTerm')"
+                    :key="window.key"
+                    class="rounded-lg bg-(--cp-bg-secondary) py-2"
+                  >
+                    <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
+                      <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
+                      <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+                    </div>
+                    <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                      <div
+                        class="h-full rounded-full bg-(--cp-info)"
+                        :style="{ width: quotaWindowBarWidth(window) }"
+                      />
+                    </div>
+                    <div
+                      class="mt-3 flex flex-col gap-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                    >
+                      <span>重置时间: {{ window.resetAtDisplay }}</span>
+                      <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  v-for="window in quotaWindowsByGroup(row, 'other')"
+                  :key="window.key"
+                  class="rounded-lg bg-(--cp-bg-secondary) py-2"
+                >
+                  <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
+                    <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
+                    <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+                  </div>
+                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                    <div
+                      class="h-full rounded-full bg-(--cp-info)"
+                      :style="{ width: quotaWindowBarWidth(window) }"
+                    />
+                  </div>
+                  <div
+                    class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                  >
+                    <span>重置时间: {{ window.resetAtDisplay }}</span>
+                    <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                  </div>
+                </div>
               </div>
             </section>
 
