@@ -361,7 +361,7 @@ fn cooldown_with_jitter_should_return_positive_duration_within_expected_range() 
 async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_token() {
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
-    use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
+    use codex_proxy_rs::upstream::accounts::model::AccountStatus;
     use codex_proxy_rs::upstream::accounts::token_refresh::{
         RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger, TokenPair, TokenRefresher,
     };
@@ -379,7 +379,7 @@ async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_tok
     }
 
     let now = Utc::now();
-    let mut account = Account::test("acct_1", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("acct_1", AccountStatus::Active);
     account.access_token_expires_at = Some(now + ChronoDuration::seconds(60));
     account.refresh_token = Some("rt_keep".to_string());
     let scheduler = RefreshScheduler::new(

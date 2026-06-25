@@ -23,7 +23,7 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -322,7 +322,7 @@ async fn admin_account_cookies_should_store_encrypted_cookie_header() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -406,7 +406,7 @@ async fn admin_account_create_should_derive_claims_and_store_encrypted_tokens() 
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -452,7 +452,7 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

@@ -73,7 +73,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
             pool.clone(),
         ),
     };
-    let fingerprint = codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,

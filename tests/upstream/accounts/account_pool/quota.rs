@@ -2,11 +2,14 @@ use super::*;
 
 #[test]
 fn account_pool_should_skip_accounts_with_cached_quota_limit() {
-    let mut limited = Account::test("limited", AccountStatus::Active);
+    let mut limited = crate::support::accounts::test_account("limited", AccountStatus::Active);
     limited.quota_limit_reached = true;
     let mut pool = AccountPool::default();
     pool.insert(limited);
-    pool.insert(Account::test("usable", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "usable",
+        AccountStatus::Active,
+    ));
 
     assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "usable");
 }
@@ -15,7 +18,10 @@ fn account_pool_should_skip_accounts_with_cached_quota_limit() {
 fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
-    pool.insert(Account::test("limited", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "limited",
+        AccountStatus::Active,
+    ));
     pool.mark_quota_limited_until("limited", now + Duration::seconds(30));
 
     assert!(pool
@@ -37,7 +43,10 @@ fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
 fn account_pool_should_not_shorten_existing_quota_cooldown() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
-    pool.insert(Account::test("limited", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "limited",
+        AccountStatus::Active,
+    ));
 
     pool.mark_quota_limited_until("limited", now + Duration::seconds(180));
     pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
@@ -53,7 +62,7 @@ fn account_pool_should_not_shorten_existing_quota_cooldown() {
 #[test]
 fn account_pool_should_not_replace_known_window_length_with_cooldown_seconds() {
     let now = Utc::now();
-    let mut account = Account::test("limited", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("limited", AccountStatus::Active);
     account.limit_window_seconds = Some(300);
     let mut pool = AccountPool::default();
     pool.insert(account);
@@ -72,7 +81,7 @@ fn account_pool_should_not_replace_known_window_length_with_cooldown_seconds() {
 #[test]
 fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
     let now = fixed_time();
-    let mut account = Account::test("acct_a", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
     account.quota_limit_reached = true;
     account.quota_cooldown_until = Some(now - Duration::seconds(1));
     account.cloudflare_cooldown_until = Some(now - Duration::seconds(1));
@@ -100,11 +109,14 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
 #[test]
 fn account_pool_should_skip_accounts_in_cloudflare_cooldown() {
     let now = fixed_time();
-    let mut cooling = Account::test("cooling", AccountStatus::Active);
+    let mut cooling = crate::support::accounts::test_account("cooling", AccountStatus::Active);
     cooling.cloudflare_cooldown_until = Some(now + Duration::seconds(30));
     let mut pool = AccountPool::default();
     pool.insert(cooling);
-    pool.insert(Account::test("usable", AccountStatus::Active));
+    pool.insert(crate::support::accounts::test_account(
+        "usable",
+        AccountStatus::Active,
+    ));
 
     let acquired = pool
         .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
@@ -120,9 +132,9 @@ fn least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled()
         rotation_strategy: RotationStrategy::LeastUsed,
         ..AccountPoolOptions::default()
     });
-    let mut limited = Account::test("limited", AccountStatus::Active);
+    let mut limited = crate::support::accounts::test_account("limited", AccountStatus::Active);
     limited.quota_limit_reached = true;
-    let mut usable = Account::test("usable", AccountStatus::Active);
+    let mut usable = crate::support::accounts::test_account("usable", AccountStatus::Active);
     usable.request_count = 100;
     pool.insert(limited);
     pool.insert(usable);
@@ -139,9 +151,9 @@ fn least_used_should_prefer_earlier_rate_limit_window_reset() {
         rotation_strategy: RotationStrategy::LeastUsed,
         ..AccountPoolOptions::default()
     });
-    let mut soon = Account::test("soon", AccountStatus::Active);
+    let mut soon = crate::support::accounts::test_account("soon", AccountStatus::Active);
     soon.window_reset_at = Some(now + Duration::seconds(30));
-    let mut later = Account::test("later", AccountStatus::Active);
+    let mut later = crate::support::accounts::test_account("later", AccountStatus::Active);
     later.window_reset_at = Some(now + Duration::seconds(300));
     pool.insert(later);
     pool.insert(soon);
@@ -156,7 +168,7 @@ fn least_used_should_prefer_earlier_rate_limit_window_reset() {
 #[test]
 fn sync_rate_limit_window_should_reset_window_counters_when_drift_crosses_threshold() {
     let now = fixed_time();
-    let mut account = Account::test("acct_a", AccountStatus::Active);
+    let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
     account.window_request_count = 5;
     account.window_input_tokens = 100;
     account.window_output_tokens = 40;

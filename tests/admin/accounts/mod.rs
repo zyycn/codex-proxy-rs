@@ -25,7 +25,7 @@ use codex_proxy_rs::{
         store::{NewAccount, SqliteAccountStore},
         token_refresh::RefreshLeaseStore,
     },
-    upstream::fingerprint::{Fingerprint, FingerprintRepository},
+    upstream::fingerprint::FingerprintRepository,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{json, Value};
@@ -192,7 +192,7 @@ async fn admin_accounts_test_app_with_overrides(
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

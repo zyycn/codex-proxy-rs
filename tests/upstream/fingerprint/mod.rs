@@ -1,6 +1,6 @@
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::fingerprint::{
-    parse_update_manifest, Fingerprint, FingerprintRepository, FingerprintUpdater, UpdateChecker,
+    parse_update_manifest, FingerprintRepository, FingerprintUpdater, UpdateChecker,
 };
 
 #[test]
@@ -20,7 +20,7 @@ async fn fingerprint_repository_should_update_current_record() {
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool.clone());
-    let default_fingerprint = Fingerprint::default_for_tests();
+    let default_fingerprint = crate::support::fingerprint::test_fingerprint();
 
     repo.ensure_current_seed(&default_fingerprint)
         .await
@@ -66,7 +66,7 @@ async fn fingerprint_updater_should_fetch_manifest_and_persist_history() {
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&Fingerprint::default_for_tests())
+    repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
     let updater = FingerprintUpdater::new(
@@ -151,7 +151,7 @@ async fn update_checker_should_apply_available_update_to_repository() {
         .await
         .expect("sqlite pool");
     let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&Fingerprint::default_for_tests())
+    repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
     let extracted_path = dir.path().join("extracted-fingerprint.json");

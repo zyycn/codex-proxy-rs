@@ -26,7 +26,7 @@ async fn admin_usage_stats_should_return_page_and_summary() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -91,7 +91,7 @@ async fn admin_usage_stats_should_require_admin_session_cookie() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -162,7 +162,7 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -248,7 +248,7 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

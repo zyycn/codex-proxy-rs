@@ -3,7 +3,6 @@ use std::sync::{
     Arc,
 };
 
-use codex_proxy_rs::upstream::fingerprint::Fingerprint;
 use codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest;
 use codex_proxy_rs::upstream::transport::{
     CodexBackendClient, CodexRequestContext, CodexWebSocketPool,
@@ -72,7 +71,7 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
     let backend = CodexBackendClient::new(
         reqwest::Client::new(),
         format!("http://{addr}"),
-        Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(Arc::new(pool));
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());

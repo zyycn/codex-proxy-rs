@@ -20,7 +20,7 @@ use codex_proxy_rs::{
     runtime::state::AppState,
     upstream::accounts::token_refresh::RefreshLeaseStore,
     upstream::accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
-    upstream::fingerprint::{Fingerprint, FingerprintRepository},
+    upstream::fingerprint::FingerprintRepository,
 };
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
@@ -102,7 +102,7 @@ async fn admin_settings_update_should_persist_retained_fields_to_config_yaml() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let mut services = Services::new(&config, stores, fingerprint);
     services.settings = std::sync::Arc::new(
         codex_proxy_rs::config::settings::RuntimeSettingsService::with_config_path(
@@ -189,7 +189,7 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,
@@ -234,7 +234,7 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
         client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
         config,

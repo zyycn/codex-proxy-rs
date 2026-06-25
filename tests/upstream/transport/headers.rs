@@ -1,11 +1,10 @@
 use super::*;
-use codex_proxy_rs::upstream::fingerprint::Fingerprint;
 use codex_proxy_rs::upstream::transport::build_ordered_codex_headers;
 use codex_proxy_rs::upstream::transport::websocket::CodexWebSocketConnection;
 
 #[test]
 fn ordered_codex_headers_should_preserve_fingerprint_priority_and_request_fields() {
-    let fingerprint = Fingerprint::default_for_tests();
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
 
     let headers = build_ordered_codex_headers(
         &fingerprint,
@@ -279,7 +278,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     )
     .with_websocket_pool(pool);
 
@@ -404,7 +403,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
     let mut request =
         codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -470,7 +469,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     let usage = client
@@ -550,7 +549,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     let models = client
@@ -615,7 +614,7 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     client
@@ -689,7 +688,7 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        codex_proxy_rs::upstream::fingerprint::Fingerprint::default_for_tests(),
+        crate::support::fingerprint::test_fingerprint(),
     );
 
     client
