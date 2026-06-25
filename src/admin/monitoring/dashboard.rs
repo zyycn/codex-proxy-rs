@@ -324,8 +324,8 @@ fn dashboard_cards(
     let today_cost = cost_window(logs, today_start, now, billing_context).unwrap_or(0.0);
     let total_cost = total_cost(logs, summary, billing_context);
 
-    let total_input = summary.input_tokens.max(0) as u64;
-    let total_cached = summary.cached_tokens.max(0) as u64;
+    let total_input = nonnegative_i64_to_u64(summary.input_tokens);
+    let total_cached = nonnegative_i64_to_u64(summary.cached_tokens);
 
     DashboardCardsData {
         accounts: DashboardAccountsCardData {
@@ -350,14 +350,14 @@ fn dashboard_cards(
         traffic: DashboardTrafficCardData {
             today_requests: today.requests,
             yesterday_requests: yesterday.requests,
-            total_requests: summary.request_count.max(0) as u64,
+            total_requests: nonnegative_i64_to_u64(summary.request_count),
             rpm: today.requests,
             tpm: today.tokens(),
         },
         tokens: DashboardTokenCardData {
             today_tokens: today.tokens(),
             yesterday_tokens: yesterday.tokens(),
-            total_tokens: (summary.input_tokens + summary.output_tokens).max(0) as u64,
+            total_tokens: nonnegative_i64_to_u64(summary.input_tokens + summary.output_tokens),
             today_cost_usd: Some(today_cost),
             total_cost_usd: Some(total_cost),
         },
@@ -562,9 +562,9 @@ fn total_cost(logs: &[EventLog], summary: &AdminUsageSummary, context: BillingCo
         return total;
     }
 
-    let input_tokens = summary.input_tokens.max(0) as u64;
-    let output_tokens = summary.output_tokens.max(0) as u64;
-    let cached_tokens = summary.cached_tokens.max(0) as u64;
+    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
+    let output_tokens = nonnegative_i64_to_u64(summary.output_tokens);
+    let cached_tokens = nonnegative_i64_to_u64(summary.cached_tokens);
     billing::calculate_cost(
         input_tokens,
         output_tokens,
@@ -614,7 +614,7 @@ fn apply_log(window: &mut UsageWindow, log: &EventLog) {
     if let Some(latency) = log
         .latency_ms
         .filter(|value| *value > 0)
-        .map(|value| value as u64)
+        .map(nonnegative_i64_to_u64)
     {
         window.latency_sum += latency;
         window.latency_count += 1;
@@ -718,9 +718,10 @@ fn account_usage_data(
                         .and_then(|email| email.split('@').next().map(ToString::to_string))
                 })
                 .unwrap_or_else(|| usage.account_id.chars().take(8).collect());
-            let status = account
-                .map(|account| account.status.to_string())
-                .unwrap_or_else(|| "active".to_string());
+            let status = account.map_or_else(
+                || "active".to_string(),
+                |account| account.status.to_string(),
+            );
             let quota_used_percent = quota_used_by_account
                 .get(&usage.account_id)
                 .copied()
@@ -732,8 +733,8 @@ fn account_usage_data(
                     .plan_type
                     .clone()
                     .unwrap_or_else(|| "free".to_string()),
-                requests: usage.request_count.max(0) as u64,
-                tokens: (usage.input_tokens + usage.output_tokens).max(0) as u64,
+                requests: nonnegative_i64_to_u64(usage.request_count),
+                tokens: nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens),
                 quota_used_percent,
                 last_used_at: usage.last_used_at.map(|value| value.to_rfc3339()),
                 status,
@@ -782,6 +783,10 @@ fn percent_value(value: &Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))?;
     percent.is_finite().then_some(percent.clamp(0.0, 100.0))
+}
+
+fn nonnegative_i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
 }
 
 fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
