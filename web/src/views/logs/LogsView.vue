@@ -10,7 +10,6 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
-import AppTopbar from '@/layout/components/AppTopbar.vue'
 import { withMinimumDuration } from '@/utils/async'
 
 import type { EventLog } from '@/api'
@@ -184,8 +183,6 @@ onBeforeUnmount(() => {
           查看系统运行日志 · 共 {{ totalLogs }} 条
         </p>
       </div>
-
-      <AppTopbar class="mt-0.5" :refreshing="refreshingList" @refresh="refreshLogs" />
     </header>
 
     <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
@@ -213,12 +210,7 @@ onBeforeUnmount(() => {
           <RefreshCw class="size-4.5" />
         </BaseIconButton>
 
-        <BaseButton
-          variant="danger"
-          size="md"
-          :disabled="clearingLogs"
-          @click="showClearModal = true"
-        >
+        <BaseButton variant="danger" :disabled="clearingLogs" @click="showClearModal = true">
           <Trash2 class="size-4" />
           清空日志
         </BaseButton>

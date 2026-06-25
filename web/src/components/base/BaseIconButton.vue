@@ -5,7 +5,7 @@ const props = withDefaults(
   defineProps<{
     label?: string
     title?: string
-    size?: 'default' | 'large' | 'sm' | 'md'
+    size?: 'default' | 'sm' | 'md'
     variant?: 'default' | 'ghost'
     active?: boolean
     disabled?: boolean
@@ -21,7 +21,7 @@ const props = withDefaults(
 )
 
 const sizeClasses = computed(() => {
-  if (props.size === 'large' || props.size === 'md') return 'h-11 w-11 rounded-xl'
+  if (props.size === 'md') return 'h-11 w-11 rounded-xl'
   if (props.size === 'sm') return 'h-8 w-8 rounded-(--cp-icon-button-radius)'
   return 'h-9 w-9 rounded-xl'
 })

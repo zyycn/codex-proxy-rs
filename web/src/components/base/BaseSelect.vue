@@ -9,7 +9,7 @@ interface SelectOption {
   disabled?: boolean
 }
 
-type SelectSize = 'small' | 'default' | 'large' | 'pagination'
+type SelectSize = 'default' | 'pagination'
 
 defineOptions({
   inheritAttrs: false,
@@ -50,21 +50,11 @@ const sizeConfig: Record<
     icon: number
   }
 > = {
-  large: {
-    trigger: 'h-(--cp-input-height-large) px-4 pr-10 text-sm rounded-(--cp-input-radius-base)',
-    option: 'h-9 px-3 text-sm',
-    icon: 16,
-  },
   default: {
     trigger:
       'h-(--cp-input-height-default) px-3.5 pr-9 text-[13px] rounded-(--cp-input-radius-base)',
     option: 'h-8.5 px-3 text-[13px]',
     icon: 16,
-  },
-  small: {
-    trigger: 'h-(--cp-input-height-compact) px-2.5 pr-8 text-xs rounded-(--cp-input-radius-small)',
-    option: 'h-7 px-2 text-xs',
-    icon: 14,
   },
   pagination: {
     trigger: 'h-8 px-2.5 pr-7 text-xs rounded-lg',
@@ -277,7 +267,7 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="rootRef"
-    class="relative inline-block box-content overflow-visible p-[3px] text-left"
+    class="relative inline-block box-content overflow-visible p-0.75 text-left"
     v-bind="attrs"
   >
     <button
@@ -344,7 +334,7 @@ onBeforeUnmount(() => {
             <Check
               v-if="option.value === model"
               class="shrink-0 text-(--cp-info)"
-              :size="size === 'small' || size === 'pagination' ? 13 : 15"
+              :size="size === 'pagination' ? 13 : 15"
             />
           </button>
         </template>

@@ -14,6 +14,10 @@ export interface MetricCardItem {
   icon: Component
   tone: SemanticTone
   details: MetricDetail[]
+  sparkline?: {
+    values: number[]
+    tone: SemanticTone
+  }
   trend?: {
     direction: 'up' | 'down' | 'flat'
     tone: SemanticTone

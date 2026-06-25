@@ -27,12 +27,14 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
     http::middleware::request_id::RequestId,
-    infra::time::{china_datetime_rfc3339_str, china_relative_time, china_time},
+    infra::time::{china_datetime, china_datetime_rfc3339_str, china_relative_time, china_time},
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
 };
 
 const DASHBOARD_LOG_LIMIT: u32 = 1000;
+const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
+const HEALTH_TIMELINE_SLOTS: i64 = 7 * 24 * 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,12 +56,25 @@ pub enum DashboardTrendKind {
 pub struct DashboardSummaryData {
     pub cards: DashboardCardsData,
     pub trend: DashboardTrendData,
+    pub health_timeline: DashboardHealthTimelineData,
     pub account_usage: Vec<DashboardAccountUsageData>,
     pub service_statuses: Vec<DashboardServiceStatusData>,
     pub event_logs: Vec<DashboardEventLogData>,
     pub pool_summary: AccountPoolDiagnostics,
     pub capacity_info: AccountCapacityDiagnostics,
     pub rotation_strategy: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardHealthTimelineData {
+    pub title: String,
+    pub description: String,
+    pub range_display: String,
+    pub reliability_display: String,
+    pub oldest_label: String,
+    pub newest_label: String,
+    pub points: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +291,7 @@ pub async fn dashboard_summary(
                     settings.model.service_tier.as_deref(),
                 ),
                 trend,
+                health_timeline: dashboard_health_timeline_data(&logs),
                 account_usage: account_usage_data(
                     &accounts,
                     &usage_records,
@@ -444,6 +460,82 @@ fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> Dashboar
         kind,
         summary: trend_summary(kind, &points),
         points,
+    }
+}
+
+fn dashboard_health_timeline_data(logs: &[EventLog]) -> DashboardHealthTimelineData {
+    let now = Utc::now();
+    let current_slot = quarter_hour_start(now);
+    let start = current_slot
+        - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (HEALTH_TIMELINE_SLOTS - 1));
+    let mut buckets = (0..HEALTH_TIMELINE_SLOTS)
+        .map(|index| {
+            let bucket_start = start + Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * index);
+            (bucket_start, UsageWindow::default())
+        })
+        .collect::<Vec<_>>();
+
+    for log in logs {
+        if log.created_at < start || log.created_at > now {
+            continue;
+        }
+        let log_slot = quarter_hour_start(log.created_at);
+        if let Some((_, bucket)) = buckets
+            .iter_mut()
+            .find(|(bucket_start, _)| *bucket_start == log_slot)
+        {
+            apply_log(bucket, log);
+        }
+    }
+
+    let requests = buckets
+        .iter()
+        .map(|(_, bucket)| bucket.requests)
+        .sum::<u64>();
+    let errors = buckets.iter().map(|(_, bucket)| bucket.errors).sum::<u64>();
+    let reliability = if requests > 0 {
+        ((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let end = current_slot + Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES);
+
+    DashboardHealthTimelineData {
+        title: "请求健康时间线".to_string(),
+        description: "最近 7 天请求可靠性".to_string(),
+        range_display: format!("{} - {}", china_datetime(&start), china_datetime(&end)),
+        reliability_display: if requests > 0 {
+            format!("{reliability:.1}%")
+        } else {
+            "-".to_string()
+        },
+        oldest_label: "最早".to_string(),
+        newest_label: "最新".to_string(),
+        points: buckets
+            .into_iter()
+            .map(|(_, bucket)| {
+                let success_rate = if bucket.requests > 0 {
+                    ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0)
+                        .round()
+                        / 10.0
+                } else {
+                    0.0
+                };
+                health_tone(bucket, success_rate)
+            })
+            .collect(),
+    }
+}
+
+fn health_tone(bucket: UsageWindow, success_rate: f64) -> char {
+    if bucket.requests == 0 {
+        '0'
+    } else if bucket.errors == 0 {
+        '1'
+    } else if success_rate >= 90.0 {
+        '2'
+    } else {
+        '3'
     }
 }
 
@@ -909,5 +1001,13 @@ fn hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
         .date_naive()
         .and_hms_opt(value.hour(), 0, 0)
         .expect("valid hour")
+        .and_utc()
+}
+
+fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .date_naive()
+        .and_hms_opt(value.hour(), value.minute() / 15 * 15, 0)
+        .expect("valid quarter hour")
         .and_utc()
 }

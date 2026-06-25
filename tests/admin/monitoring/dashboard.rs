@@ -213,6 +213,30 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
     assert_eq!(body["data"]["accountUsage"][0]["lastUsed"], "2000-01-01");
 }
 
+#[tokio::test]
+async fn dashboard_summary_should_return_seven_day_health_timeline() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-health-timeline.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    store
+        .append(&usage_log_with_tokens(Utc::now(), 10))
+        .await
+        .unwrap();
+    store
+        .append(&usage_log_with_tokens(Utc::now() - Duration::days(8), 10))
+        .await
+        .unwrap();
+
+    let body = dashboard_summary(app).await;
+    let points = body["data"]["healthTimeline"]["points"].as_str().unwrap();
+
+    assert_eq!(body["data"]["healthTimeline"]["title"], "请求健康时间线");
+    assert_eq!(points.len(), 672);
+    assert_eq!(points.matches('1').count(), 1);
+}
+
 async fn dashboard_summary_total_cost_for_log(db_name: &str, model: &str, metadata: Value) -> f64 {
     let (app, store, _pool, _dir) =
         dashboard_test_app(db_name, crate::support::fingerprint::test_fingerprint()).await;

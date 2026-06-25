@@ -143,9 +143,11 @@ const quotaToneClasses: Record<SemanticTone, string> = {
 <template>
   <BaseCard as="article" :padded="false" class="w-full xl:h-112.5">
     <div
-      class="grid gap-7 px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] xl:pb-0"
+      class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(360px,360fr)_minmax(612px,612fr)_minmax(500px,500fr)] xl:gap-7 xl:pb-0"
     >
-      <section class="w-full xl:h-100.5">
+      <section
+        class="w-full pb-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:h-100.5 xl:pb-0 xl:shadow-none"
+      >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           容量、并发与分配策略
@@ -195,34 +197,36 @@ const quotaToneClasses: Record<SemanticTone, string> = {
         </div>
       </section>
 
-      <section class="w-full">
+      <section
+        class="w-full py-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:py-0 xl:shadow-none"
+      >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           总请求排序
         </p>
 
-        <div class="mt-6.75 grid h-82.5 w-full gap-1.5 overflow-hidden">
+        <div class="mt-5 grid w-full gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-1.5">
           <BaseEmpty
             v-if="accounts.length === 0"
             compact
             title="暂无账号用量"
             description="账号产生请求后会显示 24h 排序和 Token 负载。"
-            class="h-full place-content-center"
+            class="min-h-40 place-content-center xl:h-full"
           />
           <template v-else>
             <article
               v-for="(account, index) in accounts"
               :key="account.name"
-              class="grid h-19.5 w-full grid-cols-[34px_10px_minmax(150px,1fr)_8px_76px_8px_84px_8px_84px] items-start rounded-[14px] px-3.5 transition-colors duration-200 hover:bg-(--cp-bg-subtle)"
+              class="grid w-full grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] px-3.5 py-3.5 hover:bg-(--cp-bg-subtle) xl:h-19.5 xl:grid-cols-[34px_minmax(150px,1fr)_76px_84px_84px] xl:items-center xl:gap-x-3 xl:py-0"
               :class="['bg-(--cp-bg-subtle)', 'bg-white'][index % 2]"
             >
               <span
-                class="mt-5.5 inline-flex size-8.5 items-center justify-center rounded-full"
+                class="inline-flex size-8.5 items-center justify-center rounded-full"
                 :class="rowToneClasses[account.tone]"
               >
                 {{ account.name[0] }}
               </span>
-              <span class="col-start-3 row-start-1 mt-4.25 grid min-w-0 gap-4.25">
+              <span class="grid min-w-0 gap-1.5 xl:gap-4.25">
                 <span class="flex min-w-0 items-start">
                   <strong class="text-sm leading-[1.15] font-[650] text-(--cp-text-primary)">{{
                     account.name
@@ -237,38 +241,58 @@ const quotaToneClasses: Record<SemanticTone, string> = {
                   >{{ account.email }}</span
                 >
               </span>
-              <span class="col-start-5 row-start-1 mt-5 grid min-w-0 gap-4.25">
-                <strong
-                  class="w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
-                  >{{ account.requests }}</strong
-                >
-                <span
-                  class="w-20 whitespace-nowrap text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
-                  >{{ account.lastUsed }}</span
-                >
-              </span>
-              <strong
-                class="col-start-7 row-start-1 mt-5 w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
-                >{{ account.tokens }}</strong
-              >
               <span
-                class="col-start-9 row-start-1 mt-9 block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)"
+                class="col-span-2 mt-3 grid grid-cols-3 gap-3 pl-11 xl:col-span-3 xl:mt-0 xl:grid-cols-[76px_84px_84px] xl:pl-0"
               >
-                <i
-                  class="block h-1.5 rounded-full"
-                  :class="quotaToneClasses[account.quotaTone]"
-                  :style="{
-                    width: `${account.quotaPercent}%`,
-                    minWidth: account.quotaPercent > 0 ? '7px' : '0',
-                  }"
-                />
+                <span class="grid min-w-0 gap-1.5">
+                  <span
+                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
+                    >请求</span
+                  >
+                  <strong
+                    class="w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
+                    >{{ account.requests }}</strong
+                  >
+                  <span
+                    class="w-full truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary) xl:w-20 xl:whitespace-nowrap"
+                    >{{ account.lastUsed }}</span
+                  >
+                </span>
+                <span class="grid min-w-0 gap-1.5">
+                  <span
+                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
+                    >Token</span
+                  >
+                  <strong
+                    class="w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
+                    >{{ account.tokens }}</strong
+                  >
+                </span>
+                <span class="grid min-w-0 gap-2">
+                  <span
+                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
+                    >额度</span
+                  >
+                  <span
+                    class="mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)"
+                  >
+                    <i
+                      class="block h-1.5 rounded-full"
+                      :class="quotaToneClasses[account.quotaTone]"
+                      :style="{
+                        width: `${account.quotaPercent}%`,
+                        minWidth: account.quotaPercent > 0 ? '7px' : '0',
+                      }"
+                    />
+                  </span>
+                </span>
               </span>
             </article>
           </template>
         </div>
       </section>
 
-      <section class="w-full xl:h-100.5">
+      <section class="w-full pt-6 xl:h-100.5 xl:pt-0">
         <header class="flex h-12.5 items-start justify-between">
           <div>
             <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号状态</h2>
@@ -311,7 +335,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5 transition-colors duration-200"
+            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
           >
             <span
               class="inline-flex size-7 items-center justify-center rounded-[9px]"

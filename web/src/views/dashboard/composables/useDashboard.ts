@@ -15,6 +15,7 @@ import {
 import { getDashboardSummary, getDashboardTrend } from '@/api'
 import type {
   DashboardAccountUsage,
+  DashboardHealthTimeline,
   DashboardServiceStatus,
   DashboardSummary,
   DashboardTrend,
@@ -39,6 +40,7 @@ export function useDashboard(): {
   metrics: Ref<MetricCardItem[]>
   trendPoints: Ref<TrendPoint[]>
   trendSummary: Ref<TrendSummaryItem[]>
+  healthTimeline: Ref<DashboardHealthTimeline>
   accountUsage: Ref<AccountUsageItem[]>
   serviceStatuses: Ref<ServiceStatusItem[]>
   eventLogs: Ref<EventLogItem[]>
@@ -51,6 +53,7 @@ export function useDashboard(): {
   const metrics = ref<MetricCardItem[]>(metricCards(emptyDashboardSummary()))
   const trendPoints = ref<TrendPoint[]>([])
   const trendSummary = ref<TrendSummaryItem[]>([])
+  const healthTimeline = ref<DashboardHealthTimeline>(emptyDashboardSummary().healthTimeline)
   const accountUsage = ref<AccountUsageItem[]>([])
   const serviceStatuses = ref<ServiceStatusItem[]>([])
   const eventLogs = ref<EventLogItem[]>([])
@@ -93,6 +96,7 @@ export function useDashboard(): {
   function applySummary(summary: DashboardSummary) {
     metrics.value = metricCards(summary)
     applyTrend(summary.trend)
+    healthTimeline.value = summary.healthTimeline
     accountUsage.value = summary.accountUsage.map(accountUsageItem)
     serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
     eventLogs.value = summary.eventLogs.map((log) => ({
@@ -147,6 +151,15 @@ export function useDashboard(): {
         points: [],
         summary: [],
       },
+      healthTimeline: {
+        title: '请求健康时间线',
+        description: '最近 7 天请求可靠性',
+        rangeDisplay: '-',
+        reliabilityDisplay: '-',
+        oldestLabel: '最早',
+        newestLabel: '最新',
+        points: '',
+      },
       accountUsage: [],
       serviceStatuses: [],
       eventLogs: [],
@@ -171,6 +184,7 @@ export function useDashboard(): {
 
   function metricCards(summary: DashboardSummary): MetricCardItem[] {
     const { accounts, traffic, tokens, cache } = summary.cards
+    const points = summary.trend.points
     return [
       {
         title: '账号',
@@ -195,6 +209,10 @@ export function useDashboard(): {
         value: formatNumber(traffic.todayRequests),
         icon: Activity,
         tone: 'info',
+        sparkline: sparkline(
+          points.map((point) => point.requests),
+          'info',
+        ),
         trend: trendState(traffic.todayRequests, traffic.yesterdayRequests, 'info'),
         details: [
           { label: '总请求', value: formatNumber(traffic.totalRequests), tone: 'info' },
@@ -210,6 +228,10 @@ export function useDashboard(): {
         value: formatTokens(tokens.todayTokens),
         icon: FileText,
         tone: 'success',
+        sparkline: sparkline(
+          points.map((point) => point.tokens),
+          'success',
+        ),
         trend: trendState(tokens.todayTokens, tokens.yesterdayTokens, 'success'),
         details: [
           { label: '总 Token', value: formatTokens(tokens.totalTokens), tone: 'success' },
@@ -225,6 +247,10 @@ export function useDashboard(): {
         value: formatRate(cache.todayHitRate),
         icon: Timer,
         tone: cache.todayHitRate && cache.todayHitRate > 0 ? 'warning' : 'normal',
+        sparkline: sparkline(
+          points.map((point) => point.cachedTokens),
+          'warning',
+        ),
         trend: trendState(cache.todayHitRate ?? 0, cache.yesterdayHitRate ?? 0, 'warning'),
         details: [
           { label: '总缓存命中', value: formatRate(cache.totalHitRate), tone: 'warning' },
@@ -236,6 +262,10 @@ export function useDashboard(): {
         ],
       },
     ]
+  }
+
+  function sparkline(values: number[], tone: SemanticTone): MetricCardItem['sparkline'] {
+    return values.some((value) => value > 0) ? { values, tone } : undefined
   }
 
   function applyTrend(trend: DashboardTrend) {
@@ -414,6 +444,7 @@ export function useDashboard(): {
     metrics,
     trendPoints,
     trendSummary,
+    healthTimeline,
     accountUsage,
     serviceStatuses,
     eventLogs,

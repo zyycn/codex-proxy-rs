@@ -5,12 +5,23 @@ export type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 export interface DashboardSummary {
   cards: DashboardCards
   trend: DashboardTrend
+  healthTimeline: DashboardHealthTimeline
   accountUsage: DashboardAccountUsage[]
   serviceStatuses: DashboardServiceStatus[]
   eventLogs: DashboardEventLog[]
   poolSummary: DashboardAccountPoolSummary
   capacityInfo: DashboardAccountCapacityInfo
   rotationStrategy?: string
+}
+
+export interface DashboardHealthTimeline {
+  title: string
+  description: string
+  rangeDisplay: string
+  reliabilityDisplay: string
+  oldestLabel: string
+  newestLabel: string
+  points: string
 }
 
 export interface DashboardCards {
