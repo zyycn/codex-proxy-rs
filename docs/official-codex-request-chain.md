@@ -92,10 +92,9 @@
 - 官方连接日志包含 `responses_websocket.connect`、`responses_websocket.stream_request`、`responses.stream_request`、`transport`、`pre_compression_bytes`、`post_compression_bytes`、`compression_duration_ms`。
 - 官方协议能力包含 `requestAttestation`，注释为允许 client 接收 `attestation/generate` 请求并为上游生成 `x-oai-attestation`。
 - 官方 WebSocket 头相关字段包含 `ws_request_header_traceparent`、`ws_request_header_tracestate`、`ws_request_header_x_openai_internal_codex_responses_lite`。
-- 官方公开源码 `openai/codex` 的 `codex-rs/core/src/client.rs` 确认：
-  - `add_responses_lite_header` 只在模型信息 `use_responses_lite = true` 时写 `x-openai-internal-codex-responses-lite: true`。
-  - WebSocket 每次发送前调用 `stamp_ws_stream_request_start_ms`，向 payload `client_metadata` 写入当前 Unix 毫秒字符串 `x-codex-ws-stream-request-start-ms`。
-  - WebSocket lite 请求还会在 payload `client_metadata` 写 `ws_request_header_x_openai_internal_codex_responses_lite: "true"`。
+- Desktop 原生二进制还出现 `add_responses_lite_header`、`stamp_ws_stream_request_start_ms`、`x-openai-internal-codex-responses-lite`、`x-codex-ws-stream-request-start-ms`、`x-codex-beta-features`。公开 `openai/codex` 同名源码只能作为辅助解释：
+  - `stamp_ws_stream_request_start_ms` 会向 WebSocket payload `client_metadata` 写入当前 Unix 毫秒字符串 `x-codex-ws-stream-request-start-ms`。
+  - `add_responses_lite_header` 在辅助源码里依赖模型信息 `use_responses_lite = true`，这不能单独证明 Desktop 当前所有触发条件。
 - 官方错误文案包含 `Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.`，说明 WebSocket 连接有 60 分钟生命周期或服务端连接限制。
 - 官方安全拦截文案包含 `This request has been flagged for possible cybersecurity risk.`，属于请求内容/工具调用侧风控信号，不是普通额度不足。
 
@@ -244,13 +243,13 @@ WebSocket payload metadata：
 
 - 当前项目会在每次 WebSocket 请求发出前向 `client_metadata` 写 `x-codex-ws-stream-request-start-ms`，值为当前 Unix 毫秒字符串；HTTP SSE 不写该字段。
 
-官方二进制和公开源码还出现 `x-oai-attestation`、`requestAttestation`、`ws_request_header_traceparent`、`ws_request_header_tracestate`、`x-openai-internal-codex-responses-lite`。这些字段不能按固定值补齐，需要满足各自触发条件。
+Desktop 二进制还出现 `x-oai-attestation`、`requestAttestation`、`ws_request_header_traceparent`、`ws_request_header_tracestate`、`x-openai-internal-codex-responses-lite`。这些字段不能按固定值补齐，需要满足各自触发条件。
 
 当前需要继续取证的头部差距：
 
-- `x-oai-attestation` 来自 app-server 协议的 `attestation/generate` 能力。Desktop main 在 macOS arm64 会加载 `native/devicecheck.node` 生成 token；app-server README 说明 client 返回 `{ "token": "v1.<opaque>" }` 后，上游 envelope 形如 `{ "v": 1, "s": 0, "t": "v1.<opaque>" }`，没有 opt-in client 时省略该头。
+- `x-oai-attestation` 来自 app-server 协议的 `attestation/generate` 能力。Desktop main 在 macOS arm64 会加载 `native/devicecheck.node` 生成 token；公开 `openai/codex` README 只作为辅助资料，说明 client 返回 `{ "token": "v1.<opaque>" }` 后，上游 envelope 形如 `{ "v": 1, "s": 0, "t": "v1.<opaque>" }`，没有 opt-in client 时省略该头。
 - `traceparent` / `tracestate` 是 OTEL 链路追踪头，官方只确认 WebSocket request header 字段存在，未确认是否每个请求都带。
-- `x-openai-internal-codex-responses-lite` 与 `ws_request_header_x_openai_internal_codex_responses_lite` 依赖官方模型信息 `use_responses_lite`。当前项目模型目录还没有保存/传递该字段，因此不应无条件添加。
+- `x-openai-internal-codex-responses-lite` 与 `ws_request_header_x_openai_internal_codex_responses_lite` 在 Desktop 二进制中能确认存在；公开 `openai/codex` 辅助源码显示它们依赖模型信息 `use_responses_lite`，但不能单独作为 Desktop 实现依据。当前项目不应无条件添加。
 
 ### 请求携带的数据
 
@@ -309,7 +308,7 @@ WebSocket 事件：
 - `src/proxy/dispatch/responses.rs` 在非流式和流式完成时记录 usage、event log、transport、rateLimitHeaders。
 - live stream 结束后再次按 `response.completed` 判定完成状态；未完成会记录 `missing_completed`。
 - live WebSocket 捕获到的 rate-limit 更新和 turn-state 更新会在 finalize 阶段合并。
-- WebSocket 请求 payload 会在发送前写入 `client_metadata.x-codex-ws-stream-request-start-ms`，用于和官方 `stamp_ws_stream_request_start_ms` 行为对齐。
+- WebSocket 请求 payload 会在发送前写入 `client_metadata.x-codex-ws-stream-request-start-ms`，用于和 Desktop 二进制里的 `stamp_ws_stream_request_start_ms` 证据对齐。
 
 ### 风控和恢复
 
@@ -406,7 +405,7 @@ Usage 请求路径按 base URL 选择：
 
 - `x-oai-attestation` 已确认是 host/app-server 动态协作生成，不是常量；当前项目没有 Desktop host 的 DeviceCheck/signals 链路，不实现该头。
 - `traceparent` / `tracestate` 只确认官方 WebSocket request header 字段存在，当前项目未实现。
-- `x-openai-internal-codex-responses-lite` 和 `ws_request_header_x_openai_internal_codex_responses_lite` 已确认依赖模型 `use_responses_lite`，当前项目还缺模型字段和调度传递链路，暂不实现。
+- `x-openai-internal-codex-responses-lite` 和 `ws_request_header_x_openai_internal_codex_responses_lite` 已在 Desktop 二进制中确认存在；触发条件仍以 Desktop 为准，公开 `openai/codex` 只能辅助判断，当前项目暂不实现。
 - 原生二进制不能在当前 Linux 环境执行，无法做动态断点或真实 app-server 调用链追踪。
 - 官方包里没有 source map，JS bundle 为压缩产物；函数名和局部变量名不能视为稳定 API。
 - WebSocket 降级策略目前按现有项目实现理解为连接/transport 错误可降级，显式上游状态错误不降级；官方二进制字符串能证明有降级路径，但不能单独证明完整条件矩阵。
