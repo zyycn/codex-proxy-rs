@@ -36,6 +36,7 @@ mod import_export;
 mod lifecycle;
 mod list;
 mod quota;
+mod testing;
 
 async fn seed_admin_session(pool: &SqlitePool, session_id: &str) {
     sqlx::query(
