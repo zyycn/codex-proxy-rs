@@ -1,12 +1,12 @@
 import type { RouteRecordRaw } from 'vue-router'
 
 import AdminLayout from '@/layout/index.vue'
-import AccountsView from '@/views/accounts/AccountsView.vue'
-import ApiKeysView from '@/views/api-keys/ApiKeysView.vue'
-import DashboardView from '@/views/dashboard/DashboardView.vue'
-import LoginView from '@/views/login/LoginView.vue'
-import LogsView from '@/views/logs/LogsView.vue'
-import SettingsView from '@/views/settings/SettingsView.vue'
+import AccountsView from '@/views/accounts/index.vue'
+import ApiKeysView from '@/views/api-keys/index.vue'
+import DashboardView from '@/views/dashboard/index.vue'
+import LoginView from '@/views/login/index.vue'
+import LogsView from '@/views/logs/index.vue'
+import SettingsView from '@/views/settings/index.vue'
 
 export const routes: RouteRecordRaw[] = [
   {

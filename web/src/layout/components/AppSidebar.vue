@@ -14,7 +14,7 @@ import {
   Users,
 } from '@lucide/vue'
 
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseButton from '@/components/base/BaseButton.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 
 const route = useRoute()
@@ -267,7 +267,8 @@ watch(
         </span>
 
         <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
-          <BaseIconButton
+          <BaseButton
+            icon-only
             variant="ghost"
             :size="collapsed ? 'default' : 'sm'"
             data-sidebar-toggle
@@ -276,9 +277,10 @@ watch(
           >
             <PanelLeftOpen v-if="collapsed" :size="19" />
             <PanelLeftClose v-else :size="18" />
-          </BaseIconButton>
+          </BaseButton>
 
-          <BaseIconButton
+          <BaseButton
+            icon-only
             variant="ghost"
             :size="collapsed ? 'default' : 'sm'"
             label="退出登录"
@@ -286,7 +288,7 @@ watch(
             @click="handleLogout"
           >
             <LogOut :size="collapsed ? 19 : 18" />
-          </BaseIconButton>
+          </BaseButton>
         </div>
       </div>
     </div>

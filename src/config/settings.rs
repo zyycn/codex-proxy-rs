@@ -107,40 +107,12 @@ impl Default for AdminQuotaWarningThresholds {
 pub struct AdminSettingsPatch {
     /// 默认模型 ID。
     pub default_model: Option<String>,
-    /// 默认 reasoning effort。
-    pub default_reasoning_effort: Option<String>,
-    /// 默认服务层级。
-    pub service_tier: Option<String>,
-    /// 模型别名映射。
-    pub model_aliases: Option<BTreeMap<String, String>>,
-    /// 是否启用访问令牌刷新。
-    pub refresh_enabled: Option<bool>,
-    /// 访问令牌过期前多少秒开始刷新。
-    pub refresh_margin_seconds: Option<u64>,
-    /// 访问令牌刷新并发数。
-    pub refresh_concurrency: Option<u32>,
     /// 单账号最大并发请求数。
     pub max_concurrent_per_account: Option<usize>,
     /// 同账号请求间隔毫秒数。
     pub request_interval_ms: Option<u64>,
     /// 账号轮换策略。
     pub rotation_strategy: Option<String>,
-    /// 计划类型优先级。
-    pub tier_priority: Option<Vec<String>>,
-    /// 配额刷新间隔分钟数。
-    pub quota_refresh_interval_minutes: Option<u64>,
-    /// 配额预警阈值。
-    pub quota_warning_thresholds: Option<AdminQuotaWarningThresholds>,
-    /// 配额耗尽账号是否跳过调度。
-    pub quota_skip_exhausted: Option<bool>,
-    /// 是否启用事件日志。
-    pub logs_enabled: Option<bool>,
-    /// 事件日志容量。
-    pub logs_capacity: Option<u32>,
-    /// 事件日志是否捕获请求/响应体。
-    pub logs_capture_body: Option<bool>,
-    /// 用量历史保留天数。
-    pub usage_history_retention_days: Option<u64>,
 }
 
 /// 设置领域服务。
@@ -156,27 +128,6 @@ impl SettingsService {
         if let Some(default_model) = patch.default_model {
             current.default_model = non_empty_string("defaultModel", default_model)?;
         }
-        if let Some(default_reasoning_effort) = patch.default_reasoning_effort {
-            current.default_reasoning_effort = Some(non_empty_string(
-                "defaultReasoningEffort",
-                default_reasoning_effort,
-            )?);
-        }
-        if let Some(service_tier) = patch.service_tier {
-            current.service_tier = Some(non_empty_string("serviceTier", service_tier)?);
-        }
-        if let Some(model_aliases) = patch.model_aliases {
-            current.model_aliases = validate_aliases(model_aliases)?;
-        }
-        if let Some(refresh_enabled) = patch.refresh_enabled {
-            current.refresh_enabled = refresh_enabled;
-        }
-        if let Some(refresh_margin_seconds) = patch.refresh_margin_seconds {
-            current.refresh_margin_seconds = refresh_margin_seconds;
-        }
-        if let Some(refresh_concurrency) = patch.refresh_concurrency {
-            current.refresh_concurrency = positive_u32("refreshConcurrency", refresh_concurrency)?;
-        }
         if let Some(max_concurrent_per_account) = patch.max_concurrent_per_account {
             current.max_concurrent_per_account =
                 positive_usize("maxConcurrentPerAccount", max_concurrent_per_account)?;
@@ -186,37 +137,6 @@ impl SettingsService {
         }
         if let Some(rotation_strategy) = patch.rotation_strategy {
             current.rotation_strategy = validate_rotation_strategy(rotation_strategy)?;
-        }
-        if let Some(tier_priority) = patch.tier_priority {
-            current.tier_priority = validate_tier_priority(tier_priority)?;
-        }
-        if let Some(quota_refresh_interval_minutes) = patch.quota_refresh_interval_minutes {
-            current.quota_refresh_interval_minutes = positive_u64(
-                "quotaRefreshIntervalMinutes",
-                quota_refresh_interval_minutes,
-            )?;
-        }
-        if let Some(quota_warning_thresholds) = patch.quota_warning_thresholds {
-            validate_thresholds(&quota_warning_thresholds)?;
-            current.quota_warning_thresholds = quota_warning_thresholds;
-        }
-        if let Some(quota_skip_exhausted) = patch.quota_skip_exhausted {
-            current.quota_skip_exhausted = quota_skip_exhausted;
-        }
-        if let Some(logs_enabled) = patch.logs_enabled {
-            current.logs_enabled = logs_enabled;
-        }
-        if let Some(logs_capacity) = patch.logs_capacity {
-            current.logs_capacity = positive_u32("logsCapacity", logs_capacity)?;
-        }
-        if let Some(logs_capture_body) = patch.logs_capture_body {
-            current.logs_capture_body = logs_capture_body;
-        }
-        if let Some(usage_history_retention_days) = patch.usage_history_retention_days {
-            current.usage_history_retention_days = Some(positive_u64(
-                "usageHistoryRetentionDays",
-                usage_history_retention_days,
-            )?);
         }
         Ok(())
     }
@@ -250,26 +170,6 @@ impl SettingsServiceError {
     }
 }
 
-fn validate_aliases(
-    aliases: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, SettingsServiceError> {
-    let mut validated = BTreeMap::new();
-    for (alias, target) in aliases {
-        let alias = non_empty_string("modelAliases", alias)?;
-        let target = non_empty_string("modelAliases", target)?;
-        validated.insert(alias, target);
-    }
-    Ok(validated)
-}
-
-fn validate_tier_priority(tiers: Vec<String>) -> Result<Vec<String>, SettingsServiceError> {
-    let mut validated = Vec::with_capacity(tiers.len());
-    for tier in tiers {
-        validated.push(non_empty_string("tierPriority", tier)?);
-    }
-    Ok(validated)
-}
-
 fn validate_rotation_strategy(strategy: String) -> Result<String, SettingsServiceError> {
     let strategy = non_empty_string("rotationStrategy", strategy)?;
     if ROTATION_STRATEGIES.contains(&strategy.as_str()) {
@@ -282,49 +182,10 @@ fn validate_rotation_strategy(strategy: String) -> Result<String, SettingsServic
     }
 }
 
-fn validate_thresholds(
-    thresholds: &AdminQuotaWarningThresholds,
-) -> Result<(), SettingsServiceError> {
-    if thresholds.primary.is_empty() && thresholds.secondary.is_empty() {
-        return Err(invalid_field(
-            "quotaWarningThresholds",
-            "must include at least one threshold",
-        ));
-    }
-    if thresholds
-        .primary
-        .iter()
-        .chain(thresholds.secondary.iter())
-        .any(|t| *t > 100)
-    {
-        return Err(invalid_field(
-            "quotaWarningThresholds",
-            "thresholds must be between 0 and 100",
-        ));
-    }
-    Ok(())
-}
-
 fn non_empty_string(field: &str, value: String) -> Result<String, SettingsServiceError> {
     let value = value.trim().to_string();
     if value.is_empty() {
         Err(invalid_field(field, "must not be empty"))
-    } else {
-        Ok(value)
-    }
-}
-
-fn positive_u32(field: &str, value: u32) -> Result<u32, SettingsServiceError> {
-    if value == 0 {
-        Err(invalid_field(field, "must be greater than 0"))
-    } else {
-        Ok(value)
-    }
-}
-
-fn positive_u64(field: &str, value: u64) -> Result<u64, SettingsServiceError> {
-    if value == 0 {
-        Err(invalid_field(field, "must be greater than 0"))
     } else {
         Ok(value)
     }
@@ -411,12 +272,13 @@ pub enum RuntimeSettingsError {
 }
 
 fn admin_settings_from_config(config: &AppConfig) -> AdminSettings {
+    let defaults = AdminSettings::default();
     AdminSettings {
         default_model: config.model.default_model.clone(),
         default_reasoning_effort: config.model.default_reasoning_effort.clone(),
         service_tier: config.model.service_tier.clone(),
         model_aliases: config.model.aliases.clone(),
-        refresh_enabled: config.auth.refresh_enabled,
+        refresh_enabled: defaults.refresh_enabled,
         refresh_margin_seconds: config.auth.refresh_margin_seconds,
         refresh_concurrency: config.auth.refresh_concurrency,
         max_concurrent_per_account: config.auth.max_concurrent_per_account,
@@ -428,9 +290,9 @@ fn admin_settings_from_config(config: &AppConfig) -> AdminSettings {
             primary: config.quota.warning_thresholds.primary.clone(),
             secondary: config.quota.warning_thresholds.secondary.clone(),
         },
-        quota_skip_exhausted: config.quota.skip_exhausted,
-        logs_enabled: config.logging.enabled,
-        logs_capacity: config.logging.capacity,
+        quota_skip_exhausted: defaults.quota_skip_exhausted,
+        logs_enabled: defaults.logs_enabled,
+        logs_capacity: defaults.logs_capacity,
         logs_capture_body: config.logging.capture_body,
         usage_history_retention_days: config.usage_stats.history_retention_days,
     }

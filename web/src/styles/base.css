@@ -1,20 +1,8 @@
-* {
-  box-sizing: border-box;
-}
-
 html {
   min-width: 360px;
   background: var(--cp-bg-page);
   color: var(--cp-text-primary);
-  font-family:
-    'Inter Variable',
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -22,36 +10,7 @@ html {
 }
 
 body {
-  min-height: 100vh;
-  margin: 0;
   background: var(--cp-bg-page);
-}
-
-input[type='checkbox']:not(.sr-only) {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  border: 1px solid var(--cp-control-border);
-  border-radius: var(--cp-checkbox-radius);
-  background: var(--cp-bg-surface);
-  accent-color: var(--cp-info);
-  cursor: pointer;
-  vertical-align: middle;
-}
-
-input[type='checkbox']:not(.sr-only):hover {
-  border-color: var(--cp-control-border-hover);
-}
-
-input[type='checkbox']:not(.sr-only):focus-visible {
-  outline: 3px solid var(--cp-control-focus-ring);
-  outline-offset: 2px;
-}
-
-input[type='checkbox']:not(.sr-only):disabled {
-  border-color: var(--cp-disabled-border);
-  background: var(--cp-disabled-bg);
-  cursor: not-allowed;
 }
 
 button {
@@ -61,38 +20,4 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-}
-
-#app {
-  min-height: 100vh;
-}
-
-.cp-scrollbar {
-  scrollbar-color: var(--cp-scrollbar-thumb) transparent;
-  scrollbar-width: thin;
-}
-
-.cp-scrollbar::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.cp-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.cp-scrollbar::-webkit-scrollbar-thumb {
-  min-height: 56px;
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background-color: var(--cp-scrollbar-thumb);
-  background-clip: content-box;
-}
-
-.cp-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: var(--cp-scrollbar-thumb-hover);
-}
-
-.cp-scrollbar::-webkit-scrollbar-corner {
-  background: transparent;
 }

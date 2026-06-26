@@ -16,7 +16,9 @@ use serde_json::Value;
 
 use crate::{
     admin::auth::session::require_admin_session,
-    admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
+    admin::response::{
+        AdminEnvelope, AdminError, AdminResponse, CursorPageMeta, NumberedPageMeta, PageMeta,
+    },
     admin::{
         accounts::service::{AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate},
         monitoring::{
@@ -28,10 +30,11 @@ use crate::{
     },
     http::middleware::request_id::RequestId,
     infra::{
-        json::{clamp_limit, clamp_page, Page},
+        json::{clamp_limit, clamp_page, total_pages, Page},
         time::{china_datetime, china_relative_time, china_rfc3339, china_rfc3339_str},
     },
     runtime::state::AppState,
+    upstream::accounts::model::AccountStatus,
     upstream::accounts::store::StoredAccount,
 };
 
@@ -316,6 +319,68 @@ impl AccountListStats {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AdminAccountSummaryData {
+    total: u64,
+    active: u64,
+    high_usage: u64,
+    attention: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccountPageData {
+    items: Vec<AdminAccountData>,
+    page: PageMeta,
+    summary: AdminAccountSummaryData,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccountPageEnvelope {
+    code: u32,
+    message: String,
+    data: AdminAccountPageData,
+}
+
+impl AdminAccountPageEnvelope {
+    fn cursor(page: Page<AdminAccountData>, limit: u32, summary: AdminAccountSummaryData) -> Self {
+        Self {
+            code: 200,
+            message: "OK".into(),
+            data: AdminAccountPageData {
+                items: page.items,
+                page: PageMeta::Cursor(CursorPageMeta {
+                    limit,
+                    next_cursor: page.next_cursor,
+                }),
+                summary,
+            },
+        }
+    }
+
+    fn numbered(
+        page: crate::infra::json::NumberedPage<AdminAccountData>,
+        summary: AdminAccountSummaryData,
+    ) -> Self {
+        Self {
+            code: 200,
+            message: "OK".into(),
+            data: AdminAccountPageData {
+                page: PageMeta::Numbered(NumberedPageMeta {
+                    page: page.page,
+                    page_size: page.page_size,
+                    total: page.total,
+                    total_pages: total_pages(page.total, page.page_size),
+                }),
+                items: page.items,
+                summary,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BatchDeleteAccountsData {
     deleted: u32,
     not_found: Vec<String>,
@@ -430,7 +495,9 @@ pub(crate) async fn accounts(
     require_admin_session(&state, &headers, &request_id).await?;
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
+    let search = params.search.clone();
     let stats = account_list_stats(&state).await;
+    let summary = account_summary_data(&state, &stats, search.as_deref()).await;
 
     if use_numbered_page {
         return match state
@@ -452,7 +519,7 @@ pub(crate) async fn accounts(
                 };
                 Ok(AdminResponse::new(
                     StatusCode::OK,
-                    AdminPageEnvelope::numbered(page, request_id),
+                    AdminAccountPageEnvelope::numbered(page, summary),
                 ))
             }
             Err(error) => Err(account_error(error, request_id)),
@@ -476,7 +543,7 @@ pub(crate) async fn accounts(
             };
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminPageEnvelope::ok(page, limit, request_id),
+                AdminAccountPageEnvelope::cursor(page, limit, summary),
             ))
         }
         Err(error) => Err(account_error(error, request_id)),
@@ -872,6 +939,81 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
             .collect(),
         models_by_account: models_by_account(&logs),
     }
+}
+
+async fn account_summary_data(
+    state: &AppState,
+    stats: &AccountListStats,
+    search: Option<&str>,
+) -> AdminAccountSummaryData {
+    let accounts = list_all_account_metadata(state, search).await;
+    let total = accounts.len() as u64;
+    let active = accounts
+        .iter()
+        .filter(|account| account.status == AccountStatus::Active)
+        .count() as u64;
+    let high_usage = accounts
+        .iter()
+        .filter(|account| {
+            stats
+                .quota_by_account
+                .get(&account.id)
+                .is_some_and(account_quota_has_high_usage)
+        })
+        .count() as u64;
+    let attention = accounts
+        .iter()
+        .filter(|account| account_summary_needs_attention(account.status))
+        .count() as u64;
+
+    AdminAccountSummaryData {
+        total,
+        active,
+        high_usage,
+        attention,
+    }
+}
+
+async fn list_all_account_metadata(
+    state: &AppState,
+    search: Option<&str>,
+) -> Vec<AdminAccountMetadata> {
+    let mut page = 1;
+    let mut accounts = Vec::new();
+    loop {
+        let Ok(result) = state
+            .services
+            .admin_accounts
+            .list_page(
+                page,
+                ACCOUNT_STATS_PAGE_LIMIT,
+                search.map(ToString::to_string),
+            )
+            .await
+        else {
+            return Vec::new();
+        };
+        let total = result.total;
+        accounts.extend(result.items);
+        if accounts.len() as u64 >= total || total == 0 {
+            return accounts;
+        }
+        page = page.saturating_add(1);
+    }
+}
+
+fn account_quota_has_high_usage(quota: &AdminAccountQuotaData) -> bool {
+    quota
+        .windows
+        .iter()
+        .any(|window| window.used_percent.is_some_and(|percent| percent >= 80.0))
+}
+
+fn account_summary_needs_attention(status: AccountStatus) -> bool {
+    matches!(
+        status,
+        AccountStatus::Expired | AccountStatus::Disabled | AccountStatus::Banned
+    )
 }
 
 async fn list_all_usage_records(state: &AppState) -> Vec<AdminUsageRecord> {

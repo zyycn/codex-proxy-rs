@@ -4,13 +4,12 @@ import { computed } from 'vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
-import type { MetricCardItem, SemanticTone } from '../types'
 
 const props = defineProps<{
-  metric: MetricCardItem
+  metric: any
 }>()
 
-const iconToneClasses: Record<SemanticTone, string> = {
+const iconToneClasses: Record<string, string> = {
   normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
   info: 'bg-(--cp-info-bg) text-(--cp-info)',
   success: 'bg-(--cp-success-bg) text-(--cp-success)',
@@ -18,7 +17,7 @@ const iconToneClasses: Record<SemanticTone, string> = {
   danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
 }
 
-const detailToneClasses: Record<SemanticTone, string> = {
+const detailToneClasses: Record<string, string> = {
   normal: 'text-(--cp-normal-text)',
   info: 'text-(--cp-info-text)',
   success: 'text-(--cp-success-text)',
@@ -26,7 +25,7 @@ const detailToneClasses: Record<SemanticTone, string> = {
   danger: 'text-(--cp-danger-text)',
 }
 
-const trendToneClasses: Record<SemanticTone, string> = {
+const trendToneClasses: Record<string, string> = {
   normal: 'bg-(--cp-normal-text)',
   info: 'bg-(--cp-info-text)',
   success: 'bg-(--cp-success-text)',
@@ -34,7 +33,7 @@ const trendToneClasses: Record<SemanticTone, string> = {
   danger: 'bg-(--cp-danger-text)',
 }
 
-const sparklineColors: Record<SemanticTone, string> = {
+const sparklineColors: Record<string, string> = {
   normal: '#94A3B8',
   info: '#60A5FA',
   success: '#5CCB8A',
@@ -43,7 +42,7 @@ const sparklineColors: Record<SemanticTone, string> = {
 }
 
 const sparklineOption = computed<EChartsOption | null>(() => {
-  const values = props.metric.sparkline?.values ?? []
+  const values = (props.metric.sparkline?.values ?? []) as number[]
   if (values.length < 2) return null
 
   const color = sparklineColors[props.metric.sparkline?.tone ?? 'normal']

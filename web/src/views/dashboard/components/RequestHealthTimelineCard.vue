@@ -2,10 +2,9 @@
 import { computed } from 'vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
-import type { DashboardHealthTimeline } from '@/api'
 
 const props = defineProps<{
-  timeline: DashboardHealthTimeline
+  timeline: any
 }>()
 
 const points = computed(() => props.timeline.points.split(''))
@@ -19,17 +18,15 @@ function cellClass(point: string) {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="w-full px-4 pt-5.5 pb-6 lg:px-7">
-    <header class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-      <div class="pt-0.5">
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
-          {{ timeline.title }}
-        </h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
-          {{ timeline.description }}
-        </p>
-      </div>
-
+  <BaseCard
+    as="article"
+    variant="dashboard"
+    :title="timeline.title"
+    :description="timeline.description"
+    header-collapse-at="lg"
+    class="w-full"
+  >
+    <template #actions>
       <div class="grid gap-2 lg:justify-items-end">
         <span class="font-mono text-xs leading-none font-[650] text-(--cp-text-secondary)">
           {{ timeline.rangeDisplay }}
@@ -48,17 +45,19 @@ function cellClass(point: string) {
           <span>{{ timeline.newestLabel }}</span>
         </div>
       </div>
-    </header>
+    </template>
 
-    <div class="mt-4.25">
-      <div class="flex flex-wrap gap-1">
-        <i
-          v-for="(point, index) in points"
-          :key="index"
-          class="size-2.5 rounded-[3px]"
-          :class="cellClass(point)"
-        />
+    <template #body>
+      <div class="mt-4.25">
+        <div class="flex flex-wrap gap-1">
+          <i
+            v-for="(point, index) in points"
+            :key="index"
+            class="size-2.5 rounded-[3px]"
+            :class="cellClass(point)"
+          />
+        </div>
       </div>
-    </div>
+    </template>
   </BaseCard>
 </template>

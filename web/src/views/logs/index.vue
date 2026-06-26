@@ -5,64 +5,94 @@ import { Search, RefreshCw, Trash2, Eye } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import { withMinimumDuration } from '@/utils/async'
 
-import type { EventLog } from '@/api'
 import { clearLogs, getLogDetail, getLogs } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
 const loading = ref(true)
-const logs = ref<EventLog[]>([])
+const logs = ref<any[]>([])
 const totalLogs = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const searchQuery = ref('')
-const filterLevel = ref<string>('')
-const filterKind = ref<string>('')
+const filterLevel = ref('')
 const showClearModal = ref(false)
 const showDetailModal = ref(false)
-const selectedLog = ref<EventLog | null>(null)
+const selectedLog = ref<any>(null)
 const refreshingList = ref(false)
 const clearingLogs = ref(false)
+const loaded = ref(false)
 let searchTimer: number | undefined
 
-const levelOptions = [
-  { label: '全部级别', value: '' },
-  { label: '信息', value: 'info' },
-  { label: '警告', value: 'warn' },
-  { label: '错误', value: 'error' },
-]
-
-const kindOptions = [
-  { label: '全部类型', value: '' },
-  { label: '请求', value: 'request' },
-  { label: '响应', value: 'response' },
-  { label: '系统', value: 'system' },
-]
-
 const logColumns = [
-  { key: 'createdAt', label: '时间' },
-  { key: 'level', label: '级别' },
-  { key: 'kind', label: '类型' },
-  { key: 'requestId', label: '请求 ID' },
-  { key: 'route', label: '路由' },
-  { key: 'statusCode', label: '状态码' },
-  { key: 'message', label: '消息' },
-  { key: 'actions', label: '操作', width: '76px', align: 'right' as const },
+  {
+    key: 'createdAtDisplay',
+    label: '时间',
+    width: '176px',
+    mono: true,
+    tabular: true,
+    cellClass: 'text-(--cp-text-secondary)',
+  },
+  { key: 'level', label: '级别', width: '96px', ellipsis: false },
+  {
+    key: 'kind',
+    label: '类型',
+    width: '128px',
+    cellClass: 'font-[650] text-(--cp-text-secondary)',
+  },
+  { key: 'requestId', label: '请求 ID', minWidth: '220px', flex: 1.1, mono: true },
+  { key: 'route', label: '路由', minWidth: '156px', flex: 0.8, mono: true },
+  {
+    key: 'statusCode',
+    label: '状态',
+    width: '92px',
+    align: 'center' as const,
+    ellipsis: false,
+    mono: true,
+    tabular: true,
+  },
+  {
+    key: 'latencyMs',
+    label: '延迟',
+    width: '96px',
+    align: 'right' as const,
+    ellipsis: false,
+    mono: true,
+    tabular: true,
+    cellClass: 'text-(--cp-text-secondary)',
+  },
+  { key: 'message', label: '消息', minWidth: '260px', flex: 1.35 },
+  {
+    key: 'actions',
+    label: '操作',
+    width: '92px',
+    align: 'center' as const,
+    ellipsis: false,
+    headerClass: '!px-4',
+    cellClass: '!px-4',
+  },
 ]
 
 const levelColors: Record<string, { bg: string; text: string }> = {
   info: { bg: 'bg-(--cp-info-bg)', text: 'text-(--cp-info-text)' },
   warn: { bg: 'bg-(--cp-warning-bg)', text: 'text-(--cp-warning-text)' },
   error: { bg: 'bg-(--cp-danger-bg)', text: 'text-(--cp-danger-text)' },
+  debug: { bg: 'bg-(--cp-bg-subtle)', text: 'text-(--cp-text-secondary)' },
 }
 
 const filteredLogs = computed(() => logs.value)
+const initialLoading = computed(() => loading.value && !loaded.value)
+const levelOptions = [
+  { label: '全部级别', value: '' },
+  { label: '信息', value: 'info' },
+  { label: '错误', value: 'error' },
+]
 const logPagination = computed(() => ({
   page: page.value,
   pageSize: pageSize.value,
@@ -76,8 +106,7 @@ async function loadLogs() {
     const result = await getLogs({
       page: page.value,
       pageSize: pageSize.value,
-      level: filterLevel.value ? (filterLevel.value as EventLog['level']) : undefined,
-      kind: filterKind.value || undefined,
+      level: filterLevel.value || undefined,
       search: searchQuery.value || undefined,
     })
     logs.value = result.items
@@ -93,6 +122,7 @@ async function loadLogs() {
     toast.error(error.message || '加载失败')
   } finally {
     loading.value = false
+    loaded.value = true
   }
 }
 
@@ -132,9 +162,9 @@ function handlePageSizeChange(nextPageSize: number) {
   void loadLogs()
 }
 
-async function handleViewDetail(log: EventLog) {
+async function handleViewDetail(log: any) {
   try {
-    const detail = await getLogDetail(log.id)
+    const detail = await getLogDetail({ id: log.id })
     selectedLog.value = detail
     showDetailModal.value = true
   } catch (error: any) {
@@ -144,6 +174,7 @@ async function handleViewDetail(log: EventLog) {
 
 function getLevelLabel(level: string): string {
   const labels: Record<string, string> = {
+    debug: '调试',
     info: '信息',
     warn: '警告',
     error: '错误',
@@ -151,11 +182,31 @@ function getLevelLabel(level: string): string {
   return labels[level] || level
 }
 
+function statusClass(statusCode?: number) {
+  if (statusCode === undefined || statusCode === null) {
+    return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
+  }
+
+  if (statusCode >= 200 && statusCode < 300) {
+    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
+  }
+
+  if (statusCode >= 300 && statusCode < 400) {
+    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
+  }
+
+  return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
+}
+
+function latencyText(latencyMs?: number) {
+  return latencyMs === undefined || latencyMs === null ? '—' : `${latencyMs} ms`
+}
+
 onMounted(() => {
   loadLogs()
 })
 
-watch([searchQuery, filterLevel, filterKind], () => {
+watch([searchQuery, filterLevel], () => {
   page.value = 1
   if (searchTimer) {
     window.clearTimeout(searchTimer)
@@ -174,129 +225,114 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
-    <header class="flex h-17 shrink-0 items-start justify-between">
+    <header class="flex min-h-17 shrink-0 items-start justify-between gap-4">
       <div>
-        <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">
+        <h1 class="mt-0 mb-0 text-[34px] leading-[1.15] font-extrabold text-(--cp-text-primary)">
           事件日志
         </h1>
-        <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          查看系统运行日志 · 共 {{ totalLogs }} 条
+        <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
+          追踪网关请求、上游响应与异常线索。
         </p>
       </div>
     </header>
 
-    <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <BaseInput v-model="searchQuery" placeholder="搜索消息、请求 ID 或路由..." class="w-80">
-          <template #prefix>
-            <Search class="size-4.5 text-(--cp-text-tertiary)" />
-          </template>
-        </BaseInput>
-
-        <BaseSelect v-model="filterLevel" :options="levelOptions" class="w-36" />
-
-        <BaseSelect v-model="filterKind" :options="kindOptions" class="w-36" />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新列表"
-          :loading="refreshingList"
-          :disabled="loading"
-          @click="refreshLogs"
-        >
-          <RefreshCw class="size-4.5" />
-        </BaseIconButton>
-
-        <BaseButton variant="danger" :disabled="clearingLogs" @click="showClearModal = true">
-          <Trash2 class="size-4" />
-          清空日志
-        </BaseButton>
-      </div>
-    </div>
-
-    <BaseCard v-loading="loading" class="mt-5 flex min-h-0 flex-1 p-0">
-      <BaseTable
-        :columns="logColumns"
-        :rows="filteredLogs"
-        :pagination="logPagination"
-        empty-text="暂无日志记录"
-        @page-change="handlePageChange"
-        @page-size-change="handlePageSizeChange"
-      >
-        <template #createdAt="{ row }">
-          <span class="font-mono text-(--cp-text-secondary)">
-            {{ row.createdAtDisplay }}
-          </span>
-        </template>
-
-        <template #level="{ row }">
-          <span
-            class="inline-flex items-center rounded-full px-2 py-0.5 text-[12px] font-medium"
-            :class="[
-              levelColors[row.level]?.bg || 'bg-(--cp-bg-subtle)',
-              levelColors[row.level]?.text || 'text-(--cp-text-secondary)',
-            ]"
-          >
-            {{ getLevelLabel(row.level) }}
-          </span>
-        </template>
-
-        <template #kind="{ row }">
-          <span class="capitalize text-(--cp-text-secondary)">
-            {{ row.kind }}
-          </span>
-        </template>
-
-        <template #requestId="{ row }">
-          <code class="font-mono text-(--cp-text-primary)">
-            {{ row.requestId || '—' }}
-          </code>
-        </template>
-
-        <template #route="{ row }">
-          <code class="font-mono text-(--cp-text-primary)">
-            {{ row.route || '—' }}
-          </code>
-        </template>
-
-        <template #statusCode="{ row }">
-          <span
-            class="font-mono"
-            :class="{
-              'text-(--cp-success-text)':
-                row.statusCode !== undefined && row.statusCode >= 200 && row.statusCode < 300,
-              'text-(--cp-warning-text)':
-                row.statusCode !== undefined && row.statusCode >= 300 && row.statusCode < 400,
-              'text-(--cp-danger-text)': row.statusCode !== undefined && row.statusCode >= 400,
-              'text-(--cp-text-secondary)': row.statusCode === undefined,
-            }"
-          >
-            {{ row.statusCode ?? '—' }}
-          </span>
-        </template>
-
-        <template #message="{ row }">
-          <p class="m-0 max-w-sm truncate text-(--cp-text-primary)">
-            {{ row.message }}
-          </p>
-        </template>
-
-        <template #actions="{ row }">
-          <div class="flex items-center justify-end">
-            <BaseIconButton
-              variant="ghost"
-              size="sm"
-              title="查看详情"
-              @click="handleViewDetail(row)"
+    <BaseCard
+      v-loading="initialLoading"
+      :padded="false"
+      class="mt-5 flex min-h-0 flex-1 flex-col"
+      header-class="px-5 pt-4"
+      body-class="min-h-0 flex-1 px-5 pt-3"
+    >
+      <template #header>
+        <div class="flex flex-wrap items-center justify-between gap-3" aria-label="日志筛选">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <BaseInput
+              v-model="searchQuery"
+              placeholder="搜索消息、请求 ID 或路由"
+              class="min-w-64 flex-1 sm:max-w-96"
             >
-              <Eye class="size-3.5" />
-            </BaseIconButton>
+              <template #prefix>
+                <Search class="size-4.5 text-(--cp-text-tertiary)" />
+              </template>
+            </BaseInput>
+
+            <BaseSelect v-model="filterLevel" :options="levelOptions" class="w-34" />
           </div>
-        </template>
-      </BaseTable>
+
+          <div class="flex shrink-0 items-center gap-2">
+            <BaseButton
+              icon-only
+              variant="ghost"
+              size="md"
+              label="刷新日志"
+              :loading="refreshingList"
+              :disabled="loading"
+              @click="refreshLogs"
+            >
+              <RefreshCw class="size-4.5" />
+            </BaseButton>
+
+            <BaseButton variant="danger" :disabled="clearingLogs" @click="showClearModal = true">
+              <template #icon>
+                <Trash2 class="size-4" />
+              </template>
+              清空日志
+            </BaseButton>
+          </div>
+        </div>
+      </template>
+
+      <template #body>
+        <BaseTable
+          :columns="logColumns"
+          :rows="filteredLogs"
+          :loading="loading"
+          :pagination="logPagination"
+          empty-text="暂无日志记录"
+          min-width="1280px"
+          @page-change="handlePageChange"
+          @page-size-change="handlePageSizeChange"
+        >
+          <template #level="{ row }">
+            <span
+              class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
+              :class="[
+                levelColors[row.level]?.bg || 'bg-(--cp-bg-subtle)',
+                levelColors[row.level]?.text || 'text-(--cp-text-secondary)',
+              ]"
+            >
+              {{ getLevelLabel(row.level) }}
+            </span>
+          </template>
+
+          <template #statusCode="{ row }">
+            <span
+              class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 leading-none font-bold"
+              :class="statusClass(row.statusCode)"
+            >
+              {{ row.statusCode ?? '—' }}
+            </span>
+          </template>
+
+          <template #latencyMs="{ row }">
+            {{ latencyText(row.latencyMs) }}
+          </template>
+
+          <template #actions="{ row }">
+            <div class="flex items-center justify-center">
+              <BaseButton
+                icon-only
+                variant="ghost"
+                size="sm"
+                label="查看日志详情"
+                @click="handleViewDetail(row)"
+              >
+                <Eye class="size-3.5" />
+              </BaseButton>
+            </div>
+          </template>
+        </BaseTable>
+      </template>
     </BaseCard>
 
     <BaseConfirmModal
@@ -319,7 +355,7 @@ onBeforeUnmount(() => {
       variant="info"
       width="720px"
     >
-      <div v-if="selectedLog" class="flex flex-col gap-4">
+      <div v-if="selectedLog" class="flex max-h-[min(70vh,760px)] flex-col gap-4 overflow-hidden">
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">时间</label>
@@ -374,12 +410,17 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
-        <div v-if="selectedLog.metadata">
+        <div v-if="selectedLog.metadata" class="flex min-h-0 flex-1 flex-col">
           <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">元数据</label>
-          <pre
-            class="m-0 overflow-x-auto rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] text-(--cp-text-primary)"
-            >{{ JSON.stringify(selectedLog.metadata, null, 2) }}</pre
+          <BaseScrollbar
+            max-height="min(42vh, 420px)"
+            view-class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5"
           >
+            <pre
+              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)"
+              >{{ JSON.stringify(selectedLog.metadata, null, 2) }}</pre
+            >
+          </BaseScrollbar>
         </div>
       </div>
 

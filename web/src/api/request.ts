@@ -6,9 +6,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 
-import type { ApiEnvelope, ApiPageEnvelope, PaginatedResult } from './types'
-
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
@@ -20,19 +18,15 @@ export class ApiError extends Error {
   }
 }
 
-export interface RequestConfig extends AxiosRequestConfig {
+interface RequestConfig extends AxiosRequestConfig {
   skipErrorHandler?: boolean
   skipAuth?: boolean
 }
 
 const http: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/',
+  baseURL: import.meta.env.DEV ? '/dev' : '',
   timeout: 30000,
   withCredentials: true,
-  headers: {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  },
 })
 
 http.interceptors.request.use(
@@ -56,7 +50,7 @@ http.interceptors.response.use(
   (response: AxiosResponse) => {
     return response
   },
-  (error: AxiosError<ApiEnvelope<unknown>>) => {
+  (error: AxiosError<any>) => {
     const { response, config } = error
 
     if ((config as RequestConfig)?.skipErrorHandler) {
@@ -89,7 +83,7 @@ http.interceptors.response.use(
   },
 )
 
-function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+function isApiEnvelope(value: any): value is { data: any } {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -99,73 +93,14 @@ function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   )
 }
 
-function isApiPageEnvelope<T>(value: unknown): value is ApiPageEnvelope<T> {
-  return (
-    isApiEnvelope<unknown>(value) &&
-    typeof value.data === 'object' &&
-    value.data !== null &&
-    'items' in value.data &&
-    'page' in value.data
-  )
-}
-
-export async function requestJson<T = any, D = any>(
-  url: string,
-  config?: RequestConfig,
-): Promise<T> {
-  const response = await http.request<ApiEnvelope<T> | T, AxiosResponse<ApiEnvelope<T> | T>, D>({
-    url,
+export default async function request<T = any>(config: RequestConfig): Promise<T> {
+  const response = await http.request<any, AxiosResponse<any>>({
     ...config,
   })
 
-  if (isApiEnvelope<T>(response.data)) {
+  if (isApiEnvelope(response.data)) {
     return response.data.data
   }
 
   return response.data
-}
-
-export async function requestPageJson<T = any, D = any>(
-  url: string,
-  config?: RequestConfig,
-): Promise<PaginatedResult<T>> {
-  const response = await http.request<ApiPageEnvelope<T>, AxiosResponse<ApiPageEnvelope<T>>, D>({
-    url,
-    ...config,
-  })
-
-  if (!isApiPageEnvelope<T>(response.data)) {
-    throw new ApiError('分页响应格式无效', response.status)
-  }
-
-  return {
-    items: response.data.data.items,
-    page: response.data.data.page,
-  }
-}
-
-export function get<T = any>(url: string, params?: any, config?: RequestConfig): Promise<T> {
-  return requestJson<T>(url, {
-    method: 'GET',
-    params,
-    ...config,
-  })
-}
-
-export function post<T = any, D = any>(url: string, data?: D, config?: RequestConfig): Promise<T> {
-  return requestJson<T, D>(url, {
-    method: 'POST',
-    data,
-    ...config,
-  })
-}
-
-export { http }
-
-export default {
-  http,
-  request: requestJson,
-  requestPage: requestPageJson,
-  get,
-  post,
 }

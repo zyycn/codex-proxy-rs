@@ -4,10 +4,9 @@ import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseSegmented from '../../../components/base/BaseSegmented.vue'
 import BaseTable from '../../../components/base/BaseTable.vue'
-import type { EventLogItem, SemanticTone } from '../types'
 
 const props = defineProps<{
-  rows: EventLogItem[]
+  rows: any[]
 }>()
 
 const activeFilter = ref('all')
@@ -16,16 +15,16 @@ const filters = [
   { label: '错误', value: 'error' },
 ]
 const eventLogColumns = [
-  { key: 'time', label: '时间', width: 86, fixed: 'left' as const },
+  { key: 'time', label: '时间', width: 86, fixed: 'left' as const, mono: true, tabular: true },
   { key: 'level', label: '级别' },
-  { key: 'requestId', label: '请求 ID' },
+  { key: 'requestId', label: '请求 ID', mono: true, tabular: true },
   { key: 'route', label: '路由' },
   { key: 'model', label: '模型' },
-  { key: 'statusCode', label: '状态码' },
-  { key: 'latency', label: '延迟' },
+  { key: 'statusCode', label: '状态码', mono: true, tabular: true },
+  { key: 'latency', label: '延迟', mono: true, tabular: true },
 ]
 
-const levelToneClasses: Record<SemanticTone, string> = {
+const levelToneClasses: Record<string, string> = {
   normal: 'bg-(--cp-normal-bg) text-(--cp-normal-text)',
   info: 'bg-(--cp-info-bg) text-(--cp-info-text)',
   success: 'bg-(--cp-success-bg) text-(--cp-success-text)',
@@ -33,7 +32,7 @@ const levelToneClasses: Record<SemanticTone, string> = {
   danger: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
 }
 
-const statusToneClasses: Record<SemanticTone, string> = {
+const statusToneClasses: Record<string, string> = {
   normal: 'text-(--cp-normal-text)',
   info: 'text-(--cp-success-text)',
   success: 'text-(--cp-success-text)',
@@ -42,7 +41,7 @@ const statusToneClasses: Record<SemanticTone, string> = {
 }
 
 function rowTone(row: object) {
-  return (row as EventLogItem).tone
+  return (row as any).tone
 }
 
 const filteredRows = computed(() => {
@@ -53,61 +52,48 @@ const filteredRows = computed(() => {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="h-87.5 w-full px-7 pt-6">
-    <header class="flex items-start justify-between">
-      <div>
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">事件日志</h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
-          最近 50 条事件
-        </p>
-      </div>
-
+  <BaseCard
+    as="article"
+    variant="dashboard"
+    title="事件日志"
+    description="最近 50 条事件"
+    class="h-87.5 w-full"
+  >
+    <template #actions>
       <BaseSegmented v-model="activeFilter" :options="filters" class="w-38" />
-    </header>
+    </template>
 
-    <div class="mt-4.25 flex h-60 w-full justify-between overflow-hidden">
-      <BaseEmpty
-        v-if="filteredRows.length === 0"
-        compact
-        class="w-full place-content-center"
-        :title="rows.length === 0 ? '暂无事件日志' : '没有匹配日志'"
-        :description="
-          rows.length === 0 ? '请求经过代理后会在这里显示最近事件。' : '调整筛选条件后再查看。'
-        "
-      />
-      <BaseTable
-        v-else
-        class="min-w-0 flex-1"
-        :columns="eventLogColumns"
-        :rows="filteredRows"
-        min-width="760px"
-      >
-        <template #time="{ value }">
-          <span class="font-mono tabular-nums">{{ value }}</span>
-        </template>
+    <template #body>
+      <div class="mt-4.25 flex h-60 w-full justify-between overflow-hidden">
+        <BaseEmpty
+          v-if="filteredRows.length === 0"
+          compact
+          class="w-full place-content-center"
+          :title="rows.length === 0 ? '暂无事件日志' : '没有匹配日志'"
+          :description="
+            rows.length === 0 ? '请求经过代理后会在这里显示最近事件。' : '调整筛选条件后再查看。'
+          "
+        />
+        <BaseTable
+          v-else
+          class="min-w-0 flex-1"
+          :columns="eventLogColumns"
+          :rows="filteredRows"
+          min-width="760px"
+        >
+          <template #level="{ row, value }">
+            <span
+              class="inline-flex h-6 w-14.5 items-center justify-center rounded-full text-xs leading-[1.15] font-bold"
+              :class="levelToneClasses[rowTone(row)]"
+              >{{ value }}</span
+            >
+          </template>
 
-        <template #level="{ row, value }">
-          <span
-            class="inline-flex h-6 w-14.5 items-center justify-center rounded-full text-xs leading-[1.15] font-bold"
-            :class="levelToneClasses[rowTone(row)]"
-            >{{ value }}</span
-          >
-        </template>
-
-        <template #requestId="{ value }">
-          <span class="font-mono tabular-nums">{{ value }}</span>
-        </template>
-
-        <template #statusCode="{ row, value }">
-          <span class="font-mono font-bold tabular-nums" :class="statusToneClasses[rowTone(row)]">{{
-            value
-          }}</span>
-        </template>
-
-        <template #latency="{ value }">
-          <span class="font-mono tabular-nums">{{ value }}</span>
-        </template>
-      </BaseTable>
-    </div>
+          <template #statusCode="{ row, value }">
+            <span class="font-bold" :class="statusToneClasses[rowTone(row)]">{{ value }}</span>
+          </template>
+        </BaseTable>
+      </div>
+    </template>
   </BaseCard>
 </template>

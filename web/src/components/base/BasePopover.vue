@@ -61,7 +61,10 @@ function updatePopoverPosition() {
   const viewportPadding = 8
   const triggerRect = triggerRef.value.getBoundingClientRect()
   const panelRect = popoverRef.value?.getBoundingClientRect()
-  const panelWidth = Math.max(panelRect?.width ?? 0, toCssLength(props.width) ? 0 : triggerRect.width)
+  const panelWidth = Math.max(
+    panelRect?.width ?? 0,
+    toCssLength(props.width) ? 0 : triggerRect.width,
+  )
   const panelHeight = panelRect?.height ?? 0
   const belowSpace = window.innerHeight - triggerRect.bottom - props.offset
   const aboveSpace = triggerRect.top - props.offset
@@ -162,14 +165,23 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div
-        v-if="open"
-        ref="popoverRef"
-        :class="popoverClasses"
-        :style="[sizeStyle, popoverStyle]"
+      <Transition
+        enter-active-class="transition-[opacity,transform] duration-150 ease-out"
+        enter-from-class="-translate-y-1 opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
       >
-        <slot :open="open" :close="closePopover" :toggle="togglePopover" />
-      </div>
+        <div
+          v-if="open"
+          ref="popoverRef"
+          :class="popoverClasses"
+          :style="[sizeStyle, popoverStyle]"
+        >
+          <slot :open="open" :close="closePopover" :toggle="togglePopover" />
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

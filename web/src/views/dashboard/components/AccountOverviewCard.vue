@@ -4,35 +4,27 @@ import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
-import type {
-  AccountCapacityInfo,
-  AccountPoolSummary,
-  AccountStatusRow,
-  AccountUsageItem,
-  ScheduleStat,
-  SemanticTone,
-} from '../types'
 
 const props = defineProps<{
-  accounts: AccountUsageItem[]
-  pool?: AccountPoolSummary | null
-  capacity?: AccountCapacityInfo | null
+  accounts: any[]
+  pool?: any
+  capacity?: any
   rotationStrategy?: string | null
 }>()
 
-const scheduleStats = computed<ScheduleStat[]>(() => {
+const scheduleStats = computed(() => {
   const cap = props.capacity
   return [
     { label: '单账号并发', value: cap ? String(cap.maxConcurrentPerAccount) : '—' },
-    { label: '可用槽位', value: cap ? String(cap.totalSlots) : '—' },
-    { label: '剩余槽位', value: cap ? String(cap.availableSlots) : '—' },
+    { label: '总槽位', value: cap ? String(cap.totalSlots) : '—' },
+    { label: '空闲槽位', value: cap ? String(cap.availableSlots) : '—' },
   ]
 })
 
 const usedPercent = computed(() => {
   const cap = props.capacity
   if (!cap || cap.totalSlots === 0) return 0
-  return Math.round((cap.usedSlots / cap.totalSlots) * 100)
+  return Math.min(100, Math.round((cap.usedSlots / cap.totalSlots) * 100))
 })
 
 const usedRatio = computed(() => {
@@ -47,12 +39,12 @@ const strategyLabel = computed(() => {
   const map: Record<string, string> = {
     least_used: '最少使用优先',
     round_robin: '轮询',
-    random: '随机',
+    sticky: '会话粘性',
   }
   return map[s] || s
 })
 
-const statusRows = computed<AccountStatusRow[]>(() => {
+const statusRows = computed(() => {
   const p = props.pool
   const active = p?.active ?? 0
   const refreshing = p?.refreshing ?? 0
@@ -67,28 +59,28 @@ const statusRows = computed<AccountStatusRow[]>(() => {
       label: '活跃账号',
       description: '可直接参与调度',
       value: String(active),
-      tone: 'success' as SemanticTone,
+      tone: 'success',
       icon: CircleCheck,
     },
     {
       label: '刷新中',
       description: '令牌自动刷新中',
       value: String(refreshing),
-      tone: 'normal' as SemanticTone,
+      tone: 'normal',
       icon: RefreshCw,
     },
     {
       label: '额度受限',
       description: '已触发或接近额度阈值',
       value: String(quota),
-      tone: 'warning' as SemanticTone,
+      tone: 'warning',
       icon: TriangleAlert,
     },
     {
       label: '不可用',
       description: `过期 ${expired} · 禁用 ${disabled} · 封禁 ${banned}`,
       value: String(unavailable),
-      tone: 'danger' as SemanticTone,
+      tone: 'danger',
       icon: ShieldAlert,
     },
   ]
@@ -115,7 +107,7 @@ const statusBars = computed(() => {
   ].filter((b) => b.pct > 0)
 })
 
-const rowToneClasses: Record<SemanticTone, string> = {
+const rowToneClasses: Record<string, string> = {
   normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
   info: 'bg-(--cp-info-bg) text-(--cp-info)',
   success: 'bg-(--cp-success-bg) text-(--cp-success)',
@@ -123,7 +115,7 @@ const rowToneClasses: Record<SemanticTone, string> = {
   danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
 }
 
-const valueToneClasses: Record<SemanticTone, string> = {
+const valueToneClasses: Record<string, string> = {
   normal: 'text-(--cp-normal-text)',
   info: 'text-(--cp-info-text)',
   success: 'text-(--cp-success-text)',
@@ -131,7 +123,7 @@ const valueToneClasses: Record<SemanticTone, string> = {
   danger: 'text-(--cp-danger-text)',
 }
 
-const quotaToneClasses: Record<SemanticTone, string> = {
+const quotaToneClasses: Record<string, string> = {
   normal: 'bg-(--cp-normal)',
   info: 'bg-(--cp-info)',
   success: 'bg-(--cp-success)',
@@ -155,7 +147,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
 
         <div class="mt-7.75 h-30.5 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-4.5">
           <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-            >可调度容量</span
+            >槽位占用</span
           >
           <div class="mt-3 grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
             <strong
@@ -163,7 +155,7 @@ const quotaToneClasses: Record<SemanticTone, string> = {
               >{{ usedRatio }}</strong
             >
             <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >{{ usedPercent }}% 已分配</span
+              >{{ usedPercent }}% 已占用</span
             >
           </div>
           <div class="mt-4.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
