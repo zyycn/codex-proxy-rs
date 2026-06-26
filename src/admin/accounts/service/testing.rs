@@ -96,6 +96,15 @@ impl AdminAccountService {
             .await;
 
             let request = test_responses_request(model);
+            send_test_event(
+                &tx,
+                json!({
+                    "type": "request",
+                    "payload": serde_json::to_value(&request).unwrap_or_else(|_| json!({}))
+                }),
+            )
+            .await;
+
             let context = CodexRequestContext {
                 access_token: &token,
                 account_id: upstream_account_id.as_deref(),
