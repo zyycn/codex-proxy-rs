@@ -172,10 +172,14 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
 
     assert_eq!(events[0]["type"], "test_start");
     assert_eq!(events[0]["model"], "gpt-5.5");
-    assert_eq!(events[1]["type"], "content");
-    assert_eq!(events[1]["text"], "ok");
-    assert_eq!(events[2]["type"], "test_complete");
-    assert_eq!(events[2]["success"], true);
+    assert_eq!(events[1]["type"], "request");
+    assert_eq!(events[1]["payload"]["model"], "gpt-5.5");
+    assert_eq!(events[1]["payload"]["stream"], true);
+    assert_eq!(events[1]["payload"]["store"], false);
+    assert_eq!(events[2]["type"], "content");
+    assert_eq!(events[2]["text"], "ok");
+    assert_eq!(events[3]["type"], "test_complete");
+    assert_eq!(events[3]["success"], true);
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["store"], false);
