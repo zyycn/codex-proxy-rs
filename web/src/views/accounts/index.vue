@@ -35,10 +35,11 @@ import { withMinimumDuration } from '@/utils/async'
 import {
   createAccount,
   deleteAccounts,
+  getAccountTestModels,
   getAccountQuota,
   getAccounts,
   refreshAccount,
-  testAccountConnection,
+  testAccountConnectionStream,
   updateAccount,
 } from '@/api'
 
@@ -64,10 +65,13 @@ const editingAccount = ref<any>(null)
 const pendingDeleteAccount = ref<any>(null)
 const testingAccount = ref<any>(null)
 const connectionTestStatus = ref('idle')
-const connectionTestResult = ref<any>(null)
+const connectionTestModel = ref('')
+const connectionTestContent = ref('')
+const connectionTestLogs = ref<any[]>([])
 const connectionTestError = ref('')
 const connectionTestStartedAt = ref('')
 const connectionTestFinishedAt = ref('')
+const connectionTestDurationMs = ref<number | null>(null)
 const refreshingAccountIds = ref<Set<string>>(new Set())
 const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
 const updatingStatusAccountIds = ref<Set<string>>(new Set())
@@ -76,7 +80,12 @@ const deletingAccount = ref(false)
 const loaded = ref(false)
 const savingAccount = ref(false)
 const batchDeleting = ref(false)
+const loadingConnectionTestModels = ref(false)
+const connectionTestSelectedModel = ref('')
+const connectionTestModelOptions = ref<any[]>([])
 let searchTimer: number | undefined
+let connectionTestAbortController: AbortController | undefined
+let connectionTestStartedAtMs = 0
 
 const createForm = ref({
   refreshToken: '',
@@ -198,7 +207,7 @@ const connectionTestStatusView = computed(() => {
   if (connectionTestStatus.value === 'running') {
     return {
       label: '正在测试',
-      description: '正在验证账号到 Codex 模型端点的连接。',
+      description: '正在发送一条真实 Responses 流式请求。',
       icon: Clock3,
       badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
       iconClass: 'text-(--cp-info)',
@@ -207,7 +216,7 @@ const connectionTestStatusView = computed(() => {
   if (connectionTestStatus.value === 'success') {
     return {
       label: '连接正常',
-      description: '账号令牌可用，网关可以访问 Codex 模型端点。',
+      description: '账号令牌可用，已完成 Codex Responses 流式验证。',
       icon: CheckCircle2,
       badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
       iconClass: 'text-(--cp-success)',
@@ -216,7 +225,7 @@ const connectionTestStatusView = computed(() => {
   if (connectionTestStatus.value === 'error') {
     return {
       label: '测试失败',
-      description: '连接未通过，优先检查令牌状态、账号权限或上游网络。',
+      description: '真实请求未完成，优先检查令牌状态、账号权限或上游网络。',
       icon: XCircle,
       badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
       iconClass: 'text-(--cp-danger)',
@@ -224,7 +233,7 @@ const connectionTestStatusView = computed(() => {
   }
   return {
     label: '准备测试',
-    description: '点击开始后验证账号连接状态。',
+    description: '点击开始后发送一条轻量 Responses 流式请求。',
     icon: Wifi,
     badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
     iconClass: 'text-(--cp-text-muted)',
@@ -408,18 +417,25 @@ async function handleRefresh(accountId: string) {
 }
 
 function openConnectionTest(account: any) {
+  abortConnectionTest()
   testingAccount.value = account
+  connectionTestSelectedModel.value = ''
+  connectionTestModelOptions.value = []
   showConnectionTestModal.value = true
   resetConnectionTest()
-  void handleTestConnection(account)
+  void loadConnectionTestModels(account)
 }
 
 function resetConnectionTest() {
   connectionTestStatus.value = 'idle'
-  connectionTestResult.value = null
+  connectionTestModel.value = ''
+  connectionTestContent.value = ''
+  connectionTestLogs.value = []
   connectionTestError.value = ''
   connectionTestStartedAt.value = ''
   connectionTestFinishedAt.value = ''
+  connectionTestDurationMs.value = null
+  connectionTestStartedAtMs = 0
 }
 
 function formattedDateTime(value: Date) {
@@ -427,35 +443,144 @@ function formattedDateTime(value: Date) {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
 }
 
-async function handleTestConnection(account = testingAccount.value) {
-  if (!account?.id) return
-  if (testingConnectionIds.value.has(account.id)) return
-  connectionTestStatus.value = 'running'
-  connectionTestResult.value = null
-  connectionTestError.value = ''
-  connectionTestStartedAt.value = formattedDateTime(new Date())
-  connectionTestFinishedAt.value = ''
-  testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
-  try {
-    const result = await withMinimumDuration(async () =>
-      testAccountConnection({ ids: [account.id] }),
-    )
-    const check = result.results.find((item: any) => item.id === account.id) || result.results[0]
-    connectionTestResult.value = check || null
-    if (check?.result === 'alive') {
-      connectionTestStatus.value = 'success'
+function appendConnectionTestLog(text: string, tone = 'normal') {
+  connectionTestLogs.value = [
+    ...connectionTestLogs.value,
+    {
+      time: formattedDateTime(new Date()).slice(11),
+      text,
+      tone,
+    },
+  ]
+}
+
+function finishConnectionTest(status: 'success' | 'error') {
+  connectionTestStatus.value = status
+  connectionTestFinishedAt.value = formattedDateTime(new Date())
+  connectionTestDurationMs.value = Math.max(0, Date.now() - connectionTestStartedAtMs)
+}
+
+function handleConnectionTestEvent(event: any) {
+  if (event.type === 'test_start') {
+    connectionTestModel.value = event.model || connectionTestModel.value
+    appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '默认模型'}`, 'info')
+    return
+  }
+  if (event.type === 'status' && event.text) {
+    appendConnectionTestLog(event.text, 'info')
+    return
+  }
+  if (event.type === 'content' && event.text) {
+    if (!connectionTestContent.value) {
+      appendConnectionTestLog('收到上游响应内容', 'success')
+    }
+    connectionTestContent.value += event.text
+    return
+  }
+  if (event.type === 'test_complete') {
+    if (event.success) {
+      appendConnectionTestLog('测试完成', 'success')
+      finishConnectionTest('success')
     } else {
-      connectionTestStatus.value = 'error'
-      connectionTestError.value = check?.error || '测试连接失败'
+      connectionTestError.value = event.error || '测试连接失败'
+      appendConnectionTestLog(connectionTestError.value, 'danger')
+      finishConnectionTest('error')
+    }
+    return
+  }
+  if (event.type === 'error') {
+    connectionTestError.value = event.error || '测试连接失败'
+    appendConnectionTestLog(connectionTestError.value, 'danger')
+    finishConnectionTest('error')
+  }
+}
+
+function abortConnectionTest() {
+  connectionTestAbortController?.abort()
+  connectionTestAbortController = undefined
+}
+
+function connectionLogClass(tone: string) {
+  if (tone === 'success') return 'text-(--cp-success-text)'
+  if (tone === 'danger') return 'text-(--cp-danger-text)'
+  if (tone === 'info') return 'text-(--cp-info-text)'
+  return 'text-(--cp-text-secondary)'
+}
+
+async function loadConnectionTestModels(account = testingAccount.value) {
+  if (!account?.id) return
+  loadingConnectionTestModels.value = true
+  connectionTestError.value = ''
+  try {
+    const result = await getAccountTestModels({ id: account.id })
+    connectionTestModelOptions.value = (result.models || []).map((model: any) => ({
+      label: model.label || model.id,
+      value: model.id,
+    }))
+    connectionTestSelectedModel.value = connectionTestModelOptions.value[0]?.value || ''
+    if (!connectionTestSelectedModel.value) {
+      connectionTestError.value = '上游没有返回可测试模型'
     }
   } catch (error: any) {
-    connectionTestStatus.value = 'error'
-    connectionTestError.value = error.message || '测试连接失败'
+    connectionTestError.value = error.message || '加载测试模型失败'
+    connectionTestModelOptions.value = []
+    connectionTestSelectedModel.value = ''
+  } finally {
+    loadingConnectionTestModels.value = false
+  }
+}
+
+async function handleTestConnection(account = testingAccount.value) {
+  if (!account?.id) return
+  if (!connectionTestSelectedModel.value) {
+    connectionTestError.value = '请先选择上游返回的测试模型'
+    return
+  }
+  if (testingConnectionIds.value.has(account.id)) return
+  abortConnectionTest()
+  const controller = new AbortController()
+  connectionTestAbortController = controller
+  connectionTestStatus.value = 'running'
+  connectionTestModel.value = ''
+  connectionTestContent.value = ''
+  connectionTestLogs.value = []
+  connectionTestError.value = ''
+  connectionTestDurationMs.value = null
+  connectionTestModel.value = connectionTestSelectedModel.value
+  connectionTestStartedAtMs = Date.now()
+  connectionTestStartedAt.value = formattedDateTime(new Date())
+  connectionTestFinishedAt.value = ''
+  appendConnectionTestLog('准备发送测试请求', 'info')
+  testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
+  try {
+    await withMinimumDuration(() =>
+      testAccountConnectionStream(
+        {
+          id: account.id,
+          modelId: connectionTestSelectedModel.value,
+        },
+        handleConnectionTestEvent,
+        controller.signal,
+      ),
+    )
+    if (connectionTestStatus.value === 'running') {
+      connectionTestError.value = '测试连接未返回完成事件'
+      appendConnectionTestLog(connectionTestError.value, 'danger')
+      finishConnectionTest('error')
+    }
+  } catch (error: any) {
+    if (error?.name !== 'AbortError') {
+      connectionTestError.value = error.message || '测试连接失败'
+      appendConnectionTestLog(connectionTestError.value, 'danger')
+      finishConnectionTest('error')
+    }
   } finally {
     const next = new Set(testingConnectionIds.value)
     next.delete(account.id)
     testingConnectionIds.value = next
-    connectionTestFinishedAt.value = formattedDateTime(new Date())
+    if (connectionTestAbortController === controller) {
+      connectionTestAbortController = undefined
+    }
   }
 }
 
@@ -690,7 +815,14 @@ watch(searchQuery, () => {
   }, 250)
 })
 
+watch(showConnectionTestModal, (open) => {
+  if (!open) {
+    abortConnectionTest()
+  }
+})
+
 onBeforeUnmount(() => {
+  abortConnectionTest()
   if (searchTimer) {
     window.clearTimeout(searchTimer)
   }
@@ -1216,6 +1348,19 @@ onBeforeUnmount(() => {
           </span>
         </section>
 
+        <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3">
+          <div class="grid gap-2">
+            <label class="text-[12px] font-[760] text-(--cp-text-muted)">测试模型</label>
+            <BaseSelect
+              v-model="connectionTestSelectedModel"
+              :options="connectionTestModelOptions"
+              :disabled="connectionTestStatus === 'running' || loadingConnectionTestModels"
+              :placeholder="loadingConnectionTestModels ? '加载模型中...' : '选择上游模型'"
+              empty-text="上游没有返回模型"
+            />
+          </div>
+        </section>
+
         <section
           class="rounded-(--cp-card-radius) bg-(--cp-bg-surface) p-4 shadow-[inset_0_0_0_1px_var(--cp-default-border)]"
         >
@@ -1269,32 +1414,51 @@ onBeforeUnmount(() => {
             <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
               <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">响应耗时</p>
               <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
-                {{
-                  connectionTestResult?.durationMs !== undefined
-                    ? `${connectionTestResult.durationMs}ms`
-                    : '-'
-                }}
+                {{ connectionTestDurationMs !== null ? `${connectionTestDurationMs}ms` : '-' }}
               </p>
             </div>
           </div>
 
           <div class="mt-3 grid gap-3 sm:grid-cols-[0.45fr_1fr]">
             <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
-              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">HTTP 状态</p>
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">测试模型</p>
               <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
-                {{ connectionTestResult?.status ?? '-' }}
+                {{ connectionTestModel || '-' }}
               </p>
             </div>
             <div class="min-w-0 rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
-              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">探测端点</p>
-              <BaseScrollbar max-height="76px" view-class="pt-1.5 pr-2">
-                <code
-                  class="block break-all font-mono text-[12px] leading-[1.5] font-[650] text-(--cp-text-primary)"
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">响应内容</p>
+              <BaseScrollbar max-height="86px" view-class="pt-1.5 pr-2">
+                <p
+                  class="m-0 whitespace-pre-wrap break-words text-[12px] leading-[1.55] font-[650] text-(--cp-text-primary)"
                 >
-                  {{ connectionTestResult?.endpoint || '-' }}
-                </code>
+                  {{ connectionTestContent || '-' }}
+                </p>
               </BaseScrollbar>
             </div>
+          </div>
+
+          <div class="mt-3 rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+            <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">事件轨迹</p>
+            <BaseScrollbar max-height="118px" view-class="pt-2 pr-2">
+              <div
+                v-if="connectionTestLogs.length === 0"
+                class="text-[12px] font-[650] text-(--cp-text-muted)"
+              >
+                -
+              </div>
+              <div v-else class="flex flex-col gap-1.5">
+                <div
+                  v-for="(item, index) in connectionTestLogs"
+                  :key="`${item.time}-${index}`"
+                  class="grid grid-cols-[54px_minmax(0,1fr)] gap-2 text-[12px] leading-[1.45] font-[650]"
+                  :class="connectionLogClass(item.tone)"
+                >
+                  <span class="font-mono text-(--cp-text-muted)">{{ item.time }}</span>
+                  <span class="min-w-0 break-words">{{ item.text }}</span>
+                </div>
+              </div>
+            </BaseScrollbar>
           </div>
 
           <div v-if="connectionTestError" class="mt-3 rounded-lg bg-(--cp-danger-bg) px-3 py-2.5">
@@ -1315,10 +1479,10 @@ onBeforeUnmount(() => {
         <BaseButton
           variant="primary"
           :loading="connectionTestStatus === 'running'"
-          :disabled="!testingAccount"
+          :disabled="!testingAccount || loadingConnectionTestModels || !connectionTestSelectedModel"
           @click="handleTestConnection()"
         >
-          {{ connectionTestResult || connectionTestError ? '重新测试' : '开始测试' }}
+          {{ connectionTestLogs.length > 0 || connectionTestError ? '重新测试' : '开始测试' }}
         </BaseButton>
       </template>
     </BaseModal>

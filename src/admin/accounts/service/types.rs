@@ -90,6 +90,10 @@ pub enum AdminAccountError {
     FetchQuota(String),
     #[error("health check failed")]
     HealthCheck,
+    #[error("failed to fetch models: {0}")]
+    FetchModels(String),
+    #[error("no available models returned")]
+    NoModels,
     #[error("invalid status: {0}")]
     InvalidStatus(String),
     #[error("label must be 64 characters or fewer")]

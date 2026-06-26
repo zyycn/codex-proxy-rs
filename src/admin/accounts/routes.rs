@@ -1,10 +1,13 @@
 //! 账号管理 HTTP 处理器。
 
 use axum::{
-    body::Bytes,
-    extract::{Query, State},
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    body::{Body, Bytes},
+    extract::{Path, Query, State},
+    http::{
+        header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
+        HeaderMap, StatusCode,
+    },
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use std::collections::HashMap;
@@ -102,6 +105,26 @@ pub(crate) struct HealthCheckRequest {
     ids: Option<Vec<String>>,
     stagger_ms: Option<u64>,
     concurrency: Option<u8>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountTestRequest {
+    #[serde(alias = "model_id")]
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountTestModelsData {
+    models: Vec<AccountTestModelData>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountTestModelData {
+    id: String,
+    label: String,
 }
 
 // ============================================================================
@@ -825,6 +848,83 @@ pub(crate) async fn import_accounts(
                     imported: result.imported,
                     skipped: result.skipped,
                     source_format: result.source_format.to_string(),
+                },
+                request_id,
+            ),
+        )),
+        Err(error) => Err(account_error(error, request_id)),
+    }
+}
+
+/// `POST /api/admin/accounts/:id/test`
+pub(crate) async fn test_account_connection(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    let payload = parse_account_test_request(&body, &request_id)?;
+    require_admin_session(&state, &headers, &request_id).await?;
+
+    let model = payload
+        .model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| state.config.model.default_model.clone());
+    let stream = state
+        .services
+        .admin_accounts
+        .test_connection_stream(&account_id, model)
+        .await
+        .map_err(|error| account_error(error, request_id.clone()))?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .header(CONNECTION, "keep-alive")
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(stream))
+        .map_err(|_| {
+            AdminError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                50001,
+                "Failed to build account test stream",
+                request_id,
+            )
+        })
+}
+
+/// `GET /api/admin/accounts/:id/test-models`
+pub(crate) async fn account_test_models(
+    State(state): State<AppState>,
+    Path(account_id): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+    match state
+        .services
+        .admin_accounts
+        .test_connection_models(&account_id, &request_id)
+        .await
+    {
+        Ok(models) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                AccountTestModelsData {
+                    models: models
+                        .into_iter()
+                        .map(|model| AccountTestModelData {
+                            id: model.id,
+                            label: model.label,
+                        })
+                        .collect(),
                 },
                 request_id,
             ),
@@ -1705,6 +1805,7 @@ fn account_error(error: AdminAccountError, request_id: String) -> AdminError {
         | AdminAccountError::LabelTooLong
         | AdminAccountError::EmptyIds
         | AdminAccountError::NoImportableAccounts
+        | AdminAccountError::NoModels
         | AdminAccountError::InvalidAccessTokenExpiresAt
         | AdminAccountError::TokenRequired
         | AdminAccountError::InvalidToken(_)
@@ -1760,6 +1861,23 @@ fn parse_health_check_request(
             StatusCode::BAD_REQUEST,
             40001,
             "Invalid health check request",
+            request_id,
+        )
+    })
+}
+
+fn parse_account_test_request(
+    body: &Bytes,
+    request_id: &str,
+) -> Result<AccountTestRequest, AdminError> {
+    if body.is_empty() {
+        return Ok(AccountTestRequest::default());
+    }
+    serde_json::from_slice(body).map_err(|_| {
+        AdminError::new(
+            StatusCode::BAD_REQUEST,
+            40001,
+            "Invalid account test request",
             request_id,
         )
     })
