@@ -4,6 +4,7 @@ mod cookies;
 mod importing;
 mod lifecycle;
 mod quota;
+mod testing;
 mod types;
 
 use std::sync::Arc as StdArc;
