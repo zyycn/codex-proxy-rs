@@ -206,12 +206,12 @@ watch(
   >
     <div
       class="mt-5 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
-      :class="collapsed ? 'w-12 justify-start' : 'w-full gap-3'"
+      :class="collapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
       <span
         class="inline-flex size-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700"
       >
-        <Cat :size="27" stroke-width="2.05" />
+        <Cat :size="27" stroke-width="2" />
       </span>
       <span
         v-show="brandLabelVisible"

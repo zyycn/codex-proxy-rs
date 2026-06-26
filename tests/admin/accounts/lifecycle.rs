@@ -67,6 +67,39 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
     assert_eq!(status.status(), StatusCode::OK);
     assert_eq!(response_json(status).await["data"]["status"], "disabled");
 
+    let metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/update")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({
+                        "id": "acct_lifecycle",
+                        "label": null,
+                        "email": "updated-life@example.com",
+                        "accountId": "chatgpt-updated-life",
+                        "userId": "user-updated-life",
+                        "planType": "team",
+                        "status": "active"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata_body = response_json(metadata).await;
+    assert_eq!(metadata_body["data"]["label"], Value::Null);
+    assert_eq!(metadata_body["data"]["email"], "updated-life@example.com");
+    assert_eq!(metadata_body["data"]["accountId"], "chatgpt-updated-life");
+    assert_eq!(metadata_body["data"]["userId"], "user-updated-life");
+    assert_eq!(metadata_body["data"]["planType"], "team");
+    assert_eq!(metadata_body["data"]["status"], "active");
+
     let deleted = app
         .oneshot(
             Request::builder()

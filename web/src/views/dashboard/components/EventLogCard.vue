@@ -13,7 +13,6 @@ const props = defineProps<{
 const activeFilter = ref('all')
 const filters = [
   { label: '全部', value: 'all' },
-  { label: '警告', value: 'warn' },
   { label: '错误', value: 'error' },
 ]
 const eventLogColumns = [
@@ -63,7 +62,7 @@ const filteredRows = computed(() => {
         </p>
       </div>
 
-      <BaseSegmented v-model="activeFilter" :options="filters" class="w-51.5" />
+      <BaseSegmented v-model="activeFilter" :options="filters" class="w-38" />
     </header>
 
     <div class="mt-4.25 flex h-60 w-full justify-between overflow-hidden">

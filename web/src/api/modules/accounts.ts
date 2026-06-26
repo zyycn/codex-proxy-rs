@@ -136,18 +136,28 @@ export function refreshAccount(accountId: string) {
   })
 }
 
-export function updateAccountLabel(accountId: string, label: string | null) {
+export interface UpdateAccountPayload {
+  label?: string | null
+  email?: string | null
+  accountId?: string | null
+  userId?: string | null
+  planType?: string | null
+  status?: Account['status']
+}
+
+export function updateAccount(accountId: string, payload: UpdateAccountPayload) {
   return requestJson<Account>('/api/admin/accounts/update', {
     method: 'POST',
-    data: { id: accountId, label },
+    data: { id: accountId, ...payload },
   })
 }
 
+export function updateAccountLabel(accountId: string, label: string | null) {
+  return updateAccount(accountId, { label })
+}
+
 export function updateAccountStatus(accountId: string, status: Account['status']) {
-  return requestJson<Account>('/api/admin/accounts/update', {
-    method: 'POST',
-    data: { id: accountId, status },
-  })
+  return updateAccount(accountId, { status })
 }
 
 export function batchDeleteAccounts(accountIds: string[]) {
@@ -166,4 +176,31 @@ export interface QuotaInfo {
 export function getAccountQuota(accountId: string) {
   const params = new URLSearchParams({ id: accountId })
   return requestJson<QuotaInfo>(`/api/admin/accounts/quota?${params}`)
+}
+
+export interface AccountHealthCheckSummary {
+  total: number
+  alive: number
+  dead: number
+  skipped: number
+}
+
+export interface AccountHealthCheckResult {
+  id: string
+  email?: string | null
+  result: 'alive' | 'dead' | string
+  error?: string
+  durationMs?: number
+}
+
+export interface AccountHealthCheckData {
+  summary: AccountHealthCheckSummary
+  results: AccountHealthCheckResult[]
+}
+
+export function testAccountConnection(accountId: string) {
+  return requestJson<AccountHealthCheckData>('/api/admin/accounts/health-check', {
+    method: 'POST',
+    data: { ids: [accountId] },
+  })
 }
