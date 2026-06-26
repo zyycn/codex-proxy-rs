@@ -36,6 +36,7 @@ import { withMinimumDuration } from '@/utils/async'
 
 export function useDashboard(): {
   loading: Ref<boolean>
+  refreshing: Ref<boolean>
   trendLoading: Ref<boolean>
   metrics: Ref<MetricCardItem[]>
   trendPoints: Ref<TrendPoint[]>
@@ -61,6 +62,7 @@ export function useDashboard(): {
   const capacityInfo = ref<AccountCapacityInfo | null>(null)
   const rotationStrategy = ref<string | null>(null)
   const loading = ref(false)
+  const refreshing = ref(false)
   const trendLoading = ref(false)
   const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 
@@ -77,8 +79,18 @@ export function useDashboard(): {
   }
 
   async function refreshDashboardData() {
-    if (loading.value) return
-    await withMinimumDuration(loadDashboardData)
+    if (loading.value || refreshing.value) return
+    refreshing.value = true
+    try {
+      await withMinimumDuration(async () => {
+        const summary = await getDashboardSummary()
+        applySummary(summary)
+      })
+    } catch (error) {
+      console.error('Failed to refresh dashboard data:', error)
+    } finally {
+      refreshing.value = false
+    }
   }
 
   async function loadTrend(tab: string) {
@@ -440,6 +452,7 @@ export function useDashboard(): {
 
   return {
     loading,
+    refreshing,
     trendLoading,
     metrics,
     trendPoints,

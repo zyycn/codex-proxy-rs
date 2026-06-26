@@ -215,10 +215,7 @@ function formatLatency(ms: number): string {
     <div
       class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
     >
-      <div
-        v-loading="props.loading"
-        class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white"
-      >
+      <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white">
         <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
         <BaseEmpty
           v-if="!hasSamples"

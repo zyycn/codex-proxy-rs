@@ -73,12 +73,25 @@ function update() {
   if (scrollRange <= 0 || availableTrackHeight <= 0) {
     thumbHeight.value = 0
     thumbTop.value = 0
+    visible.value = false
     return
   }
 
   const ratio = wrap.clientHeight / wrap.scrollHeight
   thumbHeight.value = Math.min(availableTrackHeight, Math.max(availableTrackHeight * ratio, 32))
   thumbTop.value = (wrap.scrollTop / scrollRange) * maxThumbTop(wrap)
+}
+
+async function scrollToTop() {
+  const wrap = wrapRef.value
+  if (wrap) {
+    wrap.scrollTop = 0
+    wrap.scrollLeft = 0
+  }
+  dragging.value = false
+  visible.value = false
+  await nextTick()
+  update()
 }
 
 function handleScroll() {
@@ -170,6 +183,7 @@ onBeforeUnmount(() => {
 
 defineExpose({
   update,
+  scrollToTop,
   wrapRef,
 })
 </script>

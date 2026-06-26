@@ -64,6 +64,8 @@ pub enum AdminAccountError {
     NotFound,
     #[error("failed to update label")]
     UpdateLabel,
+    #[error("failed to update account metadata")]
+    UpdateMetadata,
     #[error("failed to update status")]
     UpdateStatus,
     #[error("failed to delete account")]
@@ -114,6 +116,27 @@ pub enum AdminAccountError {
 pub struct UpdatedAccountStatus {
     pub id: String,
     pub status: AcctStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AdminAccountMetadataUpdate {
+    pub email: Option<Option<String>>,
+    pub account_id: Option<Option<String>>,
+    pub user_id: Option<Option<String>>,
+    pub label: Option<Option<String>>,
+    pub plan_type: Option<Option<String>>,
+    pub status: Option<String>,
+}
+
+impl AdminAccountMetadataUpdate {
+    pub fn any(&self) -> bool {
+        self.email.is_some()
+            || self.account_id.is_some()
+            || self.user_id.is_some()
+            || self.label.is_some()
+            || self.plan_type.is_some()
+            || self.status.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]

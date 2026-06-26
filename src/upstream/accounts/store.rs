@@ -165,6 +165,18 @@ select
 from accounts
 where id = ?";
 
+const UPDATE_ACCOUNT_METADATA_SQL: &str = r"
+update accounts
+set
+  email = case when ? then ? else email end,
+  chatgpt_account_id = case when ? then ? else chatgpt_account_id end,
+  chatgpt_user_id = case when ? then ? else chatgpt_user_id end,
+  label = case when ? then ? else label end,
+  plan_type = case when ? then ? else plan_type end,
+  status = case when ? then ? else status end,
+  updated_at = ?
+where id = ?";
+
 const LIST_STORED_ACCOUNTS_AFTER_CURSOR_SQL: &str = r"
 select
   id,
@@ -694,6 +706,27 @@ pub struct StoredAccountMetadata {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AccountMetadataUpdate {
+    pub email: Option<Option<String>>,
+    pub account_id: Option<Option<String>>,
+    pub user_id: Option<Option<String>>,
+    pub label: Option<Option<String>>,
+    pub plan_type: Option<Option<String>>,
+    pub status: Option<AccountStatus>,
+}
+
+impl AccountMetadataUpdate {
+    pub fn any(&self) -> bool {
+        self.email.is_some()
+            || self.account_id.is_some()
+            || self.user_id.is_some()
+            || self.label.is_some()
+            || self.plan_type.is_some()
+            || self.status.is_some()
+    }
+}
+
 /// 账号用量记录。
 #[derive(Debug, Clone)]
 pub struct AccountUsageRecord {
@@ -1064,6 +1097,37 @@ impl SqliteAccountStore {
             .fetch_optional(&self.pool)
             .await?;
         row.as_ref().map(metadata_from_row).transpose()
+    }
+
+    /// 更新单账号元数据（不含 token）。
+    pub async fn update_metadata(
+        &self,
+        account_id: &str,
+        update: AccountMetadataUpdate,
+    ) -> SqliteAccountStoreResult<bool> {
+        if !update.any() {
+            return Ok(false);
+        }
+        let now = Utc::now().to_rfc3339();
+        let status = update.status.map(status_to_db);
+        let result = sqlx::query(UPDATE_ACCOUNT_METADATA_SQL)
+            .bind(update.email.is_some())
+            .bind(optional_update_value(&update.email))
+            .bind(update.account_id.is_some())
+            .bind(optional_update_value(&update.account_id))
+            .bind(update.user_id.is_some())
+            .bind(optional_update_value(&update.user_id))
+            .bind(update.label.is_some())
+            .bind(optional_update_value(&update.label))
+            .bind(update.plan_type.is_some())
+            .bind(optional_update_value(&update.plan_type))
+            .bind(update.status.is_some())
+            .bind(status)
+            .bind(&now)
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// 更新账号 claims（含 refresh token）。
@@ -1871,6 +1935,10 @@ fn status_to_db(status: AccountStatus) -> &'static str {
         AccountStatus::Disabled => "disabled",
         AccountStatus::Banned => "banned",
     }
+}
+
+fn optional_update_value(value: &Option<Option<String>>) -> Option<&str> {
+    value.as_ref().and_then(|value| value.as_deref())
 }
 
 fn status_from_db(value: &str) -> SqliteAccountStoreResult<AccountStatus> {

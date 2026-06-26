@@ -18,7 +18,7 @@ use crate::{
     admin::auth::session::require_admin_session,
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     admin::{
-        accounts::service::{AdminAccountError, AdminAccountMetadata},
+        accounts::service::{AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate},
         monitoring::{
             billing,
             event_store::AdminLogFilter,
@@ -806,28 +806,13 @@ pub(crate) async fn update_account(
     require_admin_session(&state, &headers, &request_id).await?;
 
     match parse_account_update(payload, &request_id)? {
-        ParsedAccountUpdate::Single { id, label, status } => {
-            if let Some(label) = label {
-                match state.services.admin_accounts.update_label(&id, label).await {
-                    Ok(true) => {}
-                    Ok(false) => return Err(account_not_found(request_id)),
-                    Err(error) => return Err(account_error(error, request_id)),
-                }
-            }
-            if let Some(status) = status {
-                match state
-                    .services
-                    .admin_accounts
-                    .update_status(&id, &status)
-                    .await
-                {
-                    Ok(Some(_)) => {}
-                    Ok(None) => return Err(account_not_found(request_id)),
-                    Err(error) => return Err(account_error(error, request_id)),
-                }
-            }
-
-            match state.services.admin_accounts.get(&id).await {
+        ParsedAccountUpdate::Single { id, update } => {
+            match state
+                .services
+                .admin_accounts
+                .update_metadata(&id, update)
+                .await
+            {
                 Ok(Some(account)) => Ok(AdminResponse::new(
                     StatusCode::OK,
                     AdminEnvelope::ok(
@@ -1395,8 +1380,7 @@ fn format_cost(value: f64) -> String {
 enum ParsedAccountUpdate {
     Single {
         id: String,
-        label: Option<Option<String>>,
-        status: Option<String>,
+        update: AdminAccountMetadataUpdate,
     },
     BatchStatus {
         ids: Vec<String>,
@@ -1425,7 +1409,10 @@ fn parse_account_update(
                 request_id,
             ));
         }
-        if object.contains_key("label") {
+        if ["label", "email", "accountId", "userId", "planType"]
+            .iter()
+            .any(|field| object.contains_key(*field))
+        {
             return Err(AdminError::new(
                 StatusCode::BAD_REQUEST,
                 40001,
@@ -1438,23 +1425,32 @@ fn parse_account_update(
         return Ok(ParsedAccountUpdate::BatchStatus { ids, status });
     }
     let id = required_string_field(object, "id", request_id)?;
-    let label = object
-        .get("label")
-        .map(|value| optional_string_field(value, "label", request_id))
-        .transpose()?;
+    let label = optional_string_update_field(object, "label", request_id)?;
+    let email = optional_string_update_field(object, "email", request_id)?;
+    let account_id = optional_string_update_field(object, "accountId", request_id)?;
+    let user_id = optional_string_update_field(object, "userId", request_id)?;
+    let plan_type = optional_string_update_field(object, "planType", request_id)?;
     let status = object
         .get("status")
         .map(|value| required_string_value(value, "status", request_id))
         .transpose()?;
-    if label.is_none() && status.is_none() {
+    let update = AdminAccountMetadataUpdate {
+        email,
+        account_id,
+        user_id,
+        label,
+        plan_type,
+        status,
+    };
+    if !update.any() {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
-            "Account update request must include label or status",
+            "Account update request must include editable fields",
             request_id,
         ));
     }
-    Ok(ParsedAccountUpdate::Single { id, label, status })
+    Ok(ParsedAccountUpdate::Single { id, update })
 }
 
 fn required_string_field(
@@ -1536,18 +1532,29 @@ fn optional_string_field(
     if value.is_null() {
         return Ok(None);
     }
-    value
-        .as_str()
-        .map(ToString::to_string)
-        .map(Some)
-        .ok_or_else(|| {
-            AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                format!("{field} must be a string or null"),
-                request_id,
-            )
-        })
+    match value.as_str() {
+        Some(value) => {
+            let value = value.trim();
+            Ok((!value.is_empty()).then(|| value.to_string()))
+        }
+        None => Err(AdminError::new(
+            StatusCode::BAD_REQUEST,
+            40001,
+            format!("{field} must be a string or null"),
+            request_id,
+        )),
+    }
+}
+
+fn optional_string_update_field(
+    object: &serde_json::Map<String, Value>,
+    field: &'static str,
+    request_id: &str,
+) -> Result<Option<Option<String>>, AdminError> {
+    object
+        .get(field)
+        .map(|value| optional_string_field(value, field, request_id))
+        .transpose()
 }
 
 fn account_error(error: AdminAccountError, request_id: String) -> AdminError {

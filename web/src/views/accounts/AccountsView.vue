@@ -1,6 +1,20 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ChevronDown, Plus, RefreshCw, Trash2, Download, Upload, Search } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import {
+  AlertTriangle,
+  ChevronDown,
+  Gauge,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Power,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Trash2,
+  Users,
+  Wifi,
+} from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -9,7 +23,9 @@ import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
+import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 
 import type { Account, AccountQuotaWindow } from '@/api'
@@ -20,6 +36,9 @@ import {
   getAccountQuota,
   getAccounts,
   refreshAccount,
+  testAccountConnection,
+  updateAccount,
+  updateAccountStatus,
 } from '@/api'
 
 const loading = ref(true)
@@ -33,17 +52,54 @@ const expandedAccountIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
 const showSingleDeleteModal = ref(false)
+const editingAccount = ref<Account | null>(null)
 const pendingDeleteAccount = ref<Account | null>(null)
-const refreshingList = ref(false)
 const refreshingAccountIds = ref<Set<string>>(new Set())
 const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
+const updatingStatusAccountIds = ref<Set<string>>(new Set())
+const testingConnectionIds = ref<Set<string>>(new Set())
 const deletingAccount = ref(false)
+const savingAccount = ref(false)
 const batchDeleting = ref(false)
 let searchTimer: number | undefined
 
 const createForm = ref({
   refreshToken: '',
 })
+
+const editForm = ref<{
+  label: string
+  email: string
+  accountId: string
+  userId: string
+  planType: string
+  status: Account['status']
+}>({
+  label: '',
+  email: '',
+  accountId: '',
+  userId: '',
+  planType: '',
+  status: 'active',
+})
+
+type OverviewTone = 'info' | 'success' | 'warning' | 'danger'
+
+interface OverviewItem {
+  label: string
+  value: string
+  caption: string
+  tone: OverviewTone
+  icon: Component
+}
+
+const attentionStatuses = new Set<Account['status']>([
+  'expired',
+  'disabled',
+  'banned',
+  'quota_exhausted',
+])
+const relaxedCellClass = 'py-3 align-middle'
 
 const accountColumns = [
   {
@@ -52,7 +108,7 @@ const accountColumns = [
     width: '40px',
     align: 'center' as const,
     headerClass: '!px-2',
-    cellClass: '!px-2',
+    cellClass: `!px-2 ${relaxedCellClass}`,
   },
   {
     key: 'selection',
@@ -60,16 +116,27 @@ const accountColumns = [
     width: '40px',
     align: 'center' as const,
     headerClass: '!px-2',
-    cellClass: '!px-2',
+    cellClass: `!px-2 ${relaxedCellClass}`,
   },
-  { key: 'identity', label: '邮箱', flex: 2.6, minWidth: '260px' },
-  { key: 'status', label: '状态', flex: 0.8 },
-  { key: 'planType', label: '套餐', flex: 0.8 },
-  { key: 'requests', label: '请求数', flex: 0.9 },
-  { key: 'tokens', label: '总 Tokens', flex: 1 },
-  { key: 'updatedAt', label: '最后使用', flex: 1.2 },
-  { key: 'accessTokenExpiresAt', label: '过期时间', flex: 1.2 },
-  { key: 'actions', label: '操作', width: '104px', align: 'left' as const },
+  { key: 'identity', label: '邮箱', flex: 2.6, minWidth: '260px', cellClass: relaxedCellClass },
+  { key: 'status', label: '状态', flex: 0.8, cellClass: relaxedCellClass },
+  { key: 'planType', label: '套餐', flex: 0.8, cellClass: relaxedCellClass },
+  { key: 'usage', label: '用量', flex: 1.5, minWidth: '220px', cellClass: relaxedCellClass },
+  { key: 'updatedAt', label: '最后使用', flex: 1.2, cellClass: relaxedCellClass },
+  {
+    key: 'accessTokenExpiresAt',
+    label: '过期时间',
+    flex: 1.2,
+    cellClass: relaxedCellClass,
+  },
+  {
+    key: 'actions',
+    label: '操作',
+    width: '116px',
+    align: 'right' as const,
+    headerClass: '!pr-3',
+    cellClass: `!px-2 ${relaxedCellClass}`,
+  },
 ]
 
 const statusLabels: Record<Account['status'], string> = {
@@ -80,6 +147,15 @@ const statusLabels: Record<Account['status'], string> = {
   quota_exhausted: '配额耗尽',
   refreshing: '刷新中',
 }
+
+const editableStatusOptions: Array<{ value: Account['status']; label: string }> = [
+  { value: 'active', label: statusLabels.active },
+  { value: 'disabled', label: statusLabels.disabled },
+  { value: 'expired', label: statusLabels.expired },
+  { value: 'quota_exhausted', label: statusLabels.quota_exhausted },
+  { value: 'refreshing', label: statusLabels.refreshing },
+  { value: 'banned', label: statusLabels.banned },
+]
 
 const statusTones: Record<Account['status'], 'success' | 'danger' | 'warning' | 'info' | 'normal'> =
   {
@@ -110,6 +186,50 @@ const accountPagination = computed(() => ({
   total: totalAccounts.value,
   pageSizes: [10, 20, 50, 100],
 }))
+const showEditModal = computed({
+  get: () => editingAccount.value !== null,
+  set: (value: boolean) => {
+    if (!value) {
+      editingAccount.value = null
+    }
+  },
+})
+const loadedAccountsCount = computed(() => accounts.value.length)
+const activeAccountsCount = computed(
+  () => accounts.value.filter((account) => account.status === 'active').length,
+)
+const highUsageAccountsCount = computed(() => accounts.value.filter(accountHasHighUsage).length)
+const attentionAccountsCount = computed(() => accounts.value.filter(accountNeedsAttention).length)
+const overviewItems = computed<OverviewItem[]>(() => [
+  {
+    label: '总账号',
+    value: formatCount(totalAccounts.value),
+    caption: searchQuery.value.trim() ? '匹配筛选结果' : '账号池规模',
+    tone: 'info',
+    icon: Users,
+  },
+  {
+    label: '当前页正常',
+    value: formatCount(activeAccountsCount.value),
+    caption: `${formatCount(loadedAccountsCount.value)} 个已加载账号`,
+    tone: 'success',
+    icon: ShieldCheck,
+  },
+  {
+    label: '额度预警',
+    value: formatCount(highUsageAccountsCount.value),
+    caption: '任一窗口 >= 80%',
+    tone: 'warning',
+    icon: Gauge,
+  },
+  {
+    label: '需处理',
+    value: formatCount(attentionAccountsCount.value),
+    caption: '过期 / 禁用 / 封禁 / 耗尽',
+    tone: 'danger',
+    icon: AlertTriangle,
+  },
+])
 
 async function loadAccounts() {
   try {
@@ -133,16 +253,6 @@ async function loadAccounts() {
   }
 }
 
-async function refreshAccounts() {
-  if (refreshingList.value || loading.value) return
-  refreshingList.value = true
-  try {
-    await withMinimumDuration(loadAccounts)
-  } finally {
-    refreshingList.value = false
-  }
-}
-
 async function handleCreate() {
   if (!createForm.value.refreshToken.trim()) return
 
@@ -156,6 +266,47 @@ async function handleCreate() {
   } catch (error) {
     console.error('Failed to create account:', error)
   }
+}
+
+function openEditAccount(account: Account) {
+  editingAccount.value = account
+  editForm.value = {
+    label: account.label || '',
+    email: account.email || '',
+    accountId: account.accountId || '',
+    userId: account.userId || '',
+    planType: account.planType || '',
+    status: account.status,
+  }
+}
+
+async function handleSaveAccount() {
+  const account = editingAccount.value
+  if (!account) return
+
+  try {
+    savingAccount.value = true
+    await updateAccount(account.id, {
+      label: nullableTrimmedValue(editForm.value.label),
+      email: nullableTrimmedValue(editForm.value.email),
+      accountId: nullableTrimmedValue(editForm.value.accountId),
+      userId: nullableTrimmedValue(editForm.value.userId),
+      planType: nullableTrimmedValue(editForm.value.planType),
+      status: editForm.value.status,
+    })
+    editingAccount.value = null
+    await loadAccounts()
+    toast.success('账号已更新')
+  } catch (error: any) {
+    toast.error(error.message || '保存失败')
+  } finally {
+    savingAccount.value = false
+  }
+}
+
+function nullableTrimmedValue(value: string) {
+  const trimmed = value.trim()
+  return trimmed || null
 }
 
 function requestDeleteAccount(account: Account) {
@@ -173,8 +324,9 @@ async function handleDelete() {
     showSingleDeleteModal.value = false
     pendingDeleteAccount.value = null
     await loadAccounts()
-  } catch (error) {
-    console.error('Failed to delete account:', error)
+    toast.success('账号已删除')
+  } catch (error: any) {
+    toast.error(error.message || '删除失败')
   } finally {
     deletingAccount.value = false
   }
@@ -204,12 +356,33 @@ async function handleRefresh(accountId: string) {
       await refreshAccount(accountId)
       await loadAccounts()
     })
-  } catch (error) {
-    console.error('Failed to refresh account:', error)
+    toast.success('Token 已刷新')
+  } catch (error: any) {
+    toast.error(error.message || '刷新失败')
   } finally {
     const next = new Set(refreshingAccountIds.value)
     next.delete(accountId)
     refreshingAccountIds.value = next
+  }
+}
+
+async function handleTestConnection(account: Account) {
+  if (testingConnectionIds.value.has(account.id)) return
+  testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
+  try {
+    const result = await withMinimumDuration(async () => testAccountConnection(account.id))
+    const check = result.results.find((item) => item.id === account.id) || result.results[0]
+    if (check?.result === 'alive') {
+      toast.success(`连接正常${check.durationMs !== undefined ? ` · ${check.durationMs}ms` : ''}`)
+    } else {
+      toast.error(check?.error || '测试连接失败')
+    }
+  } catch (error: any) {
+    toast.error(error.message || '测试连接失败')
+  } finally {
+    const next = new Set(testingConnectionIds.value)
+    next.delete(account.id)
+    testingConnectionIds.value = next
   }
 }
 
@@ -230,12 +403,125 @@ async function handleRefreshQuota(accountId: string) {
   }
 }
 
+async function handleToggleSchedule(account: Account) {
+  if (updatingStatusAccountIds.value.has(account.id)) return
+  const nextStatus: Account['status'] = account.status === 'disabled' ? 'active' : 'disabled'
+  updatingStatusAccountIds.value = new Set(updatingStatusAccountIds.value).add(account.id)
+  try {
+    await updateAccountStatus(account.id, nextStatus)
+    await loadAccounts()
+    toast.success(nextStatus === 'disabled' ? '已禁用调度' : '已启用调度')
+  } catch (error: any) {
+    toast.error(error.message || '状态更新失败')
+  } finally {
+    const next = new Set(updatingStatusAccountIds.value)
+    next.delete(account.id)
+    updatingStatusAccountIds.value = next
+  }
+}
+
+function scheduleActionLabel(account: Account) {
+  return account.status === 'disabled' ? '启用调度' : '禁用调度'
+}
+
 function statusTone(status: Account['status']) {
   return statusTones[status]
 }
 
 function statusLabel(status: Account['status']) {
   return statusLabels[status]
+}
+
+function statusTextClass(status: Account['status']) {
+  const tone = statusTone(status)
+  if (tone === 'success') {
+    return 'text-emerald-700'
+  }
+  if (tone === 'danger') {
+    return 'text-red-700'
+  }
+  if (tone === 'warning') {
+    return 'text-amber-700'
+  }
+  if (tone === 'info') {
+    return 'text-blue-700'
+  }
+  return 'text-slate-600'
+}
+
+function statusDotClass(status: Account['status']) {
+  const tone = statusTone(status)
+  if (tone === 'success') {
+    return 'bg-emerald-500'
+  }
+  if (tone === 'danger') {
+    return 'bg-red-500'
+  }
+  if (tone === 'warning') {
+    return 'bg-amber-500'
+  }
+  if (tone === 'info') {
+    return 'bg-blue-500'
+  }
+  return 'bg-gray-400'
+}
+
+function planTypeLabel(planType?: string) {
+  return planType?.trim() || 'Free'
+}
+
+function planTypeClass(planType?: string) {
+  const normalized = planTypeLabel(planType).toLowerCase()
+  if (normalized.includes('enterprise') || normalized.includes('team')) {
+    return 'bg-slate-900 text-white'
+  }
+  if (normalized.includes('pro')) {
+    return 'bg-indigo-50 text-indigo-700'
+  }
+  if (normalized.includes('plus') || normalized.includes('basic')) {
+    return 'bg-blue-50 text-blue-700'
+  }
+  return 'bg-gray-50 text-gray-700'
+}
+
+function accountDisplayTitle(account: Account) {
+  return account.label?.trim() || account.email || account.accountId || account.id
+}
+
+function accountSecondaryText(account: Account) {
+  const title = accountDisplayTitle(account)
+  const secondary = [account.email, account.accountId, account.userId, account.id].find(
+    (value) => value && value !== title,
+  )
+  return secondary || account.id
+}
+
+function accountInitial(account: Account) {
+  return accountDisplayTitle(account).slice(0, 1).toUpperCase()
+}
+
+function accountAvatarClass(account: Account) {
+  const palettes = [
+    'bg-cyan-50 text-cyan-700 shadow-[inset_0_0_0_1px_#bae6fd]',
+    'bg-emerald-50 text-emerald-700 shadow-[inset_0_0_0_1px_#bbf7d0]',
+    'bg-violet-50 text-violet-700 shadow-[inset_0_0_0_1px_#ddd6fe]',
+    'bg-amber-50 text-amber-700 shadow-[inset_0_0_0_1px_#fde68a]',
+  ]
+  const key = account.id || account.email || accountDisplayTitle(account)
+  const hash = [...key].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return palettes[hash % palettes.length]
+}
+
+function formatCount(value: number) {
+  return value.toLocaleString('zh-CN')
+}
+
+function accountNeedsAttention(account: Account) {
+  return attentionStatuses.has(account.status)
+}
+
+function accountHasHighUsage(account: Account) {
+  return quotaWindows(account).some((window) => quotaWindowPercent(window) >= 80)
 }
 
 function toggleSelection(accountId: string) {
@@ -283,8 +569,46 @@ function quotaWindowsByGroup(account: Account, group: AccountQuotaWindow['group'
   return quotaWindows(account).filter((window) => window.group === group)
 }
 
-function quotaWindowBarWidth(window: AccountQuotaWindow) {
-  return `${Math.max(0, Math.min(window.usedPercent ?? 0, 100))}%`
+function quotaWindowPercent(window?: AccountQuotaWindow) {
+  return Math.max(0, Math.min(window?.usedPercent ?? 0, 100))
+}
+
+function quotaWindowBarWidth(window?: AccountQuotaWindow) {
+  return `${quotaWindowPercent(window)}%`
+}
+
+function quotaWindowBarStyle(window?: AccountQuotaWindow) {
+  const percent = quotaWindowPercent(window)
+  return {
+    width: `${percent}%`,
+    minWidth: percent > 0 ? '6px' : '0',
+  }
+}
+
+function quotaWindowBarClass(window?: AccountQuotaWindow) {
+  if (window?.usedPercent === null || window?.usedPercent === undefined) {
+    return 'bg-(--cp-border-strong)'
+  }
+  if (window.usedPercent >= 95) {
+    return 'bg-red-400'
+  }
+  if (window.usedPercent >= 80) {
+    return 'bg-amber-400'
+  }
+  return 'bg-emerald-400'
+}
+
+function overviewIconClass(tone: OverviewTone) {
+  if (tone === 'success') {
+    return 'bg-emerald-50 text-emerald-700'
+  }
+  if (tone === 'warning') {
+    return 'bg-amber-50 text-amber-700'
+  }
+  if (tone === 'danger') {
+    return 'bg-red-50 text-red-700'
+  }
+  return 'bg-cyan-50 text-cyan-700'
 }
 
 onMounted(() => {
@@ -321,63 +645,88 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div class="mt-6 flex shrink-0 items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <BaseInput v-model="searchQuery" placeholder="搜索邮箱或 ID..." class="w-80">
-          <template #prefix>
-            <Search class="size-4.5 text-(--cp-text-tertiary)" />
-          </template>
-        </BaseInput>
-
-        <BaseButton
-          v-if="selectedIds.size > 0"
-          variant="danger"
-          :disabled="batchDeleting"
-          @click="showDeleteModal = true"
-        >
-          <Trash2 class="size-4" />
-          删除选中 ({{ selectedIds.size }})
-        </BaseButton>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <BaseIconButton variant="ghost" size="md" title="导出账号">
-          <Download class="size-4.5" />
-        </BaseIconButton>
-
-        <BaseIconButton variant="ghost" size="md" title="导入账号">
-          <Upload class="size-4.5" />
-        </BaseIconButton>
-
-        <BaseIconButton
-          variant="ghost"
-          size="md"
-          title="刷新列表"
-          :loading="refreshingList"
-          :disabled="loading"
-          @click="refreshAccounts"
-        >
-          <RefreshCw class="size-4.5" />
-        </BaseIconButton>
-
-        <BaseButton variant="primary" @click="showCreateModal = true">
-          <Plus class="size-4" />
-          添加账号
-        </BaseButton>
-      </div>
+    <div class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section
+        v-for="item in overviewItems"
+        :key="item.label"
+        class="min-h-24 rounded-lg bg-(--cp-bg-surface) px-4 py-3.5 shadow-(--cp-shadow-control)"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
+              {{ item.label }}
+            </p>
+            <strong
+              class="mt-2 block font-mono text-[26px] leading-none font-[820] text-(--cp-text-primary)"
+            >
+              {{ item.value }}
+            </strong>
+            <p class="m-0 mt-2 truncate text-[12px] leading-none font-[650] text-(--cp-text-muted)">
+              {{ item.caption }}
+            </p>
+          </div>
+          <span
+            class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg"
+            :class="overviewIconClass(item.tone)"
+          >
+            <component :is="item.icon" class="size-4.5" />
+          </span>
+        </div>
+      </section>
     </div>
 
-    <BaseCard v-loading="loading" class="mt-5 flex min-h-0 flex-1 p-0">
-      <BaseTable
-        :columns="accountColumns"
-        :rows="filteredAccounts"
-        :selected-row-keys="selectedRowKeys"
-        :expanded-row-keys="[...expandedAccountIds]"
-        :pagination="accountPagination"
-        empty-text="暂无账号数据"
-        @page-change="handlePageChange"
-        @page-size-change="handlePageSizeChange"
-      >
+    <BaseCard
+      v-loading="loading"
+      :padded="false"
+      class="mt-4 flex min-h-0 flex-1 flex-col"
+      header-class="px-4 pt-4 pb-2 md:px-5"
+      body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
+    >
+      <template #header>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <BaseInput
+              v-model="searchQuery"
+              placeholder="搜索邮箱或 ID..."
+              class="w-80 max-w-full [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)]"
+            >
+              <template #prefix>
+                <Search class="size-4.5 text-(--cp-text-tertiary)" />
+              </template>
+            </BaseInput>
+
+            <BaseButton
+              v-if="selectedIds.size > 0"
+              variant="danger"
+              :disabled="batchDeleting"
+              @click="showDeleteModal = true"
+            >
+              <Trash2 class="size-4" />
+              删除选中 ({{ selectedIds.size }})
+            </BaseButton>
+          </div>
+
+          <div class="flex shrink-0 items-center gap-2">
+            <BaseButton variant="primary" @click="showCreateModal = true">
+              <Plus class="size-4" />
+              添加账号
+            </BaseButton>
+          </div>
+        </div>
+      </template>
+
+      <template #body>
+        <BaseTable
+          class="min-h-0 flex-1"
+          :columns="accountColumns"
+          :rows="filteredAccounts"
+          :selected-row-keys="selectedRowKeys"
+          :expanded-row-keys="[...expandedAccountIds]"
+          :pagination="accountPagination"
+          empty-text="暂无账号数据"
+          @page-change="handlePageChange"
+          @page-size-change="handlePageSizeChange"
+        >
         <template #expander="{ row }">
           <button
             type="button"
@@ -410,42 +759,73 @@ onBeforeUnmount(() => {
         </template>
 
         <template #identity="{ row }">
-          <span class="text-[14px] font-medium text-(--cp-text-primary)">
-            {{ row.email || row.accountId || row.id }}
-          </span>
+          <div class="flex min-w-0 items-center gap-3">
+            <span
+              class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-[820]"
+              :class="accountAvatarClass(row)"
+            >
+              {{ accountInitial(row) }}
+            </span>
+            <div class="min-w-0">
+              <div class="truncate text-[14px] font-[760] text-(--cp-text-primary)">
+                {{ accountDisplayTitle(row) }}
+              </div>
+              <div class="mt-0.5 truncate font-mono text-[11px] text-(--cp-text-muted)">
+                {{ accountSecondaryText(row) }}
+              </div>
+            </div>
+          </div>
         </template>
 
         <template #status="{ row }">
           <span
-            class="inline-flex items-center rounded-full px-2 py-0.5 text-[12px] font-medium"
-            :class="{
-              'bg-green-50 text-green-700': statusTone(row.status) === 'success',
-              'bg-red-50 text-red-700': statusTone(row.status) === 'danger',
-              'bg-yellow-50 text-yellow-700': statusTone(row.status) === 'warning',
-              'bg-blue-50 text-blue-700': statusTone(row.status) === 'info',
-              'bg-gray-50 text-gray-700': statusTone(row.status) === 'normal',
-            }"
+            class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-[650]"
+            :class="statusTextClass(row.status)"
           >
-            {{ statusLabel(row.status) }}
+            <span class="size-1.5 rounded-full" :class="statusDotClass(row.status)" />
+            <span>{{ statusLabel(row.status) }}</span>
           </span>
         </template>
 
         <template #planType="{ row }">
-          <span class="capitalize text-(--cp-text-secondary)">
-            {{ row.planType || '—' }}
+          <span
+            class="inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-[760] capitalize"
+            :class="planTypeClass(row.planType)"
+          >
+            {{ planTypeLabel(row.planType) }}
           </span>
         </template>
 
-        <template #requests="{ row }">
-          <span class="font-mono text-[14px] text-(--cp-text-primary)">
-            {{ row.usage.requestCountDisplay }}
-          </span>
-        </template>
-
-        <template #tokens="{ row }">
-          <span class="font-mono text-[14px] text-(--cp-text-primary)">
-            {{ row.usage.totalTokensDisplay }}
-          </span>
+        <template #usage="{ row }">
+          <div
+            v-if="quotaWindows(row).length > 0"
+            class="flex w-full max-w-[124px] min-w-0 flex-col gap-2 whitespace-normal py-1.5"
+          >
+            <div
+              v-for="window in quotaWindows(row)"
+              :key="window.key"
+              class="min-w-0 border-b border-slate-200/70 pb-2 last:border-b-0 last:pb-0"
+            >
+              <div
+                class="mb-1.5 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]"
+              >
+                <span class="truncate text-(--cp-text-secondary)">
+                  {{ window.labelDisplay }}
+                </span>
+                <span class="shrink-0 font-mono text-(--cp-text-primary)">
+                  {{ window.usedPercentDisplay }}
+                </span>
+              </div>
+              <div class="h-1 w-full overflow-hidden rounded-full bg-(--cp-default-border)">
+                <div
+                  class="h-full rounded-full transition-[width,background-color] duration-200"
+                  :class="quotaWindowBarClass(window)"
+                  :style="quotaWindowBarStyle(window)"
+                />
+              </div>
+            </div>
+          </div>
+          <span v-else class="text-(--cp-text-muted)">-</span>
         </template>
 
         <template #updatedAt="{ row }">
@@ -461,25 +841,63 @@ onBeforeUnmount(() => {
         </template>
 
         <template #actions="{ row }">
-          <div class="flex items-center justify-start gap-1">
+          <div class="relative flex items-center justify-end gap-1">
             <BaseIconButton
               variant="ghost"
               size="sm"
-              title="刷新令牌"
-              :loading="refreshingAccountIds.has(row.id)"
-              @click="handleRefresh(row.id)"
+              title="编辑账号"
+              @click.stop="openEditAccount(row)"
             >
-              <RefreshCw class="size-3.5" />
+              <Pencil class="size-3.5" />
             </BaseIconButton>
+
             <BaseIconButton
               variant="ghost"
               size="sm"
               title="删除账号"
               :disabled="deletingAccount"
-              @click="requestDeleteAccount(row)"
+              @click.stop="requestDeleteAccount(row)"
             >
-              <Trash2 class="size-3.5" />
+              <Trash2 class="size-3.5 text-red-500" />
             </BaseIconButton>
+
+            <BasePopover placement="bottom-end" width="160px">
+              <template #trigger="{ open }">
+                <BaseIconButton variant="ghost" size="sm" title="更多操作" :active="open">
+                  <MoreHorizontal class="size-4" />
+                </BaseIconButton>
+              </template>
+
+              <template #default="{ close }">
+                <button
+                  type="button"
+                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                  :disabled="testingConnectionIds.has(row.id)"
+                  @click.stop="close(); handleTestConnection(row)"
+                >
+                  <Wifi class="size-3.5 text-(--cp-text-muted)" />
+                  测试连接
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                  :disabled="refreshingAccountIds.has(row.id)"
+                  @click.stop="close(); handleRefresh(row.id)"
+                >
+                  <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
+                  刷新 token
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                  :disabled="updatingStatusAccountIds.has(row.id)"
+                  @click.stop="close(); handleToggleSchedule(row)"
+                >
+                  <Power class="size-3.5 text-(--cp-text-muted)" />
+                  {{ scheduleActionLabel(row) }}
+                </button>
+              </template>
+            </BasePopover>
           </div>
         </template>
 
@@ -668,7 +1086,8 @@ onBeforeUnmount(() => {
             </section>
           </div>
         </template>
-      </BaseTable>
+        </BaseTable>
+      </template>
     </BaseCard>
 
     <!-- 创建账号模态框 -->
@@ -700,6 +1119,83 @@ onBeforeUnmount(() => {
           @click="handleCreate"
         >
           添加
+        </BaseButton>
+      </template>
+    </BaseModal>
+
+    <BaseModal
+      v-model="showEditModal"
+      title="编辑账号"
+      description="更新账号元信息、套餐和调度状态。"
+      variant="info"
+      width="680px"
+    >
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div class="sm:col-span-2">
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            内部 ID
+          </label>
+          <div
+            class="flex h-10 items-center truncate rounded-lg bg-(--cp-bg-secondary) px-3 font-mono text-[12px] font-[650] text-(--cp-text-muted)"
+          >
+            {{ editingAccount?.id || '-' }}
+          </div>
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            备注标签
+          </label>
+          <BaseInput v-model="editForm.label" placeholder="例如：主账号 / 备用账号" />
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            邮箱
+          </label>
+          <BaseInput v-model="editForm.email" placeholder="account@example.com" />
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            ChatGPT 账号 ID
+          </label>
+          <BaseInput v-model="editForm.accountId" placeholder="chatgpt account id" />
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            用户 ID
+          </label>
+          <BaseInput v-model="editForm.userId" placeholder="user id" />
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            套餐
+          </label>
+          <BaseInput v-model="editForm.planType" placeholder="free / plus / pro / team" />
+        </div>
+
+        <div>
+          <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
+            状态
+          </label>
+          <select
+            v-model="editForm.status"
+            class="h-10 w-full rounded-lg border border-(--cp-border) bg-(--cp-bg-surface) px-3 text-[13px] font-[650] text-(--cp-text-primary) outline-none transition focus:border-(--cp-primary) focus:ring-2 focus:ring-(--cp-primary)/15"
+          >
+            <option v-for="option in editableStatusOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <template #footer>
+        <BaseButton variant="ghost" @click="showEditModal = false"> 取消 </BaseButton>
+        <BaseButton variant="primary" :loading="savingAccount" @click="handleSaveAccount">
+          保存
         </BaseButton>
       </template>
     </BaseModal>

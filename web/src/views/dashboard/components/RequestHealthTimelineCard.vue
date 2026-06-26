@@ -41,10 +41,10 @@ function cellClass(point: string) {
           class="flex items-center gap-2 text-[11px] leading-none font-[650] text-(--cp-text-muted)"
         >
           <span>{{ timeline.oldestLabel }}</span>
-          <i class="size-2 rounded-[2px] bg-[#CBD2DC]" />
-          <i class="size-2 rounded-[2px] bg-[#D86A62]" />
-          <i class="size-2 rounded-[2px] bg-[#D9A13B]" />
-          <i class="size-2 rounded-[2px] bg-[#4FAD7A]" />
+          <i class="size-2 rounded-xs bg-[#CBD2DC]" />
+          <i class="size-2 rounded-xs bg-[#D86A62]" />
+          <i class="size-2 rounded-xs bg-[#D9A13B]" />
+          <i class="size-2 rounded-xs bg-[#4FAD7A]" />
           <span>{{ timeline.newestLabel }}</span>
         </div>
       </div>

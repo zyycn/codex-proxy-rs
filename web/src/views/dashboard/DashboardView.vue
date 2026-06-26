@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
 
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
 import EventLogCard from './components/EventLogCard.vue'
 import MetricCard from './components/MetricCard.vue'
@@ -11,6 +13,7 @@ import { useDashboard } from './composables/useDashboard'
 
 const {
   loading,
+  refreshing,
   trendLoading,
   metrics,
   trendPoints,
@@ -39,16 +42,15 @@ const {
         </p>
       </div>
 
-      <button
-        class="mt-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-xl border-0 bg-white text-(--cp-normal) shadow-(--cp-shadow-control) disabled:cursor-not-allowed disabled:opacity-50"
-        type="button"
-        aria-label="刷新概览"
-        :aria-busy="loading"
-        :disabled="loading"
+      <BaseIconButton
+        class="mt-0.5 text-(--cp-normal)"
+        size="md"
+        label="刷新概览"
+        :loading="loading || refreshing"
         @click="refresh"
       >
-        <RefreshCw :size="19" :class="loading ? 'animate-spin' : ''" />
-      </button>
+        <RefreshCw :size="19" />
+      </BaseIconButton>
     </header>
 
     <section

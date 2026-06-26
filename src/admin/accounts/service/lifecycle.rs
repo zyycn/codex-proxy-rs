@@ -211,6 +211,55 @@ impl AdminAccountService {
             Err(_) => Err(AdminAccountError::UpdateStatus),
         }
     }
+    pub async fn update_metadata(
+        &self,
+        account_id: &str,
+        update: AdminAccountMetadataUpdate,
+    ) -> Result<Option<AdminAccountMetadata>, AdminAccountError> {
+        if !update.any() {
+            return self.get(account_id).await;
+        }
+        if update
+            .label
+            .as_ref()
+            .and_then(|label| label.as_ref())
+            .is_some_and(|label| label.chars().count() > 64)
+        {
+            return Err(AdminAccountError::LabelTooLong);
+        }
+
+        let status = update
+            .status
+            .as_deref()
+            .map(parse_account_status)
+            .transpose()?;
+        let should_evict = status.is_some();
+        let updated = self
+            .store
+            .update_metadata(
+                account_id,
+                crate::upstream::accounts::store::AccountMetadataUpdate {
+                    email: update.email,
+                    account_id: update.account_id,
+                    user_id: update.user_id,
+                    label: update.label,
+                    plan_type: update.plan_type,
+                    status,
+                },
+            )
+            .await
+            .map_err(|_| AdminAccountError::UpdateMetadata)?;
+        if !updated {
+            return Ok(None);
+        }
+
+        self.sync_account_pool_best_effort(account_id, "account metadata update")
+            .await;
+        if should_evict {
+            self.evict_account_websocket_pool(account_id).await;
+        }
+        self.get(account_id).await
+    }
     pub async fn batch_delete(
         &self,
         ids: Vec<String>,
