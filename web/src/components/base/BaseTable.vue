@@ -458,7 +458,7 @@ function goToPage(page: number) {
 
 function paginationButtonClass(disabled: boolean) {
   return [
-    'inline-flex size-8 items-center justify-center rounded-lg border-0 bg-(--cp-bg-subtle) text-(--cp-text-secondary) transition-colors duration-150 outline-none',
+    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 bg-(--cp-bg-subtle) text-(--cp-text-secondary) transition-colors duration-150 outline-none',
     disabled
       ? 'cursor-not-allowed opacity-45 shadow-none'
       : 'cursor-pointer hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary) focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
@@ -467,7 +467,7 @@ function paginationButtonClass(disabled: boolean) {
 
 function paginationPageClass(page: number) {
   return [
-    'inline-flex size-8 items-center justify-center rounded-lg border-0 text-xs font-[720] leading-none transition-colors duration-150 outline-none',
+    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 text-xs font-[720] leading-none transition-colors duration-150 outline-none',
     page === currentPage.value
       ? 'cursor-default bg-(--cp-info) text-(--cp-info-on)'
       : 'cursor-pointer bg-(--cp-bg-subtle) text-(--cp-text-primary) hover:bg-(--cp-default-bg-hover) focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
@@ -583,7 +583,7 @@ function paginationPageClass(page: number) {
                 <tr v-if="isRowExpanded(row, index)" role="row">
                   <td
                     :colspan="computedColumns.length"
-                    class="rounded-lg bg-(--cp-info-bg) p-0"
+                    class="rounded-(--cp-input-radius-base) bg-(--cp-info-bg) p-0"
                     role="cell"
                   >
                     <slot name="expanded" :row="row" :index="index" />

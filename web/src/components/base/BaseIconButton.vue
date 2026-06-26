@@ -21,9 +21,9 @@ const props = withDefaults(
 )
 
 const sizeClasses = computed(() => {
-  if (props.size === 'md') return 'h-11 w-11 rounded-xl'
+  if (props.size === 'md') return 'h-11 w-11 rounded-(--cp-icon-button-radius)'
   if (props.size === 'sm') return 'h-8 w-8 rounded-(--cp-icon-button-radius)'
-  return 'h-9 w-9 rounded-xl'
+  return 'h-9 w-9 rounded-(--cp-icon-button-radius)'
 })
 </script>
 

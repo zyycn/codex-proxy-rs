@@ -44,10 +44,10 @@ const colorClasses = {
         <div
           v-for="message in toast.messages"
           :key="message.id"
-          class="pointer-events-auto flex min-h-16 w-90 items-center gap-3 rounded-[18px] bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-popover) transition-all"
+          class="pointer-events-auto flex min-h-16 w-90 items-center gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-popover) transition-all"
         >
           <div
-            class="flex items-center justify-center shrink-0 w-8.5 h-8.5 rounded-[10px]"
+            class="flex items-center justify-center shrink-0 w-8.5 h-8.5 rounded-(--cp-icon-button-radius)"
             :class="colorClasses[message.type].iconBg"
           >
             <component

@@ -144,10 +144,12 @@ onMounted(() => {
       </header>
 
       <div class="mt-5 grid gap-4 xl:grid-cols-12">
-        <section class="min-w-0 rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5 xl:col-span-7">
+        <section
+          class="min-w-0 rounded-(--cp-panel-radius) bg-(--cp-bg-subtle) p-4 md:p-5 xl:col-span-7"
+        >
           <div class="mb-5 flex items-center gap-3">
             <span
-              class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-info-bg) text-(--cp-info)"
+              class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-info-bg) text-(--cp-info)"
             >
               <Cpu class="size-4.5" />
             </span>
@@ -205,10 +207,10 @@ onMounted(() => {
         </section>
 
         <div class="grid min-w-0 content-start gap-4 xl:col-span-5">
-          <section class="rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5">
+          <section class="rounded-(--cp-panel-radius) bg-(--cp-bg-subtle) p-4 md:p-5">
             <div class="mb-4 flex items-center gap-3">
               <span
-                class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-success-bg) text-(--cp-success-text)"
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-success-bg) text-(--cp-success-text)"
               >
                 <RotateCw class="size-4.5" />
               </span>
@@ -224,7 +226,7 @@ onMounted(() => {
 
             <div class="grid gap-3">
               <div
-                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+                class="flex min-h-14 items-center justify-between gap-4 rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
               >
                 <div class="min-w-0">
                   <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">
@@ -238,7 +240,7 @@ onMounted(() => {
               </div>
 
               <div
-                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+                class="flex min-h-14 items-center justify-between gap-4 rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
               >
                 <div class="min-w-0">
                   <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">
@@ -253,10 +255,10 @@ onMounted(() => {
             </div>
           </section>
 
-          <section class="rounded-2xl bg-(--cp-bg-subtle) p-4 md:p-5">
+          <section class="rounded-(--cp-panel-radius) bg-(--cp-bg-subtle) p-4 md:p-5">
             <div class="mb-4 flex items-center gap-3">
               <span
-                class="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-(--cp-warning-bg) text-(--cp-warning-text)"
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-warning-bg) text-(--cp-warning-text)"
               >
                 <ShieldCheck class="size-4.5" />
               </span>
@@ -272,7 +274,7 @@ onMounted(() => {
 
             <div class="grid gap-3">
               <div
-                class="flex min-h-14 items-center justify-between gap-4 rounded-xl bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
+                class="flex min-h-14 items-center justify-between gap-4 rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) px-4 py-2 shadow-(--cp-shadow-control)"
               >
                 <div class="min-w-0">
                   <p class="m-0 text-[13px] font-[720] leading-[1.15] text-(--cp-text-primary)">

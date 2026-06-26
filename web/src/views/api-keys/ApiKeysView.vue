@@ -416,8 +416,8 @@ watch(filteredKeys, () => {
           <button
             class="inline-flex cursor-pointer items-center rounded-full border-0 px-2 py-0.5 text-[12px] font-medium"
             :class="{
-              'bg-green-50 text-green-700': row.enabled,
-              'bg-gray-50 text-gray-700': !row.enabled,
+              'bg-(--cp-success-bg) text-(--cp-success-text)': row.enabled,
+              'bg-(--cp-bg-subtle) text-(--cp-text-secondary)': !row.enabled,
             }"
             @click="handleToggleStatus(row)"
           >
@@ -464,7 +464,7 @@ watch(filteredKeys, () => {
       <div class="flex flex-col gap-4">
         <div>
           <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
-            名称 <span class="text-red-500">*</span>
+            名称 <span class="text-(--cp-danger)">*</span>
           </label>
           <BaseInput v-model="createForm.name" placeholder="例如：生产环境、测试账号..." />
         </div>
@@ -494,7 +494,9 @@ watch(filteredKeys, () => {
       width="540px"
     >
       <div class="flex flex-col gap-4">
-        <div class="rounded-xl border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3">
+        <div
+          class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3"
+        >
           <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
             请妥善保存此密钥，它只会显示一次。
           </p>
@@ -506,7 +508,7 @@ watch(filteredKeys, () => {
           </label>
           <div class="flex items-center gap-2">
             <code
-              class="flex-1 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all"
+              class="flex-1 px-3 py-2.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) text-[13px] font-mono text-(--cp-text-primary) break-all"
             >
               {{ createdKey }}
             </code>

@@ -14,6 +14,7 @@ import {
   Users,
 } from '@lucide/vue'
 
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 
 const route = useRoute()
@@ -201,7 +202,7 @@ watch(
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-white px-4 shadow-(--cp-shadow-sidebar) min-[961px]:flex"
+    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar) min-[961px]:flex"
     :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
   >
     <div
@@ -209,7 +210,7 @@ watch(
       :class="collapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
       <span
-        class="inline-flex size-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700"
+        class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
       >
         <Cat :size="27" stroke-width="2" />
       </span>
@@ -218,8 +219,8 @@ watch(
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-base leading-[1.1] font-[760] text-gray-900">Codex</strong>
-        <span class="mt-1 text-xs leading-[1.1] font-semibold text-slate-500"
+        <strong class="text-base leading-[1.1] font-[760] text-(--cp-text-primary)">Codex</strong>
+        <span class="mt-1 text-xs leading-[1.1] font-semibold text-(--cp-text-secondary)"
           >Proxy RS · v0.1.0</span
         >
       </span>
@@ -230,12 +231,12 @@ watch(
         v-for="item in navItems"
         :key="item.label"
         type="button"
-        class="inline-flex h-11.5 items-center rounded-xl text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
+        class="inline-flex h-11.5 items-center rounded-(--cp-icon-button-radius) text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
         :class="[
           collapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
-            ? 'bg-[#E9EEF5] font-bold text-gray-900'
-            : 'bg-transparent font-semibold text-slate-500 hover:bg-slate-50',
+            ? 'bg-(--cp-bg-nav-active) font-bold text-(--cp-text-primary)'
+            : 'bg-transparent font-semibold text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) hover:text-(--cp-text-primary)',
         ]"
         @click="navigate(item.path)"
       >
@@ -250,11 +251,11 @@ watch(
 
     <div class="mt-auto mb-8" :class="collapsed ? 'w-11' : 'w-full'">
       <div
-        class="bg-slate-50/80"
+        class="bg-(--cp-bg-subtle)"
         :class="
           collapsed
-            ? 'grid gap-1 rounded-xl p-1'
-            : 'flex h-11 items-center justify-between rounded-2xl px-2'
+            ? 'grid gap-1 rounded-(--cp-icon-button-radius) p-1'
+            : 'flex h-11 items-center justify-between rounded-(--cp-panel-radius) px-2'
         "
       >
         <span
@@ -266,29 +267,26 @@ watch(
         </span>
 
         <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
-          <button
-            class="inline-flex items-center justify-center rounded-xl border-0 bg-transparent text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-700"
-            :class="collapsed ? 'size-9' : 'size-8'"
-            type="button"
+          <BaseIconButton
+            variant="ghost"
+            :size="collapsed ? 'default' : 'sm'"
             data-sidebar-toggle
-            :aria-label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
-            :title="collapsed ? '展开侧边栏' : '收缩侧边栏'"
+            :label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
             @click="$emit('toggle')"
           >
             <PanelLeftOpen v-if="collapsed" :size="19" />
             <PanelLeftClose v-else :size="18" />
-          </button>
+          </BaseIconButton>
 
-          <button
-            class="inline-flex items-center justify-center rounded-xl border-0 bg-transparent text-slate-500 transition-colors duration-200 hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
-            :class="collapsed ? 'size-9' : 'size-8'"
-            type="button"
-            aria-label="退出登录"
-            title="退出登录"
+          <BaseIconButton
+            variant="ghost"
+            :size="collapsed ? 'default' : 'sm'"
+            label="退出登录"
+            class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
             @click="handleLogout"
           >
             <LogOut :size="collapsed ? 19 : 18" />
-          </button>
+          </BaseIconButton>
         </div>
       </div>
     </div>

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, KeyRound, Mail, SquareTerminal } from '@lucide/vue'
+import { ArrowRight, Cat, KeyRound, Mail } from '@lucide/vue'
 
+import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 
 const router = useRouter()
@@ -29,208 +31,521 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <main
-    class="flex h-screen w-screen items-center justify-center overflow-hidden bg-[linear-gradient(115deg,#F8FAFC_0%,#FFFFFF_46%,#F1F7FF_100%)] px-6 py-8 min-[961px]:px-24 min-[961px]:py-12"
-  >
-    <section
-      class="grid h-full max-h-[calc(100vh-64px)] w-full max-w-[1728px] items-center gap-8 min-[961px]:max-h-[calc(100vh-96px)] min-[961px]:grid-cols-[minmax(0,980px)_520px] min-[961px]:gap-22"
-      aria-label="Codex Proxy RS 登录"
-    >
-      <div class="relative h-full min-h-0 overflow-hidden">
-        <div class="absolute left-0 top-0 flex h-13 w-105 items-center gap-3.25">
-          <span
-            class="inline-flex size-11 items-center justify-center rounded-[13px] bg-[#111827] text-white"
-          >
-            <SquareTerminal :size="22" />
-          </span>
-          <span class="grid h-10.5 content-center gap-1">
-            <strong class="text-[17px] leading-[1.1] font-[760] text-[#0E1726]"
-              >Codex Proxy RS</strong
-            >
-            <span class="text-[11px] leading-[1.1] font-[650] text-[#64748B]"
-              >Proxy RS · v0.1.0</span
-            >
-          </span>
-        </div>
-
-        <div class="pointer-events-none absolute left-2 top-[26%] h-59.5 w-227.5 max-w-[96vw]">
-          <svg
-            class="size-full overflow-visible"
-            viewBox="0 0 910 238"
-            fill="none"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0 134 C154 30 304 54 440 116 C592 186 726 178 910 54"
-              stroke="#2563EB"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2.2"
-            />
-          </svg>
-        </div>
-
-        <div class="pointer-events-none absolute left-6 top-[35%] h-52.5 w-217.5 max-w-[92vw]">
-          <svg
-            class="size-full overflow-visible"
-            viewBox="0 0 870 210"
-            fill="none"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0 62 C138 150 286 154 424 94 C580 26 708 48 870 150"
-              stroke="#0F9F9A"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-            />
-          </svg>
-        </div>
-
-        <div
-          class="pointer-events-none absolute left-10.5 top-[30%] h-52.5 w-205 max-w-[88vw] opacity-70"
-        >
-          <svg
-            class="size-full overflow-visible"
-            viewBox="0 0 820 210"
-            fill="none"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0 118 C132 54 266 76 392 124 C540 178 666 156 820 86"
-              stroke="#93C5FD"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.2"
-            />
-          </svg>
-        </div>
-
-        <div
-          class="pointer-events-none absolute left-15 top-[45%] h-44.5 w-195 max-w-[84vw] opacity-70"
-        >
-          <svg
-            class="size-full overflow-visible"
-            viewBox="0 0 780 178"
-            fill="none"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0 78 C118 42 224 118 352 78 C500 32 632 96 780 62"
-              stroke="#99F6E4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.2"
-            />
-          </svg>
-        </div>
-
-        <div
-          class="pointer-events-none absolute left-24 top-[56%] h-32.5 w-170 max-w-[74vw] opacity-60"
-        >
-          <svg
-            class="size-full overflow-visible"
-            viewBox="0 0 680 130"
-            fill="none"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0 62 C108 88 192 30 316 58 C442 86 548 42 680 66"
-              stroke="#CBD5E1"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.1"
-            />
-          </svg>
-        </div>
-
-        <span
-          class="pointer-events-none absolute left-111.5 top-[39%] size-1.75 rounded-full bg-[#2563EB] shadow-[0_0_14px_#2563EB66]"
+  <main class="login-page">
+    <div class="login-backdrop" aria-hidden="true">
+      <svg class="login-flow-map" viewBox="0 0 1200 720" fill="none" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="login-flow-primary" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stop-color="#2563eb" stop-opacity="0.02" />
+            <stop offset="0.34" stop-color="#2563eb" stop-opacity="0.18" />
+            <stop offset="0.68" stop-color="#0f9f9a" stop-opacity="0.28" />
+            <stop offset="1" stop-color="#6d5dfc" stop-opacity="0.04" />
+          </linearGradient>
+          <linearGradient id="login-flow-muted" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stop-color="#0f9f9a" stop-opacity="0.02" />
+            <stop offset="0.38" stop-color="#0f9f9a" stop-opacity="0.16" />
+            <stop offset="0.78" stop-color="#2563eb" stop-opacity="0.18" />
+            <stop offset="1" stop-color="#2563eb" stop-opacity="0.02" />
+          </linearGradient>
+        </defs>
+        <path
+          class="login-flow-line login-flow-line-a"
+          d="M-96 452 C96 338 260 332 430 410 C628 502 744 458 914 316 C1044 208 1132 190 1296 246"
+          stroke="url(#login-flow-primary)"
+          stroke-width="2"
         />
-        <span
-          class="pointer-events-none absolute left-150.5 top-[47%] size-1.75 rounded-full bg-[#0F9F9A] shadow-[0_0_14px_#0F9F9A66]"
+        <path
+          class="login-flow-line login-flow-line-b"
+          d="M-96 268 C86 346 252 386 438 294 C620 204 788 190 970 304 C1084 376 1176 386 1296 328"
+          stroke="url(#login-flow-muted)"
+          stroke-width="1.35"
         />
-        <span
-          class="pointer-events-none absolute left-65.5 top-[35%] size-1 rounded-full bg-[#94A3B8]"
+        <path
+          class="login-flow-line login-flow-line-c"
+          d="M-96 584 C104 514 260 494 438 558 C626 626 786 650 984 512 C1112 422 1190 420 1296 468"
+          stroke="url(#login-flow-primary)"
+          stroke-width="1.15"
         />
+      </svg>
 
-        <div
-          class="absolute bottom-8 left-0 grid w-145 max-w-full gap-3.5 min-[961px]:bottom-16 min-[961px]:left-14"
-        >
-          <h1 class="m-0 text-[38px] leading-[1.08] font-[780] tracking-normal text-[#0E1726]">
-            安静进入控制台。
-          </h1>
-          <p class="m-0 max-w-145 text-sm leading-[1.45] font-medium text-[#64748B]">
-            几条请求轨迹，连接账号池、模型目录与管理入口。
-          </p>
+      <span class="login-runner login-runner-a" />
+    </div>
+
+    <section class="login-stage" aria-label="Codex Proxy RS 登录">
+      <header class="login-brand">
+        <span class="login-logo">
+          <Cat :size="27" stroke-width="2" />
+        </span>
+        <span class="login-brand-text">
+          <strong>Codex Proxy RS</strong>
+          <span>轻量模型网关</span>
+        </span>
+      </header>
+
+      <section class="login-copy" aria-labelledby="login-title">
+        <h1 id="login-title">更轻的模型网关</h1>
+        <p>安全转发 OpenAI / Codex 请求，账号、密钥、记录清晰可查</p>
+        <div class="login-scope" aria-label="管理范围">
+          <span>轻量部署</span>
+          <span>安全转发</span>
+          <span>高效路由</span>
         </div>
-      </div>
+      </section>
 
       <BaseCard
         as="form"
         :padded="false"
-        radius-class="rounded-[22px]"
-        shadow-class="shadow-[0_12px_26px_-18px_rgba(14,23,38,0.122),0_34px_70px_-40px_rgba(14,23,38,0.161)]"
-        class="grid w-full max-w-120 gap-5.5 p-9"
+        radius-class="rounded-(--cp-card-radius)"
+        shadow-class="shadow-(--cp-shadow-popover)"
+        class="login-form"
         @submit.prevent="handleSubmit"
       >
-        <header class="grid h-21 gap-2.5">
-          <h2 class="m-0 text-[34px] leading-[1.12] font-extrabold tracking-normal text-[#0E1726]">
-            登录控制台
-          </h2>
-          <p class="m-0 text-sm leading-[1.55] font-medium text-[#64748B]">
-            使用管理员账号和访问密钥进入 Codex Proxy RS。
-          </p>
+        <header class="login-form-header">
+          <h2>登录控制台</h2>
+          <p>使用管理员账号继续管理网关。</p>
         </header>
 
-        <div v-if="authStore.error" class="px-4 py-3 rounded-xl bg-red-50 border border-red-200">
-          <p class="m-0 text-[13px] font-medium text-red-700">
+        <div v-if="authStore.error" class="login-error">
+          <p>
             {{ authStore.error }}
           </p>
         </div>
 
-        <label class="grid h-18 gap-2">
-          <span class="text-xs leading-[1.1] font-bold text-[#0E1726]">管理员账号</span>
-          <span
-            class="inline-flex h-11.5 items-center gap-2.5 rounded-xl bg-[#EEF2F7] px-3.5 text-[#64748B] shadow-[inset_0_1px_0_#FFFFFF66] transition focus-within:bg-[#F8FAFC] focus-within:shadow-[inset_0_1px_0_#FFFFFF,0_0_0_3px_#DBEAFE]"
+        <label class="login-field-group">
+          <span>管理员账号</span>
+          <BaseInput
+            v-model="username"
+            class="login-field"
+            placeholder="请输入用户名"
+            autocomplete="username"
           >
-            <Mail :size="17" />
-            <input
-              v-model="username"
-              class="min-w-0 flex-1 border-0 bg-transparent text-[13px] leading-none font-medium text-[#0E1726] outline-0 placeholder:text-[#94A3B8]"
-              placeholder="请输入用户名"
-              type="text"
-              required
-            />
-          </span>
+            <template #prefix>
+              <Mail :size="17" />
+            </template>
+          </BaseInput>
         </label>
 
-        <label class="grid h-18 gap-2">
-          <span class="text-xs leading-[1.1] font-bold text-[#0E1726]">访问密钥</span>
-          <span
-            class="inline-flex h-11.5 items-center gap-2.5 rounded-xl bg-[#EEF2F7] px-3.5 text-[#64748B] shadow-[inset_0_1px_0_#FFFFFF66] transition focus-within:bg-[#F8FAFC] focus-within:shadow-[inset_0_1px_0_#FFFFFF,0_0_0_3px_#DBEAFE]"
+        <label class="login-field-group">
+          <span>访问密钥</span>
+          <BaseInput
+            v-model="password"
+            class="login-field"
+            placeholder="输入会话密钥"
+            type="password"
+            autocomplete="current-password"
           >
-            <KeyRound :size="17" />
-            <input
-              v-model="password"
-              class="min-w-0 flex-1 border-0 bg-transparent text-[13px] leading-none font-medium text-[#0E1726] outline-0 placeholder:text-[#94A3B8]"
-              placeholder="输入会话密钥"
-              type="password"
-              required
-              @keyup.enter="handleSubmit"
-            />
-          </span>
+            <template #prefix>
+              <KeyRound :size="17" />
+            </template>
+          </BaseInput>
         </label>
 
-        <button
-          class="inline-flex h-12 items-center justify-center gap-2.5 rounded-xl border-0 bg-[#2563EB] text-[15px] leading-[1.1] font-[760] text-white shadow-[0_12px_24px_-16px_#2563EB66] transition-colors hover:bg-[#1D4ED8] disabled:opacity-50 disabled:cursor-not-allowed"
+        <BaseButton
+          size="lg"
           type="submit"
+          class="login-submit"
+          :loading="authStore.loading"
           :disabled="authStore.loading || !username.trim() || !password.trim()"
         >
           <span>{{ authStore.loading ? '登录中...' : '登录' }}</span>
           <ArrowRight v-if="!authStore.loading" :size="18" />
-        </button>
+        </BaseButton>
       </BaseCard>
     </section>
   </main>
 </template>
+
+<style scoped>
+.login-page {
+  position: relative;
+  isolation: isolate;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--cp-text-primary);
+  background:
+    radial-gradient(circle at 12% 20%, #e6f4ff 0, transparent 30%),
+    radial-gradient(circle at 88% 24%, #e9fbf7 0, transparent 26%),
+    linear-gradient(116deg, #f8fbff 0%, #ffffff 50%, #eef4ff 100%);
+}
+
+.login-backdrop {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.login-backdrop::before {
+  position: absolute;
+  inset: -20%;
+  content: '';
+  background:
+    linear-gradient(112deg, #ffffff00 22%, #ffffffd6 50%, #ffffff00 74%),
+    conic-gradient(from 145deg at 46% 48%, #2563eb18, #0f9f9a18, #64748b10, #2563eb18);
+  filter: blur(42px);
+  opacity: 0.58;
+  animation: login-wash 20s ease-in-out infinite alternate;
+}
+
+.login-backdrop::after {
+  position: absolute;
+  inset: -1px;
+  content: '';
+  background-image:
+    linear-gradient(#0e17260a 1px, transparent 1px),
+    linear-gradient(90deg, #0e172608 1px, transparent 1px);
+  background-size: 58px 58px;
+  mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 78%, transparent 100%);
+  opacity: 0.32;
+  animation: login-grid-drift 28s linear infinite;
+}
+
+.login-flow-map {
+  position: absolute;
+  inset: -4% -12%;
+  width: 124%;
+  height: 112%;
+  opacity: 0.68;
+}
+
+.login-flow-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 14 30;
+  animation: login-line-flow 22s linear infinite;
+}
+
+.login-flow-line-b {
+  animation-direction: reverse;
+}
+
+.login-flow-line-c {
+  stroke-dasharray: 7 24;
+  opacity: 0.56;
+}
+
+.login-runner {
+  position: absolute;
+  width: 42px;
+  height: 2px;
+  border-radius: var(--cp-radius-circle);
+  background: linear-gradient(90deg, transparent, #2563ebcc, #0f9f9acc, transparent);
+  box-shadow: 0 0 18px #2563eb24;
+  opacity: 0;
+}
+
+.login-runner-a {
+  top: 46%;
+  left: 10%;
+  animation: login-runner-a 9s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+
+.login-stage {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: min(calc(100% - 40px), 520px);
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: clamp(24px, 5vh, 56px) 0;
+  align-content: center;
+  gap: clamp(26px, 4.8vh, 46px);
+}
+
+.login-brand {
+  position: absolute;
+  top: clamp(28px, 5vh, 56px);
+  left: 0;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+}
+
+.login-logo {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--cp-icon-button-radius);
+  background: var(--cp-bg-dark);
+  color: var(--cp-white);
+  box-shadow: 0 14px 28px -22px #0e1726;
+}
+
+.login-brand-text {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.login-brand-text strong {
+  color: var(--cp-text-primary);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.1;
+}
+
+.login-brand-text span {
+  color: var(--cp-text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.login-copy {
+  display: grid;
+  gap: 13px;
+}
+
+.login-copy::before {
+  width: 42px;
+  height: 2px;
+  content: '';
+  border-radius: var(--cp-radius-circle);
+  background: linear-gradient(90deg, #2563eb, #0f9f9a);
+  opacity: 0.72;
+}
+
+.login-copy h1 {
+  max-width: 12em;
+  margin: 0;
+  color: var(--cp-text-primary);
+  font-size: clamp(34px, 9vw, 48px);
+  font-weight: 760;
+  line-height: 1.04;
+  letter-spacing: 0;
+}
+
+.login-copy p {
+  max-width: 40rem;
+  margin: 0;
+  color: var(--cp-text-secondary);
+  font-size: clamp(13px, 3.5vw, 15px);
+  font-weight: 580;
+  line-height: 1.55;
+}
+
+.login-scope {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  padding-top: 3px;
+}
+
+.login-scope span {
+  position: relative;
+  display: inline-block;
+  padding: 0 13px;
+  color: var(--cp-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.login-scope span:first-child {
+  padding-left: 0;
+}
+
+.login-scope span + span::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 1px;
+  height: 10px;
+  content: '';
+  background: #cbd8e8;
+  transform: translateY(-50%);
+}
+
+.login-form {
+  position: relative;
+  display: grid;
+  width: 100%;
+  gap: 23px;
+  padding: clamp(32px, 7vw, 42px);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#fffffff5, #fffffff0) padding-box,
+    linear-gradient(135deg, #ffffff, #dbeafe80, #c7efee66) border-box;
+  box-shadow:
+    0 1px 0 #ffffff inset,
+    0 28px 64px -42px #0e17264d;
+  backdrop-filter: blur(20px);
+}
+
+.login-form::before {
+  position: absolute;
+  top: 0;
+  right: 34px;
+  left: 34px;
+  height: 1px;
+  content: '';
+  background: linear-gradient(90deg, transparent, #93c5fd, #a7dfdd, transparent);
+  opacity: 0.7;
+}
+
+.login-form-header {
+  display: grid;
+  gap: 10px;
+}
+
+.login-form-header h2 {
+  margin: 0;
+  color: var(--cp-text-primary);
+  font-size: clamp(31px, 7vw, 36px);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.login-form-header p {
+  margin: 0;
+  color: var(--cp-text-secondary);
+  font-size: 14px;
+  font-weight: 560;
+  line-height: 1.55;
+}
+
+.login-error {
+  border: 1px solid var(--cp-danger-border);
+  border-radius: var(--cp-input-radius-base);
+  background: var(--cp-danger-bg);
+  padding: 12px 16px;
+}
+
+.login-error p {
+  margin: 0;
+  color: var(--cp-danger-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.login-field-group {
+  display: grid;
+  gap: 8px;
+}
+
+.login-field-group > span {
+  color: var(--cp-text-primary);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.1;
+}
+
+.login-field {
+  --cp-input-height-default: 46px;
+}
+
+.login-submit {
+  width: 100%;
+}
+
+@keyframes login-wash {
+  0% {
+    transform: translate3d(-3%, 1%, 0) rotate(-3deg) scale(1);
+  }
+
+  100% {
+    transform: translate3d(3%, -2%, 0) rotate(3deg) scale(1.045);
+  }
+}
+
+@keyframes login-grid-drift {
+  to {
+    background-position: 58px 58px;
+  }
+}
+
+@keyframes login-line-flow {
+  to {
+    stroke-dashoffset: -240;
+  }
+}
+
+@keyframes login-runner-a {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(-8deg);
+  }
+
+  18%,
+  72% {
+    opacity: 0.72;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(54vw, -18vh, 0) rotate(-17deg);
+  }
+}
+
+@media (min-width: 720px) {
+  .login-stage {
+    width: min(calc(100% - 80px), 640px);
+  }
+}
+
+@media (min-width: 1100px) {
+  .login-stage {
+    width: min(calc(100% - 112px), 1240px);
+    grid-template-columns: minmax(0, 1fr) minmax(452px, 500px);
+    grid-template-areas: 'copy form';
+    column-gap: clamp(82px, 9vw, 148px);
+    align-content: center;
+  }
+
+  .login-copy {
+    grid-area: copy;
+    align-self: center;
+  }
+
+  .login-form {
+    grid-area: form;
+    align-self: center;
+  }
+
+  .login-copy h1 {
+    max-width: 10.5em;
+    font-size: clamp(44px, 3.4vw, 54px);
+  }
+}
+
+@media (max-width: 520px) {
+  .login-page {
+    background:
+      radial-gradient(circle at 18% 12%, #e7f4ff 0, transparent 40%),
+      linear-gradient(116deg, #f7fbff 0%, #ffffff 50%, #eef4ff 100%);
+  }
+
+  .login-backdrop::after {
+    background-size: 42px 42px;
+    opacity: 0.28;
+  }
+
+  .login-flow-map {
+    inset: 8% -52%;
+    width: 204%;
+    height: 86%;
+    opacity: 0.66;
+  }
+
+  .login-runner {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-backdrop::before,
+  .login-backdrop::after,
+  .login-flow-line,
+  .login-runner {
+    animation: none;
+  }
+}
+</style>
