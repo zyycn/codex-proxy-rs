@@ -161,13 +161,15 @@ impl AdminAccountService {
                 installation_id: self.installation_id.as_deref(),
                 session_id: None,
             };
-            match self.codex.fetch_usage(context).await {
-                Ok(_) => {
+            match self.codex.probe_connectivity(context).await {
+                Ok(probe) => {
                     let duration = start.elapsed().as_millis();
                     results.push(serde_json::json!({
                         "id": account.id,
                         "email": account.email,
                         "result": "alive",
+                        "endpoint": probe.endpoint,
+                        "status": probe.status.as_u16(),
                         "durationMs": duration
                     }));
                 }

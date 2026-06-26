@@ -661,10 +661,19 @@ impl CodexBackendClient {
             self.base_url, self.fingerprint.app_version
         );
         let response = self.client.get(&endpoint).headers(headers).send().await?;
-        Ok(CodexConnectivityProbe {
-            endpoint,
-            status: response.status(),
-        })
+        let status = response.status();
+        let retry_after_seconds = retry_after_seconds(response.headers(), None);
+        if !status.is_success() {
+            let body = read_capped_error_body(response).await?;
+            return Err(CodexClientError::Upstream {
+                status,
+                retry_after_seconds: retry_after_seconds
+                    .or_else(|| retry_after_seconds_from_body(&body)),
+                body,
+                set_cookie_headers: Vec::new(),
+            });
+        }
+        Ok(CodexConnectivityProbe { endpoint, status })
     }
 
     /// 获取后端模型目录条目。
