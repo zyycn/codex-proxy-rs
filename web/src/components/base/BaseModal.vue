@@ -3,7 +3,6 @@ import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseButton from './BaseButton.vue'
-import BaseIconButton from './BaseIconButton.vue'
 
 type ModalVariant = 'default' | 'info' | 'warning' | 'danger' | 'success'
 
@@ -63,55 +62,96 @@ function closeModal() {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
-      <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
-      <section
-        class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
-        :style="modalStyle"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="title"
-      >
-        <header class="grid grid-cols-[auto_minmax(0,1fr)_28px] gap-4 p-7 pb-0">
-          <span
-            v-if="variant !== 'default'"
-            class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
-            :class="variantClasses[variant].iconBg"
-          >
-            <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />
-          </span>
-          <div class="min-w-0" :class="variant === 'default' ? 'col-span-2' : ''">
-            <h2 class="m-0 text-lg leading-[1.15] font-[760] text-(--cp-text-primary)">
-              {{ title }}
-            </h2>
-            <p
-              v-if="description"
-              class="mt-2 mb-0 text-[13px] font-semibold leading-[1.45] text-(--cp-text-secondary)"
+    <Transition name="cp-modal">
+      <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
+        <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
+        <section
+          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
+          :style="modalStyle"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="title"
+        >
+          <header class="grid grid-cols-[auto_minmax(0,1fr)_28px] gap-4 p-7 pb-0">
+            <span
+              v-if="variant !== 'default'"
+              class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
+              :class="variantClasses[variant].iconBg"
             >
-              {{ description }}
-            </p>
+              <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />
+            </span>
+            <div class="min-w-0" :class="variant === 'default' ? 'col-span-2' : ''">
+              <h2 class="m-0 text-lg leading-[1.15] font-[760] text-(--cp-text-primary)">
+                {{ title }}
+              </h2>
+              <p
+                v-if="description"
+                class="mt-2 mb-0 text-[13px] leading-[1.45] font-semibold text-(--cp-text-secondary)"
+              >
+                {{ description }}
+              </p>
+            </div>
+            <BaseButton
+              icon-only
+              class="col-start-3"
+              label="关闭"
+              size="sm"
+              variant="ghost"
+              :disabled="closeDisabled"
+              @click="closeModal"
+            >
+              <X :size="16" />
+            </BaseButton>
+          </header>
+          <div class="p-7" :class="description || variant !== 'default' ? 'pt-5' : 'pt-6'">
+            <slot />
           </div>
-          <BaseIconButton
-            class="col-start-3"
-            label="关闭"
-            size="sm"
-            variant="ghost"
-            :disabled="closeDisabled"
-            @click="closeModal"
-          >
-            <X :size="16" />
-          </BaseIconButton>
-        </header>
-        <div class="p-7" :class="description || variant !== 'default' ? 'pt-5' : 'pt-6'">
-          <slot />
-        </div>
-        <footer class="flex justify-end gap-3 px-7 pb-7">
-          <slot name="footer">
-            <BaseButton variant="default" @click="open = false">取消</BaseButton>
-            <BaseButton variant="primary" @click="open = false">确认</BaseButton>
-          </slot>
-        </footer>
-      </section>
-    </div>
+          <footer class="flex justify-end gap-3 px-7 pb-7">
+            <slot name="footer">
+              <BaseButton variant="default" @click="open = false">取消</BaseButton>
+              <BaseButton variant="primary" @click="open = false">确认</BaseButton>
+            </slot>
+          </footer>
+        </section>
+      </div>
+    </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.cp-modal-enter-active,
+.cp-modal-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.cp-modal-enter-active .cp-modal-panel,
+.cp-modal-leave-active .cp-modal-panel {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.cp-modal-enter-from,
+.cp-modal-leave-to {
+  opacity: 0;
+}
+
+.cp-modal-enter-from .cp-modal-panel {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.985);
+}
+
+.cp-modal-leave-to .cp-modal-panel {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0) scale(0.99);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-modal-enter-active,
+  .cp-modal-leave-active,
+  .cp-modal-enter-active .cp-modal-panel,
+  .cp-modal-leave-active .cp-modal-panel {
+    transition: none;
+  }
+}
+</style>

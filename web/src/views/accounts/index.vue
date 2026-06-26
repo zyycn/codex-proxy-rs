@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   AlertTriangle,
   ChevronDown,
@@ -20,7 +20,6 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
@@ -29,22 +28,25 @@ import BaseTable from '@/components/base/BaseTable.vue'
 import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 
-import type { Account, AccountQuotaWindow } from '@/api'
 import {
-  batchDeleteAccounts,
   createAccount,
-  deleteAccount,
+  deleteAccounts,
   getAccountQuota,
   getAccounts,
   refreshAccount,
   testAccountConnection,
   updateAccount,
-  updateAccountStatus,
 } from '@/api'
 
 const loading = ref(true)
-const accounts = ref<Account[]>([])
+const accounts = ref<any[]>([])
 const totalAccounts = ref(0)
+const accountSummary = ref({
+  total: 0,
+  active: 0,
+  highUsage: 0,
+  attention: 0,
+})
 const page = ref(1)
 const pageSize = ref(20)
 const searchQuery = ref('')
@@ -53,13 +55,14 @@ const expandedAccountIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
 const showSingleDeleteModal = ref(false)
-const editingAccount = ref<Account | null>(null)
-const pendingDeleteAccount = ref<Account | null>(null)
+const editingAccount = ref<any>(null)
+const pendingDeleteAccount = ref<any>(null)
 const refreshingAccountIds = ref<Set<string>>(new Set())
 const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
 const updatingStatusAccountIds = ref<Set<string>>(new Set())
 const testingConnectionIds = ref<Set<string>>(new Set())
 const deletingAccount = ref(false)
+const loaded = ref(false)
 const savingAccount = ref(false)
 const batchDeleting = ref(false)
 let searchTimer: number | undefined
@@ -74,7 +77,7 @@ const editForm = ref<{
   accountId: string
   userId: string
   planType: string
-  status: Account['status']
+  status: string
 }>({
   label: '',
   email: '',
@@ -84,22 +87,6 @@ const editForm = ref<{
   status: 'active',
 })
 
-type OverviewTone = 'info' | 'success' | 'warning' | 'danger'
-
-interface OverviewItem {
-  label: string
-  value: string
-  caption: string
-  tone: OverviewTone
-  icon: Component
-}
-
-const attentionStatuses = new Set<Account['status']>([
-  'expired',
-  'disabled',
-  'banned',
-  'quota_exhausted',
-])
 const relaxedCellClass = 'py-3 align-middle'
 
 const accountColumns = [
@@ -140,7 +127,7 @@ const accountColumns = [
   },
 ]
 
-const statusLabels: Record<Account['status'], string> = {
+const statusLabels: Record<string, string> = {
   active: '正常',
   expired: '已过期',
   disabled: '已禁用',
@@ -149,7 +136,7 @@ const statusLabels: Record<Account['status'], string> = {
   refreshing: '刷新中',
 }
 
-const editableStatusOptions: Array<{ value: Account['status']; label: string }> = [
+const editableStatusOptions: Array<{ value: string; label: string }> = [
   { value: 'active', label: statusLabels.active },
   { value: 'disabled', label: statusLabels.disabled },
   { value: 'expired', label: statusLabels.expired },
@@ -162,22 +149,22 @@ const editStatusModel = computed<string>({
   get: () => editForm.value.status,
   set: (value) => {
     if (editableStatusOptions.some((option) => option.value === value)) {
-      editForm.value.status = value as Account['status']
+      editForm.value.status = value
     }
   },
 })
 
-const statusTones: Record<Account['status'], 'success' | 'danger' | 'warning' | 'info' | 'normal'> =
-  {
-    active: 'success',
-    expired: 'warning',
-    disabled: 'normal',
-    banned: 'danger',
-    quota_exhausted: 'warning',
-    refreshing: 'info',
-  }
+const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
+  active: 'success',
+  expired: 'warning',
+  disabled: 'normal',
+  banned: 'danger',
+  quota_exhausted: 'warning',
+  refreshing: 'info',
+}
 
 const filteredAccounts = computed(() => accounts.value)
+const initialLoading = computed(() => loading.value && !loaded.value)
 
 const allSelected = computed(
   () =>
@@ -204,38 +191,32 @@ const showEditModal = computed({
     }
   },
 })
-const loadedAccountsCount = computed(() => accounts.value.length)
-const activeAccountsCount = computed(
-  () => accounts.value.filter((account) => account.status === 'active').length,
-)
-const highUsageAccountsCount = computed(() => accounts.value.filter(accountHasHighUsage).length)
-const attentionAccountsCount = computed(() => accounts.value.filter(accountNeedsAttention).length)
-const overviewItems = computed<OverviewItem[]>(() => [
+const overviewItems = computed(() => [
   {
     label: '总账号',
-    value: formatCount(totalAccounts.value),
+    value: formatCount(accountSummary.value.total),
     caption: searchQuery.value.trim() ? '匹配筛选结果' : '账号池规模',
     tone: 'info',
     icon: Users,
   },
   {
-    label: '当前页正常',
-    value: formatCount(activeAccountsCount.value),
-    caption: `${formatCount(loadedAccountsCount.value)} 个已加载账号`,
+    label: '正常账号',
+    value: formatCount(accountSummary.value.active),
+    caption: '可参与调度',
     tone: 'success',
     icon: ShieldCheck,
   },
   {
     label: '额度预警',
-    value: formatCount(highUsageAccountsCount.value),
+    value: formatCount(accountSummary.value.highUsage),
     caption: '任一窗口 >= 80%',
     tone: 'warning',
     icon: Gauge,
   },
   {
     label: '需处理',
-    value: formatCount(attentionAccountsCount.value),
-    caption: '过期 / 禁用 / 封禁 / 耗尽',
+    value: formatCount(accountSummary.value.attention),
+    caption: '过期 / 禁用 / 封禁',
     tone: 'danger',
     icon: AlertTriangle,
   },
@@ -250,6 +231,7 @@ async function loadAccounts() {
       search: searchQuery.value,
     })
     accounts.value = result.items
+    accountSummary.value = result.summary
     totalAccounts.value = result.page.total ?? result.items.length
     page.value = result.page.page ?? page.value
     pageSize.value = result.page.pageSize ?? pageSize.value
@@ -260,6 +242,7 @@ async function loadAccounts() {
     }
   } finally {
     loading.value = false
+    loaded.value = true
   }
 }
 
@@ -278,7 +261,7 @@ async function handleCreate() {
   }
 }
 
-function openEditAccount(account: Account) {
+function openEditAccount(account: any) {
   editingAccount.value = account
   editForm.value = {
     label: account.label || '',
@@ -296,7 +279,8 @@ async function handleSaveAccount() {
 
   try {
     savingAccount.value = true
-    await updateAccount(account.id, {
+    await updateAccount({
+      id: account.id,
       label: nullableTrimmedValue(editForm.value.label),
       email: nullableTrimmedValue(editForm.value.email),
       accountId: nullableTrimmedValue(editForm.value.accountId),
@@ -319,7 +303,7 @@ function nullableTrimmedValue(value: string) {
   return trimmed || null
 }
 
-function requestDeleteAccount(account: Account) {
+function requestDeleteAccount(account: any) {
   pendingDeleteAccount.value = account
   showSingleDeleteModal.value = true
 }
@@ -330,7 +314,7 @@ async function handleDelete() {
 
   try {
     deletingAccount.value = true
-    await deleteAccount(accountId)
+    await deleteAccounts({ ids: [accountId] })
     showSingleDeleteModal.value = false
     pendingDeleteAccount.value = null
     await loadAccounts()
@@ -347,7 +331,7 @@ async function handleBatchDelete() {
 
   try {
     batchDeleting.value = true
-    await batchDeleteAccounts([...selectedIds.value])
+    await deleteAccounts({ ids: [...selectedIds.value] })
     selectedIds.value = new Set()
     showDeleteModal.value = false
     await loadAccounts()
@@ -363,7 +347,7 @@ async function handleRefresh(accountId: string) {
   refreshingAccountIds.value = new Set(refreshingAccountIds.value).add(accountId)
   try {
     await withMinimumDuration(async () => {
-      await refreshAccount(accountId)
+      await refreshAccount({ id: accountId })
       await loadAccounts()
     })
     toast.success('Token 已刷新')
@@ -376,12 +360,14 @@ async function handleRefresh(accountId: string) {
   }
 }
 
-async function handleTestConnection(account: Account) {
+async function handleTestConnection(account: any) {
   if (testingConnectionIds.value.has(account.id)) return
   testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
   try {
-    const result = await withMinimumDuration(async () => testAccountConnection(account.id))
-    const check = result.results.find((item) => item.id === account.id) || result.results[0]
+    const result = await withMinimumDuration(async () =>
+      testAccountConnection({ ids: [account.id] }),
+    )
+    const check = result.results.find((item: any) => item.id === account.id) || result.results[0]
     if (check?.result === 'alive') {
       toast.success(`连接正常${check.durationMs !== undefined ? ` · ${check.durationMs}ms` : ''}`)
     } else {
@@ -401,7 +387,7 @@ async function handleRefreshQuota(accountId: string) {
   refreshingQuotaAccountIds.value = new Set(refreshingQuotaAccountIds.value).add(accountId)
   try {
     await withMinimumDuration(async () => {
-      await getAccountQuota(accountId)
+      await getAccountQuota({ id: accountId })
       await loadAccounts()
     })
   } catch (error) {
@@ -413,12 +399,12 @@ async function handleRefreshQuota(accountId: string) {
   }
 }
 
-async function handleToggleSchedule(account: Account) {
+async function handleToggleSchedule(account: any) {
   if (updatingStatusAccountIds.value.has(account.id)) return
-  const nextStatus: Account['status'] = account.status === 'disabled' ? 'active' : 'disabled'
+  const nextStatus = account.status === 'disabled' ? 'active' : 'disabled'
   updatingStatusAccountIds.value = new Set(updatingStatusAccountIds.value).add(account.id)
   try {
-    await updateAccountStatus(account.id, nextStatus)
+    await updateAccount({ id: account.id, status: nextStatus })
     await loadAccounts()
     toast.success(nextStatus === 'disabled' ? '已禁用调度' : '已启用调度')
   } catch (error: any) {
@@ -430,19 +416,19 @@ async function handleToggleSchedule(account: Account) {
   }
 }
 
-function scheduleActionLabel(account: Account) {
+function scheduleActionLabel(account: any) {
   return account.status === 'disabled' ? '启用调度' : '禁用调度'
 }
 
-function statusTone(status: Account['status']) {
+function statusTone(status: string) {
   return statusTones[status]
 }
 
-function statusLabel(status: Account['status']) {
+function statusLabel(status: string) {
   return statusLabels[status]
 }
 
-function statusTextClass(status: Account['status']) {
+function statusTextClass(status: string) {
   const tone = statusTone(status)
   if (tone === 'success') {
     return 'text-(--cp-success-text)'
@@ -459,7 +445,7 @@ function statusTextClass(status: Account['status']) {
   return 'text-(--cp-text-secondary)'
 }
 
-function statusDotClass(status: Account['status']) {
+function statusDotClass(status: string) {
   const tone = statusTone(status)
   if (tone === 'success') {
     return 'bg-(--cp-success)'
@@ -494,11 +480,11 @@ function planTypeClass(planType?: string) {
   return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
 }
 
-function accountDisplayTitle(account: Account) {
+function accountDisplayTitle(account: any) {
   return account.label?.trim() || account.email || account.accountId || account.id
 }
 
-function accountSecondaryText(account: Account) {
+function accountSecondaryText(account: any) {
   const title = accountDisplayTitle(account)
   const secondary = [account.email, account.accountId, account.userId, account.id].find(
     (value) => value && value !== title,
@@ -506,11 +492,11 @@ function accountSecondaryText(account: Account) {
   return secondary || account.id
 }
 
-function accountInitial(account: Account) {
+function accountInitial(account: any) {
   return accountDisplayTitle(account).slice(0, 1).toUpperCase()
 }
 
-function accountAvatarClass(account: Account) {
+function accountAvatarClass(account: any) {
   const palettes = [
     'bg-(--cp-info-bg) text-(--cp-info-text) shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
     'bg-(--cp-success-bg) text-(--cp-success-text) shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
@@ -524,14 +510,6 @@ function accountAvatarClass(account: Account) {
 
 function formatCount(value: number) {
   return value.toLocaleString('zh-CN')
-}
-
-function accountNeedsAttention(account: Account) {
-  return attentionStatuses.has(account.status)
-}
-
-function accountHasHighUsage(account: Account) {
-  return quotaWindows(account).some((window) => quotaWindowPercent(window) >= 80)
 }
 
 function toggleSelection(accountId: string) {
@@ -571,23 +549,23 @@ function handlePageSizeChange(nextPageSize: number) {
   void loadAccounts()
 }
 
-function quotaWindows(account: Account) {
-  return account.quota.windows
+function quotaWindows(account: any) {
+  return account.quota.windows as any[]
 }
 
-function quotaWindowsByGroup(account: Account, group: AccountQuotaWindow['group']) {
+function quotaWindowsByGroup(account: any, group: string) {
   return quotaWindows(account).filter((window) => window.group === group)
 }
 
-function quotaWindowPercent(window?: AccountQuotaWindow) {
+function quotaWindowPercent(window?: any) {
   return Math.max(0, Math.min(window?.usedPercent ?? 0, 100))
 }
 
-function quotaWindowBarWidth(window?: AccountQuotaWindow) {
+function quotaWindowBarWidth(window?: any) {
   return `${quotaWindowPercent(window)}%`
 }
 
-function quotaWindowBarStyle(window?: AccountQuotaWindow) {
+function quotaWindowBarStyle(window?: any) {
   const percent = quotaWindowPercent(window)
   return {
     width: `${percent}%`,
@@ -595,7 +573,7 @@ function quotaWindowBarStyle(window?: AccountQuotaWindow) {
   }
 }
 
-function quotaWindowBarClass(window?: AccountQuotaWindow) {
+function quotaWindowBarClass(window?: any) {
   if (window?.usedPercent === null || window?.usedPercent === undefined) {
     return 'bg-(--cp-default-border-hover)'
   }
@@ -608,7 +586,7 @@ function quotaWindowBarClass(window?: AccountQuotaWindow) {
   return 'bg-(--cp-success)'
 }
 
-function overviewIconClass(tone: OverviewTone) {
+function overviewIconClass(tone: string) {
   if (tone === 'success') {
     return 'bg-(--cp-success-bg) text-(--cp-success-text)'
   }
@@ -650,43 +628,45 @@ onBeforeUnmount(() => {
           账号管理
         </h1>
         <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          管理 Codex 账号 · 共 {{ totalAccounts }} 个账号
+          维护 Codex 账号池，快速确认可用性、配额与连接状态。
         </p>
       </div>
     </header>
 
     <div class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-      <section
+      <BaseCard
         v-for="item in overviewItems"
         :key="item.label"
-        class="min-h-24 rounded-lg bg-(--cp-bg-surface) px-4 py-3.5 shadow-(--cp-shadow-control)"
+        as="article"
+        :padded="false"
+        class="h-24"
       >
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
+        <div class="flex h-full items-stretch justify-between gap-3 px-5 py-3">
+          <div class="flex min-w-0 flex-col justify-between">
             <p class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
               {{ item.label }}
             </p>
             <strong
-              class="mt-2 block font-mono text-[26px] leading-none font-[820] text-(--cp-text-primary)"
+              class="block font-mono text-[26px] leading-none font-[820] text-(--cp-text-primary)"
             >
               {{ item.value }}
             </strong>
-            <p class="m-0 mt-2 truncate text-[12px] leading-none font-[650] text-(--cp-text-muted)">
+            <p class="m-0 truncate text-[12px] leading-none font-[650] text-(--cp-text-muted)">
               {{ item.caption }}
             </p>
           </div>
           <span
-            class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg"
+            class="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-lg"
             :class="overviewIconClass(item.tone)"
           >
             <component :is="item.icon" class="size-4.5" />
           </span>
         </div>
-      </section>
+      </BaseCard>
     </div>
 
     <BaseCard
-      v-loading="loading"
+      v-loading="initialLoading"
       :padded="false"
       class="mt-4 flex min-h-0 flex-1 flex-col"
       header-class="px-4 pt-4 pb-2 md:px-5"
@@ -730,6 +710,7 @@ onBeforeUnmount(() => {
           class="min-h-0 flex-1"
           :columns="accountColumns"
           :rows="filteredAccounts"
+          :loading="loading"
           :selected-row-keys="selectedRowKeys"
           :expanded-row-keys="[...expandedAccountIds]"
           :pagination="accountPagination"
@@ -809,7 +790,7 @@ onBeforeUnmount(() => {
           <template #usage="{ row }">
             <div
               v-if="quotaWindows(row).length > 0"
-              class="flex w-full max-w-[124px] min-w-0 flex-col gap-2 whitespace-normal py-1.5"
+              class="flex w-full max-w-31 min-w-0 flex-col gap-2 whitespace-normal py-1.5"
             >
               <div
                 v-for="window in quotaWindows(row)"
@@ -852,16 +833,18 @@ onBeforeUnmount(() => {
 
           <template #actions="{ row }">
             <div class="relative flex items-center justify-end gap-1">
-              <BaseIconButton
+              <BaseButton
+                icon-only
                 variant="ghost"
                 size="sm"
                 title="编辑账号"
                 @click.stop="openEditAccount(row)"
               >
                 <Pencil class="size-3.5" />
-              </BaseIconButton>
+              </BaseButton>
 
-              <BaseIconButton
+              <BaseButton
+                icon-only
                 variant="ghost"
                 size="sm"
                 title="删除账号"
@@ -869,13 +852,13 @@ onBeforeUnmount(() => {
                 @click.stop="requestDeleteAccount(row)"
               >
                 <Trash2 class="size-3.5 text-(--cp-danger)" />
-              </BaseIconButton>
+              </BaseButton>
 
               <BasePopover placement="bottom-end" width="160px">
                 <template #trigger="{ open }">
-                  <BaseIconButton variant="ghost" size="sm" title="更多操作" :active="open">
+                  <BaseButton icon-only variant="ghost" size="sm" title="更多操作" :active="open">
                     <MoreHorizontal class="size-4" />
-                  </BaseIconButton>
+                  </BaseButton>
                 </template>
 
                 <template #default="{ close }">
@@ -922,7 +905,8 @@ onBeforeUnmount(() => {
                       {{ row.quota.refreshedAtDisplay }}
                     </p>
                   </div>
-                  <BaseIconButton
+                  <BaseButton
+                    icon-only
                     variant="ghost"
                     size="sm"
                     title="刷新额度"
@@ -930,14 +914,14 @@ onBeforeUnmount(() => {
                     @click="handleRefreshQuota(row.id)"
                   >
                     <RefreshCw class="size-3.5" />
-                  </BaseIconButton>
+                  </BaseButton>
                 </div>
 
                 <div class="grid gap-3">
                   <div
                     v-for="window in quotaWindowsByGroup(row, 'monthly')"
                     :key="window.key"
-                    class="rounded-lg bg-(--cp-bg-subtle) py-2"
+                    class="rounded-lg bg-(--cp-bg-subtle) p-2"
                   >
                     <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
                       <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
@@ -964,7 +948,7 @@ onBeforeUnmount(() => {
                     <div
                       v-for="window in quotaWindowsByGroup(row, 'shortTerm')"
                       :key="window.key"
-                      class="rounded-lg bg-(--cp-bg-subtle) py-2"
+                      class="rounded-lg bg-(--cp-bg-subtle) p-2"
                     >
                       <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
                         <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
@@ -990,7 +974,7 @@ onBeforeUnmount(() => {
                   <div
                     v-for="window in quotaWindowsByGroup(row, 'other')"
                     :key="window.key"
-                    class="rounded-lg bg-(--cp-bg-subtle) py-2"
+                    class="rounded-lg bg-(--cp-bg-subtle) p-2"
                   >
                     <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
                       <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>

@@ -14,24 +14,24 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
-    "@lucide/vue": "^1.18.0",
-    "axios": "^1.18.0",
+    "@lucide/vue": "^1.21.0",
+    "axios": "^1.18.1",
     "echarts": "^6.1.0",
     "gsap": "^3.15.0",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
-    "vue": "^3.5.38",
+    "vue": "^3.5.39",
     "vue-router": "^5.1.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.0.1",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/tsconfig": "^0.9.1",
     "prettier": "^3.8.4",
     "tailwindcss": "^4.3.1",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16",
+    "vite": "^8.1.0",
     "vue-tsc": "^3.3.5"
   },
   "prettier": {

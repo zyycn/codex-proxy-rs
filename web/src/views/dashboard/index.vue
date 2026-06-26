@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
 
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseButton from '@/components/base/BaseButton.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
 import EventLogCard from './components/EventLogCard.vue'
@@ -42,7 +42,8 @@ const {
         </p>
       </div>
 
-      <BaseIconButton
+      <BaseButton
+        icon-only
         class="mt-0.5 text-(--cp-normal)"
         size="md"
         label="刷新概览"
@@ -50,7 +51,7 @@ const {
         @click="refresh"
       >
         <RefreshCw :size="19" />
-      </BaseIconButton>
+      </BaseButton>
     </header>
 
     <section

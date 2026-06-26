@@ -14,8 +14,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '^/api(/|$)': 'http://127.0.0.1:8080',
-      '^/auth(/|$)': 'http://127.0.0.1:8080',
+      '/dev': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/dev/, ''),
+      },
     },
   },
   build: {

@@ -5,11 +5,10 @@ import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseSegmented from '../../../components/base/BaseSegmented.vue'
-import type { TrendPoint, TrendSummaryItem } from '../types'
 
 const props = defineProps<{
-  points: TrendPoint[]
-  summary: TrendSummaryItem[]
+  points: any[]
+  summary: any[]
   loading?: boolean
 }>()
 
@@ -195,64 +194,65 @@ function formatLatency(ms: number): string {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="min-h-95 w-full px-4 pt-5.5 pb-6 lg:px-7">
-    <header class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div class="pt-0.5">
-        <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">使用趋势</h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
-          最近 24 小时
-        </p>
-      </div>
-
+  <BaseCard
+    as="article"
+    variant="dashboard"
+    title="使用趋势"
+    description="最近 24 小时"
+    class="min-h-95 w-full"
+  >
+    <template #actions>
       <BaseSegmented
         v-model="activeTab"
         :options="tabs"
         class="w-full max-w-61.5 sm:w-61.5"
         @update:model-value="emit('trendChange', $event)"
       />
-    </header>
+    </template>
 
-    <div
-      class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
-    >
-      <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white">
-        <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
-        <BaseEmpty
-          v-if="!hasSamples"
-          compact
-          title="暂无趋势数据"
-          description="最近 24 小时还没有可用于绘制趋势的请求日志。"
-          class="h-full place-content-center bg-white"
-        />
-      </div>
-
-      <aside class="grid h-67 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5">
-        <div
-          v-for="item in props.summary"
-          :key="item.label"
-          class="grid grid-cols-[minmax(0,1fr)_8px] items-center gap-x-3 py-2"
-        >
-          <span class="grid gap-1.75">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">{{
-              item.label
-            }}</span>
-            <strong
-              class="font-mono text-2xl leading-[1.15] font-[760] tabular-nums text-(--cp-text-primary)"
-              >{{ item.value }}</strong
-            >
-          </span>
-          <i
-            class="size-2 justify-self-end rounded-full"
-            :class="{
-              'bg-(--cp-info)': item.tone === 'info',
-              'bg-(--cp-success)': item.tone === 'success',
-              'bg-(--cp-warning)': item.tone === 'warning',
-              'bg-(--cp-danger)': item.tone === 'danger',
-              'bg-(--cp-normal)': item.tone === 'normal',
-            }"
+    <template #body>
+      <div
+        class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
+      >
+        <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white">
+          <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
+          <BaseEmpty
+            v-if="!hasSamples"
+            compact
+            title="暂无趋势数据"
+            description="最近 24 小时还没有可用于绘制趋势的请求日志。"
+            class="h-full place-content-center bg-white"
           />
         </div>
-      </aside>
-    </div>
+
+        <aside class="grid h-67 w-full grid-rows-3 rounded-2xl bg-(--cp-bg-subtle) px-5 py-4.5">
+          <div
+            v-for="item in props.summary"
+            :key="item.label"
+            class="grid grid-cols-[minmax(0,1fr)_8px] items-center gap-x-3 py-2"
+          >
+            <span class="grid gap-1.75">
+              <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">{{
+                item.label
+              }}</span>
+              <strong
+                class="font-mono text-2xl leading-[1.15] font-[760] tabular-nums text-(--cp-text-primary)"
+                >{{ item.value }}</strong
+              >
+            </span>
+            <i
+              class="size-2 justify-self-end rounded-full"
+              :class="{
+                'bg-(--cp-info)': item.tone === 'info',
+                'bg-(--cp-success)': item.tone === 'success',
+                'bg-(--cp-warning)': item.tone === 'warning',
+                'bg-(--cp-danger)': item.tone === 'danger',
+                'bg-(--cp-normal)': item.tone === 'normal',
+              }"
+            />
+          </div>
+        </aside>
+      </div>
+    </template>
   </BaseCard>
 </template>

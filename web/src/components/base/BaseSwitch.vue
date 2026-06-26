@@ -15,7 +15,7 @@ const props = withDefaults(
 const model = defineModel<boolean>({ default: false })
 
 const trackClasses = computed(() => [
-  'relative inline-flex h-6 w-10.5 shrink-0 rounded-full border-0 transition-colors duration-180 outline-none',
+  'relative inline-flex h-6 w-10.5 shrink-0 rounded-full border-0 transition-colors duration-200 outline-none',
   props.disabled
     ? 'cursor-not-allowed bg-(--cp-disabled-bg) opacity-70'
     : model.value
@@ -24,7 +24,7 @@ const trackClasses = computed(() => [
 ])
 
 const knobClasses = computed(() => [
-  'absolute top-0.75 left-0 size-4.5 rounded-full bg-(--cp-bg-surface) shadow-(--cp-shadow-control) transition-transform duration-180',
+  'absolute top-0.75 left-0 size-4.5 rounded-full bg-(--cp-bg-surface) shadow-(--cp-shadow-control) transition-transform duration-200',
   model.value ? 'translate-x-5' : 'translate-x-0.75',
 ])
 

@@ -15,6 +15,10 @@ export interface BaseTableColumn {
   flex?: number
   fixed?: 'left'
   align?: 'left' | 'right' | 'center'
+  ellipsis?: boolean
+  emptyText?: string
+  mono?: boolean
+  tabular?: boolean
   headerClass?: string
   cellClass?: string
 }
@@ -131,6 +135,10 @@ const pageSizeOptions = computed(() => {
 const pageSizeModel = computed({
   get: () => String(props.pagination?.pageSize ?? ''),
   set: (value: string) => {
+    if (props.loading) {
+      return
+    }
+
     const pageSize = Number(value)
     if (Number.isFinite(pageSize) && pageSize > 0) {
       emit('page-size-change', pageSize)
@@ -264,6 +272,28 @@ function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
 
 function cellValue(row: TableRow, key: string) {
   return row[key]
+}
+
+function isEmptyCellValue(value: unknown) {
+  return value === undefined || value === null || value === ''
+}
+
+function cellDisplayValue(column: BaseTableColumn, row: TableRow) {
+  const value = cellValue(row, column.key)
+  return isEmptyCellValue(value) ? (column.emptyText ?? '—') : value
+}
+
+function cellTitle(column: BaseTableColumn, row: TableRow) {
+  if (column.ellipsis === false || column.key === 'selection' || column.key === 'actions') {
+    return undefined
+  }
+
+  const value = cellDisplayValue(column, row)
+  if (isEmptyCellValue(value)) {
+    return undefined
+  }
+
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined
 }
 
 function getRowKey(row: TableRow, index: number) {
@@ -445,11 +475,22 @@ function cellContentClass(column: BaseTableColumn) {
     return 'min-w-0 overflow-visible'
   }
 
-  return 'min-w-0 truncate'
+  return [
+    'min-w-0',
+    column.ellipsis === false ? undefined : 'truncate',
+    column.mono ? 'font-mono text-[12px] font-[650]' : undefined,
+    column.tabular ? 'tabular-nums' : undefined,
+  ]
 }
 
 function goToPage(page: number) {
-  if (!props.pagination || page < 1 || page > totalPages.value || page === currentPage.value) {
+  if (
+    props.loading ||
+    !props.pagination ||
+    page < 1 ||
+    page > totalPages.value ||
+    page === currentPage.value
+  ) {
     return
   }
 
@@ -485,7 +526,7 @@ function paginationPageClass(page: number) {
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
         <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
-            class="w-full shrink-0 table-fixed border-separate border-spacing-y-2 text-left"
+            class="w-full shrink-0 table-fixed border-separate border-spacing-y-1 text-left"
             :style="tableStyle()"
             role="table"
           >
@@ -568,14 +609,15 @@ function paginationPageClass(page: number) {
                     ]"
                     role="cell"
                   >
-                    <div :class="cellContentClass(column)">
+                    <div :class="cellContentClass(column)" :title="cellTitle(column, row)">
                       <slot
                         :name="column.key"
                         :row="row"
                         :value="cellValue(row, column.key)"
+                        :display-value="cellDisplayValue(column, row)"
                         :index="index"
                       >
-                        {{ cellValue(row, column.key) }}
+                        {{ cellDisplayValue(column, row) }}
                       </slot>
                     </div>
                   </td>
@@ -624,6 +666,7 @@ function paginationPageClass(page: number) {
         <BaseSelect
           v-model="pageSizeModel"
           :options="pageSizeOptions"
+          :disabled="loading"
           size="pagination"
           class="w-28"
         />
@@ -631,8 +674,8 @@ function paginationPageClass(page: number) {
         <div class="flex items-center gap-2">
           <button
             type="button"
-            :class="paginationButtonClass(currentPage <= 1)"
-            :disabled="currentPage <= 1"
+            :class="paginationButtonClass(loading || currentPage <= 1)"
+            :disabled="loading || currentPage <= 1"
             title="上一页"
             aria-label="上一页"
             @click="goToPage(currentPage - 1)"
@@ -651,7 +694,7 @@ function paginationPageClass(page: number) {
               v-else
               type="button"
               :class="paginationPageClass(item)"
-              :disabled="item === currentPage"
+              :disabled="loading || item === currentPage"
               :aria-current="item === currentPage ? 'page' : undefined"
               @click="goToPage(item)"
             >
@@ -661,8 +704,8 @@ function paginationPageClass(page: number) {
 
           <button
             type="button"
-            :class="paginationButtonClass(currentPage >= totalPages)"
-            :disabled="currentPage >= totalPages"
+            :class="paginationButtonClass(loading || currentPage >= totalPages)"
+            :disabled="loading || currentPage >= totalPages"
             title="下一页"
             aria-label="下一页"
             @click="goToPage(currentPage + 1)"

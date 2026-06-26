@@ -80,7 +80,7 @@ const triggerClasses = computed(() => [
 ])
 
 const popoverClasses = computed(() => [
-  'fixed z-50 rounded-(--cp-popover-radius) border-0 bg-(--cp-bg-surface) p-1.5 shadow-(--cp-shadow-popover)',
+  'fixed z-50 flex flex-col gap-1 rounded-(--cp-popover-radius) border-0 bg-(--cp-bg-surface) p-1 shadow-(--cp-shadow-popover)',
   props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
 ])
 
@@ -300,45 +300,54 @@ onBeforeUnmount(() => {
     </button>
 
     <Teleport to="body">
-      <div
-        v-if="open"
-        :id="`${selectId}-listbox`"
-        ref="popoverRef"
-        :class="popoverClasses"
-        :style="popoverStyle"
-        role="listbox"
-        :aria-labelledby="selectId"
+      <Transition
+        enter-active-class="transition-[opacity,transform] duration-150 ease-out"
+        enter-from-class="-translate-y-1 opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
       >
         <div
-          v-if="options.length === 0"
-          class="flex h-8.5 items-center rounded-(--cp-control-radius-base) px-3 text-[13px] font-[650] leading-none text-(--cp-text-muted)"
+          v-if="open"
+          :id="`${selectId}-listbox`"
+          ref="popoverRef"
+          :class="popoverClasses"
+          :style="popoverStyle"
+          role="listbox"
+          :aria-labelledby="selectId"
         >
-          {{ emptyText }}
-        </div>
-
-        <template v-else>
-          <button
-            v-for="(option, index) in options"
-            :id="optionId(index)"
-            :key="option.value"
-            type="button"
-            role="option"
-            :aria-selected="option.value === model"
-            :disabled="option.disabled"
-            :class="optionClasses(option, index)"
-            @mouseenter="activeIndex = option.disabled ? activeIndex : index"
-            @mousedown.prevent
-            @click="chooseOption(option, index)"
+          <div
+            v-if="options.length === 0"
+            class="flex h-8.5 items-center rounded-(--cp-input-radius-small) px-3 text-[13px] leading-none font-[650] text-(--cp-text-muted)"
           >
-            <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
-            <Check
-              v-if="option.value === model"
-              class="shrink-0 text-(--cp-info)"
-              :size="size === 'pagination' ? 13 : 15"
-            />
-          </button>
-        </template>
-      </div>
+            {{ emptyText }}
+          </div>
+
+          <template v-else>
+            <button
+              v-for="(option, index) in options"
+              :id="optionId(index)"
+              :key="option.value"
+              type="button"
+              role="option"
+              :aria-selected="option.value === model"
+              :disabled="option.disabled"
+              :class="optionClasses(option, index)"
+              @mouseenter="activeIndex = option.disabled ? activeIndex : index"
+              @mousedown.prevent
+              @click="chooseOption(option, index)"
+            >
+              <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+              <Check
+                v-if="option.value === model"
+                class="shrink-0 text-(--cp-info)"
+                :size="size === 'pagination' ? 13 : 15"
+              />
+            </button>
+          </template>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import { getAuthStatus, login as apiLogin, logout as apiLogout } from '@/api'
-import type { LoginRequest } from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = ref(false)
@@ -23,7 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(payload: LoginRequest) {
+  async function login(payload: any) {
     try {
       loading.value = true
       error.value = null

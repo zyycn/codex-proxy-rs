@@ -20,5 +20,4 @@ export * from './modules/dashboard'
 export * from './modules/settings'
 
 // 请求工具
-export * from './request'
-export type * from './types'
+export { default as request } from './request'

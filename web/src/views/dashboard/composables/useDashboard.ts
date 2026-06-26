@@ -1,5 +1,4 @@
 import { onMounted, onUnmounted, ref } from 'vue'
-import type { Ref } from 'vue'
 
 import {
   Activity,
@@ -13,57 +12,23 @@ import {
 } from '@lucide/vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
-import type {
-  DashboardAccountUsage,
-  DashboardHealthTimeline,
-  DashboardServiceStatus,
-  DashboardSummary,
-  DashboardTrend,
-  DashboardTrendKind,
-} from '@/api'
-import type {
-  AccountCapacityInfo,
-  AccountPoolSummary,
-  AccountUsageItem,
-  EventLogItem,
-  MetricCardItem,
-  SemanticTone,
-  ServiceStatusItem,
-  TrendPoint,
-  TrendSummaryItem,
-} from '../types'
 import { withMinimumDuration } from '@/utils/async'
 
-export function useDashboard(): {
-  loading: Ref<boolean>
-  refreshing: Ref<boolean>
-  trendLoading: Ref<boolean>
-  metrics: Ref<MetricCardItem[]>
-  trendPoints: Ref<TrendPoint[]>
-  trendSummary: Ref<TrendSummaryItem[]>
-  healthTimeline: Ref<DashboardHealthTimeline>
-  accountUsage: Ref<AccountUsageItem[]>
-  serviceStatuses: Ref<ServiceStatusItem[]>
-  eventLogs: Ref<EventLogItem[]>
-  poolSummary: Ref<AccountPoolSummary | null>
-  capacityInfo: Ref<AccountCapacityInfo | null>
-  rotationStrategy: Ref<string | null>
-  refresh: () => Promise<void>
-  loadTrend: (tab: string) => Promise<void>
-} {
-  const metrics = ref<MetricCardItem[]>(metricCards(emptyDashboardSummary()))
-  const trendPoints = ref<TrendPoint[]>([])
-  const trendSummary = ref<TrendSummaryItem[]>([])
-  const healthTimeline = ref<DashboardHealthTimeline>(emptyDashboardSummary().healthTimeline)
-  const accountUsage = ref<AccountUsageItem[]>([])
-  const serviceStatuses = ref<ServiceStatusItem[]>([])
-  const eventLogs = ref<EventLogItem[]>([])
-  const poolSummary = ref<AccountPoolSummary | null>(null)
-  const capacityInfo = ref<AccountCapacityInfo | null>(null)
-  const rotationStrategy = ref<string | null>(null)
+export function useDashboard(): any {
+  const metrics = ref<any[]>(metricCards(emptyDashboardSummary()))
+  const trendPoints = ref<any[]>([])
+  const trendSummary = ref<any[]>([])
+  const healthTimeline = ref<any>(emptyDashboardSummary().healthTimeline)
+  const accountUsage = ref<any[]>([])
+  const serviceStatuses = ref<any[]>([])
+  const eventLogs = ref<any[]>([])
+  const poolSummary = ref<any>(null)
+  const capacityInfo = ref<any>(null)
+  const rotationStrategy = ref<any>(null)
   const loading = ref(false)
   const refreshing = ref(false)
   const trendLoading = ref(false)
+  const lastRefreshedAt = ref('')
   const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 
   async function loadDashboardData() {
@@ -97,7 +62,7 @@ export function useDashboard(): {
     const kind = trendKindFromTab(tab)
     try {
       trendLoading.value = true
-      applyTrend(await getDashboardTrend(kind))
+      applyTrend(await getDashboardTrend({ kind }))
     } catch (error) {
       console.error('Failed to load dashboard trend:', error)
     } finally {
@@ -105,13 +70,13 @@ export function useDashboard(): {
     }
   }
 
-  function applySummary(summary: DashboardSummary) {
+  function applySummary(summary: any) {
     metrics.value = metricCards(summary)
     applyTrend(summary.trend)
     healthTimeline.value = summary.healthTimeline
     accountUsage.value = summary.accountUsage.map(accountUsageItem)
     serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
-    eventLogs.value = summary.eventLogs.map((log) => ({
+    eventLogs.value = (summary.eventLogs as any[]).map((log) => ({
       id: log.id,
       time: log.time,
       level: levelLabel(log.level),
@@ -125,9 +90,10 @@ export function useDashboard(): {
     poolSummary.value = summary.poolSummary
     capacityInfo.value = summary.capacityInfo
     rotationStrategy.value = summary.rotationStrategy ?? null
+    lastRefreshedAt.value = formatDateTime(new Date())
   }
 
-  function emptyDashboardSummary(): DashboardSummary {
+  function emptyDashboardSummary() {
     return {
       cards: {
         accounts: {
@@ -194,9 +160,9 @@ export function useDashboard(): {
     }
   }
 
-  function metricCards(summary: DashboardSummary): MetricCardItem[] {
+  function metricCards(summary: any) {
     const { accounts, traffic, tokens, cache } = summary.cards
-    const points = summary.trend.points
+    const points = summary.trend.points as any[]
     return [
       {
         title: '账号',
@@ -276,13 +242,13 @@ export function useDashboard(): {
     ]
   }
 
-  function sparkline(values: number[], tone: SemanticTone): MetricCardItem['sparkline'] {
+  function sparkline(values: number[], tone: string) {
     return values.some((value) => value > 0) ? { values, tone } : undefined
   }
 
-  function applyTrend(trend: DashboardTrend) {
+  function applyTrend(trend: any) {
     trendPoints.value = trend.points
-    trendSummary.value = trend.summary.map((item) => {
+    trendSummary.value = (trend.summary as any[]).map((item) => {
       if (trend.kind === 'latency') {
         return {
           label: item.label,
@@ -303,7 +269,7 @@ export function useDashboard(): {
     })
   }
 
-  function accountUsageItem(item: DashboardAccountUsage): AccountUsageItem {
+  function accountUsageItem(item: any) {
     const tone = accountTone(item.status)
     const quotaPercent = quotaUsedPercent(item.quotaUsedPercent)
     return {
@@ -324,14 +290,14 @@ export function useDashboard(): {
     return Math.max(0, Math.min(100, Math.round(value)))
   }
 
-  function quotaTone(percent: number): SemanticTone {
+  function quotaTone(percent: number) {
     if (percent >= 95) return 'danger'
     if (percent >= 80) return 'warning'
     if (percent > 0) return 'success'
     return 'normal'
   }
 
-  function serviceStatusItem(item: DashboardServiceStatus, index: number): ServiceStatusItem {
+  function serviceStatusItem(item: any, index: number) {
     const icons = [MonitorCheck, MonitorCheck, CloudCheck, RefreshCw, Gauge]
     return {
       label: item.label,
@@ -342,23 +308,19 @@ export function useDashboard(): {
     }
   }
 
-  function trendState(
-    current: number,
-    previous: number,
-    fallbackTone: SemanticTone,
-  ): MetricCardItem['trend'] {
+  function trendState(current: number, previous: number, fallbackTone: string) {
     if (current > previous) return { direction: 'up', tone: 'success' }
     if (current < previous) return { direction: 'down', tone: 'danger' }
     return previous > 0 || current > 0 ? { direction: 'flat', tone: fallbackTone } : undefined
   }
 
-  function trendKindFromTab(tab: string): DashboardTrendKind {
+  function trendKindFromTab(tab: string) {
     if (tab === '延迟') return 'latency'
     if (tab === '错误') return 'errors'
     return 'usage'
   }
 
-  function trendSummaryTone(label: string): SemanticTone {
+  function trendSummaryTone(label: string) {
     if (label.includes('错误')) return 'danger'
     if (label.includes('最高')) return 'warning'
     if (label.includes('输出') || label.includes('最低') || label.includes('成功')) return 'success'
@@ -366,7 +328,7 @@ export function useDashboard(): {
     return 'info'
   }
 
-  function accountTone(status: DashboardAccountUsage['status']): SemanticTone {
+  function accountTone(status: string) {
     if (status === 'active') return 'success'
     if (status === 'quota_exhausted' || status === 'expired') return 'warning'
     if (status === 'banned' || status === 'disabled') return 'danger'
@@ -374,7 +336,7 @@ export function useDashboard(): {
     return 'normal'
   }
 
-  function eventTone(level: string, statusCode?: number): SemanticTone {
+  function eventTone(level: string, statusCode?: number) {
     if (level === 'warn') return 'warning'
     if (level === 'error' || (typeof statusCode === 'number' && statusCode >= 400)) return 'danger'
     if (level === 'debug') return 'normal'
@@ -427,6 +389,13 @@ export function useDashboard(): {
     return `${ms}ms`
   }
 
+  function formatDateTime(date: Date): string {
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+      date.getHours(),
+    )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  }
+
   function startAutoRefresh() {
     stopAutoRefresh()
     autoRefreshTimer.value = setInterval(() => {
@@ -454,6 +423,7 @@ export function useDashboard(): {
     loading,
     refreshing,
     trendLoading,
+    lastRefreshedAt,
     metrics,
     trendPoints,
     trendSummary,

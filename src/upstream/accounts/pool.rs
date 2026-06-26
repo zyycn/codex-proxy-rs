@@ -519,17 +519,15 @@ impl AccountPool {
     pub fn capacity_summary(&mut self, now: DateTime<Utc>) -> AccountCapacitySummary {
         self.cleanup_stale_slots(now);
         self.refresh_account_statuses(now);
+        let is_capacity_account = |account: &Account| {
+            account.status == AccountStatus::Active
+                && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
+                && AccountService::cloudflare_available_at(account, now)
+        };
         let active_accounts = self
             .accounts
             .values()
-            .filter(|account| {
-                account.status == AccountStatus::Active
-                    && AccountService::quota_available_at(
-                        account,
-                        now,
-                        self.options.skip_quota_limited,
-                    )
-            })
+            .filter(|account| is_capacity_account(account))
             .count();
         let total_slots = active_accounts * self.options.max_concurrent_per_account;
         let used_slots = self
@@ -538,7 +536,7 @@ impl AccountPool {
             .filter(|(account_id, _)| {
                 self.accounts
                     .get(*account_id)
-                    .is_some_and(|account| account.status == AccountStatus::Active)
+                    .is_some_and(|account| is_capacity_account(account))
             })
             .map(|(_, slots)| slots.len().min(self.options.max_concurrent_per_account))
             .sum();
