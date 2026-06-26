@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   AlertTriangle,
   ChevronDown,
+  CheckCircle2,
+  Clock3,
   Gauge,
   MoreHorizontal,
   Pencil,
@@ -14,6 +16,7 @@ import {
   Trash2,
   Users,
   Wifi,
+  XCircle,
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -23,6 +26,7 @@ import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import { toast } from '@/components/base/BaseToast'
@@ -55,8 +59,15 @@ const expandedAccountIds = ref<Set<string>>(new Set())
 const showCreateModal = ref(false)
 const showDeleteModal = ref(false)
 const showSingleDeleteModal = ref(false)
+const showConnectionTestModal = ref(false)
 const editingAccount = ref<any>(null)
 const pendingDeleteAccount = ref<any>(null)
+const testingAccount = ref<any>(null)
+const connectionTestStatus = ref('idle')
+const connectionTestResult = ref<any>(null)
+const connectionTestError = ref('')
+const connectionTestStartedAt = ref('')
+const connectionTestFinishedAt = ref('')
 const refreshingAccountIds = ref<Set<string>>(new Set())
 const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
 const updatingStatusAccountIds = ref<Set<string>>(new Set())
@@ -183,6 +194,42 @@ const accountPagination = computed(() => ({
   total: totalAccounts.value,
   pageSizes: [10, 20, 50, 100],
 }))
+const connectionTestStatusView = computed(() => {
+  if (connectionTestStatus.value === 'running') {
+    return {
+      label: '正在测试',
+      description: '正在验证账号到 Codex 模型端点的连接。',
+      icon: Clock3,
+      badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
+      iconClass: 'text-(--cp-info)',
+    }
+  }
+  if (connectionTestStatus.value === 'success') {
+    return {
+      label: '连接正常',
+      description: '账号令牌可用，网关可以访问 Codex 模型端点。',
+      icon: CheckCircle2,
+      badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+      iconClass: 'text-(--cp-success)',
+    }
+  }
+  if (connectionTestStatus.value === 'error') {
+    return {
+      label: '测试失败',
+      description: '连接未通过，优先检查令牌状态、账号权限或上游网络。',
+      icon: XCircle,
+      badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
+      iconClass: 'text-(--cp-danger)',
+    }
+  }
+  return {
+    label: '准备测试',
+    description: '点击开始后验证账号连接状态。',
+    icon: Wifi,
+    badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
+    iconClass: 'text-(--cp-text-muted)',
+  }
+})
 const showEditModal = computed({
   get: () => editingAccount.value !== null,
   set: (value: boolean) => {
@@ -360,25 +407,55 @@ async function handleRefresh(accountId: string) {
   }
 }
 
-async function handleTestConnection(account: any) {
+function openConnectionTest(account: any) {
+  testingAccount.value = account
+  showConnectionTestModal.value = true
+  resetConnectionTest()
+  void handleTestConnection(account)
+}
+
+function resetConnectionTest() {
+  connectionTestStatus.value = 'idle'
+  connectionTestResult.value = null
+  connectionTestError.value = ''
+  connectionTestStartedAt.value = ''
+  connectionTestFinishedAt.value = ''
+}
+
+function formattedDateTime(value: Date) {
+  const pad = (item: number) => String(item).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
+}
+
+async function handleTestConnection(account = testingAccount.value) {
+  if (!account?.id) return
   if (testingConnectionIds.value.has(account.id)) return
+  connectionTestStatus.value = 'running'
+  connectionTestResult.value = null
+  connectionTestError.value = ''
+  connectionTestStartedAt.value = formattedDateTime(new Date())
+  connectionTestFinishedAt.value = ''
   testingConnectionIds.value = new Set(testingConnectionIds.value).add(account.id)
   try {
     const result = await withMinimumDuration(async () =>
       testAccountConnection({ ids: [account.id] }),
     )
     const check = result.results.find((item: any) => item.id === account.id) || result.results[0]
+    connectionTestResult.value = check || null
     if (check?.result === 'alive') {
-      toast.success(`连接正常${check.durationMs !== undefined ? ` · ${check.durationMs}ms` : ''}`)
+      connectionTestStatus.value = 'success'
     } else {
-      toast.error(check?.error || '测试连接失败')
+      connectionTestStatus.value = 'error'
+      connectionTestError.value = check?.error || '测试连接失败'
     }
   } catch (error: any) {
-    toast.error(error.message || '测试连接失败')
+    connectionTestStatus.value = 'error'
+    connectionTestError.value = error.message || '测试连接失败'
   } finally {
     const next = new Set(testingConnectionIds.value)
     next.delete(account.id)
     testingConnectionIds.value = next
+    connectionTestFinishedAt.value = formattedDateTime(new Date())
   }
 }
 
@@ -866,7 +943,7 @@ onBeforeUnmount(() => {
                     type="button"
                     class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
                     :disabled="testingConnectionIds.has(row.id)"
-                    @click.stop="(close(), handleTestConnection(row))"
+                    @click.stop="(close(), openConnectionTest(row))"
                   >
                     <Wifi class="size-3.5 text-(--cp-text-muted)" />
                     测试连接
@@ -1104,7 +1181,148 @@ onBeforeUnmount(() => {
       </template>
     </BaseCard>
 
-    <!-- 创建账号模态框 -->
+    <BaseModal
+      v-model="showConnectionTestModal"
+      title="测试连接"
+      description="验证账号令牌、ChatGPT 账号 ID 与 Codex 模型端点是否可用。"
+      variant="info"
+      width="680px"
+    >
+      <div v-if="testingAccount" class="flex flex-col gap-4">
+        <section
+          class="flex items-center justify-between gap-4 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3"
+        >
+          <div class="flex min-w-0 items-center gap-3">
+            <span
+              class="inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-[15px] font-[820]"
+              :class="accountAvatarClass(testingAccount)"
+            >
+              {{ accountInitial(testingAccount) }}
+            </span>
+            <div class="min-w-0">
+              <p class="m-0 truncate text-[14px] font-[760] text-(--cp-text-primary)">
+                {{ accountDisplayTitle(testingAccount) }}
+              </p>
+              <p class="mt-1 mb-0 truncate text-[12px] font-[650] text-(--cp-text-secondary)">
+                {{ accountSecondaryText(testingAccount) }}
+              </p>
+            </div>
+          </div>
+          <span
+            class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-[760]"
+            :class="statusTextClass(testingAccount.status)"
+          >
+            {{ statusLabel(testingAccount.status) || testingAccount.status }}
+          </span>
+        </section>
+
+        <section
+          class="rounded-(--cp-card-radius) bg-(--cp-bg-surface) p-4 shadow-[inset_0_0_0_1px_var(--cp-default-border)]"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex min-w-0 items-start gap-3">
+              <span
+                class="inline-flex size-10 shrink-0 items-center justify-center rounded-lg"
+                :class="connectionTestStatusView.badge"
+              >
+                <component
+                  :is="connectionTestStatusView.icon"
+                  class="size-5"
+                  :class="[
+                    connectionTestStatusView.iconClass,
+                    connectionTestStatus === 'running' ? 'animate-pulse' : '',
+                  ]"
+                />
+              </span>
+              <div class="min-w-0">
+                <p class="m-0 text-[16px] font-[780] text-(--cp-text-primary)">
+                  {{ connectionTestStatusView.label }}
+                </p>
+                <p
+                  class="mt-1.5 mb-0 text-[13px] leading-[1.5] font-[650] text-(--cp-text-secondary)"
+                >
+                  {{ connectionTestStatusView.description }}
+                </p>
+              </div>
+            </div>
+            <span
+              class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-[760]"
+              :class="connectionTestStatusView.badge"
+            >
+              {{ connectionTestStatus === 'running' ? '检测中' : connectionTestStatusView.label }}
+            </span>
+          </div>
+
+          <div class="mt-4 grid gap-3 sm:grid-cols-3">
+            <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">开始时间</p>
+              <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+                {{ connectionTestStartedAt || '-' }}
+              </p>
+            </div>
+            <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">完成时间</p>
+              <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+                {{ connectionTestFinishedAt || '-' }}
+              </p>
+            </div>
+            <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">响应耗时</p>
+              <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+                {{
+                  connectionTestResult?.durationMs !== undefined
+                    ? `${connectionTestResult.durationMs}ms`
+                    : '-'
+                }}
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-3 grid gap-3 sm:grid-cols-[0.45fr_1fr]">
+            <div class="rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">HTTP 状态</p>
+              <p class="mt-1.5 mb-0 font-mono text-[12px] font-[650] text-(--cp-text-primary)">
+                {{ connectionTestResult?.status ?? '-' }}
+              </p>
+            </div>
+            <div class="min-w-0 rounded-lg bg-(--cp-bg-subtle) px-3 py-2.5">
+              <p class="m-0 text-[11px] font-[760] text-(--cp-text-muted)">探测端点</p>
+              <BaseScrollbar max-height="76px" view-class="pt-1.5 pr-2">
+                <code
+                  class="block break-all font-mono text-[12px] leading-[1.5] font-[650] text-(--cp-text-primary)"
+                >
+                  {{ connectionTestResult?.endpoint || '-' }}
+                </code>
+              </BaseScrollbar>
+            </div>
+          </div>
+
+          <div v-if="connectionTestError" class="mt-3 rounded-lg bg-(--cp-danger-bg) px-3 py-2.5">
+            <p class="m-0 text-[11px] font-[760] text-(--cp-danger-text)">错误信息</p>
+            <BaseScrollbar max-height="118px" view-class="pt-1.5 pr-2">
+              <p
+                class="m-0 break-words text-[12px] leading-[1.55] font-[650] text-(--cp-danger-text)"
+              >
+                {{ connectionTestError }}
+              </p>
+            </BaseScrollbar>
+          </div>
+        </section>
+      </div>
+
+      <template #footer>
+        <BaseButton variant="ghost" @click="showConnectionTestModal = false">关闭</BaseButton>
+        <BaseButton
+          variant="primary"
+          :loading="connectionTestStatus === 'running'"
+          :disabled="!testingAccount"
+          @click="handleTestConnection()"
+        >
+          {{ connectionTestResult || connectionTestError ? '重新测试' : '开始测试' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
+
     <BaseModal
       v-model="showCreateModal"
       title="添加账号"
