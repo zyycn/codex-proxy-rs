@@ -25,7 +25,7 @@ const boxClasses = computed(() => [
     ? 'bg-(--cp-disabled-bg) text-(--cp-disabled-icon)'
     : checked.value
       ? 'bg-(--cp-info-bg) text-(--cp-info)'
-      : 'bg-(--cp-bg-surface) text-transparent shadow-[inset_0_0_0_1px_#CBD5E1]',
+      : 'bg-(--cp-bg-surface) text-transparent shadow-[inset_0_0_0_1px_var(--cp-default-border-hover)]',
 ])
 
 function toggle() {

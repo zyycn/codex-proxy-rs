@@ -66,7 +66,7 @@ function closeModal() {
     <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
       <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
       <section
-        class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-[22px] bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
+        class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
         :style="modalStyle"
         role="dialog"
         aria-modal="true"
@@ -75,7 +75,7 @@ function closeModal() {
         <header class="grid grid-cols-[auto_minmax(0,1fr)_28px] gap-4 p-7 pb-0">
           <span
             v-if="variant !== 'default'"
-            class="inline-flex size-11 items-center justify-center rounded-[14px]"
+            class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
             :class="variantClasses[variant].iconBg"
           >
             <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />

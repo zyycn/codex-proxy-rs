@@ -20,12 +20,12 @@ const resolvedIcon = computed(() => props.icon ?? Inbox)
   <div
     class="grid justify-items-center text-center"
     :class="[
-      plain ? 'bg-transparent' : 'rounded-[14px] bg-(--cp-bg-subtle)',
+      plain ? 'bg-transparent' : 'rounded-(--cp-panel-radius) bg-(--cp-bg-subtle)',
       compact ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8',
     ]"
   >
     <span
-      class="inline-flex items-center justify-center rounded-[10px] bg-(--cp-bg-muted) text-(--cp-text-muted)"
+      class="inline-flex items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-muted)"
       :class="compact ? 'size-8' : 'size-10'"
     >
       <component :is="resolvedIcon" :size="compact ? 16 : 18" />

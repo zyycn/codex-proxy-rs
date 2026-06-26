@@ -57,7 +57,7 @@ const sizeConfig: Record<
     icon: 16,
   },
   pagination: {
-    trigger: 'h-8 px-2.5 pr-7 text-xs rounded-lg',
+    trigger: 'h-8 px-2.5 pr-7 text-xs rounded-(--cp-input-radius-base)',
     option: 'h-8 px-2.5 text-xs',
     icon: 14,
   },

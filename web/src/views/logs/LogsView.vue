@@ -57,9 +57,9 @@ const logColumns = [
 ]
 
 const levelColors: Record<string, { bg: string; text: string }> = {
-  info: { bg: 'bg-blue-50', text: 'text-blue-700' },
-  warn: { bg: 'bg-yellow-50', text: 'text-yellow-700' },
-  error: { bg: 'bg-red-50', text: 'text-red-700' },
+  info: { bg: 'bg-(--cp-info-bg)', text: 'text-(--cp-info-text)' },
+  warn: { bg: 'bg-(--cp-warning-bg)', text: 'text-(--cp-warning-text)' },
+  error: { bg: 'bg-(--cp-danger-bg)', text: 'text-(--cp-danger-text)' },
 }
 
 const filteredLogs = computed(() => logs.value)
@@ -236,8 +236,8 @@ onBeforeUnmount(() => {
           <span
             class="inline-flex items-center rounded-full px-2 py-0.5 text-[12px] font-medium"
             :class="[
-              levelColors[row.level]?.bg || 'bg-gray-50',
-              levelColors[row.level]?.text || 'text-gray-700',
+              levelColors[row.level]?.bg || 'bg-(--cp-bg-subtle)',
+              levelColors[row.level]?.text || 'text-(--cp-text-secondary)',
             ]"
           >
             {{ getLevelLabel(row.level) }}
@@ -266,11 +266,11 @@ onBeforeUnmount(() => {
           <span
             class="font-mono"
             :class="{
-              'text-green-600':
+              'text-(--cp-success-text)':
                 row.statusCode !== undefined && row.statusCode >= 200 && row.statusCode < 300,
-              'text-yellow-600':
+              'text-(--cp-warning-text)':
                 row.statusCode !== undefined && row.statusCode >= 300 && row.statusCode < 400,
-              'text-red-600': row.statusCode !== undefined && row.statusCode >= 400,
+              'text-(--cp-danger-text)': row.statusCode !== undefined && row.statusCode >= 400,
               'text-(--cp-text-secondary)': row.statusCode === undefined,
             }"
           >
@@ -332,8 +332,8 @@ onBeforeUnmount(() => {
             <span
               class="inline-flex items-center px-2 py-0.5 rounded-full text-[12px] font-medium"
               :class="[
-                levelColors[selectedLog.level]?.bg || 'bg-gray-50',
-                levelColors[selectedLog.level]?.text || 'text-gray-700',
+                levelColors[selectedLog.level]?.bg || 'bg-(--cp-bg-subtle)',
+                levelColors[selectedLog.level]?.text || 'text-(--cp-text-secondary)',
               ]"
             >
               {{ getLevelLabel(selectedLog.level) }}
@@ -368,7 +368,7 @@ onBeforeUnmount(() => {
         <div>
           <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">消息</label>
           <p
-            class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[13px] text-(--cp-text-primary)"
+            class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 text-[13px] text-(--cp-text-primary)"
           >
             {{ selectedLog.message }}
           </p>
@@ -377,7 +377,7 @@ onBeforeUnmount(() => {
         <div v-if="selectedLog.metadata">
           <label class="block text-[11px] font-bold text-(--cp-text-muted) mb-1">元数据</label>
           <pre
-            class="m-0 px-3 py-2.5 rounded-lg bg-(--cp-bg-subtle) text-[12px] font-mono text-(--cp-text-primary) overflow-x-auto"
+            class="m-0 overflow-x-auto rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] text-(--cp-text-primary)"
             >{{ JSON.stringify(selectedLog.metadata, null, 2) }}</pre
           >
         </div>

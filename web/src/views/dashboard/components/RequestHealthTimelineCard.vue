@@ -19,9 +19,9 @@ function cellClass(point: string) {
 </script>
 
 <template>
-  <BaseCard as="article" :padded="false" class="w-full px-4 py-4.5 lg:px-5">
+  <BaseCard as="article" :padded="false" class="w-full px-4 pt-5.5 pb-6 lg:px-7">
     <header class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-      <div>
+      <div class="pt-0.5">
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
           {{ timeline.title }}
         </h2>
@@ -50,7 +50,7 @@ function cellClass(point: string) {
       </div>
     </header>
 
-    <div class="mt-4">
+    <div class="mt-4.25">
       <div class="flex flex-wrap gap-1">
         <i
           v-for="(point, index) in points"

@@ -24,6 +24,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
@@ -156,6 +157,15 @@ const editableStatusOptions: Array<{ value: Account['status']; label: string }> 
   { value: 'refreshing', label: statusLabels.refreshing },
   { value: 'banned', label: statusLabels.banned },
 ]
+
+const editStatusModel = computed<string>({
+  get: () => editForm.value.status,
+  set: (value) => {
+    if (editableStatusOptions.some((option) => option.value === value)) {
+      editForm.value.status = value as Account['status']
+    }
+  },
+})
 
 const statusTones: Record<Account['status'], 'success' | 'danger' | 'warning' | 'info' | 'normal'> =
   {
@@ -435,35 +445,35 @@ function statusLabel(status: Account['status']) {
 function statusTextClass(status: Account['status']) {
   const tone = statusTone(status)
   if (tone === 'success') {
-    return 'text-emerald-700'
+    return 'text-(--cp-success-text)'
   }
   if (tone === 'danger') {
-    return 'text-red-700'
+    return 'text-(--cp-danger-text)'
   }
   if (tone === 'warning') {
-    return 'text-amber-700'
+    return 'text-(--cp-warning-text)'
   }
   if (tone === 'info') {
-    return 'text-blue-700'
+    return 'text-(--cp-info-text)'
   }
-  return 'text-slate-600'
+  return 'text-(--cp-text-secondary)'
 }
 
 function statusDotClass(status: Account['status']) {
   const tone = statusTone(status)
   if (tone === 'success') {
-    return 'bg-emerald-500'
+    return 'bg-(--cp-success)'
   }
   if (tone === 'danger') {
-    return 'bg-red-500'
+    return 'bg-(--cp-danger)'
   }
   if (tone === 'warning') {
-    return 'bg-amber-500'
+    return 'bg-(--cp-warning)'
   }
   if (tone === 'info') {
-    return 'bg-blue-500'
+    return 'bg-(--cp-info)'
   }
-  return 'bg-gray-400'
+  return 'bg-(--cp-text-muted)'
 }
 
 function planTypeLabel(planType?: string) {
@@ -473,15 +483,15 @@ function planTypeLabel(planType?: string) {
 function planTypeClass(planType?: string) {
   const normalized = planTypeLabel(planType).toLowerCase()
   if (normalized.includes('enterprise') || normalized.includes('team')) {
-    return 'bg-slate-900 text-white'
+    return 'bg-(--cp-bg-dark) text-(--cp-white)'
   }
   if (normalized.includes('pro')) {
-    return 'bg-indigo-50 text-indigo-700'
+    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
   }
   if (normalized.includes('plus') || normalized.includes('basic')) {
-    return 'bg-blue-50 text-blue-700'
+    return 'bg-(--cp-normal-bg) text-(--cp-normal-text)'
   }
-  return 'bg-gray-50 text-gray-700'
+  return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
 }
 
 function accountDisplayTitle(account: Account) {
@@ -502,10 +512,10 @@ function accountInitial(account: Account) {
 
 function accountAvatarClass(account: Account) {
   const palettes = [
-    'bg-cyan-50 text-cyan-700 shadow-[inset_0_0_0_1px_#bae6fd]',
-    'bg-emerald-50 text-emerald-700 shadow-[inset_0_0_0_1px_#bbf7d0]',
-    'bg-violet-50 text-violet-700 shadow-[inset_0_0_0_1px_#ddd6fe]',
-    'bg-amber-50 text-amber-700 shadow-[inset_0_0_0_1px_#fde68a]',
+    'bg-(--cp-info-bg) text-(--cp-info-text) shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
+    'bg-(--cp-success-bg) text-(--cp-success-text) shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
+    'bg-(--cp-normal-bg) text-(--cp-normal-text) shadow-[inset_0_0_0_1px_var(--cp-normal-border)]',
+    'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
   ]
   const key = account.id || account.email || accountDisplayTitle(account)
   const hash = [...key].reduce((sum, char) => sum + char.charCodeAt(0), 0)
@@ -587,28 +597,28 @@ function quotaWindowBarStyle(window?: AccountQuotaWindow) {
 
 function quotaWindowBarClass(window?: AccountQuotaWindow) {
   if (window?.usedPercent === null || window?.usedPercent === undefined) {
-    return 'bg-(--cp-border-strong)'
+    return 'bg-(--cp-default-border-hover)'
   }
   if (window.usedPercent >= 95) {
-    return 'bg-red-400'
+    return 'bg-(--cp-danger)'
   }
   if (window.usedPercent >= 80) {
-    return 'bg-amber-400'
+    return 'bg-(--cp-warning)'
   }
-  return 'bg-emerald-400'
+  return 'bg-(--cp-success)'
 }
 
 function overviewIconClass(tone: OverviewTone) {
   if (tone === 'success') {
-    return 'bg-emerald-50 text-emerald-700'
+    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
   }
   if (tone === 'warning') {
-    return 'bg-amber-50 text-amber-700'
+    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
   }
   if (tone === 'danger') {
-    return 'bg-red-50 text-red-700'
+    return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
   }
-  return 'bg-cyan-50 text-cyan-700'
+  return 'bg-(--cp-info-bg) text-(--cp-info-text)'
 }
 
 onMounted(() => {
@@ -727,234 +737,207 @@ onBeforeUnmount(() => {
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
         >
-        <template #expander="{ row }">
-          <button
-            type="button"
-            class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-(--cp-text-secondary) transition hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary)"
-            :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
-            @click.stop="toggleExpanded(row.id)"
-          >
-            <ChevronDown
-              class="size-3.5 transition-transform"
-              :class="expandedAccountIds.has(row.id) ? '' : '-rotate-90'"
-            />
-          </button>
-        </template>
-
-        <template #header-selection>
-          <BaseCheckbox
-            :model-value="allSelected"
-            :indeterminate="indeterminate"
-            label="选择当前页账号"
-            @update:model-value="toggleAll"
-          />
-        </template>
-
-        <template #selection="{ row }">
-          <BaseCheckbox
-            :model-value="selectedIds.has(row.id)"
-            label="选择账号"
-            @update:model-value="toggleSelection(row.id)"
-          />
-        </template>
-
-        <template #identity="{ row }">
-          <div class="flex min-w-0 items-center gap-3">
-            <span
-              class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-[820]"
-              :class="accountAvatarClass(row)"
+          <template #expander="{ row }">
+            <button
+              type="button"
+              class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-(--cp-text-secondary) transition hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary)"
+              :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+              @click.stop="toggleExpanded(row.id)"
             >
-              {{ accountInitial(row) }}
-            </span>
-            <div class="min-w-0">
-              <div class="truncate text-[14px] font-[760] text-(--cp-text-primary)">
-                {{ accountDisplayTitle(row) }}
-              </div>
-              <div class="mt-0.5 truncate font-mono text-[11px] text-(--cp-text-muted)">
-                {{ accountSecondaryText(row) }}
+              <ChevronDown
+                class="size-3.5 transition-transform"
+                :class="expandedAccountIds.has(row.id) ? '' : '-rotate-90'"
+              />
+            </button>
+          </template>
+
+          <template #header-selection>
+            <BaseCheckbox
+              :model-value="allSelected"
+              :indeterminate="indeterminate"
+              label="选择当前页账号"
+              @update:model-value="toggleAll"
+            />
+          </template>
+
+          <template #selection="{ row }">
+            <BaseCheckbox
+              :model-value="selectedIds.has(row.id)"
+              label="选择账号"
+              @update:model-value="toggleSelection(row.id)"
+            />
+          </template>
+
+          <template #identity="{ row }">
+            <div class="flex min-w-0 items-center gap-3">
+              <span
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-[820]"
+                :class="accountAvatarClass(row)"
+              >
+                {{ accountInitial(row) }}
+              </span>
+              <div class="min-w-0">
+                <div class="truncate text-[14px] font-[760] text-(--cp-text-primary)">
+                  {{ accountDisplayTitle(row) }}
+                </div>
+                <div class="mt-0.5 truncate font-mono text-[11px] text-(--cp-text-muted)">
+                  {{ accountSecondaryText(row) }}
+                </div>
               </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template #status="{ row }">
-          <span
-            class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-[650]"
-            :class="statusTextClass(row.status)"
-          >
-            <span class="size-1.5 rounded-full" :class="statusDotClass(row.status)" />
-            <span>{{ statusLabel(row.status) }}</span>
-          </span>
-        </template>
+          <template #status="{ row }">
+            <span
+              class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-[650]"
+              :class="statusTextClass(row.status)"
+            >
+              <span class="size-1.5 rounded-full" :class="statusDotClass(row.status)" />
+              <span>{{ statusLabel(row.status) }}</span>
+            </span>
+          </template>
 
-        <template #planType="{ row }">
-          <span
-            class="inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-[760] capitalize"
-            :class="planTypeClass(row.planType)"
-          >
-            {{ planTypeLabel(row.planType) }}
-          </span>
-        </template>
+          <template #planType="{ row }">
+            <span
+              class="inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-[760] capitalize"
+              :class="planTypeClass(row.planType)"
+            >
+              {{ planTypeLabel(row.planType) }}
+            </span>
+          </template>
 
-        <template #usage="{ row }">
-          <div
-            v-if="quotaWindows(row).length > 0"
-            class="flex w-full max-w-[124px] min-w-0 flex-col gap-2 whitespace-normal py-1.5"
-          >
+          <template #usage="{ row }">
             <div
-              v-for="window in quotaWindows(row)"
-              :key="window.key"
-              class="min-w-0 border-b border-slate-200/70 pb-2 last:border-b-0 last:pb-0"
+              v-if="quotaWindows(row).length > 0"
+              class="flex w-full max-w-[124px] min-w-0 flex-col gap-2 whitespace-normal py-1.5"
             >
               <div
-                class="mb-1.5 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]"
+                v-for="window in quotaWindows(row)"
+                :key="window.key"
+                class="min-w-0 border-b border-slate-200/70 pb-2 last:border-b-0 last:pb-0"
               >
-                <span class="truncate text-(--cp-text-secondary)">
-                  {{ window.labelDisplay }}
-                </span>
-                <span class="shrink-0 font-mono text-(--cp-text-primary)">
-                  {{ window.usedPercentDisplay }}
-                </span>
-              </div>
-              <div class="h-1 w-full overflow-hidden rounded-full bg-(--cp-default-border)">
                 <div
-                  class="h-full rounded-full transition-[width,background-color] duration-200"
-                  :class="quotaWindowBarClass(window)"
-                  :style="quotaWindowBarStyle(window)"
-                />
+                  class="mb-1.5 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]"
+                >
+                  <span class="truncate text-(--cp-text-secondary)">
+                    {{ window.labelDisplay }}
+                  </span>
+                  <span class="shrink-0 font-mono text-(--cp-text-primary)">
+                    {{ window.usedPercentDisplay }}
+                  </span>
+                </div>
+                <div class="h-1 w-full overflow-hidden rounded-full bg-(--cp-default-border)">
+                  <div
+                    class="h-full rounded-full transition-[width,background-color] duration-200"
+                    :class="quotaWindowBarClass(window)"
+                    :style="quotaWindowBarStyle(window)"
+                  />
+                </div>
               </div>
             </div>
-          </div>
-          <span v-else class="text-(--cp-text-muted)">-</span>
-        </template>
+            <span v-else class="text-(--cp-text-muted)">-</span>
+          </template>
 
-        <template #updatedAt="{ row }">
-          <span class="text-(--cp-text-secondary)">
-            {{ row.updatedAtDisplay }}
-          </span>
-        </template>
+          <template #updatedAt="{ row }">
+            <span class="text-(--cp-text-secondary)">
+              {{ row.updatedAtDisplay }}
+            </span>
+          </template>
 
-        <template #accessTokenExpiresAt="{ row }">
-          <span class="text-(--cp-text-secondary)">
-            {{ row.accessTokenExpiresAtDisplay || '—' }}
-          </span>
-        </template>
+          <template #accessTokenExpiresAt="{ row }">
+            <span class="text-(--cp-text-secondary)">
+              {{ row.accessTokenExpiresAtDisplay || '—' }}
+            </span>
+          </template>
 
-        <template #actions="{ row }">
-          <div class="relative flex items-center justify-end gap-1">
-            <BaseIconButton
-              variant="ghost"
-              size="sm"
-              title="编辑账号"
-              @click.stop="openEditAccount(row)"
-            >
-              <Pencil class="size-3.5" />
-            </BaseIconButton>
+          <template #actions="{ row }">
+            <div class="relative flex items-center justify-end gap-1">
+              <BaseIconButton
+                variant="ghost"
+                size="sm"
+                title="编辑账号"
+                @click.stop="openEditAccount(row)"
+              >
+                <Pencil class="size-3.5" />
+              </BaseIconButton>
 
-            <BaseIconButton
-              variant="ghost"
-              size="sm"
-              title="删除账号"
-              :disabled="deletingAccount"
-              @click.stop="requestDeleteAccount(row)"
-            >
-              <Trash2 class="size-3.5 text-red-500" />
-            </BaseIconButton>
+              <BaseIconButton
+                variant="ghost"
+                size="sm"
+                title="删除账号"
+                :disabled="deletingAccount"
+                @click.stop="requestDeleteAccount(row)"
+              >
+                <Trash2 class="size-3.5 text-(--cp-danger)" />
+              </BaseIconButton>
 
-            <BasePopover placement="bottom-end" width="160px">
-              <template #trigger="{ open }">
-                <BaseIconButton variant="ghost" size="sm" title="更多操作" :active="open">
-                  <MoreHorizontal class="size-4" />
-                </BaseIconButton>
-              </template>
+              <BasePopover placement="bottom-end" width="160px">
+                <template #trigger="{ open }">
+                  <BaseIconButton variant="ghost" size="sm" title="更多操作" :active="open">
+                    <MoreHorizontal class="size-4" />
+                  </BaseIconButton>
+                </template>
 
-              <template #default="{ close }">
-                <button
-                  type="button"
-                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
-                  :disabled="testingConnectionIds.has(row.id)"
-                  @click.stop="close(); handleTestConnection(row)"
-                >
-                  <Wifi class="size-3.5 text-(--cp-text-muted)" />
-                  测试连接
-                </button>
-                <button
-                  type="button"
-                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
-                  :disabled="refreshingAccountIds.has(row.id)"
-                  @click.stop="close(); handleRefresh(row.id)"
-                >
-                  <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
-                  刷新 token
-                </button>
-                <button
-                  type="button"
-                  class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
-                  :disabled="updatingStatusAccountIds.has(row.id)"
-                  @click.stop="close(); handleToggleSchedule(row)"
-                >
-                  <Power class="size-3.5 text-(--cp-text-muted)" />
-                  {{ scheduleActionLabel(row) }}
-                </button>
-              </template>
-            </BasePopover>
-          </div>
-        </template>
-
-        <template #expanded="{ row }">
-          <div class="grid gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr]">
-            <section class="rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control)">
-              <div class="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">账号额度</h3>
-                  <p class="m-0 mt-1 text-[12px] font-[620] text-(--cp-text-secondary)">
-                    Codex 额度 · 套餐: {{ row.planType || 'Free' }} · 最近刷新:
-                    {{ row.quota.refreshedAtDisplay }}
-                  </p>
-                </div>
-                <BaseIconButton
-                  variant="ghost"
-                  size="sm"
-                  title="刷新额度"
-                  :loading="refreshingQuotaAccountIds.has(row.id)"
-                  @click="handleRefreshQuota(row.id)"
-                >
-                  <RefreshCw class="size-3.5" />
-                </BaseIconButton>
-              </div>
-
-              <div class="grid gap-3">
-                <div
-                  v-for="window in quotaWindowsByGroup(row, 'monthly')"
-                  :key="window.key"
-                  class="rounded-lg bg-(--cp-bg-secondary) py-2"
-                >
-                  <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
-                    <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
-                    <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
-                  </div>
-                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
-                    <div
-                      class="h-full rounded-full bg-(--cp-info)"
-                      :style="{ width: quotaWindowBarWidth(window) }"
-                    />
-                  </div>
-                  <div
-                    class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                <template #default="{ close }">
+                  <button
+                    type="button"
+                    class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                    :disabled="testingConnectionIds.has(row.id)"
+                    @click.stop="(close(), handleTestConnection(row))"
                   >
-                    <span>重置时间: {{ window.resetAtDisplay }}</span>
-                    <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                    <Wifi class="size-3.5 text-(--cp-text-muted)" />
+                    测试连接
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                    :disabled="refreshingAccountIds.has(row.id)"
+                    @click.stop="(close(), handleRefresh(row.id))"
+                  >
+                    <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
+                    刷新 token
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+                    :disabled="updatingStatusAccountIds.has(row.id)"
+                    @click.stop="(close(), handleToggleSchedule(row))"
+                  >
+                    <Power class="size-3.5 text-(--cp-text-muted)" />
+                    {{ scheduleActionLabel(row) }}
+                  </button>
+                </template>
+              </BasePopover>
+            </div>
+          </template>
+
+          <template #expanded="{ row }">
+            <div class="grid gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr]">
+              <section class="rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control)">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">账号额度</h3>
+                    <p class="m-0 mt-1 text-[12px] font-[620] text-(--cp-text-secondary)">
+                      Codex 额度 · 套餐: {{ row.planType || 'Free' }} · 最近刷新:
+                      {{ row.quota.refreshedAtDisplay }}
+                    </p>
                   </div>
+                  <BaseIconButton
+                    variant="ghost"
+                    size="sm"
+                    title="刷新额度"
+                    :loading="refreshingQuotaAccountIds.has(row.id)"
+                    @click="handleRefreshQuota(row.id)"
+                  >
+                    <RefreshCw class="size-3.5" />
+                  </BaseIconButton>
                 </div>
 
-                <div
-                  v-if="quotaWindowsByGroup(row, 'shortTerm').length > 0"
-                  class="grid gap-2 sm:grid-cols-2"
-                >
+                <div class="grid gap-3">
                   <div
-                    v-for="window in quotaWindowsByGroup(row, 'shortTerm')"
+                    v-for="window in quotaWindowsByGroup(row, 'monthly')"
                     :key="window.key"
-                    class="rounded-lg bg-(--cp-bg-secondary) py-2"
+                    class="rounded-lg bg-(--cp-bg-subtle) py-2"
                   >
                     <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
                       <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
@@ -967,125 +950,172 @@ onBeforeUnmount(() => {
                       />
                     </div>
                     <div
-                      class="mt-3 flex flex-col gap-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                      class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                    >
+                      <span>重置时间: {{ window.resetAtDisplay }}</span>
+                      <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="quotaWindowsByGroup(row, 'shortTerm').length > 0"
+                    class="grid gap-2 sm:grid-cols-2"
+                  >
+                    <div
+                      v-for="window in quotaWindowsByGroup(row, 'shortTerm')"
+                      :key="window.key"
+                      class="rounded-lg bg-(--cp-bg-subtle) py-2"
+                    >
+                      <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
+                        <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
+                        <span class="text-(--cp-text-primary)">{{
+                          window.usedPercentDisplay
+                        }}</span>
+                      </div>
+                      <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                        <div
+                          class="h-full rounded-full bg-(--cp-info)"
+                          :style="{ width: quotaWindowBarWidth(window) }"
+                        />
+                      </div>
+                      <div
+                        class="mt-3 flex flex-col gap-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+                      >
+                        <span>重置时间: {{ window.resetAtDisplay }}</span>
+                        <span>窗口已用: {{ window.windowUsedDisplay }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    v-for="window in quotaWindowsByGroup(row, 'other')"
+                    :key="window.key"
+                    class="rounded-lg bg-(--cp-bg-subtle) py-2"
+                  >
+                    <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
+                      <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
+                      <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+                    </div>
+                    <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+                      <div
+                        class="h-full rounded-full bg-(--cp-info)"
+                        :style="{ width: quotaWindowBarWidth(window) }"
+                      />
+                    </div>
+                    <div
+                      class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
                     >
                       <span>重置时间: {{ window.resetAtDisplay }}</span>
                       <span>窗口已用: {{ window.windowUsedDisplay }}</span>
                     </div>
                   </div>
                 </div>
+              </section>
 
-                <div
-                  v-for="window in quotaWindowsByGroup(row, 'other')"
-                  :key="window.key"
-                  class="rounded-lg bg-(--cp-bg-secondary) py-2"
-                >
-                  <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
-                    <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
-                    <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
-                  </div>
-                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
-                    <div
-                      class="h-full rounded-full bg-(--cp-info)"
-                      :style="{ width: quotaWindowBarWidth(window) }"
-                    />
-                  </div>
-                  <div
-                    class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
-                  >
-                    <span>重置时间: {{ window.resetAtDisplay }}</span>
-                    <span>窗口已用: {{ window.windowUsedDisplay }}</span>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section
-              class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
-            >
-              <div>
-                <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">Token 结构</h3>
-                <div class="grid gap-2">
-                  <div class="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
-                    <span class="text-[12px] font-bold text-green-700">输入 Tokens</span>
-                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
-                      {{ row.usage.inputTokensDisplay }}
-                    </strong>
-                  </div>
-                  <div class="flex items-center justify-between rounded-lg bg-amber-50 px-3 py-2">
-                    <span class="text-[12px] font-bold text-amber-700">输出 Tokens</span>
-                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
-                      {{ row.usage.outputTokensDisplay }}
-                    </strong>
-                  </div>
-                  <div class="flex items-center justify-between rounded-lg bg-cyan-50 px-3 py-2">
-                    <span class="text-[12px] font-bold text-cyan-700">缓存 Tokens</span>
-                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
-                      {{ row.usage.cachedTokensDisplay }}
-                    </strong>
-                  </div>
-                  <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
-                    <span class="text-[12px] font-bold text-sky-700">创建</span>
-                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
-                      {{ row.usage.createdTokensDisplay }}
-                    </strong>
-                  </div>
-                  <div class="flex items-center justify-between rounded-lg bg-sky-50 px-3 py-2">
-                    <span class="text-[12px] font-bold text-sky-700">读取</span>
-                    <strong class="font-mono text-[13px] text-(--cp-text-primary)">
-                      {{ row.usage.readTokensDisplay }}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]"
+              <section
+                class="grid gap-4 rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control) xl:grid-cols-[0.52fr_1.48fr]"
               >
-                <div class="mb-3 flex items-center justify-between">
-                  <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">模型使用排行</h3>
+                <div>
+                  <h3 class="m-0 mb-3 text-[14px] font-[760] text-(--cp-text-primary)">
+                    Token 结构
+                  </h3>
+                  <div class="grid gap-2">
+                    <div
+                      class="flex items-center justify-between rounded-lg bg-(--cp-success-bg) px-3 py-2"
+                    >
+                      <span class="text-[12px] font-bold text-(--cp-success-text)"
+                        >输入 Tokens</span
+                      >
+                      <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                        {{ row.usage.inputTokensDisplay }}
+                      </strong>
+                    </div>
+                    <div
+                      class="flex items-center justify-between rounded-lg bg-(--cp-warning-bg) px-3 py-2"
+                    >
+                      <span class="text-[12px] font-bold text-(--cp-warning-text)"
+                        >输出 Tokens</span
+                      >
+                      <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                        {{ row.usage.outputTokensDisplay }}
+                      </strong>
+                    </div>
+                    <div
+                      class="flex items-center justify-between rounded-lg bg-(--cp-normal-bg) px-3 py-2"
+                    >
+                      <span class="text-[12px] font-bold text-(--cp-normal-text)">缓存 Tokens</span>
+                      <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                        {{ row.usage.cachedTokensDisplay }}
+                      </strong>
+                    </div>
+                    <div
+                      class="flex items-center justify-between rounded-lg bg-(--cp-info-bg) px-3 py-2"
+                    >
+                      <span class="text-[12px] font-bold text-(--cp-info-text)">创建</span>
+                      <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                        {{ row.usage.createdTokensDisplay }}
+                      </strong>
+                    </div>
+                    <div
+                      class="flex items-center justify-between rounded-lg bg-(--cp-info-bg) px-3 py-2"
+                    >
+                      <span class="text-[12px] font-bold text-(--cp-info-text)">读取</span>
+                      <strong class="font-mono text-[13px] text-(--cp-text-primary)">
+                        {{ row.usage.readTokensDisplay }}
+                      </strong>
+                    </div>
+                  </div>
                 </div>
 
                 <div
-                  class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]"
+                  class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]"
                 >
-                  <span>模型</span>
-                  <span>调用</span>
-                  <span>成功率</span>
-                  <span>输入</span>
-                  <span>输出</span>
-                  <span>缓存</span>
-                  <span>总TOKEN</span>
-                  <span>总花费</span>
-                  <span>最近请求时间</span>
-                </div>
-                <div
-                  v-if="row.usage.models.length === 0"
-                  class="pt-3 text-[12px] font-[650] text-(--cp-text-muted)"
-                >
-                  -
-                </div>
-                <template v-else>
-                  <div
-                    v-for="model in row.usage.models"
-                    :key="model.model"
-                    class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)"
-                  >
-                    <span class="truncate">{{ model.model }}</span>
-                    <span>{{ model.requestCountDisplay }}</span>
-                    <span class="text-amber-600">{{ model.successRateDisplay }}</span>
-                    <span>{{ model.inputTokensDisplay }}</span>
-                    <span>{{ model.outputTokensDisplay }}</span>
-                    <span>{{ model.cachedTokensDisplay }}</span>
-                    <span>{{ model.totalTokensDisplay }}</span>
-                    <span>{{ model.totalCostUsdDisplay }}</span>
-                    <span>{{ model.lastUsedAtDisplay }}</span>
+                  <div class="mb-3 flex items-center justify-between">
+                    <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">
+                      模型使用排行
+                    </h3>
                   </div>
-                </template>
-              </div>
-            </section>
-          </div>
-        </template>
+
+                  <div
+                    class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]"
+                  >
+                    <span>模型</span>
+                    <span>调用</span>
+                    <span>成功率</span>
+                    <span>输入</span>
+                    <span>输出</span>
+                    <span>缓存</span>
+                    <span>总TOKEN</span>
+                    <span>总花费</span>
+                    <span>最近请求时间</span>
+                  </div>
+                  <div
+                    v-if="row.usage.models.length === 0"
+                    class="pt-3 text-[12px] font-[650] text-(--cp-text-muted)"
+                  >
+                    -
+                  </div>
+                  <template v-else>
+                    <div
+                      v-for="model in row.usage.models"
+                      :key="model.model"
+                      class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pt-3 text-[12px] font-[650] text-(--cp-text-primary)"
+                    >
+                      <span class="truncate">{{ model.model }}</span>
+                      <span>{{ model.requestCountDisplay }}</span>
+                      <span class="text-(--cp-warning-text)">{{ model.successRateDisplay }}</span>
+                      <span>{{ model.inputTokensDisplay }}</span>
+                      <span>{{ model.outputTokensDisplay }}</span>
+                      <span>{{ model.cachedTokensDisplay }}</span>
+                      <span>{{ model.totalTokensDisplay }}</span>
+                      <span>{{ model.totalCostUsdDisplay }}</span>
+                      <span>{{ model.lastUsedAtDisplay }}</span>
+                    </div>
+                  </template>
+                </div>
+              </section>
+            </div>
+          </template>
         </BaseTable>
       </template>
     </BaseCard>
@@ -1101,7 +1131,7 @@ onBeforeUnmount(() => {
       <div class="flex flex-col gap-4">
         <div>
           <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
-            Refresh Token <span class="text-red-500">*</span>
+            Refresh Token <span class="text-(--cp-danger)">*</span>
           </label>
           <BaseInput
             v-model="createForm.refreshToken"
@@ -1136,7 +1166,7 @@ onBeforeUnmount(() => {
             内部 ID
           </label>
           <div
-            class="flex h-10 items-center truncate rounded-lg bg-(--cp-bg-secondary) px-3 font-mono text-[12px] font-[650] text-(--cp-text-muted)"
+            class="flex h-10 items-center truncate rounded-lg bg-(--cp-bg-subtle) px-3 font-mono text-[12px] font-[650] text-(--cp-text-muted)"
           >
             {{ editingAccount?.id || '-' }}
           </div>
@@ -1181,14 +1211,7 @@ onBeforeUnmount(() => {
           <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
             状态
           </label>
-          <select
-            v-model="editForm.status"
-            class="h-10 w-full rounded-lg border border-(--cp-border) bg-(--cp-bg-surface) px-3 text-[13px] font-[650] text-(--cp-text-primary) outline-none transition focus:border-(--cp-primary) focus:ring-2 focus:ring-(--cp-primary)/15"
-          >
-            <option v-for="option in editableStatusOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
+          <BaseSelect v-model="editStatusModel" :options="editableStatusOptions" />
         </div>
       </div>
 
