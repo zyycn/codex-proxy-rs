@@ -13,7 +13,10 @@ use crate::{
         auth::service::{AdminSessionService, SqliteAdminSessionStore},
         keys::service::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
     },
-    config::{settings::RuntimeSettingsService, types::AppConfig},
+    config::{
+        settings::{account_pool_options_from_config, RuntimeSettingsService},
+        types::AppConfig,
+    },
     proxy::dispatch::{
         chat::ChatDispatchService,
         responses::ResponseDispatchService,
@@ -21,7 +24,7 @@ use crate::{
     },
     upstream::accounts::{
         cookies::SqliteCookieStore,
-        pool::{AccountPoolOptions, RuntimeAccountPoolService},
+        pool::RuntimeAccountPoolService,
         store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
         token_refresh::RefreshLeaseStore as SqliteRefreshLeaseStore,
     },
@@ -133,9 +136,15 @@ impl Services {
                 StdArc::new(client)
             }
         };
-        let settings = StdArc::new(RuntimeSettingsService::with_config_path(
+        let account_pool = StdArc::new(RuntimeAccountPoolService::new(
+            account_store_trait.clone(),
+            account_pool_options_from_config(config),
+            config.auth.request_interval_ms,
+        ));
+        let settings = StdArc::new(RuntimeSettingsService::with_account_pool(
             config.clone(),
-            "config.yaml",
+            stores.accounts.pool().clone(),
+            account_pool.clone(),
         ));
         let admin_sessions = StdArc::new(AdminSessionService::new(
             stores.admin_sessions.clone(),
@@ -146,11 +155,6 @@ impl Services {
         let client_keys = StdArc::new(ClientKeyService::new(StdArc::new(
             stores.client_keys.clone(),
         )));
-        let account_pool = StdArc::new(RuntimeAccountPoolService::new(
-            account_store_trait.clone(),
-            AccountPoolOptions::default(),
-            config.auth.request_interval_ms,
-        ));
         let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
         let admin_accounts = StdArc::new(AdminAccountService::new(
             stores.accounts.clone(),

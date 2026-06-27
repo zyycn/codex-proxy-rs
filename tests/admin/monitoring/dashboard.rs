@@ -12,9 +12,7 @@ use codex_proxy_rs::{
             events::{EventLevel, EventLog},
         },
     },
-    infra::{
-        crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher, time::china_day_start,
-    },
+    infra::{database::connect_sqlite, identity::ApiKeyHasher, time::china_day_start},
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
         services::{BackgroundTaskStores, Services},
@@ -63,7 +61,7 @@ async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_mis
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_event_logs() {
+async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_buckets() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-traffic-latency.sqlite",
         crate::support::fingerprint::test_fingerprint(),
@@ -110,6 +108,34 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_event
             .as_u64()
             .unwrap(),
         1_500
+    );
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_keep_trend_after_event_logs_are_cleared() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-time-buckets-survive-log-clear.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let mut log = usage_log_with_tokens(Utc::now(), 12);
+    log.latency_ms = Some(900);
+    store.append(&log).await.unwrap();
+    store.clear().await.unwrap();
+
+    let body = dashboard_summary(app).await;
+
+    assert_eq!(body["data"]["eventLogs"].as_array().unwrap().len(), 0);
+    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], 1);
+    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], 12);
+    assert_eq!(
+        body["data"]["trend"]["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["requests"].as_u64().unwrap())
+            .sum::<u64>(),
+        1
     );
 }
 
@@ -280,12 +306,11 @@ async fn dashboard_test_app(
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = crate::support::config::test_config(url);
-    let secret_box = SecretBox::new([73u8; 32]);
     let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),

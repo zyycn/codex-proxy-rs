@@ -897,7 +897,6 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
     let restored_state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
         test_config(format!("sqlite://{}", db.display()), server_base_url),
         pool.clone(),
-        SecretBox::new([83u8; 32]),
         ApiKeyHasher::new([84u8; 32]),
         TEST_INSTALLATION_ID.to_string(),
     );

@@ -1,9 +1,7 @@
 #![deny(missing_docs)]
 
-//! 平台基础设施层，承载加密、身份、存储、日志和 JSON 原语。
+//! 平台基础设施层，承载身份、存储、日志和 JSON 原语。
 
-/// 加密原语。
-pub mod crypto;
 /// 数据库连接与 SQLite 管理。
 pub mod database;
 /// 身份验证原语（管理员密码、API Key 哈希）。

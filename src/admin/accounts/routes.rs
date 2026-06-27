@@ -24,12 +24,7 @@ use crate::{
     },
     admin::{
         accounts::service::{AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate},
-        monitoring::{
-            billing,
-            event_store::AdminLogFilter,
-            events::{EventLevel, EventLog},
-            service::AdminUsageRecord,
-        },
+        monitoring::{billing, service::AdminUsageRecord},
     },
     http::middleware::request_id::RequestId,
     infra::{
@@ -38,7 +33,7 @@ use crate::{
     },
     runtime::state::AppState,
     upstream::accounts::model::AccountStatus,
-    upstream::accounts::store::StoredAccount,
+    upstream::accounts::store::{AccountModelUsageRecord, StoredAccount},
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
@@ -1022,7 +1017,13 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
         .list_quota_snapshots()
         .await
         .unwrap_or_default();
-    let logs = list_all_event_logs(state).await;
+    let model_usage_records = state
+        .services
+        .background_tasks
+        .accounts
+        .list_model_usage()
+        .await
+        .unwrap_or_default();
 
     AccountListStats {
         usage_by_account: usage_records
@@ -1038,7 +1039,7 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
                 )
             })
             .collect(),
-        models_by_account: models_by_account(&logs),
+        models_by_account: models_by_account(model_usage_records),
     }
 }
 
@@ -1129,120 +1130,67 @@ async fn list_all_usage_records(state: &AppState) -> Vec<AdminUsageRecord> {
     }
 }
 
-async fn list_all_event_logs(state: &AppState) -> Vec<EventLog> {
-    let mut cursor = None;
-    let mut logs = Vec::new();
-    loop {
-        let Ok(page) = state
-            .services
-            .logs
-            .list(cursor, ACCOUNT_STATS_PAGE_LIMIT, AdminLogFilter::default())
-            .await
-        else {
-            return Vec::new();
-        };
-        logs.extend(page.items);
-        let Some(next_cursor) = page.next_cursor else {
-            return logs;
-        };
-        cursor = Some(next_cursor);
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct ModelUsageAggregate {
-    model: String,
-    request_count: u64,
-    error_count: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    last_used_at: Option<DateTime<Utc>>,
-}
-
-fn models_by_account(logs: &[EventLog]) -> HashMap<String, Vec<AdminAccountModelUsageData>> {
-    let mut by_account_model = HashMap::<(String, String), ModelUsageAggregate>::new();
-    for log in logs {
-        let Some(account_id) = log
-            .account_id
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            continue;
-        };
-        let Some(model) = log.model.as_ref().filter(|value| !value.trim().is_empty()) else {
-            continue;
-        };
-        let aggregate = by_account_model
-            .entry((account_id.clone(), model.clone()))
-            .or_insert_with(|| ModelUsageAggregate {
-                model: model.clone(),
-                ..ModelUsageAggregate::default()
-            });
-        aggregate.request_count += 1;
-        if log.level == EventLevel::Error || log.status_code.is_some_and(|status| status >= 400) {
-            aggregate.error_count += 1;
-        }
-        aggregate.input_tokens += metadata_usage_number(&log.metadata, "inputTokens");
-        aggregate.output_tokens += metadata_usage_number(&log.metadata, "outputTokens");
-        aggregate.cached_tokens += metadata_usage_number(&log.metadata, "cachedTokens");
-        aggregate.last_used_at = Some(
-            aggregate
-                .last_used_at
-                .map_or(log.created_at, |last| last.max(log.created_at)),
-        );
-    }
-
-    let mut by_account = HashMap::<String, Vec<ModelUsageAggregate>>::new();
-    for ((account_id, _), aggregate) in by_account_model {
-        by_account.entry(account_id).or_default().push(aggregate);
+fn models_by_account(
+    records: Vec<AccountModelUsageRecord>,
+) -> HashMap<String, Vec<AdminAccountModelUsageData>> {
+    let mut by_account = HashMap::<String, Vec<AccountModelUsageRecord>>::new();
+    for record in records {
+        by_account
+            .entry(record.account_id.clone())
+            .or_default()
+            .push(record);
     }
 
     by_account
         .into_iter()
-        .map(|(account_id, mut aggregates)| {
-            aggregates.sort_by(|a, b| {
+        .map(|(account_id, mut records)| {
+            records.sort_by(|a, b| {
                 b.request_count
                     .cmp(&a.request_count)
                     .then_with(|| b.last_used_at.cmp(&a.last_used_at))
+                    .then_with(|| a.model.cmp(&b.model))
             });
             (
                 account_id,
-                aggregates.into_iter().map(model_usage_data).collect(),
+                records.into_iter().map(model_usage_data).collect(),
             )
         })
         .collect()
 }
 
-fn model_usage_data(usage: ModelUsageAggregate) -> AdminAccountModelUsageData {
-    let total_tokens = usage.input_tokens + usage.output_tokens;
-    let success_rate = if usage.request_count > 0 {
-        ((usage.request_count - usage.error_count) as f64 / usage.request_count as f64 * 1000.0)
-            .round()
+fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountModelUsageData {
+    let request_count = nonnegative_i64_to_u64(usage.request_count);
+    let error_count = nonnegative_i64_to_u64(usage.error_count);
+    let input_tokens = nonnegative_i64_to_u64(usage.input_tokens);
+    let output_tokens = nonnegative_i64_to_u64(usage.output_tokens);
+    let cached_tokens = nonnegative_i64_to_u64(usage.cached_tokens);
+    let total_tokens = input_tokens + output_tokens;
+    let success_rate = if request_count > 0 {
+        ((request_count.saturating_sub(error_count)) as f64 / request_count as f64 * 1000.0).round()
             / 10.0
     } else {
         0.0
     };
     let total_cost_usd = billing::calculate_cost(
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.cached_tokens,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
         &usage.model,
         None,
     );
 
     AdminAccountModelUsageData {
         model: usage.model,
-        request_count: usage.request_count,
-        request_count_display: format_count(usage.request_count),
+        request_count,
+        request_count_display: format_count(request_count),
         success_rate,
         success_rate_display: format_percent(success_rate),
-        input_tokens: usage.input_tokens,
-        input_tokens_display: format_tokens(usage.input_tokens),
-        output_tokens: usage.output_tokens,
-        output_tokens_display: format_tokens(usage.output_tokens),
-        cached_tokens: usage.cached_tokens,
-        cached_tokens_display: format_tokens(usage.cached_tokens),
+        input_tokens,
+        input_tokens_display: format_tokens(input_tokens),
+        output_tokens,
+        output_tokens_display: format_tokens(output_tokens),
+        cached_tokens,
+        cached_tokens_display: format_tokens(cached_tokens),
         total_tokens,
         total_tokens_display: format_tokens(total_tokens),
         total_cost_usd,
@@ -1550,15 +1498,6 @@ fn format_duration_days(seconds: u64) -> String {
     } else {
         format!("{:.1}h", seconds as f64 / 3_600.0)
     }
-}
-
-fn metadata_usage_number(metadata: &Value, field: &str) -> u64 {
-    metadata
-        .get("usage")
-        .and_then(|usage| usage.get(field))
-        .or_else(|| metadata.get(field))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
 }
 
 fn number_value(value: &Value) -> Option<f64> {

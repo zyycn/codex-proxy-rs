@@ -8,7 +8,7 @@ use codex_proxy_rs::{
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig, WebSocketPoolConfig,
     },
-    infra::{crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher},
+    infra::{database::connect_sqlite, identity::ApiKeyHasher},
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -41,17 +41,13 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     let database_url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&database_url).await.expect("sqlite pool");
     let config = test_config(database_url);
-    let secret_box = SecretBox::new([61u8; 32]);
     let hasher = ApiKeyHasher::new([62u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(
-            pool.clone(),
-            secret_box.clone(),
-        ),
+        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(pool.clone()),
         fingerprints: codex_proxy_rs::upstream::fingerprint::FingerprintRepository::new(
             pool.clone(),
         ),
@@ -147,6 +143,7 @@ fn test_config(database_url: String) -> AppConfig {
             default_reasoning_effort: None,
             service_tier: None,
             aliases: Default::default(),
+            account_routes: Default::default(),
         },
         auth: AuthConfig {
             refresh_margin_seconds: 240,
@@ -173,7 +170,6 @@ fn test_config(database_url: String) -> AppConfig {
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
-            master_key_file: "data/master.key".to_string(),
             api_key_pepper_file: "data/api-key-pepper.file".to_string(),
         },
         tls: TlsConfig {

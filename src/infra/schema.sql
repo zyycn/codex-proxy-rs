@@ -1,15 +1,6 @@
 pragma foreign_keys = on;
 
 -- ============================================
--- Schema Migrations
--- ============================================
-create table if not exists schema_migrations (
-  version integer primary key,
-  name text not null,
-  applied_at text not null
-);
-
--- ============================================
 -- Admin Users
 -- ============================================
 create table if not exists admin_users (
@@ -47,6 +38,22 @@ create table if not exists client_api_keys (
 );
 
 create index if not exists idx_client_api_keys_prefix on client_api_keys(prefix) where enabled = 1;
+create index if not exists idx_client_api_keys_created_id on client_api_keys(created_at desc, id desc);
+
+-- ============================================
+-- Runtime Settings
+-- ============================================
+create table if not exists runtime_settings (
+  id integer primary key check (id = 1),
+  default_model text not null,
+  model_aliases_json text not null default '{}',
+  refresh_margin_seconds integer not null check (refresh_margin_seconds > 0),
+  refresh_concurrency integer not null check (refresh_concurrency > 0),
+  max_concurrent_per_account integer not null check (max_concurrent_per_account > 0),
+  request_interval_ms integer not null check (request_interval_ms >= 0),
+  rotation_strategy text not null check (rotation_strategy in ('least_used', 'round_robin', 'sticky')),
+  updated_at text not null
+);
 
 -- ============================================
 -- Accounts
@@ -74,6 +81,7 @@ create table if not exists accounts (
 );
 
 create index if not exists idx_accounts_status on accounts(status);
+create index if not exists idx_accounts_added_id on accounts(added_at desc, id desc);
 create unique index if not exists ux_accounts_chatgpt_identity
 on accounts(chatgpt_account_id, coalesce(chatgpt_user_id, ''))
 where chatgpt_account_id is not null;
@@ -120,6 +128,73 @@ create table if not exists account_usage (
   last_used_at text
 );
 
+create index if not exists idx_account_usage_last_used_account
+on account_usage(last_used_at desc, account_id desc);
+
+-- ============================================
+-- Account Model Usage Statistics
+-- ============================================
+create table if not exists account_model_usage (
+  account_id text not null references accounts(id) on delete cascade,
+  model text not null,
+  request_count integer not null default 0 check (request_count >= 0),
+  error_count integer not null default 0 check (error_count >= 0),
+  input_tokens integer not null default 0 check (input_tokens >= 0),
+  output_tokens integer not null default 0 check (output_tokens >= 0),
+  cached_tokens integer not null default 0 check (cached_tokens >= 0),
+  last_used_at text,
+  primary key (account_id, model)
+);
+
+create index if not exists idx_account_model_usage_last_used
+on account_model_usage(last_used_at desc, account_id, model);
+
+-- ============================================
+-- Usage Time Buckets
+-- ============================================
+create table if not exists usage_time_buckets (
+  bucket_start text not null,
+  account_id text not null default '',
+  model text not null default '',
+  service_tier text not null default '',
+  request_count integer not null default 0 check (request_count >= 0),
+  error_count integer not null default 0 check (error_count >= 0),
+  input_tokens integer not null default 0 check (input_tokens >= 0),
+  output_tokens integer not null default 0 check (output_tokens >= 0),
+  cached_tokens integer not null default 0 check (cached_tokens >= 0),
+  first_token_latency_sum integer not null default 0 check (first_token_latency_sum >= 0),
+  first_token_latency_count integer not null default 0 check (first_token_latency_count >= 0),
+  latency_sum integer not null default 0 check (latency_sum >= 0),
+  latency_count integer not null default 0 check (latency_count >= 0),
+  max_latency_ms integer not null default 0 check (max_latency_ms >= 0),
+  min_latency_ms integer not null default 0 check (min_latency_ms >= 0),
+  updated_at text not null,
+  primary key (bucket_start, account_id, model, service_tier)
+);
+
+create index if not exists idx_usage_time_buckets_bucket
+on usage_time_buckets(bucket_start);
+create index if not exists idx_usage_time_buckets_model_bucket
+on usage_time_buckets(model, bucket_start);
+
+-- ============================================
+-- Model Account Routes
+-- ============================================
+create table if not exists model_account_routes (
+  model text not null,
+  account_id text not null references accounts(id) on delete cascade,
+  priority integer not null default 0 check (priority >= 0),
+  enabled integer not null default 1 check (enabled in (0, 1)),
+  created_at text not null,
+  updated_at text not null,
+  primary key (model, account_id)
+);
+
+create index if not exists idx_model_account_routes_account
+on model_account_routes(account_id);
+create index if not exists idx_model_account_routes_enabled_model
+on model_account_routes(enabled, model, priority asc, account_id);
+
 -- ============================================
 -- Account Cookies
 -- ============================================
@@ -128,7 +203,7 @@ create table if not exists account_cookies (
   account_id text not null references accounts(id) on delete cascade,
   domain text not null,
   name text not null,
-  value_cipher text not null,
+  value text not null,
   path text not null default '/',
   expires_at text,
   updated_at text not null,
@@ -137,6 +212,9 @@ create table if not exists account_cookies (
 
 create index if not exists idx_account_cookies_account on account_cookies(account_id);
 create index if not exists idx_account_cookies_account_domain on account_cookies(account_id, domain);
+create index if not exists idx_account_cookies_expires
+on account_cookies(expires_at)
+where expires_at is not null;
 
 -- ============================================
 -- Device Fingerprints
@@ -167,6 +245,9 @@ create table if not exists fingerprint_update_history (
   manifest_json text,
   created_at text not null
 );
+
+create index if not exists idx_fingerprint_update_history_created_id
+on fingerprint_update_history(created_at desc, id desc);
 
 -- ============================================
 -- Event Logs
@@ -200,6 +281,11 @@ create index if not exists idx_event_logs_transport on event_logs(transport, cre
 create index if not exists idx_event_logs_failure_class on event_logs(failure_class, created_at desc) where failure_class is not null;
 create index if not exists idx_event_logs_response_id on event_logs(response_id) where response_id is not null;
 create index if not exists idx_event_logs_upstream_request_id on event_logs(upstream_request_id) where upstream_request_id is not null;
+create index if not exists idx_event_logs_level_created on event_logs(level, created_at desc);
+create index if not exists idx_event_logs_route_created on event_logs(route, created_at desc) where route is not null;
+create index if not exists idx_event_logs_model_created on event_logs(model, created_at desc) where model is not null;
+create index if not exists idx_event_logs_status_created on event_logs(status_code, created_at desc) where status_code is not null;
+create index if not exists idx_event_logs_upstream_status_created on event_logs(upstream_status_code, created_at desc) where upstream_status_code is not null;
 
 -- ============================================
 -- Model Plan Snapshots
@@ -228,3 +314,4 @@ create table if not exists session_affinities (
 
 create index if not exists idx_session_affinities_conversation on session_affinities(conversation_id, created_at desc);
 create index if not exists idx_session_affinities_expires on session_affinities(expires_at);
+create index if not exists idx_session_affinities_active_order on session_affinities(expires_at, created_at, response_id);

@@ -5,7 +5,7 @@ use codex_proxy_rs::{
         auth::service::SqliteAdminSessionStore, keys::service::SqliteClientKeyStore,
         monitoring::event_store::SqliteEventLogStore,
     },
-    infra::{crypto::SecretBox, identity::ApiKeyHasher},
+    infra::identity::ApiKeyHasher,
     runtime::services::{BackgroundTaskStores, Services},
     upstream::{
         accounts::{
@@ -28,13 +28,12 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
             "sqlite://{}",
             temp_dir.path().join("services-tls.sqlite").display()
         ));
-        let secret_box = SecretBox::load_or_create(temp_dir.path().join("master.key")).unwrap();
         let hasher = ApiKeyHasher::load_or_create(temp_dir.path().join("api-key-pepper.key"))
             .expect("api key hasher");
         let stores = BackgroundTaskStores {
             accounts: SqliteAccountStore::new(pool.clone()),
             admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-            cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+            cookies: SqliteCookieStore::new(pool.clone()),
             fingerprints: FingerprintRepository::new(pool.clone()),
             session_affinity:
                 codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(

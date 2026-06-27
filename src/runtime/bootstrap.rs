@@ -3,6 +3,7 @@ use std::error::Error;
 use axum::Router;
 use chrono::Utc;
 
+use crate::config::settings::RuntimeSettingsService;
 use crate::config::types::AppConfig;
 use crate::infra::database::connect_sqlite;
 use crate::infra::logging::{init_tracing, LogGuard, RotationConfig};
@@ -35,7 +36,7 @@ async fn build_application(
     config: AppConfig,
 ) -> Result<(Router, TaskCoordinator), Box<dyn Error + Send + Sync>> {
     let pool = connect_sqlite(&config.database.url).await?;
-    let secret = crate::infra::crypto::SecretBox::load_or_create(&config.security.master_key_file)?;
+    let config = RuntimeSettingsService::load_or_initialize_config(config, &pool).await?;
     let hasher =
         crate::infra::identity::ApiKeyHasher::load_or_create(&config.security.api_key_pepper_file)?;
 
@@ -43,10 +44,7 @@ async fn build_application(
     let stores = BackgroundTaskStores {
         accounts: crate::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: crate::admin::auth::service::SqliteAdminSessionStore::new(pool.clone()),
-        cookies: crate::upstream::accounts::cookies::SqliteCookieStore::new(
-            pool.clone(),
-            secret.clone(),
-        ),
+        cookies: crate::upstream::accounts::cookies::SqliteCookieStore::new(pool.clone()),
         fingerprints: fingerprint_repository.clone(),
         session_affinity: crate::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
             pool.clone(),

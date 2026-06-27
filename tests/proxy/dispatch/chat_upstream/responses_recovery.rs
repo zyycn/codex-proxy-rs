@@ -484,7 +484,7 @@ async fn responses_should_return_cloudflare_challenge_error_when_403_fallback_is
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_chat", "cf_clearance=old")
         .await
@@ -560,7 +560,7 @@ async fn responses_should_cool_down_cloudflare_403_and_fallback() {
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_primary", "cf_clearance=old")
         .await
@@ -646,7 +646,7 @@ async fn responses_should_clear_cookies_after_cloudflare_path_block_404_and_fall
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_primary", "cf_clearance=old")
         .await
@@ -715,7 +715,7 @@ async fn responses_should_disable_account_after_three_cloudflare_path_block_404s
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_chat", "cf_clearance=old")
         .await
@@ -1597,7 +1597,7 @@ async fn responses_stream_should_cool_down_cloudflare_403_and_fallback() {
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_primary", "cf_clearance=old")
         .await
@@ -1680,7 +1680,7 @@ async fn responses_stream_should_return_cloudflare_path_block_error_when_404_fal
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_chat", "cf_clearance=old")
         .await

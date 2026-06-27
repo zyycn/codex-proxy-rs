@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::{
     admin::auth::session::require_admin_session,
@@ -21,8 +22,12 @@ use crate::{
     runtime::state::AppState,
 };
 
-const ALLOWED_SETTINGS_KEYS: [&str; 4] = [
+const ALLOWED_SETTINGS_KEYS: [&str; 8] = [
     "defaultModel",
+    "modelAliases",
+    "modelAccountRoutes",
+    "refreshMarginSeconds",
+    "refreshConcurrency",
     "maxConcurrentPerAccount",
     "requestIntervalMs",
     "rotationStrategy",
@@ -33,6 +38,10 @@ const ALLOWED_SETTINGS_KEYS: [&str; 4] = [
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsData {
     pub default_model: String,
+    pub model_aliases: BTreeMap<String, String>,
+    pub model_account_routes: BTreeMap<String, Vec<String>>,
+    pub refresh_margin_seconds: u64,
+    pub refresh_concurrency: u32,
     pub max_concurrent_per_account: usize,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
@@ -42,6 +51,10 @@ impl AdminSettingsData {
     fn from_config(config: &AppConfig) -> Self {
         Self {
             default_model: config.model.default_model.clone(),
+            model_aliases: config.model.aliases.clone(),
+            model_account_routes: config.model.account_routes.clone(),
+            refresh_margin_seconds: config.auth.refresh_margin_seconds,
+            refresh_concurrency: config.auth.refresh_concurrency,
             max_concurrent_per_account: config.auth.max_concurrent_per_account,
             request_interval_ms: config.auth.request_interval_ms,
             rotation_strategy: config.auth.rotation_strategy.clone(),
@@ -139,7 +152,9 @@ fn settings_service_error(error: RuntimeSettingsError, request_id: &str) -> Admi
             format!("Invalid setting {field}: {message}"),
             request_id,
         ),
-        RuntimeSettingsError::Persist(_) => AdminError::new(
+        RuntimeSettingsError::Database(_)
+        | RuntimeSettingsError::Json(_)
+        | RuntimeSettingsError::StoredField { .. } => AdminError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             50000,
             "Failed to persist settings",

@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use chrono::{Duration, Utc};
-use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
@@ -204,9 +203,8 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let secret_box = SecretBox::new([14u8; 32]);
     let store = SqliteAccountStore::new(pool.clone());
-    let cookies = SqliteCookieStore::new(pool.clone(), secret_box);
+    let cookies = SqliteCookieStore::new(pool.clone());
     insert_quota_locked_account(&store, &pool, "acct-quota-cookie", "access-token-cookie").await;
     cookies
         .set_cookie_header("acct-quota-cookie", "cf_clearance=quota-refresh")

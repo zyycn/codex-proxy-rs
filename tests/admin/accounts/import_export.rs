@@ -11,7 +11,6 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([77u8; 32]);
     seed_account(
         &pool,
         NewAccount {
@@ -34,7 +33,7 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -80,7 +79,6 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([79u8; 32]);
     let access_token = test_jwt(
         "chatgpt_import",
         Some("user_import"),
@@ -92,7 +90,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -190,7 +188,7 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, _) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
         "admin-accounts-import-current-openai-token.sqlite",
         118,
         format!("{}/backend-api", server.uri()),
@@ -295,7 +293,7 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, _) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
             "admin-accounts-import-rt-complete.sqlite",
             125,
@@ -382,14 +380,13 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([120u8; 32]);
     let mut config = test_config(url);
     config.api.base_url = format!("{}/backend-api", server.uri());
     let hasher = ApiKeyHasher::new([121u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -499,7 +496,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
 
 #[tokio::test]
 async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_stale_quota_lock() {
-    let (app, _state, pool, _dir, _) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-import-update-existing.sqlite", 116).await;
     let new_access_token = test_jwt(
         "chatgpt-import-update",
@@ -603,12 +600,11 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let config = test_config(url);
-    let secret_box = SecretBox::new([111u8; 32]);
     let hasher = ApiKeyHasher::new([112u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -641,7 +637,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
 
 #[tokio::test]
 async fn admin_accounts_import_should_store_plain_tokens_and_list_sanitized_accounts() {
-    let (app, _state, pool, _dir, _secret_box) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-import-sanitized.sqlite", 113).await;
     let access_token = test_jwt(
         "chatgpt-account",
@@ -700,7 +696,7 @@ async fn admin_accounts_import_should_store_plain_tokens_and_list_sanitized_acco
 
 #[tokio::test]
 async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_filter_ids() {
-    let (app, _state, pool, _dir, _) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-export-filter.sqlite", 117).await;
     seed_account(
         &pool,

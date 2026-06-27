@@ -56,7 +56,16 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_event_log
     .await
     .unwrap();
     assert_eq!(usage, (1, 7, 4, 2));
-    let cookie_header = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]))
+    let model_usage: (i64, i64, i64, i64) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens, cached_tokens from account_model_usage where account_id = ? and model = ?",
+    )
+    .bind("acct_chat")
+    .bind("gpt-5.5")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(model_usage, (1, 7, 4, 2));
+    let cookie_header = SqliteCookieStore::new(pool.clone())
         .cookie_header("acct_chat", "chatgpt.com")
         .await
         .unwrap();
@@ -398,6 +407,14 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    let model_usage: (i64, i64, i64) = sqlx::query_as(
+        "select request_count, input_tokens, output_tokens from account_model_usage where account_id = ? and model = ?",
+    )
+    .bind("acct_chat")
+    .bind("gpt-5.5")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
@@ -408,6 +425,7 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
         "stream responses should terminate clients, body was {body:?}"
     );
     assert_eq!(usage, (1, 3, 5));
+    assert_eq!(model_usage, (1, 3, 5));
 }
 
 #[tokio::test]

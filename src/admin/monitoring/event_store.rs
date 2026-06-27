@@ -10,6 +10,7 @@ use crate::admin::monitoring::events::{
     EventLevel, EventLog, EventLogStore, EventLogStoreError, EventLogStoreResult,
 };
 use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
+use crate::infra::time::china_quarter_hour_start;
 
 /// SQLite 事件日志错误。
 #[derive(Debug, Error)]
@@ -287,7 +288,132 @@ async fn append_event(pool: &SqlitePool, event: &EventLog) -> SqliteEventLogStor
     .bind(event.created_at.to_rfc3339())
     .execute(pool)
     .await?;
+    append_usage_time_bucket(pool, event).await?;
     Ok(())
+}
+
+async fn append_usage_time_bucket(
+    pool: &SqlitePool,
+    event: &EventLog,
+) -> SqliteEventLogStoreResult<()> {
+    let bucket_start = china_quarter_hour_start(event.created_at);
+    let error_count = i64::from(is_error_event(event));
+    let input_tokens = metadata_usage_i64(&event.metadata, "inputTokens");
+    let output_tokens = metadata_usage_i64(&event.metadata, "outputTokens");
+    let cached_tokens = metadata_usage_i64(&event.metadata, "cachedTokens");
+    let first_token_latency = metadata_first_token_latency(&event.metadata).unwrap_or(0);
+    let first_token_latency_count = i64::from(first_token_latency > 0);
+    let latency = event.latency_ms.filter(|value| *value > 0).unwrap_or(0);
+    let latency_count = i64::from(latency > 0);
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        r"
+insert into usage_time_buckets (
+  bucket_start,
+  account_id,
+  model,
+  service_tier,
+  request_count,
+  error_count,
+  input_tokens,
+  output_tokens,
+  cached_tokens,
+  first_token_latency_sum,
+  first_token_latency_count,
+  latency_sum,
+  latency_count,
+  max_latency_ms,
+  min_latency_ms,
+  updated_at
+) values (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(bucket_start, account_id, model, service_tier) do update set
+  request_count = request_count + excluded.request_count,
+  error_count = error_count + excluded.error_count,
+  input_tokens = input_tokens + excluded.input_tokens,
+  output_tokens = output_tokens + excluded.output_tokens,
+  cached_tokens = cached_tokens + excluded.cached_tokens,
+  first_token_latency_sum = first_token_latency_sum + excluded.first_token_latency_sum,
+  first_token_latency_count = first_token_latency_count + excluded.first_token_latency_count,
+  latency_sum = latency_sum + excluded.latency_sum,
+  latency_count = latency_count + excluded.latency_count,
+  max_latency_ms = max(max_latency_ms, excluded.max_latency_ms),
+  min_latency_ms = case
+    when min_latency_ms = 0 then excluded.min_latency_ms
+    when excluded.min_latency_ms = 0 then min_latency_ms
+    else min(min_latency_ms, excluded.min_latency_ms)
+  end,
+  updated_at = excluded.updated_at",
+    )
+    .bind(bucket_start.to_rfc3339())
+    .bind(event.account_id.as_deref().unwrap_or_default())
+    .bind(event.model.as_deref().unwrap_or_default())
+    .bind(metadata_service_tier(&event.metadata).unwrap_or_default())
+    .bind(error_count)
+    .bind(input_tokens)
+    .bind(output_tokens)
+    .bind(cached_tokens)
+    .bind(first_token_latency)
+    .bind(first_token_latency_count)
+    .bind(latency)
+    .bind(latency_count)
+    .bind(latency)
+    .bind(latency)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn is_error_event(event: &EventLog) -> bool {
+    event.level == EventLevel::Error || event.status_code.is_some_and(|status| status >= 400)
+}
+
+fn metadata_usage_i64(metadata: &Value, field: &str) -> i64 {
+    metadata
+        .get("usage")
+        .and_then(|usage| usage.get(field))
+        .or_else(|| metadata.get(field))
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(0)
+}
+
+fn metadata_first_token_latency(metadata: &Value) -> Option<i64> {
+    [
+        "firstTokenMs",
+        "first_token_ms",
+        "firstTokenLatencyMs",
+        "first_token_latency_ms",
+    ]
+    .into_iter()
+    .find_map(|field| {
+        metadata
+            .get(field)
+            .or_else(|| metadata.get("usage").and_then(|usage| usage.get(field)))
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+    })
+}
+
+fn metadata_service_tier(metadata: &Value) -> Option<&str> {
+    metadata_service_tier_value(metadata)
+        .or_else(|| metadata.get("usage").and_then(metadata_service_tier_value))
+}
+
+fn metadata_service_tier_value(value: &Value) -> Option<&str> {
+    [
+        "billingServiceTier",
+        "billing_service_tier",
+        "actualServiceTier",
+        "actual_service_tier",
+        "serviceTier",
+        "service_tier",
+    ]
+    .into_iter()
+    .find_map(|field| value.get(field).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
 }
 
 async fn trim_to_capacity(pool: &SqlitePool, capacity: u32) -> SqliteEventLogStoreResult<u64> {
