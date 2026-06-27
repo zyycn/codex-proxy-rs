@@ -29,7 +29,6 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
     )
     .await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([78u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -37,7 +36,7 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -86,7 +85,6 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
         Some("team"),
     );
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([80u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -94,7 +92,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -382,7 +380,6 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
     seed_admin_session(&pool, "session_1").await;
     let mut config = test_config(url);
     config.api.base_url = format!("{}/backend-api", server.uri());
-    let hasher = ApiKeyHasher::new([121u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -390,7 +387,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -600,7 +597,6 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([112u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -608,7 +604,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();

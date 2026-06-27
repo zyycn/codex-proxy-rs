@@ -15,10 +15,10 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -258,7 +258,6 @@ async fn admin_logs_test_app(
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -266,7 +265,7 @@ async fn admin_logs_test_app(
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -350,9 +349,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

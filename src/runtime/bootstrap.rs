@@ -37,8 +37,6 @@ async fn build_application(
 ) -> Result<(Router, TaskCoordinator), Box<dyn Error + Send + Sync>> {
     let pool = connect_sqlite(&config.database.url).await?;
     let config = RuntimeSettingsService::load_or_initialize_config(config, &pool).await?;
-    let hasher =
-        crate::infra::identity::ApiKeyHasher::load_or_create(&config.security.api_key_pepper_file)?;
 
     let fingerprint_repository = FingerprintRepository::new(pool.clone());
     let stores = BackgroundTaskStores {
@@ -52,7 +50,7 @@ async fn build_application(
         refresh_leases: crate::upstream::accounts::token_refresh::RefreshLeaseStore::new(
             pool.clone(),
         ),
-        client_keys: crate::admin::keys::service::SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: crate::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
         event_logs: crate::admin::monitoring::event_store::SqliteEventLogStore::new(pool),
     };
 

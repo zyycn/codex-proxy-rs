@@ -894,10 +894,9 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
     assert_eq!(first_response.status(), StatusCode::OK);
 
     let db = dir.path().join("openai-record-affinity.sqlite");
-    let restored_state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let restored_state = test_app_state_with_pool_and_installation_id(
         test_config(format!("sqlite://{}", db.display()), server_base_url),
         pool.clone(),
-        ApiKeyHasher::new([84u8; 32]),
         TEST_INSTALLATION_ID.to_string(),
     );
     assert_eq!(

@@ -12,7 +12,6 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         .bind("active").bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z")
         .execute(&pool).await.unwrap();
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([64u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -20,7 +19,7 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();

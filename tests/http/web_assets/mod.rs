@@ -5,10 +5,10 @@ use axum::{
 use codex_proxy_rs::{
     config::types::{
         AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -41,7 +41,6 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     let database_url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&database_url).await.expect("sqlite pool");
     let config = test_config(database_url);
-    let hasher = ApiKeyHasher::new([62u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
@@ -58,10 +57,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
         refresh_leases: codex_proxy_rs::upstream::accounts::token_refresh::RefreshLeaseStore::new(
             pool.clone(),
         ),
-        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(
-            pool.clone(),
-            hasher,
-        ),
+        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
         event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
             pool.clone(),
         ),
@@ -169,9 +165,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.file".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

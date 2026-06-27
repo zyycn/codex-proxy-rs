@@ -22,11 +22,11 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
     http::router,
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::{
         build_conversation_identity, SessionAffinityEntry, SqliteSessionAffinityStore,
     },
@@ -236,10 +236,9 @@ mod responses_recovery;
 mod responses_websocket;
 mod usage_logging;
 
-fn test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+fn test_app_state_with_pool_and_installation_id(
     config: AppConfig,
     pool: SqlitePool,
-    hasher: ApiKeyHasher,
     installation_id: String,
 ) -> AppState {
     let stores = BackgroundTaskStores {
@@ -249,7 +248,7 @@ fn test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool),
     };
     let services = Services::with_installation_id(
@@ -273,13 +272,11 @@ async fn test_app_with_account_and_installation_id(
     let db = dir.path().join("openai-chat-upstream.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool,
-        hasher,
         installation_id,
     );
     state
@@ -302,12 +299,10 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
     let db = dir.path().join("openai-responses-no-accounts.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let api_key = insert_client_api_key(&pool).await;
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool,
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -346,15 +341,13 @@ async fn test_app_with_account_pool_config(
     let db = dir.path().join("openai-record-affinity.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
     let mut config = test_config(url, base_url);
     configure(&mut config);
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         config,
         pool.clone(),
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -373,13 +366,11 @@ async fn test_app_with_restored_pool_then_disabled_account(
     let db = dir.path().join("openai-chat-restored-pool.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool.clone(),
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -403,8 +394,7 @@ async fn test_app_with_two_accounts_and_affinity(
     let db = dir.path().join("openai-responses-affinity.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_named_account(&pool, "acct_a", "access-default", "chatgpt-default").await;
     insert_named_account(&pool, "acct_z", "access-affinity", "chatgpt-affinity").await;
     let now = Utc::now();
@@ -425,10 +415,9 @@ async fn test_app_with_two_accounts_and_affinity(
         )
         .await
         .unwrap();
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool,
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -456,8 +445,7 @@ async fn test_app_with_two_accounts_and_affinity_status(
     ));
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
     insert_named_account(
         &pool,
@@ -490,10 +478,9 @@ async fn test_app_with_two_accounts_and_affinity_status(
         )
         .await
         .unwrap();
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool.clone(),
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -518,8 +505,7 @@ async fn test_app_with_two_accounts(
     let db = dir.path().join("openai-responses-fallback.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([84u8; 32]);
-    let api_key = insert_client_api_key(&pool, &hasher).await;
+    let api_key = insert_client_api_key(&pool).await;
     insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
     insert_named_account(
         &pool,
@@ -528,10 +514,9 @@ async fn test_app_with_two_accounts(
         "chatgpt-secondary",
     )
     .await;
-    let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
+    let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool.clone(),
-        hasher,
         TEST_INSTALLATION_ID.to_string(),
     );
     state
@@ -543,8 +528,8 @@ async fn test_app_with_two_accounts(
     (router::router().with_state(state), api_key, pool, dir)
 }
 
-async fn insert_client_api_key(pool: &SqlitePool, hasher: &ApiKeyHasher) -> String {
-    SqliteClientKeyStore::new(pool.clone(), hasher.clone())
+async fn insert_client_api_key(pool: &SqlitePool) -> String {
+    SqliteClientKeyStore::new(pool.clone())
         .create("test")
         .await
         .unwrap()
@@ -1612,9 +1597,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },
