@@ -52,7 +52,7 @@ async fn account_test_models_should_return_upstream_models_only() {
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, _secret_box) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
         "admin-account-test-models.sqlite",
         91,
         format!("{}/backend-api", server.uri()),
@@ -124,7 +124,7 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
         )
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, _secret_box) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
         "admin-account-test-stream.sqlite",
         92,
         format!("{}/backend-api", server.uri()),

@@ -8,7 +8,9 @@ use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
 use crate::infra::json::{decode_cursor, page_offset, NumberedPage, Page};
-use crate::upstream::accounts::model::{Account, AccountStatus, AccountUsageDelta};
+use crate::upstream::accounts::model::{
+    Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta,
+};
 
 // ============================================================================
 // SQL 常量
@@ -314,7 +316,39 @@ on conflict(account_id) do update set
     then excluded.last_used_at
     else account_usage.window_started_at
   end,
+	  last_used_at = excluded.last_used_at";
+
+const RECORD_MODEL_USAGE_SQL: &str = r"
+insert into account_model_usage (
+  account_id,
+  model,
+  request_count,
+  error_count,
+  input_tokens,
+  output_tokens,
+  cached_tokens,
+  last_used_at
+) values (?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(account_id, model) do update set
+  request_count = request_count + excluded.request_count,
+  error_count = error_count + excluded.error_count,
+  input_tokens = input_tokens + excluded.input_tokens,
+  output_tokens = output_tokens + excluded.output_tokens,
+  cached_tokens = cached_tokens + excluded.cached_tokens,
   last_used_at = excluded.last_used_at";
+
+const LIST_MODEL_USAGE_SQL: &str = r"
+select
+  account_id,
+  model,
+  request_count,
+  error_count,
+  input_tokens,
+  output_tokens,
+  cached_tokens,
+  last_used_at
+from account_model_usage
+order by account_id asc, request_count desc, last_used_at desc, model asc";
 
 const GET_USAGE_SQL: &str = r"
 select
@@ -776,6 +810,27 @@ pub struct AccountUsageRecord {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
+/// 账号模型维度用量记录。
+#[derive(Debug, Clone)]
+pub struct AccountModelUsageRecord {
+    /// 账号 ID。
+    pub account_id: String,
+    /// 模型 ID。
+    pub model: String,
+    /// 历史请求总数。
+    pub request_count: i64,
+    /// 历史错误数。
+    pub error_count: i64,
+    /// 累计输入 token。
+    pub input_tokens: i64,
+    /// 累计输出 token。
+    pub output_tokens: i64,
+    /// 累计缓存 token。
+    pub cached_tokens: i64,
+    /// 最近使用时间。
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
 /// 账号配额快照。
 #[derive(Debug, Clone)]
 pub struct AccountQuotaSnapshot {
@@ -868,6 +923,14 @@ pub trait AccountStore: Send + Sync + 'static {
         &self,
         account_id: &str,
         usage: AccountUsageDelta,
+    ) -> AccountStoreResult<()>;
+
+    /// 记录账号模型维度用量增量。
+    async fn record_model_usage_delta(
+        &self,
+        account_id: &str,
+        model: &str,
+        usage: AccountModelUsageDelta,
     ) -> AccountStoreResult<()>;
 
     /// 读取账号当前配额 JSON。
@@ -1329,6 +1392,40 @@ impl SqliteAccountStore {
         Ok(())
     }
 
+    /// 记录模型维度用量。
+    pub async fn record_model_usage(
+        &self,
+        account_id: &str,
+        model: &str,
+        delta: AccountModelUsageDelta,
+    ) -> SqliteAccountStoreResult<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Ok(());
+        }
+        let last_used_at = Utc::now().to_rfc3339();
+        sqlx::query(RECORD_MODEL_USAGE_SQL)
+            .bind(account_id)
+            .bind(model)
+            .bind(u64_to_i64_saturating(delta.requests))
+            .bind(u64_to_i64_saturating(delta.errors))
+            .bind(u64_to_i64_saturating(delta.input_tokens))
+            .bind(u64_to_i64_saturating(delta.output_tokens))
+            .bind(u64_to_i64_saturating(delta.cached_tokens))
+            .bind(&last_used_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 列出模型维度用量。
+    pub async fn list_model_usage(&self) -> SqliteAccountStoreResult<Vec<AccountModelUsageRecord>> {
+        let rows = sqlx::query(LIST_MODEL_USAGE_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(model_usage_from_row).collect()
+    }
+
     /// 获取用量记录。
     pub async fn get_usage(
         &self,
@@ -1587,6 +1684,17 @@ impl AccountStore for SqliteAccountStore {
         usage: AccountUsageDelta,
     ) -> AccountStoreResult<()> {
         self.record_usage(account_id, sqlite_usage_delta(usage))
+            .await
+            .map_err(map_account_store_error)
+    }
+
+    async fn record_model_usage_delta(
+        &self,
+        account_id: &str,
+        model: &str,
+        usage: AccountModelUsageDelta,
+    ) -> AccountStoreResult<()> {
+        self.record_model_usage(account_id, model, usage)
             .await
             .map_err(map_account_store_error)
     }
@@ -1879,6 +1987,21 @@ fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> SqliteAccountStoreResult<Acc
         limit_window_seconds: optional_positive_i64_to_u64(
             row.get::<Option<i64>, _>("limit_window_seconds"),
         ),
+        last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+    })
+}
+
+fn model_usage_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> SqliteAccountStoreResult<AccountModelUsageRecord> {
+    Ok(AccountModelUsageRecord {
+        account_id: row.get("account_id"),
+        model: row.get("model"),
+        request_count: row.get("request_count"),
+        error_count: row.get("error_count"),
+        input_tokens: row.get("input_tokens"),
+        output_tokens: row.get("output_tokens"),
+        cached_tokens: row.get("cached_tokens"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
     })
 }

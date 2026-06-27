@@ -20,6 +20,7 @@ pub fn test_config(database_url: String) -> AppConfig {
             default_reasoning_effort: None,
             service_tier: None,
             aliases: BTreeMap::new(),
+            account_routes: BTreeMap::new(),
         },
         auth: AuthConfig {
             refresh_margin_seconds: 300,
@@ -46,7 +47,6 @@ pub fn test_config(database_url: String) -> AppConfig {
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
-            master_key_file: "data/master.key".to_string(),
             api_key_pepper_file: "data/api-key-pepper.key".to_string(),
         },
         tls: TlsConfig {

@@ -8,7 +8,6 @@ rust-version = "1.95"
 description = "Codex/OpenAI proxy backed by ChatGPT accounts."
 
 [dependencies]
-aes-gcm = "0.10.3"
 argon2 = "0.5.3"
 async-trait = "0.1.89"
 axum = "0.8.9"
@@ -22,6 +21,7 @@ hex = "0.4.3"
 hmac = "0.13.0"
 indexmap = { version = "2.0", features = ["serde"] }
 rand = "0.10.1"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "gzip", "brotli", "zstd", "deflate", "http2"] }
 rustls = { version = "=0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
@@ -31,7 +31,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_yml = "0.0.13"
 sha2 = "0.11.0"
-sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid", "migrate"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync", "net", "test-util"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
@@ -43,7 +43,6 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
-zeroize = "1.8.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"

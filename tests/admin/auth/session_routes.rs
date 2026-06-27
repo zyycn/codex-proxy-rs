@@ -16,7 +16,6 @@ use codex_proxy_rs::{
         UsageStatsConfig, WebSocketPoolConfig,
     },
     infra::{
-        crypto::SecretBox,
         database::connect_sqlite,
         identity::{hash_admin_password, ApiKeyHasher},
     },
@@ -39,12 +38,11 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([121u8; 32]);
     let hasher = ApiKeyHasher::new([122u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -106,12 +104,11 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([123u8; 32]);
     let hasher = ApiKeyHasher::new([124u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -181,6 +178,7 @@ fn test_config(database_url: String) -> AppConfig {
             default_reasoning_effort: Some("high".to_string()),
             service_tier: Some("flex".to_string()),
             aliases,
+            account_routes: BTreeMap::new(),
         },
         auth: AuthConfig {
             refresh_margin_seconds: 240,
@@ -207,7 +205,6 @@ fn test_config(database_url: String) -> AppConfig {
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
-            master_key_file: "data/master.key".to_string(),
             api_key_pepper_file: "data/api-key-pepper.key".to_string(),
         },
         tls: TlsConfig {

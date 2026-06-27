@@ -373,7 +373,7 @@ impl ChatDispatchService {
         self.cloudflare.reset_account_recovery(&account_id).await;
         if let Some(ref usage) = response.usage {
             self.account_pool
-                .record_token_usage(&account_id, usage)
+                .record_token_usage(&account_id, &request.model, usage)
                 .await;
         }
         record_response_event(ResponseEventRecord {

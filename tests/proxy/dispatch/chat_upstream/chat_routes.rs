@@ -77,6 +77,14 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
     .await
     .unwrap();
     assert_eq!(usage, (1, 9, 3));
+    let model_usage: (String, i64, i64, i64) = sqlx::query_as(
+        "select model, request_count, input_tokens, output_tokens from account_model_usage where account_id = ?",
+    )
+    .bind("acct_chat")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(model_usage, ("gpt-5.5".to_string(), 1, 9, 3));
     let event = latest_event_log(&pool, "v1.chat").await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.request_id.as_deref(), Some("req_chat_nonstream_log"));
@@ -743,7 +751,7 @@ async fn chat_completions_should_cool_down_cloudflare_403_and_fallback() {
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .set_cookie_header("acct_primary", "cf_clearance=old")
         .await

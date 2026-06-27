@@ -1,5 +1,4 @@
 use super::*;
-use codex_proxy_rs::admin::monitoring::events::{EventLevel, EventLog};
 
 #[tokio::test]
 async fn admin_accounts_list_should_not_expose_account_tokens() {
@@ -13,12 +12,11 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         .bind("active").bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z")
         .execute(&pool).await.unwrap();
     let config = test_config(url);
-    let secret_box = SecretBox::new([63u8; 32]);
     let hasher = ApiKeyHasher::new([64u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -58,7 +56,7 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
 
 #[tokio::test]
 async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
-    let (app, _state, pool, _dir, _secret_box) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-stats.sqlite", 68).await;
     seed_usage_account(
         &pool,
@@ -125,43 +123,32 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         .execute(&pool)
         .await
         .unwrap();
-    let store = SqliteEventLogStore::new(pool.clone());
-    let mut log = EventLog::new("response", EventLevel::Info, "ok");
-    log.account_id = Some("acct_stats".to_string());
-    log.model = Some("gpt-5.5".to_string());
-    log.created_at = "2026-06-23T08:50:13Z".parse().unwrap();
-    log.metadata = json!({
-        "usage": {
-            "inputTokens": 3_500_000u64,
-            "outputTokens": 13_900u64,
-            "cachedTokens": 3_400_000u64
-        }
-    });
-    store.append(&log).await.unwrap();
-    let mut second_gpt55_log = EventLog::new("response", EventLevel::Info, "ok");
-    second_gpt55_log.account_id = Some("acct_stats".to_string());
-    second_gpt55_log.model = Some("gpt-5.5".to_string());
-    second_gpt55_log.created_at = "2026-06-23T08:51:13Z".parse().unwrap();
-    second_gpt55_log.metadata = json!({
-        "usage": {
-            "inputTokens": 100u64,
-            "outputTokens": 20u64,
-            "cachedTokens": 10u64
-        }
-    });
-    store.append(&second_gpt55_log).await.unwrap();
-    let mut gpt5_log = EventLog::new("response", EventLevel::Info, "ok");
-    gpt5_log.account_id = Some("acct_stats".to_string());
-    gpt5_log.model = Some("gpt-5".to_string());
-    gpt5_log.created_at = "2026-06-23T08:52:13Z".parse().unwrap();
-    gpt5_log.metadata = json!({
-        "usage": {
-            "inputTokens": 200u64,
-            "outputTokens": 30u64,
-            "cachedTokens": 20u64
-        }
-    });
-    store.append(&gpt5_log).await.unwrap();
+    sqlx::query(
+        "insert into account_model_usage (account_id, model, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_stats")
+    .bind("gpt-5.5")
+    .bind(2)
+    .bind(3_500_100)
+    .bind(13_920)
+    .bind(3_400_010)
+    .bind("2026-06-23T08:51:13Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into account_model_usage (account_id, model, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_stats")
+    .bind("gpt-5")
+    .bind(1)
+    .bind(200)
+    .bind(30)
+    .bind(20)
+    .bind("2026-06-23T08:52:13Z")
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let response = app
         .oneshot(
@@ -199,7 +186,7 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
 
 #[tokio::test]
 async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
-    let (app, _state, pool, _dir, _secret_box) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-numbered.sqlite", 67).await;
     for (id, email, label, added_at) in [
         (

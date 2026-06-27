@@ -62,6 +62,8 @@ pub struct ModelConfig {
     pub service_tier: Option<String>,
     /// 模型别名映射。
     pub aliases: BTreeMap<String, String>,
+    /// 模型到账号 ID 的显式路由。
+    pub account_routes: BTreeMap<String, Vec<String>>,
 }
 
 /// 认证、轮换与 token 续期配置。
@@ -126,8 +128,6 @@ pub struct DatabaseConfig {
 /// 本地安全文件路径配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SecurityConfig {
-    /// 主密钥文件路径。
-    pub master_key_file: String,
     /// API Key pepper 文件路径。
     pub api_key_pepper_file: String,
 }

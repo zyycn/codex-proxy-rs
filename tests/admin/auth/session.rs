@@ -4,7 +4,6 @@ use axum::{
 };
 use chrono::Utc;
 use codex_proxy_rs::infra::{
-    crypto::SecretBox,
     database::connect_sqlite,
     identity::{hash_admin_password, ApiKeyHasher},
 };
@@ -21,17 +20,13 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([121u8; 32]);
     let hasher = ApiKeyHasher::new([122u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(
-            pool.clone(),
-            secret_box.clone(),
-        ),
+        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(pool.clone()),
         fingerprints: codex_proxy_rs::upstream::fingerprint::FingerprintRepository::new(
             pool.clone(),
         ),
@@ -102,17 +97,13 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([123u8; 32]);
     let hasher = ApiKeyHasher::new([124u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
             pool.clone(),
         ),
-        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(
-            pool.clone(),
-            secret_box.clone(),
-        ),
+        cookies: codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore::new(pool.clone()),
         fingerprints: codex_proxy_rs::upstream::fingerprint::FingerprintRepository::new(
             pool.clone(),
         ),

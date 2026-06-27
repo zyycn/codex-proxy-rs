@@ -155,6 +155,28 @@ fn account_pool_should_filter_by_model_plan_allowlist() {
 }
 
 #[test]
+fn account_pool_should_filter_by_model_account_routes() {
+    let mut model_routes = BTreeMap::new();
+    model_routes.insert("gpt-5.5".to_string(), vec!["acct_b".to_string()]);
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 1,
+        model_account_routes: model_routes,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+
+    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_b");
+    assert!(pool.acquire("gpt-5.5").is_none());
+}
+
+#[test]
 fn account_pool_should_exclude_requested_account_ids() {
     let mut pool = AccountPool::default();
     pool.insert(crate::support::accounts::test_account(

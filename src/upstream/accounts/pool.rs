@@ -14,7 +14,7 @@ use crate::upstream::accounts::quota::{quota_snapshot_limit_reached, quota_snaps
 use crate::upstream::accounts::store::AccountStore;
 use crate::upstream::accounts::token_refresh::{jwt_expiry, JwtExpiry};
 use crate::upstream::accounts::{
-    model::{Account, AccountStatus, AccountUsageDelta},
+    model::{Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta},
     service::AccountService,
 };
 use crate::upstream::protocol::events::{
@@ -59,6 +59,8 @@ pub struct AccountPoolOptions {
     pub tier_priority: Vec<String>,
     /// 模型到允许订阅计划的映射。
     pub model_plan_allowlist: BTreeMap<String, Vec<String>>,
+    /// 模型到指定账号 ID 的显式路由。
+    pub model_account_routes: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AccountPoolOptions {
@@ -70,6 +72,7 @@ impl Default for AccountPoolOptions {
             skip_quota_limited: true,
             tier_priority: Vec::new(),
             model_plan_allowlist: BTreeMap::new(),
+            model_account_routes: BTreeMap::new(),
         }
     }
 }
@@ -238,6 +241,16 @@ impl AccountPool {
     /// 替换模型计划 allowlist。
     pub fn set_model_plan_allowlist(&mut self, allowlist: BTreeMap<String, Vec<String>>) {
         self.options.model_plan_allowlist = allowlist;
+    }
+
+    /// 替换模型账号路由。
+    pub fn set_model_account_routes(&mut self, routes: BTreeMap<String, Vec<String>>) {
+        self.options.model_account_routes = routes;
+    }
+
+    /// 替换账号池运行参数。
+    pub fn set_options(&mut self, options: AccountPoolOptions) {
+        self.options = options;
     }
 
     /// 更新账号标签。
@@ -642,6 +655,7 @@ impl AccountPool {
                 request.now,
                 self.options.skip_quota_limited,
             )
+            && self.is_model_account_allowed(account, &request.model)
             && self.is_model_allowed(account, &request.model)
             && !request
                 .exclude_account_ids
@@ -720,6 +734,15 @@ impl AccountPool {
             .any(|plan| account.plan_type.as_deref() == Some(plan.as_str()))
     }
 
+    fn is_model_account_allowed(&self, account: &Account, model: &str) -> bool {
+        let Some(account_ids) = self.options.model_account_routes.get(model) else {
+            return true;
+        };
+        account_ids
+            .iter()
+            .any(|account_id| account_id == &account.id)
+    }
+
     fn best_available_tier(&self, candidates: &[Account]) -> Option<String> {
         self.options.tier_priority.iter().find_map(|tier| {
             candidates
@@ -750,7 +773,7 @@ fn access_token_expired(account: &Account, now: DateTime<Utc>) -> bool {
 pub struct RuntimeAccountPoolService {
     pool: StdArc<tokio::sync::Mutex<AccountPool>>,
     store: StdArc<dyn AccountStore>,
-    request_interval: StdDuration,
+    request_interval: StdArc<std::sync::RwLock<StdDuration>>,
 }
 
 impl RuntimeAccountPoolService {
@@ -763,8 +786,20 @@ impl RuntimeAccountPoolService {
         Self {
             pool: StdArc::new(tokio::sync::Mutex::new(AccountPool::with_options(options))),
             store,
-            request_interval: StdDuration::from_millis(request_interval_ms),
+            request_interval: StdArc::new(std::sync::RwLock::new(StdDuration::from_millis(
+                request_interval_ms,
+            ))),
         }
+    }
+
+    /// 更新账号池运行参数。
+    pub async fn apply_options(&self, options: AccountPoolOptions, request_interval_ms: u64) {
+        self.pool.lock().await.set_options(options);
+        *self
+            .request_interval
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            StdDuration::from_millis(request_interval_ms);
     }
 
     /// 从持久化账号恢复运行时账号池。
@@ -843,6 +878,7 @@ impl RuntimeAccountPoolService {
 
     /// 按请求上下文获取可用账号。
     pub async fn acquire_with(&self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
+        let model = request.model.clone();
         let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
         self.persist_expired_statuses(refresh.expired_account_ids)
             .await;
@@ -852,6 +888,25 @@ impl RuntimeAccountPoolService {
                 account_id = acquired.account.id,
                 error = %error,
                 "failed to persist account request usage"
+            );
+        }
+        if let Err(error) = self
+            .store
+            .record_model_usage_delta(
+                &acquired.account.id,
+                &model,
+                AccountModelUsageDelta {
+                    requests: 1,
+                    ..AccountModelUsageDelta::default()
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id = acquired.account.id,
+                model,
+                error = %error,
+                "failed to persist account model request usage"
             );
         }
         Some(acquired)
@@ -875,7 +930,11 @@ impl RuntimeAccountPoolService {
 
     /// 按账号上一个在途槽位控制请求间隔。
     pub async fn wait_for_request_interval(&self, acquired: &AcquiredAccount) {
-        if self.request_interval.is_zero() {
+        let request_interval = *self
+            .request_interval
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if request_interval.is_zero() {
             return;
         }
         let Some(previous_slot_at) = acquired.previous_slot_at else {
@@ -885,20 +944,22 @@ impl RuntimeAccountPoolService {
             .signed_duration_since(previous_slot_at)
             .to_std()
             .unwrap_or_default();
-        if elapsed < self.request_interval {
-            tokio::time::sleep(self.request_interval - elapsed).await;
+        if elapsed < request_interval {
+            tokio::time::sleep(request_interval - elapsed).await;
         }
     }
 
     /// 记录上游 token 用量。
-    pub async fn record_token_usage(&self, account_id: &str, usage: &CodexTokenUsage) {
-        self.record_response_usage(account_id, *usage, false).await;
+    pub async fn record_token_usage(&self, account_id: &str, model: &str, usage: &CodexTokenUsage) {
+        self.record_response_usage(account_id, model, *usage, false)
+            .await;
     }
 
     /// 记录 Responses 请求用量。
     pub async fn record_response_usage(
         &self,
         account_id: &str,
+        model: &str,
         usage: CodexTokenUsage,
         image_generation_requested: bool,
     ) {
@@ -927,6 +988,27 @@ impl RuntimeAccountPoolService {
                 "failed to persist account token usage"
             );
         }
+        if let Err(error) = self
+            .store
+            .record_model_usage_delta(
+                account_id,
+                model,
+                AccountModelUsageDelta {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cached_tokens: usage.cached_tokens,
+                    ..AccountModelUsageDelta::default()
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id,
+                model,
+                error = %error,
+                "failed to persist account model token usage"
+            );
+        }
         self.pool.lock().await.record_window_token_usage(
             account_id,
             AccountWindowUsageDelta {
@@ -945,6 +1027,7 @@ impl RuntimeAccountPoolService {
     pub async fn record_empty_response_attempt(
         &self,
         account_id: &str,
+        model: &str,
         image_generation_requested: bool,
     ) {
         let usage = AccountUsageDelta {
@@ -957,6 +1040,25 @@ impl RuntimeAccountPoolService {
                 account_id,
                 error = %error,
                 "failed to persist empty response usage"
+            );
+        }
+        if let Err(error) = self
+            .store
+            .record_model_usage_delta(
+                account_id,
+                model,
+                AccountModelUsageDelta {
+                    errors: 1,
+                    ..AccountModelUsageDelta::default()
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id,
+                model,
+                error = %error,
+                "failed to persist account model empty response usage"
             );
         }
         if image_generation_requested {

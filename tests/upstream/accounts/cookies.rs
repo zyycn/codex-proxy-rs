@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::{
-    infra::{crypto::SecretBox, database::connect_sqlite},
+    infra::database::connect_sqlite,
     upstream::accounts::{
         cookies::SqliteCookieStore,
         model::AccountStatus,
@@ -12,16 +12,16 @@ use sqlx::SqlitePool;
 
 #[tokio::test]
 async fn cookie_store_should_cleanup_expired_cookies() {
-    let (pool, secret_box, _dir) = sqlite_cookie_store_parts("cookies-cleanup.sqlite").await;
+    let (pool, _dir) = sqlite_cookie_store_parts("cookies-cleanup.sqlite").await;
     seed_account(&pool, "acct_a").await;
-    let store = SqliteCookieStore::new(pool.clone(), secret_box);
+    let store = SqliteCookieStore::new(pool.clone());
 
     let now = Utc::now();
     let past = now - Duration::hours(2);
     let future = now + Duration::hours(2);
 
     sqlx::query(
-        "insert into account_cookies (id, account_id, domain, name, value_cipher, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into account_cookies (id, account_id, domain, name, value, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("cookie_expired")
     .bind("acct_a")
@@ -36,7 +36,7 @@ async fn cookie_store_should_cleanup_expired_cookies() {
     .unwrap();
 
     sqlx::query(
-        "insert into account_cookies (id, account_id, domain, name, value_cipher, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into account_cookies (id, account_id, domain, name, value, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("cookie_valid")
     .bind("acct_a")
@@ -60,12 +60,12 @@ async fn cookie_store_should_cleanup_expired_cookies() {
     assert_eq!(remaining.0, 1);
 }
 
-async fn sqlite_cookie_store_parts(name: &str) -> (SqlitePool, SecretBox, tempfile::TempDir) {
+async fn sqlite_cookie_store_parts(name: &str) -> (SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(name);
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    (pool, SecretBox::new([21u8; 32]), dir)
+    (pool, dir)
 }
 
 async fn seed_account(pool: &SqlitePool, id: &str) {

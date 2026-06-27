@@ -151,3 +151,18 @@ impl AccountUsageDelta {
         }
     }
 }
+
+/// 账号模型维度用量增量。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AccountModelUsageDelta {
+    /// 请求数增量。
+    pub requests: u64,
+    /// 错误数增量。
+    pub errors: u64,
+    /// 输入 token 增量。
+    pub input_tokens: u64,
+    /// 输出 token 增量。
+    pub output_tokens: u64,
+    /// 缓存 token 增量。
+    pub cached_tokens: u64,
+}

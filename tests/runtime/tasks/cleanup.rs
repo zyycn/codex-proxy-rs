@@ -7,8 +7,7 @@ async fn cookie_cleanup_task_should_delete_only_expired_cookie_rows() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let secret_box = SecretBox::new([7u8; 32]);
-    let store = SqliteCookieStore::new(pool.clone(), secret_box);
+    let store = SqliteCookieStore::new(pool.clone());
     insert_account(&pool, "acct-cookie").await;
     let now = Utc::now();
     insert_cookie(

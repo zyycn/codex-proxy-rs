@@ -609,6 +609,7 @@ impl ResponseDispatchService {
                         self.account_pool
                             .record_empty_response_attempt(
                                 &release_account_id,
+                                &request.model,
                                 image_generation_requested,
                             )
                             .await;
@@ -845,7 +846,12 @@ impl ResponseDispatchService {
                     .await;
                 if let Some(usage) = response.usage {
                     self.account_pool
-                        .record_response_usage(&account.id, usage, image_generation_requested)
+                        .record_response_usage(
+                            &account.id,
+                            &request.model,
+                            usage,
+                            image_generation_requested,
+                        )
                         .await;
                 }
                 self.record_response_affinity(
@@ -1723,7 +1729,7 @@ impl ResponseDispatchService {
                     let usage = extract_usage(&response.body);
                     if let Some(usage) = usage {
                         self.account_pool
-                            .record_token_usage(&account.id, &usage)
+                            .record_token_usage(&account.id, &request.model, &usage)
                             .await;
                     }
                     record_response_event(ResponseEventRecord {
@@ -2338,7 +2344,7 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
         Ok(Some(usage)) => {
             context
                 .account_pool
-                .record_token_usage(&context.account_id, &usage)
+                .record_token_usage(&context.account_id, &context.model, &usage)
                 .await;
             Some(usage)
         }

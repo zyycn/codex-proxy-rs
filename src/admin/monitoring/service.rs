@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::admin::monitoring::usage_store::{SqliteUsageStore, UsageListRecord, UsageSummary};
+use crate::admin::monitoring::usage_store::{
+    SqliteUsageStore, UsageListRecord, UsageSummary, UsageTimeBucketRecord,
+};
 use crate::infra::json::{NumberedPage, Page};
 use crate::upstream::accounts::model::AccountUsageDelta;
 use crate::upstream::protocol::events::TokenUsage;
@@ -152,6 +154,24 @@ impl AdminUsageService {
             .map(AdminUsageSummary::from)
             .map_err(|_| AdminUsageError::Summary)
     }
+
+    /// 列出指定时间范围内的聚合时间桶。
+    pub async fn time_buckets(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<AdminUsageTimeBucketRecord>, AdminUsageError> {
+        self.store
+            .list_time_buckets(start, end)
+            .await
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(AdminUsageTimeBucketRecord::from)
+                    .collect()
+            })
+            .map_err(|_| AdminUsageError::TimeBuckets)
+    }
 }
 
 /// 管理端用量统计错误。
@@ -161,6 +181,8 @@ pub enum AdminUsageError {
     List,
     #[error("failed to summarize account usage")]
     Summary,
+    #[error("failed to list usage time buckets")]
+    TimeBuckets,
 }
 
 /// 管理端账号用量记录。
@@ -201,6 +223,25 @@ pub struct AdminUsageSummary {
     pub image_request_failed_count: i64,
 }
 
+/// 管理端时间桶用量记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUsageTimeBucketRecord {
+    pub bucket_start: DateTime<Utc>,
+    pub model: String,
+    pub service_tier: Option<String>,
+    pub request_count: i64,
+    pub error_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub first_token_latency_sum: i64,
+    pub first_token_latency_count: i64,
+    pub latency_sum: i64,
+    pub latency_count: i64,
+    pub max_latency_ms: i64,
+    pub min_latency_ms: i64,
+}
+
 impl From<UsageSummary> for AdminUsageSummary {
     fn from(s: UsageSummary) -> Self {
         Self {
@@ -216,6 +257,27 @@ impl From<UsageSummary> for AdminUsageSummary {
             image_output_tokens: s.image_output_tokens,
             image_request_count: s.image_request_count,
             image_request_failed_count: s.image_request_failed_count,
+        }
+    }
+}
+
+impl From<UsageTimeBucketRecord> for AdminUsageTimeBucketRecord {
+    fn from(record: UsageTimeBucketRecord) -> Self {
+        Self {
+            bucket_start: record.bucket_start,
+            model: record.model,
+            service_tier: record.service_tier,
+            request_count: record.request_count,
+            error_count: record.error_count,
+            input_tokens: record.input_tokens,
+            output_tokens: record.output_tokens,
+            cached_tokens: record.cached_tokens,
+            first_token_latency_sum: record.first_token_latency_sum,
+            first_token_latency_count: record.first_token_latency_count,
+            latency_sum: record.latency_sum,
+            latency_count: record.latency_count,
+            max_latency_ms: record.max_latency_ms,
+            min_latency_ms: record.min_latency_ms,
         }
     }
 }

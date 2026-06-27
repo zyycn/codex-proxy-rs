@@ -22,7 +22,7 @@ use crate::{
             },
             event_store::AdminLogFilter,
             events::{EventLevel, EventLog},
-            service::{AdminUsageRecord, AdminUsageSummary},
+            service::{AdminUsageRecord, AdminUsageSummary, AdminUsageTimeBucketRecord},
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
@@ -276,9 +276,11 @@ pub async fn dashboard_summary(
         .map(|page| page.items)
         .unwrap_or_default();
 
+    let now = Utc::now();
+    let time_buckets = dashboard_time_buckets(&state, now).await;
     let pool_summary = account_pool_summary(&accounts);
     let dashboard_logs = logs.iter().take(10).map(dashboard_event_log_data).collect();
-    let trend = dashboard_trend_data(&logs, DashboardTrendKind::Usage);
+    let trend = dashboard_trend_data(&time_buckets, DashboardTrendKind::Usage);
     let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
     let settings = state.services.settings.current();
 
@@ -289,12 +291,12 @@ pub async fn dashboard_summary(
                 cards: dashboard_cards(
                     &accounts,
                     &summary,
-                    &logs,
+                    &time_buckets,
                     &settings.model.default_model,
                     settings.model.service_tier.as_deref(),
                 ),
                 trend,
-                health_timeline: dashboard_health_timeline_data(&logs),
+                health_timeline: dashboard_health_timeline_data(&time_buckets),
                 account_usage: account_usage_data(
                     &accounts,
                     &usage_records,
@@ -320,18 +322,12 @@ pub async fn dashboard_trend(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
-    let logs = state
-        .services
-        .logs
-        .list(None, DASHBOARD_LOG_LIMIT, AdminLogFilter::default())
-        .await
-        .map(|page| page.items)
-        .unwrap_or_default();
+    let time_buckets = dashboard_time_buckets(&state, Utc::now()).await;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(
-            dashboard_trend_data(&logs, query.kind.unwrap_or_default()),
+            dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default()),
             request_id,
         ),
     ))
@@ -340,14 +336,14 @@ pub async fn dashboard_trend(
 fn dashboard_cards(
     accounts: &[Account],
     summary: &AdminUsageSummary,
-    logs: &[EventLog],
+    buckets: &[AdminUsageTimeBucketRecord],
     default_model: &str,
     default_service_tier: Option<&str>,
 ) -> DashboardCardsData {
     dashboard_cards_at(
         accounts,
         summary,
-        logs,
+        buckets,
         default_model,
         default_service_tier,
         Utc::now(),
@@ -357,7 +353,7 @@ fn dashboard_cards(
 fn dashboard_cards_at(
     accounts: &[Account],
     summary: &AdminUsageSummary,
-    logs: &[EventLog],
+    buckets: &[AdminUsageTimeBucketRecord],
     default_model: &str,
     default_service_tier: Option<&str>,
     now: DateTime<Utc>,
@@ -369,10 +365,10 @@ fn dashboard_cards_at(
         default_service_tier,
     };
 
-    let today = usage_window(logs, today_start, now);
-    let yesterday = usage_window(logs, yesterday_start, today_start);
-    let today_cost = cost_window(logs, today_start, now, billing_context).unwrap_or(0.0);
-    let total_cost = total_cost(logs, summary, billing_context);
+    let today = usage_window(buckets, today_start, now);
+    let yesterday = usage_window(buckets, yesterday_start, today_start);
+    let today_cost = cost_window(buckets, today_start, now, billing_context).unwrap_or(0.0);
+    let total_cost = total_cost(buckets, summary, billing_context);
 
     let total_input = nonnegative_i64_to_u64(summary.input_tokens);
     let total_cached = nonnegative_i64_to_u64(summary.cached_tokens);
@@ -426,12 +422,30 @@ fn dashboard_cards_at(
     }
 }
 
-fn dashboard_trend_data(logs: &[EventLog], kind: DashboardTrendKind) -> DashboardTrendData {
-    dashboard_trend_data_at(logs, kind, Utc::now())
+async fn dashboard_time_buckets(
+    state: &AppState,
+    now: DateTime<Utc>,
+) -> Vec<AdminUsageTimeBucketRecord> {
+    let current_slot = china_quarter_hour_start(now);
+    let start = current_slot
+        - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (HEALTH_TIMELINE_SLOTS - 1));
+    state
+        .services
+        .usage
+        .time_buckets(start, now)
+        .await
+        .unwrap_or_default()
+}
+
+fn dashboard_trend_data(
+    buckets: &[AdminUsageTimeBucketRecord],
+    kind: DashboardTrendKind,
+) -> DashboardTrendData {
+    dashboard_trend_data_at(buckets, kind, Utc::now())
 }
 
 fn dashboard_trend_data_at(
-    logs: &[EventLog],
+    records: &[AdminUsageTimeBucketRecord],
     kind: DashboardTrendKind,
     now: DateTime<Utc>,
 ) -> DashboardTrendData {
@@ -444,16 +458,16 @@ fn dashboard_trend_data_at(
         })
         .collect::<Vec<_>>();
 
-    for log in logs {
-        if log.created_at < start || log.created_at > now {
+    for record in records {
+        if record.bucket_start < start || record.bucket_start > now {
             continue;
         }
-        let log_hour = china_hour_start(log.created_at);
+        let log_hour = china_hour_start(record.bucket_start);
         if let Some((_, bucket)) = buckets
             .iter_mut()
             .find(|(bucket_start, _)| *bucket_start == log_hour)
         {
-            apply_log(bucket, log);
+            apply_bucket(bucket, record);
         }
     }
 
@@ -490,12 +504,14 @@ fn dashboard_trend_data_at(
     }
 }
 
-fn dashboard_health_timeline_data(logs: &[EventLog]) -> DashboardHealthTimelineData {
-    dashboard_health_timeline_data_at(logs, Utc::now())
+fn dashboard_health_timeline_data(
+    buckets: &[AdminUsageTimeBucketRecord],
+) -> DashboardHealthTimelineData {
+    dashboard_health_timeline_data_at(buckets, Utc::now())
 }
 
 fn dashboard_health_timeline_data_at(
-    logs: &[EventLog],
+    records: &[AdminUsageTimeBucketRecord],
     now: DateTime<Utc>,
 ) -> DashboardHealthTimelineData {
     let current_slot = china_quarter_hour_start(now);
@@ -508,16 +524,16 @@ fn dashboard_health_timeline_data_at(
         })
         .collect::<Vec<_>>();
 
-    for log in logs {
-        if log.created_at < start || log.created_at > now {
+    for record in records {
+        if record.bucket_start < start || record.bucket_start > now {
             continue;
         }
-        let log_slot = china_quarter_hour_start(log.created_at);
+        let log_slot = china_quarter_hour_start(record.bucket_start);
         if let Some((_, bucket)) = buckets
             .iter_mut()
             .find(|(bucket_start, _)| *bucket_start == log_slot)
         {
-            apply_log(bucket, log);
+            apply_bucket(bucket, record);
         }
     }
 
@@ -659,27 +675,31 @@ fn trend_summary(
     }
 }
 
-fn usage_window(logs: &[EventLog], start: DateTime<Utc>, end: DateTime<Utc>) -> UsageWindow {
+fn usage_window(
+    records: &[AdminUsageTimeBucketRecord],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> UsageWindow {
     let mut window = UsageWindow::default();
-    for log in logs {
-        if log.created_at >= start && log.created_at < end {
-            apply_log(&mut window, log);
+    for record in records {
+        if record.bucket_start >= start && record.bucket_start < end {
+            apply_bucket(&mut window, record);
         }
     }
     window
 }
 
 fn cost_window(
-    logs: &[EventLog],
+    records: &[AdminUsageTimeBucketRecord],
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     context: BillingContext<'_>,
 ) -> Option<f64> {
     let mut total = 0.0;
     let mut has_usage = false;
-    for log in logs {
-        if log.created_at >= start && log.created_at < end {
-            if let Some(cost) = log_cost(log, context) {
+    for record in records {
+        if record.bucket_start >= start && record.bucket_start < end {
+            if let Some(cost) = bucket_cost(record, context) {
                 total += cost;
                 has_usage = true;
             }
@@ -688,11 +708,15 @@ fn cost_window(
     has_usage.then_some(total)
 }
 
-fn total_cost(logs: &[EventLog], summary: &AdminUsageSummary, context: BillingContext<'_>) -> f64 {
+fn total_cost(
+    records: &[AdminUsageTimeBucketRecord],
+    summary: &AdminUsageSummary,
+    context: BillingContext<'_>,
+) -> f64 {
     let mut total = 0.0;
     let mut has_usage = false;
-    for log in logs {
-        if let Some(cost) = log_cost(log, context) {
+    for record in records {
+        if let Some(cost) = bucket_cost(record, context) {
             total += cost;
             has_usage = true;
         }
@@ -713,21 +737,26 @@ fn total_cost(logs: &[EventLog], summary: &AdminUsageSummary, context: BillingCo
     )
 }
 
-fn log_cost(log: &EventLog, context: BillingContext<'_>) -> Option<f64> {
-    let input_tokens = metadata_usage_number(&log.metadata, "inputTokens");
-    let output_tokens = metadata_usage_number(&log.metadata, "outputTokens");
-    let cached_tokens = metadata_usage_number(&log.metadata, "cachedTokens");
+fn bucket_cost(record: &AdminUsageTimeBucketRecord, context: BillingContext<'_>) -> Option<f64> {
+    let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
+    let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
+    let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
     if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
         return None;
     }
 
-    let model = log
-        .model
+    let model = {
+        let value = record.model.trim();
+        if value.is_empty() {
+            context.default_model
+        } else {
+            value
+        }
+    };
+    let service_tier = record
+        .service_tier
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(context.default_model);
-    let service_tier = metadata_service_tier(&log.metadata).or(context.default_service_tier);
+        .or(context.default_service_tier);
 
     Some(billing::calculate_cost(
         input_tokens,
@@ -738,82 +767,28 @@ fn log_cost(log: &EventLog, context: BillingContext<'_>) -> Option<f64> {
     ))
 }
 
-fn apply_log(window: &mut UsageWindow, log: &EventLog) {
-    window.requests += 1;
-    window.input_tokens += metadata_usage_number(&log.metadata, "inputTokens");
-    window.output_tokens += metadata_usage_number(&log.metadata, "outputTokens");
-    window.cached_tokens += metadata_usage_number(&log.metadata, "cachedTokens");
-    if let Some(first_token_latency) = metadata_first_token_latency(&log.metadata) {
-        window.first_token_latency_sum += first_token_latency;
-        window.first_token_latency_count += 1;
+fn apply_bucket(window: &mut UsageWindow, record: &AdminUsageTimeBucketRecord) {
+    window.requests += nonnegative_i64_to_u64(record.request_count);
+    window.input_tokens += nonnegative_i64_to_u64(record.input_tokens);
+    window.output_tokens += nonnegative_i64_to_u64(record.output_tokens);
+    window.cached_tokens += nonnegative_i64_to_u64(record.cached_tokens);
+    window.errors += nonnegative_i64_to_u64(record.error_count);
+    window.first_token_latency_sum += nonnegative_i64_to_u64(record.first_token_latency_sum);
+    window.first_token_latency_count += nonnegative_i64_to_u64(record.first_token_latency_count);
+    window.latency_sum += nonnegative_i64_to_u64(record.latency_sum);
+    window.latency_count += nonnegative_i64_to_u64(record.latency_count);
+    let max_latency = nonnegative_i64_to_u64(record.max_latency_ms);
+    if max_latency > 0 {
+        window.max_latency = window.max_latency.max(max_latency);
     }
-    if is_error_log(log) {
-        window.errors += 1;
-    }
-    if let Some(latency) = log
-        .latency_ms
-        .filter(|value| *value > 0)
-        .map(nonnegative_i64_to_u64)
-    {
-        window.latency_sum += latency;
-        window.latency_count += 1;
-        window.max_latency = window.max_latency.max(latency);
+    let min_latency = nonnegative_i64_to_u64(record.min_latency_ms);
+    if min_latency > 0 {
         window.min_latency = if window.min_latency == 0 {
-            latency
+            min_latency
         } else {
-            window.min_latency.min(latency)
+            window.min_latency.min(min_latency)
         };
     }
-}
-
-fn metadata_first_token_latency(metadata: &Value) -> Option<u64> {
-    [
-        "firstTokenMs",
-        "first_token_ms",
-        "firstTokenLatencyMs",
-        "first_token_latency_ms",
-    ]
-    .into_iter()
-    .find_map(|field| {
-        metadata
-            .get(field)
-            .or_else(|| metadata.get("usage").and_then(|usage| usage.get(field)))
-            .and_then(Value::as_u64)
-            .filter(|value| *value > 0)
-    })
-}
-
-fn metadata_usage_number(metadata: &Value, field: &str) -> u64 {
-    metadata
-        .get("usage")
-        .and_then(|usage| usage.get(field))
-        .or_else(|| metadata.get(field))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-}
-
-fn metadata_service_tier(metadata: &Value) -> Option<&str> {
-    let direct = metadata_service_tier_value(metadata);
-    direct.or_else(|| metadata.get("usage").and_then(metadata_service_tier_value))
-}
-
-fn metadata_service_tier_value(value: &Value) -> Option<&str> {
-    [
-        "billingServiceTier",
-        "billing_service_tier",
-        "actualServiceTier",
-        "actual_service_tier",
-        "serviceTier",
-        "service_tier",
-    ]
-    .into_iter()
-    .find_map(|field| value.get(field).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-}
-
-fn is_error_log(log: &EventLog) -> bool {
-    log.level == EventLevel::Error || log.status_code.is_some_and(|status| status >= 400)
 }
 
 fn account_pool_summary(accounts: &[Account]) -> AccountPoolDiagnostics {
@@ -1046,12 +1021,12 @@ mod tests {
     #[test]
     fn dashboard_cards_should_use_china_day_boundary() {
         let now = utc("2026-06-24T18:00:00Z");
-        let logs = vec![
-            usage_log_at("2026-06-24T16:30:00Z", 10),
-            usage_log_at("2026-06-24T15:30:00Z", 20),
+        let buckets = vec![
+            usage_bucket_at("2026-06-24T16:30:00Z", 10),
+            usage_bucket_at("2026-06-24T15:30:00Z", 20),
         ];
 
-        let cards = dashboard_cards_at(&[], &empty_usage_summary(), &logs, "gpt-5.5", None, now);
+        let cards = dashboard_cards_at(&[], &empty_usage_summary(), &buckets, "gpt-5.5", None, now);
 
         assert_eq!(cards.traffic.today_requests, 1);
         assert_eq!(cards.traffic.yesterday_requests, 1);
@@ -1062,27 +1037,32 @@ mod tests {
     #[test]
     fn dashboard_trend_should_bucket_and_label_by_china_hour() {
         let now = utc("2026-06-24T18:37:00Z");
-        let logs = vec![usage_log_at("2026-06-24T18:15:00Z", 10)];
+        let buckets = vec![usage_bucket_at("2026-06-24T18:15:00Z", 10)];
 
-        let trend = dashboard_trend_data_at(&logs, DashboardTrendKind::Usage, now);
+        let trend = dashboard_trend_data_at(&buckets, DashboardTrendKind::Usage, now);
         let last = trend.points.last().expect("trend should contain points");
 
         assert_eq!(last.time, "02");
         assert_eq!(last.requests, 1);
     }
 
-    fn usage_log_at(created_at: &str, input_tokens: u64) -> EventLog {
-        let mut log = EventLog::new("v1.response", EventLevel::Info, "completed");
-        log.created_at = utc(created_at);
-        log.model = Some("gpt-5.5".to_string());
-        log.metadata = serde_json::json!({
-            "usage": {
-                "inputTokens": input_tokens,
-                "outputTokens": 0u64,
-                "cachedTokens": 0u64
-            }
-        });
-        log
+    fn usage_bucket_at(created_at: &str, input_tokens: i64) -> AdminUsageTimeBucketRecord {
+        AdminUsageTimeBucketRecord {
+            bucket_start: utc(created_at),
+            model: "gpt-5.5".to_string(),
+            service_tier: None,
+            request_count: 1,
+            error_count: 0,
+            input_tokens,
+            output_tokens: 0,
+            cached_tokens: 0,
+            first_token_latency_sum: 0,
+            first_token_latency_count: 0,
+            latency_sum: 0,
+            latency_count: 0,
+            max_latency_ms: 0,
+            min_latency_ms: 0,
+        }
     }
 
     fn utc(value: &str) -> DateTime<Utc> {

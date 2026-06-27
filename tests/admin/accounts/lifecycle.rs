@@ -10,13 +10,13 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
     sqlx::query("insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)")
         .bind("acct_lifecycle").bind("life@example.com").bind("cipher").bind("active")
         .bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z").execute(&pool).await.unwrap();
+    seed_account_related_rows(&pool, "acct_lifecycle").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([75u8; 32]);
     let hasher = ApiKeyHasher::new([76u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -114,11 +114,116 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(response_json(deleted).await["data"]["deleted"], 1);
+    assert_account_related_rows_deleted(&pool, "acct_lifecycle").await;
+}
+
+async fn seed_account_related_rows(pool: &SqlitePool, account_id: &str) {
+    sqlx::query("insert into account_usage (account_id, request_count) values (?, 1)")
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into account_model_usage (account_id, model, request_count) values (?, ?, 1)",
+    )
+    .bind(account_id)
+    .bind("gpt-5.5")
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into model_account_routes (model, account_id, priority, created_at, updated_at) values (?, ?, 0, ?, ?)",
+    )
+    .bind("gpt-5.5")
+    .bind(account_id)
+    .bind("2026-06-18T00:00:00Z")
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("insert into account_cookies (id, account_id, domain, name, value, updated_at) values (?, ?, ?, ?, ?, ?)")
+        .bind("cookie_lifecycle")
+        .bind(account_id)
+        .bind("chatgpt.com")
+        .bind("cf_clearance")
+        .bind("cipher")
+        .bind("2026-06-18T00:00:00Z")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into account_refresh_leases (account_id, owner, expires_at, updated_at) values (?, ?, ?, ?)")
+        .bind(account_id)
+        .bind("test")
+        .bind("2026-06-18T00:10:00Z")
+        .bind("2026-06-18T00:00:00Z")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into session_affinities (response_id, account_id, conversation_id, expires_at, created_at) values (?, ?, ?, ?, ?)")
+        .bind("resp_lifecycle")
+        .bind(account_id)
+        .bind("conv_lifecycle")
+        .bind("2026-06-18T01:00:00Z")
+        .bind("2026-06-18T00:00:00Z")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn assert_account_related_rows_deleted(pool: &SqlitePool, account_id: &str) {
+    let accounts: i64 = sqlx::query_scalar("select count(*) from accounts where id = ?")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let usage: i64 = sqlx::query_scalar("select count(*) from account_usage where account_id = ?")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let model_usage: i64 =
+        sqlx::query_scalar("select count(*) from account_model_usage where account_id = ?")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let cookies: i64 =
+        sqlx::query_scalar("select count(*) from account_cookies where account_id = ?")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let model_routes: i64 =
+        sqlx::query_scalar("select count(*) from model_account_routes where account_id = ?")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let leases: i64 =
+        sqlx::query_scalar("select count(*) from account_refresh_leases where account_id = ?")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let affinities: i64 =
+        sqlx::query_scalar("select count(*) from session_affinities where account_id = ?")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+    assert_eq!(accounts, 0);
+    assert_eq!(usage, 0);
+    assert_eq!(model_usage, 0);
+    assert_eq!(model_routes, 0);
+    assert_eq!(cookies, 0);
+    assert_eq!(leases, 0);
+    assert_eq!(affinities, 0);
 }
 
 #[tokio::test]
 async fn admin_account_status_update_should_update_proxy_account_pool() {
-    let (app, state, pool, _dir, _) =
+    let (app, state, pool, _dir) =
         admin_accounts_test_app("admin-account-status-runtime-pool.sqlite", 121).await;
     seed_account(
         &pool,
@@ -199,7 +304,7 @@ async fn admin_account_refresh_should_not_mark_valid_account_banned_when_refresh
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, _) = admin_accounts_test_app_with_oauth_token_endpoint(
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
         "admin-account-refresh-rt-reused.sqlite",
         124,
         format!("{}/oauth/token", server.uri()),
@@ -257,7 +362,7 @@ async fn admin_account_refresh_should_not_mark_valid_account_banned_when_refresh
 
 #[tokio::test]
 async fn admin_account_update_should_accept_batch_status_payload() {
-    let (app, _state, pool, _dir, _secret_box) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-account-batch-status-update.sqlite", 122).await;
     sqlx::query("insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)")
         .bind("acct_batch_status_1").bind("batch-1@example.com").bind("cipher").bind("active")
@@ -293,7 +398,7 @@ async fn admin_account_update_should_accept_batch_status_payload() {
 
 #[tokio::test]
 async fn admin_account_batch_status_route_should_not_exist() {
-    let (_app, state, _pool, _dir, _secret_box) =
+    let (_app, state, _pool, _dir) =
         admin_accounts_test_app("admin-account-batch-status-route.sqlite", 123).await;
     let admin_router = codex_proxy_rs::admin::router::router().with_state(state);
 
@@ -316,13 +421,12 @@ async fn admin_account_batch_status_route_should_not_exist() {
 }
 
 #[tokio::test]
-async fn admin_account_cookies_should_store_encrypted_cookie_header() {
+async fn admin_account_cookies_should_store_plain_cookie_header() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-account-cookies.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([85u8; 32]);
     seed_account(
         &pool,
         NewAccount {
@@ -345,7 +449,7 @@ async fn admin_account_cookies_should_store_encrypted_cookie_header() {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -400,14 +504,14 @@ async fn admin_account_cookies_should_store_encrypted_cookie_header() {
     assert!(cookies.contains("__cf_bm=bm-secret"));
 
     let stored_values: Vec<String> =
-        sqlx::query_scalar("select value_cipher from account_cookies where account_id = ?1")
+        sqlx::query_scalar("select value from account_cookies where account_id = ?1")
             .bind("acct_cookies")
             .fetch_all(&pool)
             .await
             .unwrap();
     assert!(!stored_values.is_empty());
-    assert!(!stored_values.iter().any(|value| value == "clear-secret"));
-    assert!(!stored_values.iter().any(|value| value == "bm-secret"));
+    assert!(stored_values.iter().any(|value| value == "clear-secret"));
+    assert!(stored_values.iter().any(|value| value == "bm-secret"));
 }
 
 #[tokio::test]
@@ -417,7 +521,6 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([91u8; 32]);
     let token = test_jwt(
         "jwt-account",
         Some("jwt-user"),
@@ -429,7 +532,7 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -470,12 +573,11 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = test_config(url);
-    let secret_box = SecretBox::new([93u8; 32]);
     let hasher = ApiKeyHasher::new([94u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -507,7 +609,7 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
 #[tokio::test]
 async fn admin_account_manual_create_should_accept_current_openai_token_without_chatgpt_account_id()
 {
-    let (app, _state, pool, _dir, _) =
+    let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-account-create-current-openai-token.sqlite", 119).await;
     let token = test_jwt_with_exp(
         None,

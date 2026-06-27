@@ -3,13 +3,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
-use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-
-use crate::infra::crypto::{CryptoError, SecretBox};
 
 /// 单个 Cookie 条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +37,6 @@ pub enum SqliteCookieStoreError {
     /// 数据库错误。
     #[error("sqlite cookie store database error: {0}")]
     Database(#[from] sqlx::Error),
-    /// 加解密错误。
-    #[error("sqlite cookie store crypto error: {0}")]
-    Crypto(#[from] CryptoError),
 }
 
 /// SQLite Cookie 存储结果。
@@ -52,13 +46,12 @@ pub type SqliteCookieStoreResult<T> = Result<T, SqliteCookieStoreError>;
 #[derive(Clone)]
 pub struct SqliteCookieStore {
     pool: SqlitePool,
-    secret: SecretBox,
 }
 
 impl SqliteCookieStore {
     /// 构造 Cookie 存储。
-    pub fn new(pool: SqlitePool, secret: SecretBox) -> Self {
-        Self { pool, secret }
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     /// 返回底层连接池。
@@ -122,7 +115,7 @@ impl SqliteCookieStore {
         request_path: &str,
     ) -> SqliteCookieStoreResult<Option<String>> {
         let rows = sqlx::query(
-            "select domain, name, value_cipher, path, expires_at from account_cookies where account_id = ?",
+            "select domain, name, value, path, expires_at from account_cookies where account_id = ?",
         )
         .bind(account_id)
         .fetch_all(&self.pool)
@@ -143,12 +136,10 @@ impl SqliteCookieStore {
                 continue;
             }
             let name = row.get::<String, _>("name");
-            let value_cipher = row.get::<String, _>("value_cipher");
-            let value = self.secret.decrypt(&value_cipher)?;
             pairs.push(CookieHeaderPair {
                 path_len: path.len(),
                 name: name.clone(),
-                value: format!("{name}={}", value.expose_secret()),
+                value: format!("{name}={}", row.get::<String, _>("value")),
             });
         }
         if pairs.is_empty() {
@@ -196,17 +187,14 @@ impl SqliteCookieStore {
         parsed: ParsedCookie,
     ) -> SqliteCookieStoreResult<()> {
         let now = Utc::now().to_rfc3339();
-        let value_cipher = self
-            .secret
-            .encrypt(&SecretString::new(parsed.value.into()))?;
         sqlx::query(
-            "insert into account_cookies (id, account_id, domain, name, value_cipher, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict(account_id, domain, name, path) do update set value_cipher = excluded.value_cipher, expires_at = excluded.expires_at, updated_at = excluded.updated_at",
+            "insert into account_cookies (id, account_id, domain, name, value, path, expires_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?) on conflict(account_id, domain, name, path) do update set value = excluded.value, expires_at = excluded.expires_at, updated_at = excluded.updated_at",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(account_id)
         .bind(parsed.domain)
         .bind(parsed.name)
-        .bind(value_cipher)
+        .bind(parsed.value)
         .bind(parsed.path)
         .bind(parsed.expires_at)
         .bind(now)

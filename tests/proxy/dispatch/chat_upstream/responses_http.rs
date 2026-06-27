@@ -806,7 +806,7 @@ async fn responses_should_scope_upstream_cookie_by_codex_response_path() {
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
-    let cookie_store = SqliteCookieStore::new(pool.clone(), SecretBox::new([83u8; 32]));
+    let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
         .capture_set_cookie(
             "acct_chat",

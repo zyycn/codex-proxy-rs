@@ -3,13 +3,12 @@ use std::{sync::Arc, time::Duration as StdDuration};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore;
-use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::proxy::dispatch::session_affinity::SessionAffinityEntry;
 use codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
-use codex_proxy_rs::upstream::accounts::model::AccountUsageDelta;
 use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
+use codex_proxy_rs::upstream::accounts::model::{AccountModelUsageDelta, AccountUsageDelta};
 use codex_proxy_rs::upstream::accounts::store::{AccountStore, AccountStoreResult};
 use codex_proxy_rs::upstream::fingerprint::FingerprintRepository;
 use codex_proxy_rs::upstream::models::ModelConfig;
@@ -63,6 +62,15 @@ impl AccountStore for FakeAccountStore {
         &self,
         _account_id: &str,
         _usage: AccountUsageDelta,
+    ) -> AccountStoreResult<()> {
+        Ok(())
+    }
+
+    async fn record_model_usage_delta(
+        &self,
+        _account_id: &str,
+        _model: &str,
+        _usage: AccountModelUsageDelta,
     ) -> AccountStoreResult<()> {
         Ok(())
     }
@@ -173,7 +181,7 @@ async fn insert_cookie(
     expires_at: chrono::DateTime<Utc>,
 ) {
     sqlx::query(
-        "insert into account_cookies (id, account_id, domain, name, value_cipher, path, expires_at, updated_at) values (?, ?, 'chatgpt.com', ?, 'cipher', '/', ?, ?)",
+        "insert into account_cookies (id, account_id, domain, name, value, path, expires_at, updated_at) values (?, ?, 'chatgpt.com', ?, 'cipher', '/', ?, ?)",
     )
     .bind(id)
     .bind(account_id)

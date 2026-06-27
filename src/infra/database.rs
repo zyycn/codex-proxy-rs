@@ -1,4 +1,4 @@
-//! SQLite 数据库连接与 Schema 迁移。
+//! SQLite 数据库连接与 Schema 初始化。
 
 use std::{fs, path::Path, str::FromStr, time::Duration};
 

@@ -15,7 +15,7 @@ use codex_proxy_rs::{
         QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
         UsageStatsConfig, WebSocketPoolConfig,
     },
-    infra::{crypto::SecretBox, database::connect_sqlite, identity::ApiKeyHasher},
+    infra::{database::connect_sqlite, identity::ApiKeyHasher},
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -110,13 +110,7 @@ async fn post_admin_account(app: &axum::Router, payload: Value) -> axum::respons
 async fn admin_accounts_test_app(
     db_name: &str,
     key_byte: u8,
-) -> (
-    axum::Router,
-    AppState,
-    SqlitePool,
-    tempfile::TempDir,
-    SecretBox,
-) {
+) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
     admin_accounts_test_app_with_api_base_url(
         db_name,
         key_byte,
@@ -129,13 +123,7 @@ async fn admin_accounts_test_app_with_api_base_url(
     db_name: &str,
     key_byte: u8,
     api_base_url: String,
-) -> (
-    axum::Router,
-    AppState,
-    SqlitePool,
-    tempfile::TempDir,
-    SecretBox,
-) {
+) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
     admin_accounts_test_app_with_overrides(db_name, key_byte, api_base_url, None).await
 }
 
@@ -143,13 +131,7 @@ async fn admin_accounts_test_app_with_oauth_token_endpoint(
     db_name: &str,
     key_byte: u8,
     oauth_token_endpoint: String,
-) -> (
-    axum::Router,
-    AppState,
-    SqlitePool,
-    tempfile::TempDir,
-    SecretBox,
-) {
+) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
     admin_accounts_test_app_with_overrides(
         db_name,
         key_byte,
@@ -164,13 +146,7 @@ async fn admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
     key_byte: u8,
     api_base_url: String,
     oauth_token_endpoint: String,
-) -> (
-    axum::Router,
-    AppState,
-    SqlitePool,
-    tempfile::TempDir,
-    SecretBox,
-) {
+) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
     admin_accounts_test_app_with_overrides(
         db_name,
         key_byte,
@@ -185,19 +161,12 @@ async fn admin_accounts_test_app_with_overrides(
     key_byte: u8,
     api_base_url: String,
     oauth_token_endpoint: Option<String>,
-) -> (
-    axum::Router,
-    AppState,
-    SqlitePool,
-    tempfile::TempDir,
-    SecretBox,
-) {
+) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let secret_box = SecretBox::new([key_byte; 32]);
     let hasher = ApiKeyHasher::new([key_byte; 32]);
     let mut config = test_config(url);
     config.api.base_url = api_base_url;
@@ -207,7 +176,7 @@ async fn admin_accounts_test_app_with_overrides(
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -221,7 +190,7 @@ async fn admin_accounts_test_app_with_overrides(
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state.clone());
-    (app, state, pool, dir, secret_box)
+    (app, state, pool, dir)
 }
 
 async fn seed_account(pool: &SqlitePool, account: NewAccount) {
@@ -278,6 +247,7 @@ fn test_config(database_url: String) -> AppConfig {
             default_reasoning_effort: None,
             service_tier: None,
             aliases: BTreeMap::new(),
+            account_routes: BTreeMap::new(),
         },
         auth: AuthConfig {
             refresh_margin_seconds: 300,
@@ -304,7 +274,6 @@ fn test_config(database_url: String) -> AppConfig {
         },
         database: DatabaseConfig { url: database_url },
         security: SecurityConfig {
-            master_key_file: "data/master.key".to_string(),
             api_key_pepper_file: "data/api-key-pepper.key".to_string(),
         },
         tls: TlsConfig {

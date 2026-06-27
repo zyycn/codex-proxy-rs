@@ -13,6 +13,7 @@ model:
   default_reasoning_effort: null
   default_service_tier: null
   aliases: {}
+  account_routes: {}
 auth:
   refresh_margin_seconds: 300
   refresh_enabled: true
@@ -39,7 +40,6 @@ usage_stats:
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
 security:
-  master_key_file: .runtime/data/master.key
   api_key_pepper_file: .runtime/data/api-key-pepper.key
 tls:
   force_http11: false
@@ -132,7 +132,6 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
         cfg.database.url,
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
     );
-    assert_eq!(cfg.security.master_key_file, ".runtime/data/master.key");
     assert_eq!(
         cfg.security.api_key_pepper_file,
         ".runtime/data/api-key-pepper.key"
@@ -156,6 +155,7 @@ model:
   default_reasoning_effort: null
   default_service_tier: null
   aliases: {}
+  account_routes: {}
 auth:
   refresh_margin_seconds: 300
   refresh_enabled: true
@@ -182,7 +182,6 @@ usage_stats:
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
 security:
-  master_key_file: .runtime/data/master.key
   api_key_pepper_file: .runtime/data/api-key-pepper.key
 tls:
   force_http11: false

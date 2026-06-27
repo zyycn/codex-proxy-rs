@@ -95,6 +95,27 @@ select
   coalesce(sum(image_request_failed_count), 0) as image_request_failed_count
 from account_usage";
 
+const LIST_USAGE_TIME_BUCKETS_SQL: &str = r"
+select
+  bucket_start,
+  model,
+  service_tier,
+  coalesce(sum(request_count), 0) as request_count,
+  coalesce(sum(error_count), 0) as error_count,
+  coalesce(sum(input_tokens), 0) as input_tokens,
+  coalesce(sum(output_tokens), 0) as output_tokens,
+  coalesce(sum(cached_tokens), 0) as cached_tokens,
+  coalesce(sum(first_token_latency_sum), 0) as first_token_latency_sum,
+  coalesce(sum(first_token_latency_count), 0) as first_token_latency_count,
+  coalesce(sum(latency_sum), 0) as latency_sum,
+  coalesce(sum(latency_count), 0) as latency_count,
+  coalesce(max(max_latency_ms), 0) as max_latency_ms,
+  coalesce(min(nullif(min_latency_ms, 0)), 0) as min_latency_ms
+from usage_time_buckets
+where bucket_start >= ? and bucket_start <= ?
+group by bucket_start, model, service_tier
+order by bucket_start asc, model asc, service_tier asc";
+
 /// SQLite 用量存储错误。
 #[derive(Debug, Error)]
 pub enum SqliteUsageStoreError {
@@ -176,6 +197,39 @@ pub struct UsageSummary {
     pub image_request_count: i64,
     /// 总图片请求失败数。
     pub image_request_failed_count: i64,
+}
+
+/// 时间桶聚合用量记录。
+#[derive(Debug, Clone)]
+pub struct UsageTimeBucketRecord {
+    /// 桶开始时间。
+    pub bucket_start: DateTime<Utc>,
+    /// 模型。
+    pub model: String,
+    /// 服务层级。
+    pub service_tier: Option<String>,
+    /// 请求数。
+    pub request_count: i64,
+    /// 错误数。
+    pub error_count: i64,
+    /// 输入 token。
+    pub input_tokens: i64,
+    /// 输出 token。
+    pub output_tokens: i64,
+    /// 缓存 token。
+    pub cached_tokens: i64,
+    /// 首 token 延迟总和。
+    pub first_token_latency_sum: i64,
+    /// 首 token 延迟样本数。
+    pub first_token_latency_count: i64,
+    /// 完成延迟总和。
+    pub latency_sum: i64,
+    /// 完成延迟样本数。
+    pub latency_count: i64,
+    /// 最大完成延迟。
+    pub max_latency_ms: i64,
+    /// 最小完成延迟。
+    pub min_latency_ms: i64,
 }
 
 /// SQLite 用量存储。
@@ -269,6 +323,20 @@ impl SqliteUsageStore {
             image_request_failed_count: row.get("image_request_failed_count"),
         })
     }
+
+    /// 列出指定时间范围内的时间桶聚合用量。
+    pub async fn list_time_buckets(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> SqliteUsageStoreResult<Vec<UsageTimeBucketRecord>> {
+        let rows = sqlx::query(LIST_USAGE_TIME_BUCKETS_SQL)
+            .bind(start.to_rfc3339())
+            .bind(end.to_rfc3339())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(usage_time_bucket_from_row).collect()
+    }
 }
 
 fn usage_list_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageListRecord> {
@@ -289,6 +357,27 @@ fn usage_list_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageListRecor
         image_request_count: row.get("image_request_count"),
         image_request_failed_count: row.get("image_request_failed_count"),
         last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+    })
+}
+
+fn usage_time_bucket_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageTimeBucketRecord> {
+    let service_tier = row.get::<String, _>("service_tier").trim().to_string();
+    Ok(UsageTimeBucketRecord {
+        bucket_start: DateTime::parse_from_rfc3339(row.get::<&str, _>("bucket_start"))?
+            .with_timezone(&Utc),
+        model: row.get("model"),
+        service_tier: (!service_tier.is_empty()).then_some(service_tier),
+        request_count: row.get("request_count"),
+        error_count: row.get("error_count"),
+        input_tokens: row.get("input_tokens"),
+        output_tokens: row.get("output_tokens"),
+        cached_tokens: row.get("cached_tokens"),
+        first_token_latency_sum: row.get("first_token_latency_sum"),
+        first_token_latency_count: row.get("first_token_latency_count"),
+        latency_sum: row.get("latency_sum"),
+        latency_count: row.get("latency_count"),
+        max_latency_ms: row.get("max_latency_ms"),
+        min_latency_ms: row.get("min_latency_ms"),
     })
 }
 
