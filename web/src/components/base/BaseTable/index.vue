@@ -323,7 +323,7 @@ function paginationPageClass(page: number) {
     @mouseenter="horizontalHovering = true"
     @mouseleave="horizontalHovering = false"
   >
-    <div class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3">
+    <div v-loading="loading" class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3">
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
         <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table

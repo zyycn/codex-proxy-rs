@@ -24,6 +24,22 @@ export function importAccounts(data: any) {
   })
 }
 
+export function authorizeAccountOAuth(data?: any) {
+  return request({
+    url: '/api/admin/accounts/oauth/authorize',
+    method: 'POST',
+    data: data || {},
+  })
+}
+
+export function exchangeAccountOAuth(data: any) {
+  return request({
+    url: '/api/admin/accounts/oauth/exchange',
+    method: 'POST',
+    data,
+  })
+}
+
 export function deleteAccounts(data: any) {
   return request({
     url: '/api/admin/accounts/delete',

@@ -23,7 +23,9 @@ use crate::{
         AdminEnvelope, AdminError, AdminResponse, CursorPageMeta, NumberedPageMeta, PageMeta,
     },
     admin::{
-        accounts::service::{AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate},
+        accounts::service::{
+            AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, OAuthExchangeInput,
+        },
         monitoring::{billing, service::AdminUsageRecord},
     },
     http::middleware::request_id::RequestId,
@@ -107,6 +109,15 @@ pub(crate) struct HealthCheckRequest {
 pub(crate) struct AccountTestRequest {
     #[serde(alias = "model_id")]
     model_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountOAuthExchangeRequest {
+    session_id: String,
+    callback_url: Option<String>,
+    code: Option<String>,
+    state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,6 +495,15 @@ struct AccountImportData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AccountOAuthAuthorizeData {
+    session_id: String,
+    auth_url: String,
+    expires_at: String,
+    expires_at_display: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct HealthCheckData {
     summary: HealthCheckSummary,
     results: Vec<Value>,
@@ -835,6 +855,66 @@ pub(crate) async fn import_accounts(
     let request_id = request_id.as_str().to_string();
     require_admin_session(&state, &headers, &request_id).await?;
     match state.services.admin_accounts.import(payload).await {
+        Ok(result) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                AccountImportData {
+                    imported: result.imported,
+                    skipped: result.skipped,
+                    source_format: result.source_format.to_string(),
+                },
+                request_id,
+            ),
+        )),
+        Err(error) => Err(account_error(error, request_id)),
+    }
+}
+
+/// `POST /api/admin/accounts/oauth/authorize`
+pub(crate) async fn oauth_authorize_account(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+    match state.services.admin_accounts.oauth_authorize().await {
+        Ok(result) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                AccountOAuthAuthorizeData {
+                    session_id: result.session_id,
+                    auth_url: result.auth_url,
+                    expires_at: china_rfc3339(&result.expires_at),
+                    expires_at_display: china_datetime(&result.expires_at),
+                },
+                request_id,
+            ),
+        )),
+        Err(error) => Err(account_error(error, request_id)),
+    }
+}
+
+/// `POST /api/admin/accounts/oauth/exchange`
+pub(crate) async fn oauth_exchange_account(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    Json(payload): Json<AccountOAuthExchangeRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    let request_id = request_id.as_str().to_string();
+    require_admin_session(&state, &headers, &request_id).await?;
+    match state
+        .services
+        .admin_accounts
+        .oauth_exchange(OAuthExchangeInput {
+            session_id: payload.session_id,
+            callback_url: payload.callback_url,
+            code: payload.code,
+            state: payload.state,
+        })
+        .await
+    {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
             AdminEnvelope::ok(
@@ -1749,9 +1829,18 @@ fn account_error(error: AdminAccountError, request_id: String) -> AdminError {
         | AdminAccountError::TokenRequired
         | AdminAccountError::InvalidToken(_)
         | AdminAccountError::RefreshTokenExchange(_)
+        | AdminAccountError::OAuthSessionInvalid
+        | AdminAccountError::OAuthCallbackInvalid
+        | AdminAccountError::OAuthStateMismatch
         | AdminAccountError::NoValidCookies => AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
+            error.to_string(),
+            request_id,
+        ),
+        AdminAccountError::OAuthCodeExchange(_) => AdminError::new(
+            StatusCode::BAD_GATEWAY,
+            50201,
             error.to_string(),
             request_id,
         ),

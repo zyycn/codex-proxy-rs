@@ -34,6 +34,7 @@ use tower::util::ServiceExt;
 mod import_export;
 mod lifecycle;
 mod list;
+mod oauth;
 mod quota;
 mod testing;
 

@@ -1,7 +1,9 @@
 import { computed, onMounted, ref, type Ref } from 'vue'
 
 import {
+  authorizeAccountOAuth,
   deleteAccounts,
+  exchangeAccountOAuth,
   getAccountQuota,
   getAccounts,
   importAccounts,
@@ -36,15 +38,18 @@ export function useAccountMutations(options: {
   const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
   const updatingStatusAccountIds = ref<Set<string>>(new Set())
   const deletingAccount = ref(false)
-  const loaded = ref(false)
   const creatingAccount = ref(false)
+  const authorizingOAuth = ref(false)
   const savingAccount = ref(false)
   const batchDeleting = ref(false)
 
   const createForm = ref({
-    mode: 'rt',
+    mode: 'oauth',
     refreshToken: '',
     importText: '',
+    oauthSessionId: '',
+    oauthAuthUrl: '',
+    oauthCallback: '',
   })
 
   const editForm = ref({
@@ -55,8 +60,6 @@ export function useAccountMutations(options: {
     planType: '',
     status: 'active',
   })
-
-  const initialLoading = computed(() => loading.value && !loaded.value)
 
   const showEditModal = computed({
     get: () => editingAccount.value !== null,
@@ -100,11 +103,14 @@ export function useAccountMutations(options: {
       }
     } finally {
       loading.value = false
-      loaded.value = true
     }
   }
 
   async function handleCreate() {
+    if (createForm.value.mode === 'oauth') {
+      await handleExchangeOAuth()
+      return
+    }
     if (creatingAccount.value) return
 
     try {
@@ -114,7 +120,7 @@ export function useAccountMutations(options: {
       creatingAccount.value = true
       const result = await importAccounts(payload)
       showCreateModal.value = false
-      createForm.value = { mode: 'rt', refreshToken: '', importText: '' }
+      resetCreateForm()
       await loadAccounts()
       toast.success(importSuccessText(result))
     } catch (error) {
@@ -125,6 +131,14 @@ export function useAccountMutations(options: {
   }
 
   function accountImportPayload() {
+    if (createForm.value.mode === 'oauth') {
+      if (!createForm.value.oauthSessionId || !createForm.value.oauthCallback.trim()) return null
+      return {
+        sessionId: createForm.value.oauthSessionId,
+        callbackUrl: createForm.value.oauthCallback.trim(),
+      }
+    }
+
     if (createForm.value.mode === 'rt') {
       const accounts = createForm.value.refreshToken
         .split(/\r?\n/)
@@ -153,6 +167,58 @@ export function useAccountMutations(options: {
       return { ...parsed, sourceFormat }
     }
     return { sourceFormat, accounts: [parsed] }
+  }
+
+  async function handleAuthorizeOAuth() {
+    if (authorizingOAuth.value) return
+
+    try {
+      authorizingOAuth.value = true
+      const result = await authorizeAccountOAuth()
+      createForm.value = {
+        ...createForm.value,
+        mode: 'oauth',
+        oauthSessionId: result.sessionId,
+        oauthAuthUrl: result.authUrl,
+        oauthCallback: '',
+      }
+      toast.success('授权链接已生成')
+    } catch (error: any) {
+      toast.error(error.message || '授权链接生成失败')
+    } finally {
+      authorizingOAuth.value = false
+    }
+  }
+
+  async function handleExchangeOAuth() {
+    if (creatingAccount.value) return
+
+    try {
+      const payload = accountImportPayload()
+      if (!payload) return
+
+      creatingAccount.value = true
+      const result = await exchangeAccountOAuth(payload)
+      showCreateModal.value = false
+      resetCreateForm()
+      await loadAccounts()
+      toast.success(importSuccessText(result))
+    } catch (error: any) {
+      toast.error(error.message || 'OAuth 授权导入失败')
+    } finally {
+      creatingAccount.value = false
+    }
+  }
+
+  function resetCreateForm() {
+    createForm.value = {
+      mode: 'oauth',
+      refreshToken: '',
+      importText: '',
+      oauthSessionId: '',
+      oauthAuthUrl: '',
+      oauthCallback: '',
+    }
   }
 
   function importSuccessText(result: any) {
@@ -325,14 +391,16 @@ export function useAccountMutations(options: {
     updatingStatusAccountIds,
     deletingAccount,
     creatingAccount,
+    authorizingOAuth,
     savingAccount,
     batchDeleting,
     createForm,
     editForm,
     editStatusModel,
-    initialLoading,
     loadAccounts,
     handleCreate,
+    handleAuthorizeOAuth,
+    handleExchangeOAuth,
     openEditAccount,
     handleSaveAccount,
     requestDeleteAccount,

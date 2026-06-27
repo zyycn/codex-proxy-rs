@@ -1,4 +1,4 @@
-import { computed, onMounted, ref, type Ref } from 'vue'
+import { onMounted, ref, type Ref } from 'vue'
 
 import { clearLogs, getLogs } from '@/api'
 import { toast } from '@/components/base/BaseToast'
@@ -16,10 +16,6 @@ export function useLogsTable(options: {
   const showClearModal = ref(false)
   const refreshingList = ref(false)
   const clearingLogs = ref(false)
-  const loaded = ref(false)
-
-  const initialLoading = computed(() => loading.value && !loaded.value)
-
   async function loadLogs() {
     try {
       loading.value = true
@@ -42,7 +38,6 @@ export function useLogsTable(options: {
       toast.error(error.message || '加载失败')
     } finally {
       loading.value = false
-      loaded.value = true
     }
   }
 
@@ -83,7 +78,6 @@ export function useLogsTable(options: {
     showClearModal,
     refreshingList,
     clearingLogs,
-    initialLoading,
     loadLogs,
     refreshLogs,
     handleClearLogs,

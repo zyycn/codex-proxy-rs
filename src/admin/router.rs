@@ -11,8 +11,8 @@ use super::{
     accounts::routes::{
         account_quota, account_test_models, accounts, batch_delete_accounts, create_account,
         export_accounts, get_account_cookies, health_check_accounts, import_accounts,
-        quota_warnings, refresh_account, reset_account_usage, set_account_cookies,
-        test_account_connection, update_account,
+        oauth_authorize_account, oauth_exchange_account, quota_warnings, refresh_account,
+        reset_account_usage, set_account_cookies, test_account_connection, update_account,
     },
     auth::session::{login, logout, session_status},
     keys::routes::{
@@ -42,6 +42,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/accounts", get(accounts).post(create_account))
         .route("/api/admin/accounts/export", get(export_accounts))
         .route("/api/admin/accounts/import", post(import_accounts))
+        .route(
+            "/api/admin/accounts/oauth/authorize",
+            post(oauth_authorize_account),
+        )
+        .route(
+            "/api/admin/accounts/oauth/exchange",
+            post(oauth_exchange_account),
+        )
         .route("/api/admin/accounts/quota-warnings", get(quota_warnings))
         .route(
             "/api/admin/accounts/health-check",
