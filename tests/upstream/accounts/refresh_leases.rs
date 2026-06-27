@@ -1,6 +1,6 @@
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::{
-    infra::{crypto::SecretBox, database::connect_sqlite},
+    infra::database::connect_sqlite,
     upstream::accounts::{
         model::AccountStatus,
         store::{NewAccount, SqliteAccountStore},
@@ -16,8 +16,7 @@ async fn refresh_lease_store_should_acquire_release_and_respect_expiry() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let secret_box = SecretBox::new([31u8; 32]);
-    let accounts = SqliteAccountStore::new(pool.clone(), secret_box);
+    let accounts = SqliteAccountStore::new(pool.clone());
     accounts
         .insert(NewAccount {
             id: "acct-lease".to_string(),

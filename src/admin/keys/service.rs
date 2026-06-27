@@ -4,13 +4,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::infra::{
-    crypto::{CryptoError, SecretBox},
     identity::{ApiKeyHasher, AuthError},
     json::{decode_cursor, encode_cursor, Page},
 };
@@ -332,9 +330,6 @@ pub enum SqliteClientKeyStoreError {
     /// API Key 验证错误。
     #[error("sqlite client key auth error: {0}")]
     Auth(#[from] AuthError),
-    /// API Key 密文处理错误。
-    #[error("sqlite client key crypto error: {0}")]
-    Crypto(#[from] CryptoError),
     /// 分页游标无效。
     #[error("invalid client key pagination cursor")]
     InvalidCursor,
@@ -387,18 +382,12 @@ pub struct CreatedClientApiKey {
 pub struct SqliteClientKeyStore {
     pool: SqlitePool,
     hasher: ApiKeyHasher,
-    secret_box: SecretBox,
 }
 
 impl SqliteClientKeyStore {
     /// 构造存储适配器。
     pub fn new(pool: SqlitePool, hasher: ApiKeyHasher) -> Self {
-        let secret_box = hasher.secret_box();
-        Self {
-            pool,
-            hasher,
-            secret_box,
-        }
+        Self { pool, hasher }
     }
 
     /// 暴露底层连接池，供集成测试和运行时组合层复用。
@@ -414,17 +403,14 @@ impl SqliteClientKeyStore {
         let generated = self.hasher.generate_client_api_key(name);
         let id = format!("key_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
-        let key_cipher = self
-            .secret_box
-            .encrypt(&SecretString::new(generated.key.clone().into()))?;
         sqlx::query(
-            "insert into client_api_keys (id, name, label, prefix, key_hash, key_cipher, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, ?, 1, ?, null)",
+            "insert into client_api_keys (id, name, label, prefix, key_hash, key, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, ?, 1, ?, null)",
         )
         .bind(&id)
         .bind(name)
         .bind(&generated.prefix)
         .bind(&generated.key_hash)
-        .bind(&key_cipher)
+        .bind(&generated.key)
         .bind(&now)
         .execute(&self.pool)
         .await?;
@@ -452,7 +438,7 @@ impl SqliteClientKeyStore {
             let (created_at, id) =
                 decode_cursor(&cursor).ok_or(SqliteClientKeyStoreError::InvalidCursor)?;
             sqlx::query(
-                "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, key, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
             )
             .bind(&created_at)
             .bind(created_at)
@@ -462,7 +448,7 @@ impl SqliteClientKeyStore {
             .await?
         } else {
             sqlx::query(
-                "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, key, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
             )
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -493,7 +479,7 @@ impl SqliteClientKeyStore {
         id: &str,
     ) -> Result<Option<StoredClientApiKey>, SqliteClientKeyStoreError> {
         let row = sqlx::query(
-            "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys where id = ?",
+            "select id, name, label, prefix, key, enabled, created_at, last_used_at from client_api_keys where id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -549,14 +535,12 @@ impl SqliteClientKeyStore {
         &self,
         row: &sqlx::sqlite::SqliteRow,
     ) -> Result<StoredClientApiKey, SqliteClientKeyStoreError> {
-        let key_cipher = row.get::<String, _>("key_cipher");
-        let key = self.secret_box.decrypt(&key_cipher)?;
         Ok(StoredClientApiKey {
             id: row.get("id"),
             name: row.get("name"),
             label: row.get("label"),
             prefix: row.get("prefix"),
-            key: key.expose_secret().to_string(),
+            key: row.get("key"),
             enabled: row.get::<i64, _>("enabled") != 0,
             created_at: row.get("created_at"),
             last_used_at: row.get("last_used_at"),

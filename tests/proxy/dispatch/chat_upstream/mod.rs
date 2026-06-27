@@ -38,7 +38,6 @@ use codex_proxy_rs::{
     upstream::fingerprint::FingerprintRepository,
 };
 use futures::{SinkExt, StreamExt};
-use secrecy::SecretString;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tokio::{
@@ -245,7 +244,7 @@ fn test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
     installation_id: String,
 ) -> AppState {
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -278,7 +277,7 @@ async fn test_app_with_account_and_installation_id(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
-    insert_account(&pool, &secret_box).await;
+    insert_account(&pool).await;
     let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
         test_config(url, base_url),
         pool,
@@ -355,7 +354,7 @@ async fn test_app_with_account_pool_config(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
-    insert_account(&pool, &secret_box).await;
+    insert_account(&pool).await;
     let mut config = test_config(url, base_url);
     configure(&mut config);
     let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
@@ -384,7 +383,7 @@ async fn test_app_with_restored_pool_then_disabled_account(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
-    insert_account(&pool, &secret_box).await;
+    insert_account(&pool).await;
     let state = test_app_state_with_pool_secret_api_key_hasher_and_installation_id(
         test_config(url, base_url),
         pool.clone(),
@@ -416,22 +415,8 @@ async fn test_app_with_two_accounts_and_affinity(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
-    insert_named_account(
-        &pool,
-        &secret_box,
-        "acct_a",
-        "access-default",
-        "chatgpt-default",
-    )
-    .await;
-    insert_named_account(
-        &pool,
-        &secret_box,
-        "acct_z",
-        "access-affinity",
-        "chatgpt-affinity",
-    )
-    .await;
+    insert_named_account(&pool, "acct_a", "access-default", "chatgpt-default").await;
+    insert_named_account(&pool, "acct_z", "access-affinity", "chatgpt-affinity").await;
     let now = Utc::now();
     SqliteSessionAffinityStore::new(pool.clone())
         .upsert(
@@ -485,17 +470,9 @@ async fn test_app_with_two_accounts_and_affinity_status(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
+    insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
     insert_named_account(
         &pool,
-        &secret_box,
-        "acct_primary",
-        "access-primary",
-        "chatgpt-primary",
-    )
-    .await;
-    insert_named_account(
-        &pool,
-        &secret_box,
         "acct_affinity",
         "access-affinity",
         "chatgpt-affinity",
@@ -557,17 +534,9 @@ async fn test_app_with_two_accounts(
     let secret_box = SecretBox::new([83u8; 32]);
     let hasher = ApiKeyHasher::new([84u8; 32]);
     let api_key = insert_client_api_key(&pool, &hasher).await;
+    insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
     insert_named_account(
         &pool,
-        &secret_box,
-        "acct_primary",
-        "access-primary",
-        "chatgpt-primary",
-    )
-    .await;
-    insert_named_account(
-        &pool,
-        &secret_box,
         "acct_secondary",
         "access-secondary",
         "chatgpt-secondary",
@@ -639,18 +608,15 @@ async fn update_admin_account_status(app: &axum::Router, account_id: &str, statu
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-async fn insert_account(pool: &SqlitePool, secret_box: &SecretBox) {
-    let access_token = secret_box
-        .encrypt(&SecretString::new("access-secret".to_string().into()))
-        .unwrap();
+async fn insert_account(pool: &SqlitePool) {
     sqlx::query(
-        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind("acct_chat")
     .bind("user@example.com")
     .bind("chatgpt-account")
     .bind("chatgpt-user")
-    .bind(access_token)
+    .bind("access-secret")
     .bind("2100-01-01T00:00:00Z")
     .bind("active")
     .bind("2026-06-18T00:00:00Z")
@@ -662,18 +628,12 @@ async fn insert_account(pool: &SqlitePool, secret_box: &SecretBox) {
 
 async fn insert_named_account(
     pool: &SqlitePool,
-    secret_box: &SecretBox,
     id: &str,
-    access_token_plaintext: &str,
+    access_token: &str,
     chatgpt_account_id: &str,
 ) {
-    let access_token = secret_box
-        .encrypt(&SecretString::new(
-            access_token_plaintext.to_string().into(),
-        ))
-        .unwrap();
     sqlx::query(
-        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(format!("{id}@example.com"))

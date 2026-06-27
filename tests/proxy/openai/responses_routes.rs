@@ -144,9 +144,9 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
     let config = test_config(url);
     let secret_box = SecretBox::new([96u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([96u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),

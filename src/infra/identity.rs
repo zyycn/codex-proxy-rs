@@ -12,8 +12,6 @@ use rand::Rng;
 use sha2::Sha256;
 use thiserror::Error;
 
-use crate::infra::crypto::SecretBox;
-
 // ---------------------------------------------------------------------------
 // AuthError / AuthResult
 // ---------------------------------------------------------------------------
@@ -163,9 +161,5 @@ impl ApiKeyHasher {
             Ok(mac) => mac,
             Err(error) => unreachable!("HMAC accepts any key size: {error}"),
         }
-    }
-
-    pub(crate) fn secret_box(&self) -> SecretBox {
-        SecretBox::new(self.pepper)
     }
 }

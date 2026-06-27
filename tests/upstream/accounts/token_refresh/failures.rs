@@ -7,7 +7,7 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([13u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 9, 0, 0).unwrap();
     let new_expires_at = now + Duration::hours(1);
     let new_access_token = test_jwt(new_expires_at.timestamp());
@@ -75,7 +75,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([14u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 10, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::hours(1)).timestamp());
     let new_access_token = test_jwt((now + Duration::hours(2)).timestamp());
@@ -135,7 +135,7 @@ async fn token_refresh_task_should_not_retry_ambiguous_transport_failure() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([15u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 11, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
     store
@@ -199,7 +199,7 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([19u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 15, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
@@ -281,7 +281,7 @@ async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([31u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 16, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
     let rotated_access_token = test_jwt((now + Duration::hours(1)).timestamp());
@@ -350,7 +350,7 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([17u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 13, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
     store

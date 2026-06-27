@@ -5,10 +5,9 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-async fn seed_test_account(pool: &SqlitePool, secret_box: SecretBox) {
-    seed_encrypted_account(
+async fn seed_test_account(pool: &SqlitePool) {
+    seed_account(
         pool,
-        secret_box,
         NewAccount {
             id: "acct_test".to_string(),
             email: Some("test@example.com".to_string()),
@@ -53,13 +52,13 @@ async fn account_test_models_should_return_upstream_models_only() {
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, secret_box) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir, _secret_box) = admin_accounts_test_app_with_api_base_url(
         "admin-account-test-models.sqlite",
         91,
         format!("{}/backend-api", server.uri()),
     )
     .await;
-    seed_test_account(&pool, secret_box).await;
+    seed_test_account(&pool).await;
 
     let response = app
         .oneshot(
@@ -125,13 +124,13 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
         )
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, secret_box) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir, _secret_box) = admin_accounts_test_app_with_api_base_url(
         "admin-account-test-stream.sqlite",
         92,
         format!("{}/backend-api", server.uri()),
     )
     .await;
-    seed_test_account(&pool, secret_box).await;
+    seed_test_account(&pool).await;
 
     let response = app
         .oneshot(

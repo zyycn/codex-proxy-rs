@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use codex_proxy_rs::{
-    infra::{crypto::SecretBox, database::connect_sqlite},
+    infra::database::connect_sqlite,
     upstream::accounts::{
         model::{AccountStatus, AccountUsageDelta},
         store::{AccountStore, NewAccount, SqliteAccountStore},
@@ -9,9 +9,9 @@ use codex_proxy_rs::{
 use secrecy::{ExposeSecret, SecretString};
 
 #[tokio::test]
-async fn account_repository_should_encrypt_tokens_and_load_decrypted_account() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 4).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box);
+async fn account_repository_should_store_plain_tokens_and_load_secret_wrappers() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 4).await;
+    let repo = SqliteAccountStore::new(pool.clone());
     let expires_at = Utc::now() + Duration::hours(1);
 
     repo.insert(NewAccount {
@@ -30,17 +30,14 @@ async fn account_repository_should_encrypt_tokens_and_load_decrypted_account() {
     .await
     .unwrap();
 
-    let stored: (String, String) = sqlx::query_as(
-        "select access_token_cipher, refresh_token_cipher from accounts where id = ?",
-    )
-    .bind("acct_a")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(stored.0.starts_with("v1:"));
-    assert!(!stored.0.contains("access-secret"));
-    assert!(stored.1.starts_with("v1:"));
-    assert!(!stored.1.contains("refresh-secret"));
+    let stored: (String, String) =
+        sqlx::query_as("select access_token, refresh_token from accounts where id = ?")
+            .bind("acct_a")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "access-secret");
+    assert_eq!(stored.1, "refresh-secret");
 
     let loaded = repo.get("acct_a").await.unwrap().unwrap();
     assert_eq!(loaded.access_token.expose_secret(), "access-secret");
@@ -54,12 +51,12 @@ async fn account_repository_should_encrypt_tokens_and_load_decrypted_account() {
 
 #[tokio::test]
 async fn account_repository_should_cursor_page_accounts_by_added_at_desc() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 5).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 5).await;
+    let repo = SqliteAccountStore::new(pool.clone());
 
-    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
-    seed_repo_account(&pool, &secret_box, "acct_b", "2026-06-11T00:01:00Z").await;
-    seed_repo_account(&pool, &secret_box, "acct_c", "2026-06-11T00:02:00Z").await;
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    seed_repo_account(&pool, "acct_b", "2026-06-11T00:01:00Z").await;
+    seed_repo_account(&pool, "acct_c", "2026-06-11T00:02:00Z").await;
 
     let first_page = repo.list(None, 2).await.unwrap();
     assert_eq!(
@@ -83,15 +80,15 @@ async fn account_repository_should_cursor_page_accounts_by_added_at_desc() {
 }
 
 #[tokio::test]
-async fn account_repository_should_list_metadata_without_decrypting_tokens() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 35).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box);
+async fn account_repository_should_list_metadata_without_exposing_tokens() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 35).await;
+    let repo = SqliteAccountStore::new(pool.clone());
     sqlx::query(
-        "insert into accounts (id, email, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
     )
-    .bind("acct_corrupt")
+    .bind("acct_plain")
     .bind("user@example.com")
-    .bind("not-a-secret-box-cipher")
+    .bind("plain-access-token")
     .bind("active")
     .bind("2026-06-11T00:00:00Z")
     .bind("2026-06-11T00:00:00Z")
@@ -101,15 +98,15 @@ async fn account_repository_should_list_metadata_without_decrypting_tokens() {
 
     let page = repo.list_metadata(None, 10).await.unwrap();
 
-    assert_eq!(page.items[0].id, "acct_corrupt");
+    assert_eq!(page.items[0].id, "acct_plain");
     assert_eq!(page.items[0].email.as_deref(), Some("user@example.com"));
     assert_eq!(page.items[0].status, AccountStatus::Active);
 }
 
 #[tokio::test]
 async fn account_repository_should_update_status_and_label_without_rewriting_tokens() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 6).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box);
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 6).await;
+    let repo = SqliteAccountStore::new(pool.clone());
 
     repo.insert(NewAccount {
         id: "acct_a".to_string(),
@@ -126,7 +123,7 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
     })
     .await
     .unwrap();
-    let before: (String,) = sqlx::query_as("select access_token_cipher from accounts where id = ?")
+    let before: (String,) = sqlx::query_as("select access_token from accounts where id = ?")
         .bind("acct_a")
         .fetch_one(&pool)
         .await
@@ -141,7 +138,7 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
         .await
         .unwrap());
 
-    let after: (String,) = sqlx::query_as("select access_token_cipher from accounts where id = ?")
+    let after: (String,) = sqlx::query_as("select access_token from accounts where id = ?")
         .bind("acct_a")
         .fetch_one(&pool)
         .await
@@ -160,8 +157,8 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
 
 #[tokio::test]
 async fn account_repository_should_accumulate_usage_counters() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 7).await;
-    let repo = SqliteAccountStore::new(pool, secret_box);
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 7).await;
+    let repo = SqliteAccountStore::new(pool);
     seed_new_account(&repo, "acct_a").await;
 
     AccountStore::record_usage_delta(
@@ -210,12 +207,12 @@ async fn account_repository_should_accumulate_usage_counters() {
 
 #[tokio::test]
 async fn account_repository_should_restore_window_usage_into_runtime_pool_accounts() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 33).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 33).await;
+    let repo = SqliteAccountStore::new(pool.clone());
     let window_started_at = Utc::now() - Duration::minutes(2);
     let window_reset_at = Utc::now() + Duration::minutes(3);
 
-    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
     sqlx::query(
         "insert into account_usage (account_id, request_count, image_input_tokens, image_output_tokens, image_request_count, image_request_failed_count, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_image_input_tokens, window_image_output_tokens, window_image_request_count, window_image_request_failed_count, window_started_at, window_reset_at, limit_window_seconds) values (?, 9, 31, 9, 2, 1, 7, 11, 13, 17, 19, 5, 1, 1, ?, ?, 300)",
     )
@@ -250,10 +247,10 @@ async fn account_repository_should_restore_window_usage_into_runtime_pool_accoun
 
 #[tokio::test]
 async fn account_repository_should_restore_quota_verify_required_into_runtime_pool_accounts() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 34).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 34).await;
+    let repo = SqliteAccountStore::new(pool.clone());
 
-    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
     sqlx::query("update accounts set quota_verify_required = 1 where id = ?")
         .bind("acct_a")
         .execute(&pool)
@@ -270,9 +267,9 @@ async fn account_repository_should_restore_quota_verify_required_into_runtime_po
 
 #[tokio::test]
 async fn account_repository_should_update_quota_json_and_fetched_at() {
-    let (pool, secret_box, _dir) = sqlite_account_store_parts("accounts.sqlite", 36).await;
-    let repo = SqliteAccountStore::new(pool.clone(), secret_box.clone());
-    seed_repo_account(&pool, &secret_box, "acct_a", "2026-06-11T00:00:00Z").await;
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 36).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
 
     let updated = repo
         .update_quota_json(
@@ -306,13 +303,13 @@ async fn account_repository_should_update_quota_json_and_fetched_at() {
 
 async fn sqlite_account_store_parts(
     db_name: &str,
-    key_byte: u8,
-) -> (sqlx::SqlitePool, SecretBox, tempfile::TempDir) {
+    _key_byte: u8,
+) -> (sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    (pool, SecretBox::new([key_byte; 32]), dir)
+    (pool, dir)
 }
 
 async fn seed_new_account(repo: &SqliteAccountStore, id: &str) {
@@ -333,19 +330,12 @@ async fn seed_new_account(repo: &SqliteAccountStore, id: &str) {
     .unwrap();
 }
 
-async fn seed_repo_account(
-    pool: &sqlx::SqlitePool,
-    secret_box: &SecretBox,
-    id: &str,
-    added_at: &str,
-) {
-    let token = SecretString::new(format!("access-{id}").into());
-    let cipher = secret_box.encrypt(&token).unwrap();
+async fn seed_repo_account(pool: &sqlx::SqlitePool, id: &str, added_at: &str) {
     sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
     )
     .bind(id)
-    .bind(cipher)
+    .bind(format!("access-{id}"))
     .bind("active")
     .bind(added_at)
     .bind(added_at)

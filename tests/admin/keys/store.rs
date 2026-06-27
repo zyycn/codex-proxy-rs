@@ -11,13 +11,12 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
     assert_eq!(created.name, "cursor");
     assert!(created.key.starts_with("sk_"));
 
-    let key_cipher: (String,) =
-        sqlx::query_as("select key_cipher from client_api_keys where id = ?")
-            .bind(&created.id)
-            .fetch_one(store.pool())
-            .await
-            .unwrap();
-    assert_ne!(key_cipher.0, created.key);
+    let key: (String,) = sqlx::query_as("select key from client_api_keys where id = ?")
+        .bind(&created.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(key.0, created.key);
 
     assert!(store.verify_and_touch(&created.key).await.unwrap());
 

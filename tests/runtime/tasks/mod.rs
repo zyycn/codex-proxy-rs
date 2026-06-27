@@ -154,10 +154,10 @@ async fn wait_for_appcast_requests(server: &MockServer, expected_count: usize) {
 async fn insert_account(pool: &sqlx::SqlitePool, account_id: &str) {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, ?, 'active', ?, ?)",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values (?, ?, 'active', ?, ?)",
     )
     .bind(account_id)
-    .bind("cipher")
+    .bind("access-token")
     .bind(&now)
     .bind(&now)
     .execute(pool)

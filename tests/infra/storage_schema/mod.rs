@@ -118,13 +118,13 @@ async fn sqlite_schema_should_enforce_unique_chatgpt_identity() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     sqlx::query(
-        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token_cipher, status, added_at, updated_at) values ('acct_a', 'chatgpt-account', 'chatgpt-user', 'cipher', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token, status, added_at, updated_at) values ('acct_a', 'chatgpt-account', 'chatgpt-user', 'access-token-a', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await
     .unwrap();
     let result = sqlx::query(
-        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token_cipher, status, added_at, updated_at) values ('acct_b', 'chatgpt-account', 'chatgpt-user', 'cipher', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token, status, added_at, updated_at) values ('acct_b', 'chatgpt-account', 'chatgpt-user', 'access-token-b', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
@@ -233,7 +233,7 @@ async fn sqlite_schema_should_reject_invalid_account_status() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let result = sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values ('acct_bad', 'cipher', 'unknown', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_bad', 'access-token', 'unknown', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
@@ -265,17 +265,17 @@ async fn sqlite_schema_should_reject_non_boolean_flags() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let api_key_result = sqlx::query(
-        "insert into client_api_keys (id, name, prefix, key_hash, key_cipher, enabled, created_at) values ('key_bad', 'bad', 'sk_x', 'hash', 'cipher', 2, '2026-06-14T00:00:00Z')",
+        "insert into client_api_keys (id, name, prefix, key_hash, key, enabled, created_at) values ('key_bad', 'bad', 'sk_x', 'hash', 'sk_test', 2, '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
     let account_result = sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, quota_limit_reached, added_at, updated_at) values ('acct_bad', 'cipher', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, access_token, status, quota_limit_reached, added_at, updated_at) values ('acct_bad', 'access-token', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
     let quota_verify_result = sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, quota_verify_required, added_at, updated_at) values ('acct_verify_bad', 'cipher', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, access_token, status, quota_verify_required, added_at, updated_at) values ('acct_verify_bad', 'access-token', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
@@ -293,7 +293,7 @@ async fn sqlite_schema_should_reject_negative_account_usage_counts() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values ('acct_a', 'cipher', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_a', 'access-token', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await

@@ -41,7 +41,7 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
     let secret_box = SecretBox::new([43u8; 32]);
     let hasher = ApiKeyHasher::new([44u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),

@@ -11,7 +11,7 @@ async fn admin_usage_stats_should_return_page_and_summary() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    sqlx::query("insert into accounts (id, email, label, plan_type, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("insert into accounts (id, email, label, plan_type, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind("acct_usage").bind("usage@example.com").bind("primary").bind("plus")
         .bind("cipher").bind("active").bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z")
         .execute(&pool).await.unwrap();
@@ -21,9 +21,9 @@ async fn admin_usage_stats_should_return_page_and_summary() {
     let secret_box = SecretBox::new([73u8; 32]);
     let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([73u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -86,9 +86,9 @@ async fn admin_usage_stats_should_require_admin_session_cookie() {
     let secret_box = SecretBox::new([125u8; 32]);
     let hasher = ApiKeyHasher::new([126u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([125u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -157,9 +157,9 @@ async fn admin_usage_stats_should_cursor_page_account_usage() {
     let secret_box = SecretBox::new([127u8; 32]);
     let hasher = ApiKeyHasher::new([128u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([127u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -235,9 +235,8 @@ async fn admin_account_quota_should_send_usage_cookie() {
         format!("{}/backend-api", server.uri()),
     )
     .await;
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_quota_cookie".to_string(),
             email: Some("quota-cookie@example.com".to_string()),
@@ -299,9 +298,8 @@ async fn admin_account_health_check_should_send_probe_cookie() {
         format!("{}/backend-api", server.uri()),
     )
     .await;
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_health_cookie".to_string(),
             email: Some("health-cookie@example.com".to_string()),
@@ -358,9 +356,8 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let secret_box = SecretBox::new([89u8; 32]);
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_warn".to_string(),
             email: Some("warn@example.com".to_string()),
@@ -418,9 +415,9 @@ async fn admin_account_quota_warnings_should_return_threshold_matches_from_cache
     let config = test_config(url);
     let hasher = ApiKeyHasher::new([90u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([89u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),

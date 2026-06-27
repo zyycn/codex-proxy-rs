@@ -10,7 +10,6 @@ use std::{
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, TimeZone, Utc};
-use codex_proxy_rs::infra::crypto::SecretBox;
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::store::SqliteAccountStore;

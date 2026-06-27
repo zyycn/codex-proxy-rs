@@ -261,9 +261,9 @@ async fn admin_logs_test_app(
     let secret_box = SecretBox::new([73u8; 32]);
     let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([73u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),

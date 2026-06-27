@@ -2,23 +2,23 @@ use super::*;
 use codex_proxy_rs::admin::monitoring::events::{EventLevel, EventLog};
 
 #[tokio::test]
-async fn admin_accounts_list_should_not_decrypt_account_tokens() {
+async fn admin_accounts_list_should_not_expose_account_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-accounts.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    sqlx::query("insert into accounts (id, email, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)")
-        .bind("acct_corrupt").bind("user@example.com").bind("not-a-secret-box-cipher")
+    sqlx::query("insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)")
+        .bind("acct_plain").bind("user@example.com").bind("plain-access-token")
         .bind("active").bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z")
         .execute(&pool).await.unwrap();
     let config = test_config(url);
     let secret_box = SecretBox::new([63u8; 32]);
     let hasher = ApiKeyHasher::new([64u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([63u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -48,7 +48,7 @@ async fn admin_accounts_list_should_not_decrypt_account_tokens() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["items"][0]["id"], "acct_corrupt");
+    assert_eq!(body["data"]["items"][0]["id"], "acct_plain");
     assert_eq!(body["data"]["items"][0]["email"], "user@example.com");
     assert_eq!(
         body["data"]["items"][0]["addedAt"],
@@ -221,7 +221,7 @@ async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
             "2026-06-18T00:00:00Z",
         ),
     ] {
-        sqlx::query("insert into accounts (id, email, label, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("insert into accounts (id, email, label, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)")
             .bind(id)
             .bind(email)
             .bind(label)

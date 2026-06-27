@@ -83,10 +83,7 @@ fn acquire_should_skip_accounts_with_expired_jwt_when_metadata_is_missing() {
 async fn runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_discovered() {
     let (pool, _dir) =
         crate::support::sqlite::init_test_db("runtime-pool-expired-status.sqlite").await;
-    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(
-        pool.clone(),
-        codex_proxy_rs::infra::crypto::SecretBox::new([91u8; 32]),
-    );
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone());
     store
         .insert(codex_proxy_rs::upstream::accounts::store::NewAccount {
             id: "acct_expired".to_string(),

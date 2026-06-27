@@ -1,15 +1,11 @@
 use chrono::Utc;
-use codex_proxy_rs::{
-    infra::crypto::SecretBox,
-    upstream::accounts::{
+use codex_proxy_rs::upstream::{
+    accounts::{
         model::AccountStatus,
         store::{AccountStore, SqliteAccountStore},
     },
-    upstream::models::{
-        BackendModelEntry, ModelPlanSnapshot, ModelSnapshotStore, SqliteModelSnapshotStore,
-    },
+    models::{BackendModelEntry, ModelPlanSnapshot, ModelSnapshotStore, SqliteModelSnapshotStore},
 };
-use secrecy::SecretString;
 
 #[tokio::test]
 async fn model_snapshot_repository_should_replace_and_load_plan_snapshots() {
@@ -50,17 +46,12 @@ async fn sqlite_account_store_should_list_pool_accounts() {
         codex_proxy_rs::infra::database::connect_sqlite(&format!("sqlite://{}", db.display()))
             .await
             .expect("sqlite pool");
-    let secret_box = SecretBox::new([41u8; 32]);
     let now = Utc::now().to_rfc3339();
-    let access_token_cipher = secret_box
-        .encrypt(&SecretString::new("access-token".to_string().into()))
-        .expect("encrypt access token");
-    let refresh_token_cipher = secret_box
-        .encrypt(&SecretString::new("refresh-token".to_string().into()))
-        .expect("encrypt refresh token");
+    let access_token = "access-token";
+    let refresh_token = "refresh-token";
     sqlx::query(
         "insert into accounts (
-            id, email, chatgpt_account_id, chatgpt_user_id, label, plan_type, access_token_cipher, refresh_token_cipher,
+            id, email, chatgpt_account_id, chatgpt_user_id, label, plan_type, access_token, refresh_token,
             access_token_expires_at, status, added_at, updated_at
         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -70,8 +61,8 @@ async fn sqlite_account_store_should_list_pool_accounts() {
         .bind(Option::<String>::None)
         .bind("primary")
         .bind("plus")
-        .bind(&access_token_cipher)
-        .bind(Some(&refresh_token_cipher))
+        .bind(access_token)
+        .bind(Some(refresh_token))
         .bind(Option::<String>::None)
         .bind(match AccountStatus::Active {
             AccountStatus::Active => "active",
@@ -83,7 +74,7 @@ async fn sqlite_account_store_should_list_pool_accounts() {
         .await
         .expect("insert account");
 
-    let store = SqliteAccountStore::new(pool, secret_box);
+    let store = SqliteAccountStore::new(pool);
     let accounts = AccountStore::list_pool_accounts(&store)
         .await
         .expect("list accounts");

@@ -7,7 +7,6 @@ use serde_json::Value;
 use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
-use crate::infra::crypto::{CryptoError, SecretBox};
 use crate::infra::json::{decode_cursor, page_offset, NumberedPage, Page};
 use crate::upstream::accounts::model::{Account, AccountStatus, AccountUsageDelta};
 
@@ -23,8 +22,8 @@ select
   a.chatgpt_user_id as user_id,
   a.label,
   a.plan_type,
-  a.access_token_cipher,
-  a.refresh_token_cipher,
+  a.access_token,
+  a.refresh_token,
   a.access_token_expires_at,
   a.next_refresh_at,
   a.status,
@@ -63,8 +62,8 @@ select
   a.chatgpt_user_id as user_id,
   a.label,
   a.plan_type,
-  a.access_token_cipher,
-  a.refresh_token_cipher,
+  a.access_token,
+  a.refresh_token,
   a.access_token_expires_at,
   a.next_refresh_at,
   a.status,
@@ -103,8 +102,8 @@ insert into accounts (
   chatgpt_user_id,
   label,
   plan_type,
-  access_token_cipher,
-  refresh_token_cipher,
+  access_token,
+  refresh_token,
   access_token_expires_at,
   status,
   added_at,
@@ -119,8 +118,8 @@ select
   chatgpt_user_id as user_id,
   label,
   plan_type,
-  access_token_cipher,
-  refresh_token_cipher,
+  access_token,
+  refresh_token,
   access_token_expires_at,
   next_refresh_at,
   status,
@@ -137,8 +136,8 @@ select
   chatgpt_user_id as user_id,
   label,
   plan_type,
-  access_token_cipher,
-  refresh_token_cipher,
+  access_token,
+  refresh_token,
   access_token_expires_at,
   next_refresh_at,
   status,
@@ -185,8 +184,8 @@ select
   chatgpt_user_id as user_id,
   label,
   plan_type,
-  access_token_cipher,
-  refresh_token_cipher,
+  access_token,
+  refresh_token,
   access_token_expires_at,
   next_refresh_at,
   status,
@@ -206,8 +205,8 @@ select
   chatgpt_user_id as user_id,
   label,
   plan_type,
-  access_token_cipher,
-  refresh_token_cipher,
+  access_token,
+  refresh_token,
   access_token_expires_at,
   next_refresh_at,
   status,
@@ -472,8 +471,8 @@ set
   chatgpt_account_id = ?,
   chatgpt_user_id = ?,
   plan_type = ?,
-  access_token_cipher = ?,
-  refresh_token_cipher = ?,
+  access_token = ?,
+  refresh_token = ?,
   access_token_expires_at = ?,
   next_refresh_at = ?,
   status = ?,
@@ -487,7 +486,7 @@ set
   chatgpt_account_id = ?,
   chatgpt_user_id = ?,
   plan_type = ?,
-  access_token_cipher = ?,
+  access_token = ?,
   access_token_expires_at = ?,
   next_refresh_at = ?,
   status = ?,
@@ -509,8 +508,8 @@ set
   chatgpt_user_id = ?,
   label = ?,
   plan_type = ?,
-  access_token_cipher = ?,
-  refresh_token_cipher = ?,
+  access_token = ?,
+  refresh_token = ?,
   access_token_expires_at = ?,
   status = ?,
   quota_json = coalesce(?, quota_json),
@@ -529,7 +528,7 @@ set
   chatgpt_user_id = ?,
   label = ?,
   plan_type = ?,
-  access_token_cipher = ?,
+  access_token = ?,
   access_token_expires_at = ?,
   status = ?,
   quota_json = coalesce(?, quota_json),
@@ -566,9 +565,6 @@ pub enum SqliteAccountStoreError {
     /// 数据库错误。
     #[error("sqlite account store database error: {0}")]
     Database(#[from] sqlx::Error),
-    /// 加解密错误。
-    #[error("sqlite account store crypto error: {0}")]
-    Crypto(#[from] CryptoError),
     /// 时间格式错误。
     #[error("sqlite account store timestamp error: {0}")]
     Timestamp(#[from] chrono::ParseError),
@@ -665,9 +661,9 @@ pub struct StoredAccount {
     pub label: Option<String>,
     /// 计划类型。
     pub plan_type: Option<String>,
-    /// access token 密文。
+    /// access token 明文。
     pub access_token: SecretString,
-    /// refresh token 密文。
+    /// refresh token 明文。
     pub refresh_token: Option<SecretString>,
     /// access token 过期时间。
     pub access_token_expires_at: Option<DateTime<Utc>>,
@@ -917,13 +913,12 @@ pub trait AccountStore: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct SqliteAccountStore {
     pool: SqlitePool,
-    secret_box: SecretBox,
 }
 
 impl SqliteAccountStore {
     /// 构造存储。
-    pub fn new(pool: SqlitePool, secret_box: SecretBox) -> Self {
-        Self { pool, secret_box }
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     /// 返回底层连接池。
@@ -934,11 +929,10 @@ impl SqliteAccountStore {
     /// 插入新账号。
     pub async fn insert(&self, account: NewAccount) -> SqliteAccountStoreResult<()> {
         let now = Utc::now().to_rfc3339();
-        let access_token_cipher = self.secret_box.encrypt(&account.access_token)?;
-        let refresh_token_cipher = account
+        let refresh_token = account
             .refresh_token
-            .map(|token| self.secret_box.encrypt(&token))
-            .transpose()?;
+            .as_ref()
+            .map(ExposeSecret::expose_secret);
         sqlx::query(INSERT_ACCOUNT_SQL)
             .bind(&account.id)
             .bind(&account.email)
@@ -946,8 +940,8 @@ impl SqliteAccountStore {
             .bind(&account.user_id)
             .bind(&account.label)
             .bind(&account.plan_type)
-            .bind(&access_token_cipher)
-            .bind(&refresh_token_cipher)
+            .bind(account.access_token.expose_secret())
+            .bind(refresh_token)
             .bind(account.access_token_expires_at.map(|dt| dt.to_rfc3339()))
             .bind(status_to_db(account.status))
             .bind(
@@ -968,9 +962,7 @@ impl SqliteAccountStore {
             .bind(account_id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref()
-            .map(|row| stored_account_from_row(self, row))
-            .transpose()
+        row.as_ref().map(stored_account_from_row).transpose()
     }
 
     /// 通过 ChatGPT 身份查找账号。
@@ -985,9 +977,7 @@ impl SqliteAccountStore {
             .bind(chatgpt_user_id)
             .fetch_optional(&self.pool)
             .await?;
-        row.as_ref()
-            .map(|row| stored_account_from_row(self, row))
-            .transpose()
+        row.as_ref().map(stored_account_from_row).transpose()
     }
 
     /// 分页列出所有账号（含 token）。
@@ -1010,7 +1000,7 @@ impl SqliteAccountStore {
             Ok(to_page(
                 rows,
                 limit,
-                |row| stored_account_from_row(self, row),
+                stored_account_from_row,
                 ("added_at", "id"),
             ))
         } else {
@@ -1021,7 +1011,7 @@ impl SqliteAccountStore {
             Ok(to_page(
                 rows,
                 limit,
-                |row| stored_account_from_row(self, row),
+                stored_account_from_row,
                 ("added_at", "id"),
             ))
         }
@@ -1137,20 +1127,19 @@ impl SqliteAccountStore {
         update: AccountClaimsUpdate,
     ) -> SqliteAccountStoreResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let access_token_cipher = self.secret_box.encrypt(&update.access_token)?;
-        let refresh_token_cipher = update
+        let refresh_token = update
             .refresh_token
-            .map(|token| self.secret_box.encrypt(&token))
-            .transpose()?;
+            .as_ref()
+            .map(ExposeSecret::expose_secret);
 
-        let result = if let Some(refresh_cipher) = &refresh_token_cipher {
+        let result = if let Some(refresh_token) = refresh_token {
             sqlx::query(UPDATE_ACCOUNT_CLAIMS_WITH_REFRESH_SQL)
                 .bind(&update.email)
                 .bind(&update.account_id)
                 .bind(&update.user_id)
                 .bind(&update.plan_type)
-                .bind(&access_token_cipher)
-                .bind(refresh_cipher)
+                .bind(update.access_token.expose_secret())
+                .bind(refresh_token)
                 .bind(update.access_token_expires_at.map(|dt| dt.to_rfc3339()))
                 .bind(update.next_refresh_at.map(|dt| dt.to_rfc3339()))
                 .bind(status_to_db(update.status))
@@ -1164,7 +1153,7 @@ impl SqliteAccountStore {
                 .bind(&update.account_id)
                 .bind(&update.user_id)
                 .bind(&update.plan_type)
-                .bind(&access_token_cipher)
+                .bind(update.access_token.expose_secret())
                 .bind(update.access_token_expires_at.map(|dt| dt.to_rfc3339()))
                 .bind(update.next_refresh_at.map(|dt| dt.to_rfc3339()))
                 .bind(status_to_db(update.status))
@@ -1182,25 +1171,24 @@ impl SqliteAccountStore {
         update: ImportedAccountUpdate,
     ) -> SqliteAccountStoreResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let access_token_cipher = self.secret_box.encrypt(&update.account.access_token)?;
-        let refresh_token_cipher = update
+        let refresh_token = update
             .account
             .refresh_token
-            .map(|token| self.secret_box.encrypt(&token))
-            .transpose()?;
+            .as_ref()
+            .map(ExposeSecret::expose_secret);
         let quota_json = update.quota_json;
         let quota_fetched_at = update.quota_fetched_at.map(|dt| dt.to_rfc3339());
         let quota_verify_required = if update.quota_verify_required { 1 } else { 0 };
 
-        let result = if let Some(refresh_cipher) = &refresh_token_cipher {
+        let result = if let Some(refresh_token) = refresh_token {
             sqlx::query(UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL)
                 .bind(&update.account.email)
                 .bind(&update.account.account_id)
                 .bind(&update.account.user_id)
                 .bind(&update.account.label)
                 .bind(&update.account.plan_type)
-                .bind(&access_token_cipher)
-                .bind(refresh_cipher)
+                .bind(update.account.access_token.expose_secret())
+                .bind(refresh_token)
                 .bind(
                     update
                         .account
@@ -1223,7 +1211,7 @@ impl SqliteAccountStore {
                 .bind(&update.account.user_id)
                 .bind(&update.account.label)
                 .bind(&update.account.plan_type)
-                .bind(&access_token_cipher)
+                .bind(update.account.access_token.expose_secret())
                 .bind(
                     update
                         .account
@@ -1660,7 +1648,7 @@ async fn list_pool_accounts(store: &SqliteAccountStore) -> SqliteAccountStoreRes
     let mut accounts = Vec::with_capacity(rows.len());
 
     for row in rows {
-        accounts.push(pool_account_from_row(store, &row)?);
+        accounts.push(pool_account_from_row(&row)?);
     }
 
     Ok(accounts)
@@ -1674,22 +1662,10 @@ async fn get_pool_account(
         .bind(account_id)
         .fetch_optional(&store.pool)
         .await?;
-    row.map(|row| pool_account_from_row(store, &row))
-        .transpose()
+    row.map(|row| pool_account_from_row(&row)).transpose()
 }
 
-fn pool_account_from_row(
-    store: &SqliteAccountStore,
-    row: &SqliteRow,
-) -> SqliteAccountStoreResult<Account> {
-    let access_token_cipher = row.get::<String, _>("access_token_cipher");
-    let access_token = store.secret_box.decrypt(&access_token_cipher)?;
-    let refresh_token = row
-        .get::<Option<String>, _>("refresh_token_cipher")
-        .map(|cipher| store.secret_box.decrypt(&cipher))
-        .transpose()?
-        .map(|token| token.expose_secret().to_string());
-
+fn pool_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<Account> {
     Ok(Account {
         id: row.get("id"),
         email: row.get("email"),
@@ -1697,8 +1673,8 @@ fn pool_account_from_row(
         user_id: row.get("user_id"),
         label: row.get("label"),
         plan_type: row.get("plan_type"),
-        access_token: access_token.expose_secret().to_string(),
-        refresh_token,
+        access_token: row.get("access_token"),
+        refresh_token: row.get("refresh_token"),
         access_token_expires_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("access_token_expires_at"),
         )?,
@@ -1758,17 +1734,7 @@ fn pool_account_from_row(
     })
 }
 
-fn stored_account_from_row(
-    store: &SqliteAccountStore,
-    row: &SqliteRow,
-) -> SqliteAccountStoreResult<StoredAccount> {
-    let access_token_cipher = row.get::<String, _>("access_token_cipher");
-    let access_token = store.secret_box.decrypt(&access_token_cipher)?;
-    let refresh_token = row
-        .get::<Option<String>, _>("refresh_token_cipher")
-        .map(|cipher| store.secret_box.decrypt(&cipher))
-        .transpose()?;
-
+fn stored_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<StoredAccount> {
     Ok(StoredAccount {
         id: row.get("id"),
         email: row.get("email"),
@@ -1776,8 +1742,10 @@ fn stored_account_from_row(
         user_id: row.get("user_id"),
         label: row.get("label"),
         plan_type: row.get("plan_type"),
-        access_token,
-        refresh_token,
+        access_token: SecretString::new(row.get::<String, _>("access_token").into()),
+        refresh_token: row
+            .get::<Option<String>, _>("refresh_token")
+            .map(|token| SecretString::new(token.into())),
         access_token_expires_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("access_token_expires_at"),
         )?,

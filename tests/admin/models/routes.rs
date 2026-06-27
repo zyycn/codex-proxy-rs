@@ -47,9 +47,9 @@ async fn admin_refresh_models_should_require_admin_session() {
     let secret_box = SecretBox::new([81u8; 32]);
     let hasher = ApiKeyHasher::new([82u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone(), SecretBox::new([81u8; 32])),
+        cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
@@ -106,7 +106,7 @@ async fn admin_refresh_models_should_store_snapshots_for_distinct_active_plans()
     let secret_box = SecretBox::new([83u8; 32]);
     let config = test_config(url, upstream.uri());
     let hasher = ApiKeyHasher::new([84u8; 32]);
-    let store = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let store = SqliteAccountStore::new(pool.clone());
     store
         .insert(NewAccount {
             id: "acct_plus".to_string(),

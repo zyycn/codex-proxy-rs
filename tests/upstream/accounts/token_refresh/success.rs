@@ -7,7 +7,7 @@ async fn token_refresh_task_should_persist_refreshed_access_token_and_keep_refre
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([11u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 18, 8, 0, 0).unwrap();
     let new_expires_at = now + Duration::hours(1);
     let new_access_token = test_jwt(new_expires_at.timestamp());
@@ -82,7 +82,7 @@ async fn token_refresh_task_should_persist_success_after_transient_transport_ret
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([16u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
     store

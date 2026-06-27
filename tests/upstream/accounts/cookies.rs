@@ -13,7 +13,7 @@ use sqlx::SqlitePool;
 #[tokio::test]
 async fn cookie_store_should_cleanup_expired_cookies() {
     let (pool, secret_box, _dir) = sqlite_cookie_store_parts("cookies-cleanup.sqlite").await;
-    seed_account(&pool, &secret_box, "acct_a").await;
+    seed_account(&pool, "acct_a").await;
     let store = SqliteCookieStore::new(pool.clone(), secret_box);
 
     let now = Utc::now();
@@ -68,8 +68,8 @@ async fn sqlite_cookie_store_parts(name: &str) -> (SqlitePool, SecretBox, tempfi
     (pool, SecretBox::new([21u8; 32]), dir)
 }
 
-async fn seed_account(pool: &SqlitePool, secret_box: &SecretBox, id: &str) {
-    SqliteAccountStore::new(pool.clone(), secret_box.clone())
+async fn seed_account(pool: &SqlitePool, id: &str) {
+    SqliteAccountStore::new(pool.clone())
         .insert(NewAccount {
             id: id.to_string(),
             email: Some(format!("{id}@example.com")),
