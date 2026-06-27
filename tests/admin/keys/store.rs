@@ -1,11 +1,11 @@
 use codex_proxy_rs::{
     admin::keys::service::{ClientKeyStore, SqliteClientKeyStore},
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
 };
 
 #[tokio::test]
 async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
-    let (store, _dir) = client_key_store("client-keys.sqlite", 10).await;
+    let (store, _dir) = client_key_store("client-keys.sqlite").await;
 
     let created = store.create("cursor").await.unwrap();
     assert_eq!(created.name, "cursor");
@@ -38,7 +38,7 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
 
 #[tokio::test]
 async fn client_key_store_should_page_keys_by_created_at_desc() {
-    let (store, _dir) = client_key_store("client-keys-page.sqlite", 11).await;
+    let (store, _dir) = client_key_store("client-keys-page.sqlite").await;
 
     let key_a = store.create("a").await.unwrap();
     let key_b = store.create("b").await.unwrap();
@@ -83,17 +83,11 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
     );
 }
 
-async fn client_key_store(
-    db_name: &str,
-    key_byte: u8,
-) -> (SqliteClientKeyStore, tempfile::TempDir) {
+async fn client_key_store(db_name: &str) -> (SqliteClientKeyStore, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join(db_name);
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .unwrap();
-    (
-        SqliteClientKeyStore::new(pool, ApiKeyHasher::new([key_byte; 32])),
-        dir,
-    )
+    (SqliteClientKeyStore::new(pool), dir)
 }

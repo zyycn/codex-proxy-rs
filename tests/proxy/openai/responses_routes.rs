@@ -11,10 +11,10 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -139,8 +139,7 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
     let db = dir.path().join("openai-responses-routes.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([95u8; 32]);
-    let plaintext = insert_client_api_key(&pool, &hasher).await;
+    let plaintext = insert_client_api_key(&pool).await;
     let config = test_config(url);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
@@ -149,7 +148,7 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -165,8 +164,8 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
     )
 }
 
-async fn insert_client_api_key(pool: &SqlitePool, hasher: &ApiKeyHasher) -> String {
-    SqliteClientKeyStore::new(pool.clone(), hasher.clone())
+async fn insert_client_api_key(pool: &SqlitePool) -> String {
+    SqliteClientKeyStore::new(pool.clone())
         .create("test")
         .await
         .unwrap()
@@ -218,9 +217,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

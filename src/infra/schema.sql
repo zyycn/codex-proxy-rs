@@ -29,15 +29,14 @@ create table if not exists client_api_keys (
   id text primary key,
   name text not null,
   prefix text not null,
-  key_hash text not null,
-  key text not null,
+  key text not null unique,
   label text,
   enabled integer not null default 1 check (enabled in (0, 1)),
   created_at text not null,
   last_used_at text
 );
 
-create index if not exists idx_client_api_keys_prefix on client_api_keys(prefix) where enabled = 1;
+create index if not exists idx_client_api_keys_key_enabled on client_api_keys(key) where enabled = 1;
 create index if not exists idx_client_api_keys_created_id on client_api_keys(created_at desc, id desc);
 
 -- ============================================

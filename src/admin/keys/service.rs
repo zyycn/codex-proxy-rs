@@ -9,7 +9,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::infra::{
-    identity::{ApiKeyHasher, AuthError},
+    identity::generate_client_api_key,
     json::{decode_cursor, encode_cursor, Page},
 };
 
@@ -327,9 +327,6 @@ pub enum SqliteClientKeyStoreError {
     /// 数据库错误。
     #[error("sqlite client key database error: {0}")]
     Database(#[from] sqlx::Error),
-    /// API Key 验证错误。
-    #[error("sqlite client key auth error: {0}")]
-    Auth(#[from] AuthError),
     /// 分页游标无效。
     #[error("invalid client key pagination cursor")]
     InvalidCursor,
@@ -381,13 +378,12 @@ pub struct CreatedClientApiKey {
 #[derive(Clone)]
 pub struct SqliteClientKeyStore {
     pool: SqlitePool,
-    hasher: ApiKeyHasher,
 }
 
 impl SqliteClientKeyStore {
     /// 构造存储适配器。
-    pub fn new(pool: SqlitePool, hasher: ApiKeyHasher) -> Self {
-        Self { pool, hasher }
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     /// 暴露底层连接池，供集成测试和运行时组合层复用。
@@ -400,16 +396,15 @@ impl SqliteClientKeyStore {
         &self,
         name: &str,
     ) -> Result<CreatedClientApiKey, SqliteClientKeyStoreError> {
-        let generated = self.hasher.generate_client_api_key(name);
+        let generated = generate_client_api_key();
         let id = format!("key_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "insert into client_api_keys (id, name, label, prefix, key_hash, key, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, ?, 1, ?, null)",
+            "insert into client_api_keys (id, name, label, prefix, key, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, 1, ?, null)",
         )
         .bind(&id)
         .bind(name)
         .bind(&generated.prefix)
-        .bind(&generated.key_hash)
         .bind(&generated.key)
         .bind(&now)
         .execute(&self.pool)
@@ -551,7 +546,7 @@ impl SqliteClientKeyStore {
 #[async_trait]
 impl ClientKeyStore for SqliteClientKeyStore {
     async fn verify_and_touch(&self, plaintext: &str) -> ClientKeyStoreResult<bool> {
-        verify_and_touch(&self.pool, &self.hasher, plaintext)
+        verify_and_touch(&self.pool, plaintext)
             .await
             .map_err(map_client_key_store_error)
     }
@@ -559,27 +554,21 @@ impl ClientKeyStore for SqliteClientKeyStore {
 
 async fn verify_and_touch(
     pool: &SqlitePool,
-    hasher: &ApiKeyHasher,
     plaintext: &str,
 ) -> Result<bool, SqliteClientKeyStoreError> {
-    let prefix = plaintext.chars().take(12).collect::<String>();
-    let rows =
-        sqlx::query("select id, key_hash from client_api_keys where prefix = ? and enabled = 1")
-            .bind(prefix)
-            .fetch_all(pool)
-            .await?;
+    let row = sqlx::query("select id from client_api_keys where key = ? and enabled = 1")
+        .bind(plaintext)
+        .fetch_optional(pool)
+        .await?;
 
-    for row in rows {
-        let key_hash = row.get::<String, _>("key_hash");
-        if hasher.verify_client_api_key(plaintext, &key_hash)? {
-            let id = row.get::<String, _>("id");
-            sqlx::query("update client_api_keys set last_used_at = ? where id = ?")
-                .bind(Utc::now().to_rfc3339())
-                .bind(id)
-                .execute(pool)
-                .await?;
-            return Ok(true);
-        }
+    if let Some(row) = row {
+        let id = row.get::<String, _>("id");
+        sqlx::query("update client_api_keys set last_used_at = ? where id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(pool)
+            .await?;
+        return Ok(true);
     }
 
     Ok(false)

@@ -227,9 +227,9 @@ create table usage_time_buckets (
 
 ### `client_api_keys`
 
-整体合理。`prefix` 部分索引用于启用状态下的认证查找，方向正确。
+整体合理。`key` 明文字段用于 `/v1` 认证查找，方向和当前产品策略一致；`prefix` 只作为管理端展示字段，不承担认证。
 
-已补 `created_at desc, id desc` 列表索引。当前明文 `key` 与 `key_hash` 同存是产品取舍：如果管理端需要复制完整 key，这个结构一致；但接口输出要严格控制，避免列表接口无意泄漏。
+已补 `created_at desc, id desc` 列表索引，并使用启用状态下的 `key` 索引支撑认证查询。当前不再保存额外哈希字段，也不再需要额外本地密钥文件。
 
 ### `accounts`
 

@@ -12,7 +12,6 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
         .bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z").execute(&pool).await.unwrap();
     seed_account_related_rows(&pool, "acct_lifecycle").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([76u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -20,7 +19,7 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -445,7 +444,6 @@ async fn admin_account_cookies_should_store_plain_cookie_header() {
     )
     .await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([86u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -453,7 +451,7 @@ async fn admin_account_cookies_should_store_plain_cookie_header() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -528,7 +526,6 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
         Some("team"),
     );
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([92u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -536,7 +533,7 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -573,7 +570,6 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([94u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -581,7 +577,7 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();

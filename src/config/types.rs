@@ -19,8 +19,6 @@ pub struct AppConfig {
     pub usage_stats: UsageStatsConfig,
     /// 数据库配置。
     pub database: DatabaseConfig,
-    /// 安全材料配置。
-    pub security: SecurityConfig,
     /// TLS 偏好配置。
     pub tls: TlsConfig,
     /// WebSocket 连接池配置。
@@ -123,13 +121,6 @@ pub struct UsageStatsConfig {
 pub struct DatabaseConfig {
     /// SQLite 连接 URL。
     pub url: String,
-}
-
-/// 本地安全文件路径配置。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct SecurityConfig {
-    /// API Key pepper 文件路径。
-    pub api_key_pepper_file: String,
 }
 
 /// TLS/HTTP 协议偏好配置。

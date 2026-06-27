@@ -12,7 +12,7 @@ use codex_proxy_rs::{
             events::{EventLevel, EventLog},
         },
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher, time::china_day_start},
+    infra::{database::connect_sqlite, time::china_day_start},
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
         services::{BackgroundTaskStores, Services},
@@ -306,7 +306,6 @@ async fn dashboard_test_app(
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = crate::support::config::test_config(url);
-    let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -314,7 +313,7 @@ async fn dashboard_test_app(
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));

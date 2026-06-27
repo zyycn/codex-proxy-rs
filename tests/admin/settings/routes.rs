@@ -10,11 +10,11 @@ use codex_proxy_rs::{
     admin::monitoring::event_store::SqliteEventLogStore,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
     config::{settings::RuntimeSettingsService, types::AppConfig},
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -96,7 +96,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     seed_admin_session(&pool, "session_1").await;
     seed_account(&pool, "acct_route_a").await;
     seed_account(&pool, "acct_route_b").await;
-    let hasher = ApiKeyHasher::new([54u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -104,7 +103,7 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -232,7 +231,6 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
     let config = test_config(url);
     let pool = connect_sqlite(&config.database.url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let hasher = ApiKeyHasher::new([54u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -240,7 +238,7 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -276,7 +274,6 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([54u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -284,7 +281,7 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -389,9 +386,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

@@ -12,10 +12,10 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -158,7 +158,7 @@ async fn admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
 
 async fn admin_accounts_test_app_with_overrides(
     db_name: &str,
-    key_byte: u8,
+    _key_byte: u8,
     api_base_url: String,
     oauth_token_endpoint: Option<String>,
 ) -> (axum::Router, AppState, SqlitePool, tempfile::TempDir) {
@@ -167,7 +167,6 @@ async fn admin_accounts_test_app_with_overrides(
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    let hasher = ApiKeyHasher::new([key_byte; 32]);
     let mut config = test_config(url);
     config.api.base_url = api_base_url;
     if let Some(oauth_token_endpoint) = oauth_token_endpoint {
@@ -180,7 +179,7 @@ async fn admin_accounts_test_app_with_overrides(
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -273,9 +272,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

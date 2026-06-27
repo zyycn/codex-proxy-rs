@@ -11,10 +11,10 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{database::connect_sqlite, identity::ApiKeyHasher},
+    infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -32,7 +32,6 @@ async fn models_route_should_reject_unknown_client_api_key() {
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([92u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -40,7 +39,7 @@ async fn models_route_should_reject_unknown_client_api_key() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher.clone()),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -71,8 +70,7 @@ async fn models_route_should_accept_stored_client_api_key() {
     let db = dir.path().join("openai-models-auth-valid.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
-    let hasher = ApiKeyHasher::new([93u8; 32]);
-    let plaintext = insert_client_api_key(&pool, &hasher).await;
+    let plaintext = insert_client_api_key(&pool).await;
     let config = test_config(url);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
@@ -81,7 +79,7 @@ async fn models_route_should_accept_stored_client_api_key() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -106,8 +104,8 @@ async fn models_route_should_accept_stored_client_api_key() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-async fn insert_client_api_key(pool: &SqlitePool, hasher: &ApiKeyHasher) -> String {
-    SqliteClientKeyStore::new(pool.clone(), hasher.clone())
+async fn insert_client_api_key(pool: &SqlitePool) -> String {
+    SqliteClientKeyStore::new(pool.clone())
         .create("test")
         .await
         .unwrap()
@@ -154,9 +152,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

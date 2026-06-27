@@ -39,8 +39,6 @@ usage_stats:
   history_retention_days: null
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
-security:
-  api_key_pepper_file: .runtime/data/api-key-pepper.key
 tls:
   force_http11: false
 ws_pool:
@@ -132,10 +130,6 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
         cfg.database.url,
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
     );
-    assert_eq!(
-        cfg.security.api_key_pepper_file,
-        ".runtime/data/api-key-pepper.key"
-    );
     assert_eq!(cfg.logging.directory, ".runtime/logs");
 }
 
@@ -181,8 +175,6 @@ usage_stats:
   history_retention_days: null
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
-security:
-  api_key_pepper_file: .runtime/data/api-key-pepper.key
 tls:
   force_http11: false
 ws_pool:

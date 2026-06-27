@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use codex_proxy_rs::config::types::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-    QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig, UsageStatsConfig,
+    QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
     WebSocketPoolConfig,
 };
 
@@ -46,9 +46,6 @@ pub fn test_config(database_url: String) -> AppConfig {
             history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },

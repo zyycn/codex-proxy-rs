@@ -3,10 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use codex_proxy_rs::infra::{
-    database::connect_sqlite,
-    identity::{hash_admin_password, ApiKeyHasher},
-};
+use codex_proxy_rs::infra::{database::connect_sqlite, identity::hash_admin_password};
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
@@ -20,7 +17,6 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([122u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
@@ -37,10 +33,7 @@ async fn admin_login_should_issue_http_only_session_cookie() {
         refresh_leases: codex_proxy_rs::upstream::accounts::token_refresh::RefreshLeaseStore::new(
             pool.clone(),
         ),
-        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(
-            pool.clone(),
-            hasher,
-        ),
+        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
         event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
             pool.clone(),
         ),
@@ -97,7 +90,6 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([124u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
         accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
@@ -114,10 +106,7 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
         refresh_leases: codex_proxy_rs::upstream::accounts::token_refresh::RefreshLeaseStore::new(
             pool.clone(),
         ),
-        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(
-            pool.clone(),
-            hasher,
-        ),
+        client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
         event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
             pool.clone(),
         ),

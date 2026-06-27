@@ -12,13 +12,10 @@ use codex_proxy_rs::{
     config::types::AppConfig,
     config::types::{
         AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, SecurityConfig, ServerConfig, TlsConfig,
-        UsageStatsConfig, WebSocketPoolConfig,
+        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
+        WebSocketPoolConfig,
     },
-    infra::{
-        database::connect_sqlite,
-        identity::{hash_admin_password, ApiKeyHasher},
-    },
+    infra::{database::connect_sqlite, identity::hash_admin_password},
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
@@ -38,7 +35,6 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([122u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -46,7 +42,7 @@ async fn admin_login_should_issue_http_only_session_cookie() {
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -104,7 +100,6 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_user(&pool, "correct-password").await;
     let config = test_config(url);
-    let hasher = ApiKeyHasher::new([124u8; 32]);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -112,7 +107,7 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
         fingerprints: FingerprintRepository::new(pool.clone()),
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone(), hasher),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
@@ -204,9 +199,6 @@ fn test_config(database_url: String) -> AppConfig {
             history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
-        security: SecurityConfig {
-            api_key_pepper_file: "data/api-key-pepper.key".to_string(),
-        },
         tls: TlsConfig {
             force_http11: false,
         },
