@@ -536,7 +536,7 @@ impl AccountPool {
             .filter(|(account_id, _)| {
                 self.accounts
                     .get(*account_id)
-                    .is_some_and(|account| is_capacity_account(account))
+                    .is_some_and(&is_capacity_account)
             })
             .map(|(_, slots)| slots.len().min(self.options.max_concurrent_per_account))
             .sum();

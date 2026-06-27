@@ -129,7 +129,8 @@ async fn admin_settings_update_should_persist_retained_fields_to_config_yaml() {
                 .body(Body::from(
                     json!({
                         "defaultModel": "gpt-6", "rotationStrategy": "round_robin",
-                        "refreshEnabled": false
+                        "maxConcurrentPerAccount": 7,
+                        "requestIntervalMs": 80
                     })
                     .to_string(),
                 ))
@@ -160,7 +161,9 @@ async fn admin_settings_update_should_persist_retained_fields_to_config_yaml() {
     let persisted = AppConfig::load_from_dir(dir.path()).unwrap();
     assert_eq!(persisted.model.default_model, "gpt-6");
     assert_eq!(persisted.auth.rotation_strategy, "round_robin");
-    assert!(!persisted.auth.refresh_enabled);
+    assert_eq!(persisted.auth.max_concurrent_per_account, 7);
+    assert_eq!(persisted.auth.request_interval_ms, 80);
+    assert!(persisted.auth.refresh_enabled);
     assert_eq!(persisted.database.url, config.database.url);
     assert_eq!(
         persisted.security.master_key_file,
@@ -206,7 +209,7 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_settings_update_invalid")
                 .body(Body::from(
-                    json!({"unknownSetting": true, "rotationStrategy": "random"}).to_string(),
+                    json!({"refreshEnabled": false, "rotationStrategy": "random"}).to_string(),
                 ))
                 .unwrap(),
         )

@@ -449,6 +449,14 @@ function formatConnectionTestDetail(value: any) {
   return JSON.stringify(value, null, 2)
 }
 
+function connectionTestRequestText(payload: any) {
+  const texts = (payload?.input || [])
+    .flatMap((item: any) => item?.content || [])
+    .filter((item: any) => item?.type === 'input_text' && item?.text)
+    .map((item: any) => item.text)
+  return texts.join('\n')
+}
+
 function connectionTestLogItem(key: string, text: string, tone = 'normal', detail?: any) {
   return {
     key,
@@ -491,7 +499,7 @@ function handleConnectionTestEvent(event: any) {
     return
   }
   if (event.type === 'request') {
-    setConnectionTestLog('request', '发起请求', 'info', event.payload)
+    setConnectionTestLog('request', '发起请求', 'info', connectionTestRequestText(event.payload))
     return
   }
   if (event.type === 'status' && event.text) {

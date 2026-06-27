@@ -284,21 +284,12 @@ async fn admin_account_quota_should_send_usage_cookie() {
 }
 
 #[tokio::test]
-async fn admin_account_health_check_should_send_usage_cookie() {
+async fn admin_account_health_check_should_send_probe_cookie() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/usage"))
+        .and(path("/backend-api/codex/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plan_type": "plus",
-            "rate_limit": {
-                "allowed": true,
-                "limit_reached": false,
-                "primary_window": {
-                    "used_percent": 15,
-                    "reset_at": 1_800_000_000,
-                    "limit_window_seconds": 18_000
-                }
-            }
+            "models": []
         })))
         .mount(&server)
         .await;
@@ -349,7 +340,7 @@ async fn admin_account_health_check_should_send_usage_cookie() {
     let requests = server.received_requests().await.unwrap();
     let cookie_header = requests
         .iter()
-        .find(|request| request.url.path() == "/backend-api/wham/usage")
+        .find(|request| request.url.path() == "/backend-api/codex/models")
         .and_then(|request| request.headers.get("cookie"))
         .and_then(|value| value.to_str().ok());
 
