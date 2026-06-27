@@ -21,18 +21,10 @@ const RUNTIME_SETTINGS_ID: i64 = 1;
 /// 管理端可变设置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminSettings {
-    /// 默认模型 ID。
-    pub default_model: String,
-    /// 默认 reasoning effort。
-    pub default_reasoning_effort: Option<String>,
-    /// 默认服务层级。
-    pub service_tier: Option<String>,
     /// 模型别名映射。
     pub model_aliases: BTreeMap<String, String>,
     /// 模型到账号 ID 的显式路由。
     pub model_account_routes: BTreeMap<String, Vec<String>>,
-    /// 是否启用访问令牌刷新。
-    pub refresh_enabled: bool,
     /// 访问令牌过期前多少秒开始刷新。
     pub refresh_margin_seconds: u64,
     /// 访问令牌刷新并发数。
@@ -43,65 +35,18 @@ pub struct AdminSettings {
     pub request_interval_ms: u64,
     /// 账号轮换策略。
     pub rotation_strategy: String,
-    /// 计划类型优先级。
-    pub tier_priority: Vec<String>,
-    /// 配额刷新间隔分钟数。
-    pub quota_refresh_interval_minutes: u64,
-    /// 配额预警阈值。
-    pub quota_warning_thresholds: AdminQuotaWarningThresholds,
-    /// 配额耗尽账号是否跳过调度。
-    pub quota_skip_exhausted: bool,
-    /// 是否启用事件日志。
-    pub logs_enabled: bool,
-    /// 事件日志容量。
-    pub logs_capacity: u32,
-    /// 事件日志是否捕获请求/响应体。
-    pub logs_capture_body: bool,
-    /// 用量历史保留天数。
-    pub usage_history_retention_days: Option<u64>,
 }
 
 impl Default for AdminSettings {
     fn default() -> Self {
         Self {
-            default_model: "gpt-4o".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
             model_aliases: BTreeMap::new(),
             model_account_routes: BTreeMap::new(),
-            refresh_enabled: true,
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
             request_interval_ms: 50,
             rotation_strategy: "least_used".to_string(),
-            tier_priority: Vec::new(),
-            quota_refresh_interval_minutes: 5,
-            quota_warning_thresholds: AdminQuotaWarningThresholds::default(),
-            quota_skip_exhausted: true,
-            logs_enabled: false,
-            logs_capacity: 2_000,
-            logs_capture_body: false,
-            usage_history_retention_days: None,
-        }
-    }
-}
-
-/// 配额预警阈值集合。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdminQuotaWarningThresholds {
-    /// primary 配额预警百分比。
-    pub primary: Vec<u8>,
-    /// secondary 配额预警百分比。
-    pub secondary: Vec<u8>,
-}
-
-impl Default for AdminQuotaWarningThresholds {
-    fn default() -> Self {
-        Self {
-            primary: vec![80, 90],
-            secondary: vec![80, 90],
         }
     }
 }
@@ -110,8 +55,6 @@ impl Default for AdminQuotaWarningThresholds {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsPatch {
-    /// 默认模型 ID。
-    pub default_model: Option<String>,
     /// 模型别名映射。
     pub model_aliases: Option<BTreeMap<String, String>>,
     /// 模型到账号 ID 的显式路由。
@@ -138,9 +81,6 @@ impl SettingsService {
         current: &mut AdminSettings,
         patch: AdminSettingsPatch,
     ) -> Result<(), SettingsServiceError> {
-        if let Some(default_model) = patch.default_model {
-            current.default_model = non_empty_string("defaultModel", default_model)?;
-        }
         if let Some(model_aliases) = patch.model_aliases {
             current.model_aliases = validate_model_aliases(model_aliases)?;
         }
@@ -395,37 +335,20 @@ pub enum RuntimeSettingsError {
 }
 
 fn admin_settings_from_config(config: &AppConfig) -> AdminSettings {
-    let defaults = AdminSettings::default();
     AdminSettings {
-        default_model: config.model.default_model.clone(),
-        default_reasoning_effort: config.model.default_reasoning_effort.clone(),
-        service_tier: config.model.service_tier.clone(),
-        model_aliases: config.model.aliases.clone(),
-        model_account_routes: config.model.account_routes.clone(),
-        refresh_enabled: defaults.refresh_enabled,
+        model_aliases: config.model_aliases.clone(),
+        model_account_routes: config.model_account_routes.clone(),
         refresh_margin_seconds: config.auth.refresh_margin_seconds,
         refresh_concurrency: config.auth.refresh_concurrency,
         max_concurrent_per_account: config.auth.max_concurrent_per_account,
         request_interval_ms: config.auth.request_interval_ms,
         rotation_strategy: config.auth.rotation_strategy.clone(),
-        tier_priority: config.auth.tier_priority.clone(),
-        quota_refresh_interval_minutes: config.quota.refresh_interval_minutes,
-        quota_warning_thresholds: AdminQuotaWarningThresholds {
-            primary: config.quota.warning_thresholds.primary.clone(),
-            secondary: config.quota.warning_thresholds.secondary.clone(),
-        },
-        quota_skip_exhausted: defaults.quota_skip_exhausted,
-        logs_enabled: defaults.logs_enabled,
-        logs_capacity: defaults.logs_capacity,
-        logs_capture_body: config.logging.capture_body,
-        usage_history_retention_days: config.usage_stats.history_retention_days,
     }
 }
 
 fn apply_admin_settings_to_config(config: &mut AppConfig, settings: AdminSettings) {
-    config.model.default_model = settings.default_model;
-    config.model.aliases = settings.model_aliases;
-    config.model.account_routes = settings.model_account_routes;
+    config.model_aliases = settings.model_aliases;
+    config.model_account_routes = settings.model_account_routes;
     config.auth.refresh_margin_seconds = settings.refresh_margin_seconds;
     config.auth.refresh_concurrency = settings.refresh_concurrency;
     config.auth.max_concurrent_per_account = settings.max_concurrent_per_account;
@@ -443,7 +366,6 @@ async fn insert_runtime_settings_if_missing(
         r"
 insert or ignore into runtime_settings (
   id,
-  default_model,
   model_aliases_json,
   refresh_margin_seconds,
   refresh_concurrency,
@@ -451,10 +373,9 @@ insert or ignore into runtime_settings (
   request_interval_ms,
   rotation_strategy,
   updated_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+) values (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(RUNTIME_SETTINGS_ID)
-    .bind(&settings.default_model)
     .bind(model_aliases_json)
     .bind(
         i64::try_from(settings.refresh_margin_seconds)
@@ -490,7 +411,6 @@ async fn save_runtime_settings(
         r"
 insert into runtime_settings (
   id,
-  default_model,
   model_aliases_json,
   refresh_margin_seconds,
   refresh_concurrency,
@@ -498,9 +418,8 @@ insert into runtime_settings (
   request_interval_ms,
   rotation_strategy,
   updated_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values (?, ?, ?, ?, ?, ?, ?, ?)
 on conflict(id) do update set
-  default_model = excluded.default_model,
   model_aliases_json = excluded.model_aliases_json,
   refresh_margin_seconds = excluded.refresh_margin_seconds,
   refresh_concurrency = excluded.refresh_concurrency,
@@ -510,7 +429,6 @@ on conflict(id) do update set
   updated_at = excluded.updated_at",
     )
     .bind(RUNTIME_SETTINGS_ID)
-    .bind(&settings.default_model)
     .bind(model_aliases_json)
     .bind(
         i64::try_from(settings.refresh_margin_seconds)
@@ -538,7 +456,6 @@ async fn load_runtime_settings(pool: &SqlitePool) -> Result<AdminSettings, Runti
     let row = sqlx::query(
         r"
 select
-  default_model,
   model_aliases_json,
   refresh_margin_seconds,
   refresh_concurrency,
@@ -559,7 +476,6 @@ where id = ?",
 fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSettingsError> {
     let model_aliases_json: String = row.get("model_aliases_json");
     Ok(AdminSettings {
-        default_model: row.get("default_model"),
         model_aliases: serde_json::from_str(&model_aliases_json)?,
         model_account_routes: BTreeMap::new(),
         refresh_margin_seconds: positive_i64_to_u64(
@@ -579,7 +495,6 @@ fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSe
             row.get("request_interval_ms"),
         )?,
         rotation_strategy: validate_rotation_strategy(row.get("rotation_strategy"))?,
-        ..AdminSettings::default()
     })
 }
 
@@ -643,9 +558,9 @@ pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOption
     AccountPoolOptions {
         max_concurrent_per_account: config.auth.max_concurrent_per_account,
         rotation_strategy: rotation_strategy_from_config(&config.auth.rotation_strategy),
-        skip_quota_limited: config.quota.skip_exhausted,
+        skip_quota_limited: true,
         tier_priority: config.auth.tier_priority.clone(),
-        model_account_routes: config.model.account_routes.clone(),
+        model_account_routes: config.model_account_routes.clone(),
         ..AccountPoolOptions::default()
     }
 }

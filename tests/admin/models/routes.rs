@@ -11,9 +11,8 @@ use codex_proxy_rs::{
     admin::monitoring::event_store::SqliteEventLogStore,
     config::types::AppConfig,
     config::types::{
-        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
-        WebSocketPoolConfig,
+        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
+        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
     },
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
@@ -207,13 +206,8 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             port: 0,
         },
         api: ApiConfig { base_url },
-        model: ModelConfig {
-            default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
-            aliases: BTreeMap::new(),
-            account_routes: BTreeMap::new(),
-        },
+        model_aliases: BTreeMap::new(),
+        model_account_routes: BTreeMap::new(),
         auth: AuthConfig {
             refresh_margin_seconds: 300,
             refresh_enabled: true,
@@ -223,7 +217,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
             oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
             oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
@@ -232,10 +225,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
                 primary: vec![80, 90],
                 secondary: vec![80, 90],
             },
-            skip_exhausted: true,
-        },
-        usage_stats: UsageStatsConfig {
-            history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
@@ -253,8 +242,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             directory: "logs".to_string(),
             retention_days: 14,
             enabled: false,
-            capacity: 2_000,
-            capture_body: false,
         },
     }
 }

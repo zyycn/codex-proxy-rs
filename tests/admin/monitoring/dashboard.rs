@@ -213,7 +213,7 @@ async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_fallback_total_cost_to_usage_summary_when_logs_have_no_usage() {
+async fn dashboard_summary_should_not_price_usage_summary_without_model_dimension() {
     let (app, _store, pool, _dir) = dashboard_test_app(
         "dashboard-cost-summary-fallback.sqlite",
         crate::support::fingerprint::test_fingerprint(),
@@ -227,7 +227,7 @@ async fn dashboard_summary_should_fallback_total_cost_to_usage_summary_when_logs
         body["data"]["cards"]["tokens"]["totalCostUsd"]
             .as_f64()
             .unwrap(),
-        3.5,
+        0.0,
     );
 }
 

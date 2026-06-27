@@ -22,8 +22,7 @@ use crate::{
     runtime::state::AppState,
 };
 
-const ALLOWED_SETTINGS_KEYS: [&str; 8] = [
-    "defaultModel",
+const ALLOWED_SETTINGS_KEYS: [&str; 7] = [
     "modelAliases",
     "modelAccountRoutes",
     "refreshMarginSeconds",
@@ -37,7 +36,6 @@ const ALLOWED_SETTINGS_KEYS: [&str; 8] = [
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsData {
-    pub default_model: String,
     pub model_aliases: BTreeMap<String, String>,
     pub model_account_routes: BTreeMap<String, Vec<String>>,
     pub refresh_margin_seconds: u64,
@@ -50,9 +48,8 @@ pub struct AdminSettingsData {
 impl AdminSettingsData {
     fn from_config(config: &AppConfig) -> Self {
         Self {
-            default_model: config.model.default_model.clone(),
-            model_aliases: config.model.aliases.clone(),
-            model_account_routes: config.model.account_routes.clone(),
+            model_aliases: config.model_aliases.clone(),
+            model_account_routes: config.model_account_routes.clone(),
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,
             max_concurrent_per_account: config.auth.max_concurrent_per_account,

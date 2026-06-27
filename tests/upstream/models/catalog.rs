@@ -17,14 +17,9 @@ use codex_proxy_rs::upstream::transport::{
 
 #[test]
 fn model_catalog_should_parse_alias_reasoning_and_service_tier_suffixes() {
-    let mut aliases = BTreeMap::new();
-    aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
-    let catalog = ModelCatalog::from_config(&ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: None,
-        service_tier: None,
-        aliases,
-    });
+    let mut model_aliases = BTreeMap::new();
+    model_aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
+    let catalog = ModelCatalog::from_config(&ModelConfig { model_aliases });
 
     let parsed = catalog.parse_model_name("codex-fast-high-flex");
 
@@ -39,27 +34,21 @@ fn model_catalog_should_parse_alias_reasoning_and_service_tier_suffixes() {
 }
 
 #[test]
-fn model_catalog_should_fall_back_to_default_for_unknown_model_names() {
+fn model_catalog_should_keep_unknown_model_names_without_fallback() {
     let catalog = ModelCatalog::from_config(&ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: None,
-        service_tier: None,
-        aliases: BTreeMap::new(),
+        model_aliases: BTreeMap::new(),
     });
 
     let parsed = catalog.parse_model_name("unknown-medium");
 
-    assert_eq!(parsed.model_id, "gpt-5.5");
+    assert_eq!(parsed.model_id, "unknown");
     assert_eq!(parsed.reasoning_effort, Some("medium".to_string()));
 }
 
 #[test]
 fn model_catalog_should_parse_none_and_minimal_reasoning_suffixes() {
     let catalog = ModelCatalog::from_config(&ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: None,
-        service_tier: None,
-        aliases: BTreeMap::new(),
+        model_aliases: BTreeMap::new(),
     });
 
     let none = catalog.parse_model_name("gpt-5.5-none");
@@ -98,10 +87,7 @@ fn model_catalog_should_merge_backend_snapshots_and_build_plan_allowlist() {
     );
     let catalog = ModelCatalog::from_config_and_snapshots(
         &ModelConfig {
-            default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
-            aliases: BTreeMap::new(),
+            model_aliases: BTreeMap::new(),
         },
         &[snapshot],
     );
@@ -122,13 +108,12 @@ fn model_catalog_should_merge_backend_snapshots_and_build_plan_allowlist() {
 }
 
 #[tokio::test]
-async fn model_service_should_fall_back_to_static_catalog_when_snapshot_store_is_missing() {
+async fn model_service_should_return_empty_catalog_when_snapshot_store_is_missing() {
     let service = ModelService::new(test_model_config(), None, None, None);
 
     let catalog = service.catalog().await;
 
-    assert_eq!(catalog.models().len(), 1);
-    assert_eq!(catalog.models()[0].id, "gpt-5.5");
+    assert!(catalog.models().is_empty());
 }
 
 #[tokio::test]
@@ -205,10 +190,7 @@ async fn model_service_should_return_no_accounts_when_no_active_plans_exist() {
 
 fn test_model_config() -> ModelConfig {
     ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: None,
-        service_tier: None,
-        aliases: BTreeMap::new(),
+        model_aliases: BTreeMap::new(),
     }
 }
 

@@ -8,35 +8,6 @@ server:
   port: 8080
 api:
   base_url: https://chatgpt.com/backend-api
-model:
-  default: gpt-5.5
-  default_reasoning_effort: null
-  default_service_tier: null
-  aliases: {}
-  account_routes: {}
-auth:
-  refresh_margin_seconds: 300
-  refresh_enabled: true
-  refresh_concurrency: 2
-  max_concurrent_per_account: 3
-  request_interval_ms: 50
-  rotation_strategy: least_used
-  tier_priority: []
-  oauth_client_id: app_EMoamEEZ73f0CkXaXp7hrann
-  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
-  oauth_token_endpoint: https://auth.openai.com/oauth/token
-quota:
-  refresh_interval_minutes: 5
-  warning_thresholds:
-    primary:
-      - 80
-      - 90
-    secondary:
-      - 80
-      - 90
-  skip_exhausted: true
-usage_stats:
-  history_retention_days: null
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
 tls:
@@ -97,8 +68,6 @@ logging:
   directory: .runtime/logs
   retention_days: 14
   enabled: true
-  capacity: 2000
-  capture_body: false
 "#;
 
 #[test]
@@ -106,7 +75,7 @@ fn default_config_keeps_only_codex_backend() {
     let cfg: AppConfig = serde_yml::from_str(DEFAULT_CONFIG_YAML).unwrap();
     assert_eq!(cfg.server.host, "0.0.0.0");
     assert_eq!(cfg.api.base_url, "https://chatgpt.com/backend-api");
-    assert_eq!(cfg.model.default_model, "gpt-5.5");
+    assert!(cfg.model_aliases.is_empty());
     assert_eq!(cfg.auth.refresh_margin_seconds, 300);
     assert_eq!(cfg.auth.rotation_strategy, "least_used");
     assert_eq!(cfg.auth.oauth_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
@@ -134,6 +103,52 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
 }
 
 #[test]
+fn config_should_reject_runtime_model_section() {
+    let err = serde_yml::from_str::<AppConfig>(
+        r#"
+server:
+  host: 127.0.0.1
+  port: 8080
+api:
+  base_url: https://chatgpt.com/backend-api
+model: {}
+database:
+  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("model"),
+        "expected model section to be rejected, got {err}"
+    );
+}
+
+#[test]
+fn config_should_reject_runtime_auth_and_quota_sections() {
+    for section in ["auth", "quota"] {
+        let yaml = format!(
+            r#"
+server:
+  host: 127.0.0.1
+  port: 8080
+api:
+  base_url: https://chatgpt.com/backend-api
+{section}: {{}}
+database:
+  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+"#
+        );
+        let err = serde_yml::from_str::<AppConfig>(&yaml).unwrap_err();
+
+        assert!(
+            err.to_string().contains(section),
+            "expected {section} section to be rejected, got {err}"
+        );
+    }
+}
+
+#[test]
 fn config_loader_should_read_only_config_yaml() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
@@ -144,35 +159,6 @@ server:
   port: 8080
 api:
   base_url: https://chatgpt.com/backend-api
-model:
-  default: gpt-5.5
-  default_reasoning_effort: null
-  default_service_tier: null
-  aliases: {}
-  account_routes: {}
-auth:
-  refresh_margin_seconds: 300
-  refresh_enabled: true
-  refresh_concurrency: 2
-  max_concurrent_per_account: 3
-  request_interval_ms: 50
-  rotation_strategy: least_used
-  tier_priority: []
-  oauth_client_id: app_test_client
-  oauth_auth_endpoint: https://auth.openai.com/oauth/authorize
-  oauth_token_endpoint: https://auth.example.test/oauth/token
-quota:
-  refresh_interval_minutes: 5
-  warning_thresholds:
-    primary:
-      - 80
-      - 90
-    secondary:
-      - 80
-      - 90
-  skip_exhausted: true
-usage_stats:
-  history_retention_days: null
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
 tls:
@@ -231,8 +217,6 @@ logging:
   directory: .runtime/logs
   retention_days: 14
   enabled: false
-  capacity: 2000
-  capture_body: false
 "#,
     )
     .unwrap();
@@ -259,12 +243,12 @@ ws_pool:
         cfg.database.url,
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
     );
-    assert_eq!(cfg.model.default_model, "gpt-5.5");
+    assert!(cfg.model_aliases.is_empty());
     assert_eq!(cfg.auth.max_concurrent_per_account, 3);
-    assert_eq!(cfg.auth.oauth_client_id, "app_test_client");
+    assert_eq!(cfg.auth.oauth_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
     assert_eq!(
         cfg.auth.oauth_token_endpoint,
-        "https://auth.example.test/oauth/token"
+        "https://auth.openai.com/oauth/token"
     );
     assert!(cfg.ws_pool.enabled);
     assert_eq!(cfg.ws_pool.max_age_ms, 3_300_000);
@@ -281,8 +265,6 @@ directory: .runtime/logs
 max_file_bytes: 10485760
 retention_days: 14
 enabled: false
-capacity: 2000
-capture_body: false
 "#,
     )
     .unwrap_err();

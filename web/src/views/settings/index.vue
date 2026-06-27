@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Cpu, Gauge, GitBranch, Plus, RefreshCw, Save, Timer, Trash2, Zap } from '@lucide/vue'
+import { Gauge, GitBranch, Plus, RefreshCw, Save, Timer, Trash2, Zap } from '@lucide/vue'
 
 import { getSettings, updateSettings } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -17,7 +17,6 @@ interface AliasRow {
 }
 
 interface SettingsForm {
-  defaultModel: string
   modelAliases: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number
@@ -32,7 +31,6 @@ const saving = ref(false)
 const aliasError = ref('')
 
 const form = reactive<SettingsForm>({
-  defaultModel: '',
   modelAliases: {},
   refreshMarginSeconds: 300,
   refreshConcurrency: 2,
@@ -86,42 +84,41 @@ const refreshConcurrencyValue = numericModel('refreshConcurrency')
 const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
 const requestIntervalMsValue = numericModel('requestIntervalMs')
 
-function aliasesToRows(aliases: Record<string, string> = {}) {
-  return Object.entries(aliases)
+function modelAliasesToRows(modelAliases: Record<string, string> = {}) {
+  return Object.entries(modelAliases)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([alias, target]) => ({ alias, target }))
 }
 
 function rowsToAliases(rows: AliasRow[]) {
-  const aliases: Record<string, string> = {}
+  const modelAliases: Record<string, string> = {}
   for (const row of rows) {
     const alias = row.alias.trim()
     const target = row.target.trim()
     if (!alias && !target) continue
     if (!alias || !target) {
-      return { aliases: {}, error: '别名和目标模型需要同时填写' }
+      return { modelAliases: {}, error: '别名和目标模型需要同时填写' }
     }
     if (alias === target) {
-      return { aliases: {}, error: '别名不能指向自身' }
+      return { modelAliases: {}, error: '别名不能指向自身' }
     }
-    if (aliases[alias] !== undefined) {
-      return { aliases: {}, error: `别名重复：${alias}` }
+    if (modelAliases[alias] !== undefined) {
+      return { modelAliases: {}, error: `别名重复：${alias}` }
     }
-    aliases[alias] = target
+    modelAliases[alias] = target
   }
 
-  return { aliases, error: '' }
+  return { modelAliases, error: '' }
 }
 
 function applySettings(data: any) {
-  form.defaultModel = data.defaultModel || ''
   form.modelAliases = data.modelAliases || {}
   form.refreshMarginSeconds = Number(data.refreshMarginSeconds ?? 300)
   form.refreshConcurrency = Number(data.refreshConcurrency ?? 2)
   form.maxConcurrentPerAccount = Number(data.maxConcurrentPerAccount ?? 3)
   form.requestIntervalMs = Number(data.requestIntervalMs ?? 50)
   form.rotationStrategy = (data.rotationStrategy || 'least_used') as RotationStrategy
-  aliasRows.value = aliasesToRows(form.modelAliases)
+  aliasRows.value = modelAliasesToRows(form.modelAliases)
   aliasError.value = ''
 }
 
@@ -175,8 +172,7 @@ async function handleSave() {
   try {
     saving.value = true
     const data = await updateSettings({
-      defaultModel: form.defaultModel,
-      modelAliases: aliasResult.aliases,
+      modelAliases: aliasResult.modelAliases,
       refreshMarginSeconds: form.refreshMarginSeconds,
       refreshConcurrency: form.refreshConcurrency,
       maxConcurrentPerAccount: form.maxConcurrentPerAccount,
@@ -233,22 +229,11 @@ onMounted(loadSettings)
         v-loading="loading"
         :padded="false"
         title="运行参数"
-        description="默认模型、请求节奏和 Token 刷新。"
+        description="请求节奏、账号并发和 Token 刷新。"
         header-class="px-5 pt-4"
         body-class="px-5 py-5"
       >
         <div class="grid gap-4 lg:grid-cols-2">
-          <div class="grid gap-2">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
-              默认模型
-            </span>
-            <BaseInput v-model="form.defaultModel">
-              <template #prefix>
-                <Cpu class="size-4" />
-              </template>
-            </BaseInput>
-          </div>
-
           <div class="grid gap-2">
             <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
               单账号最大并发
@@ -408,7 +393,7 @@ onMounted(loadSettings)
               <span class="text-[14px] leading-[1.15] font-[760]">{{ option.label }}</span>
             </span>
             <span
-              class="mt-2 block text-[13px] leading-[1.5] font-[650] text-(--cp-text-secondary)"
+              class="mt-2 block text-[13px] leading-normal font-[650] text-(--cp-text-secondary)"
             >
               {{ option.description }}
             </span>

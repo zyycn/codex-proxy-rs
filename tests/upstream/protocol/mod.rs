@@ -2,7 +2,7 @@ use codex_proxy_rs::proxy::openai::responses::{
     response_failed_sse_event, translate_response_to_codex, translate_response_to_compact,
     OpenAiResponsesRequest,
 };
-use codex_proxy_rs::upstream::models::{ModelConfig, ParsedModelName};
+use codex_proxy_rs::upstream::models::ParsedModelName;
 use codex_proxy_rs::upstream::protocol::events::{
     cooldown_with_jitter, extract_sse_usage, extract_usage, parse_rate_limit_headers,
     parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow,

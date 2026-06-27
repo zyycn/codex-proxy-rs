@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::upstream::{
-    models::{ModelConfig, ParsedModelName},
+    models::ParsedModelName,
     protocol::{
         schema::reconvert_tuple_values,
         sse::{parse_sse_events, SseError},
@@ -467,18 +467,13 @@ fn failure_code(value: &Value) -> Option<String> {
 pub fn apply_response_model_options(
     request: &mut CodexResponsesRequest,
     parsed_model: &ParsedModelName,
-    config: &ModelConfig,
 ) {
     request.model = parsed_model.model_id.clone();
-    apply_reasoning_options(request, parsed_model, config);
-    apply_service_tier_options(request, parsed_model, config);
+    apply_reasoning_options(request, parsed_model);
+    apply_service_tier_options(request, parsed_model);
 }
 
-fn apply_reasoning_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-    config: &ModelConfig,
-) {
+fn apply_reasoning_options(request: &mut CodexResponsesRequest, parsed_model: &ParsedModelName) {
     let existing_reasoning = request.reasoning.take();
     let existing_object = match existing_reasoning {
         Some(Value::Object(object)) => object,
@@ -488,8 +483,7 @@ fn apply_reasoning_options(
         .get("effort")
         .and_then(Value::as_str)
         .map(ToString::to_string)
-        .or_else(|| non_empty_string(parsed_model.reasoning_effort.as_deref()))
-        .or_else(|| non_empty_string(config.default_reasoning_effort.as_deref()));
+        .or_else(|| non_empty_string(parsed_model.reasoning_effort.as_deref()));
     if effort.is_none() && existing_object.is_empty() {
         request.reasoning = None;
         return;
@@ -523,17 +517,12 @@ pub(crate) fn ensure_reasoning_include(request: &mut CodexResponsesRequest) {
     request.include = Some(vec!["reasoning.encrypted_content".to_string()]);
 }
 
-fn apply_service_tier_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-    config: &ModelConfig,
-) {
+fn apply_service_tier_options(request: &mut CodexResponsesRequest, parsed_model: &ParsedModelName) {
     request.service_tier = request
         .service_tier
         .take()
         .and_then(|value| non_empty_string(Some(&value)))
         .or_else(|| non_empty_string(parsed_model.service_tier.as_deref()))
-        .or_else(|| non_empty_string(config.service_tier.as_deref()))
         .map(normalize_service_tier_for_upstream);
 }
 

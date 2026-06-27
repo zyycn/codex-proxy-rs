@@ -9,9 +9,8 @@ use codex_proxy_rs::{
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::event_store::SqliteEventLogStore,
     config::types::{
-        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
-        WebSocketPoolConfig,
+        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
+        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
     },
     config::{settings::RuntimeSettingsService, types::AppConfig},
     infra::database::connect_sqlite,
@@ -60,7 +59,6 @@ async fn admin_settings_should_return_runtime_fields() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    assert_eq!(body["data"]["defaultModel"], "gpt-5.5");
     assert_eq!(body["data"]["modelAliases"]["codex-fast"], "gpt-5.5");
     assert_eq!(body["data"]["modelAccountRoutes"], json!({}));
     assert_eq!(body["data"]["refreshMarginSeconds"], 240);
@@ -78,7 +76,7 @@ async fn admin_settings_update_should_require_admin_session_cookie() {
                 .uri("/api/admin/settings")
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_settings_update_auth")
-                .body(Body::from(r#"{"defaultModel":"gpt-5.5"}"#))
+                .body(Body::from(r#"{"refreshMarginSeconds":300}"#))
                 .unwrap(),
         )
         .await
@@ -126,7 +124,7 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
                 .header("x-request-id", "req_settings_update")
                 .body(Body::from(
                     json!({
-                        "defaultModel": "gpt-6", "rotationStrategy": "round_robin",
+                        "rotationStrategy": "round_robin",
                         "modelAliases": {
                             "gpt-5.2": "gpt-5.5",
                             "claude-sonnet": "gpt-5.5"
@@ -147,7 +145,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["defaultModel"], "gpt-6");
     assert_eq!(body["data"]["modelAliases"]["gpt-5.2"], "gpt-5.5");
     assert_eq!(
         body["data"]["modelAccountRoutes"]["gpt-5.5"][0],
@@ -168,25 +165,24 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
         .await
         .unwrap();
     assert_eq!(
-        response_json(get_response).await["data"]["defaultModel"],
-        "gpt-6"
+        response_json(get_response).await["data"]["rotationStrategy"],
+        "round_robin"
     );
 
-    let row: (String, String, i64, i64, i64, i64, String) = sqlx::query_as(
-        "select default_model, model_aliases_json, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy from runtime_settings where id = 1",
+    let row: (String, i64, i64, i64, i64, String) = sqlx::query_as(
+        "select model_aliases_json, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy from runtime_settings where id = 1",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    let aliases: BTreeMap<String, String> = serde_json::from_str(&row.1).unwrap();
-    assert_eq!(row.0, "gpt-6");
+    let aliases: BTreeMap<String, String> = serde_json::from_str(&row.0).unwrap();
     assert_eq!(aliases["gpt-5.2"], "gpt-5.5");
     assert_eq!(aliases["claude-sonnet"], "gpt-5.5");
-    assert_eq!(row.2, 900);
-    assert_eq!(row.3, 4);
-    assert_eq!(row.4, 7);
-    assert_eq!(row.5, 80);
-    assert_eq!(row.6, "round_robin");
+    assert_eq!(row.1, 900);
+    assert_eq!(row.2, 4);
+    assert_eq!(row.3, 7);
+    assert_eq!(row.4, 80);
+    assert_eq!(row.5, "round_robin");
     let route_rows: Vec<(String, String, i64)> = sqlx::query_as(
         "select model, account_id, priority from model_account_routes order by model, priority",
     )
@@ -205,10 +201,9 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     let restarted_config = RuntimeSettingsService::load_or_initialize_config(config.clone(), &pool)
         .await
         .unwrap();
-    assert_eq!(restarted_config.model.default_model, "gpt-6");
-    assert_eq!(restarted_config.model.aliases["gpt-5.2"], "gpt-5.5");
+    assert_eq!(restarted_config.model_aliases["gpt-5.2"], "gpt-5.5");
     assert_eq!(
-        restarted_config.model.account_routes["gpt-5.5"],
+        restarted_config.model_account_routes["gpt-5.5"],
         vec!["acct_route_a".to_string(), "acct_route_b".to_string()]
     );
     assert_eq!(restarted_config.auth.refresh_margin_seconds, 900);
@@ -216,10 +211,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     assert_eq!(restarted_config.auth.rotation_strategy, "round_robin");
     assert_eq!(restarted_config.auth.max_concurrent_per_account, 7);
     assert_eq!(restarted_config.auth.request_interval_ms, 80);
-    assert_eq!(
-        restarted_config.model.default_reasoning_effort,
-        config.model.default_reasoning_effort
-    );
     assert_eq!(restarted_config.database.url, config.database.url);
 }
 
@@ -355,13 +346,8 @@ fn test_config(database_url: String) -> AppConfig {
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),
         },
-        model: ModelConfig {
-            default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: Some("high".to_string()),
-            service_tier: Some("flex".to_string()),
-            aliases,
-            account_routes: BTreeMap::new(),
-        },
+        model_aliases: aliases,
+        model_account_routes: BTreeMap::new(),
         auth: AuthConfig {
             refresh_margin_seconds: 240,
             refresh_enabled: true,
@@ -371,7 +357,6 @@ fn test_config(database_url: String) -> AppConfig {
             rotation_strategy: "least_used".to_string(),
             tier_priority: vec!["team".to_string(), "plus".to_string()],
             oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
             oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
@@ -380,10 +365,6 @@ fn test_config(database_url: String) -> AppConfig {
                 primary: vec![80, 90],
                 secondary: vec![70, 95],
             },
-            skip_exhausted: true,
-        },
-        usage_stats: UsageStatsConfig {
-            history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
@@ -401,8 +382,6 @@ fn test_config(database_url: String) -> AppConfig {
             directory: "logs".to_string(),
             retention_days: 14,
             enabled: true,
-            capacity: 2_000,
-            capture_body: false,
         },
     }
 }

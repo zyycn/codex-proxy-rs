@@ -32,7 +32,7 @@ async fn sqlite_schema_should_persist_runtime_settings_columns() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('runtime_settings') where name in ('id', 'default_model', 'model_aliases_json', 'refresh_margin_seconds', 'refresh_concurrency', 'max_concurrent_per_account', 'request_interval_ms', 'rotation_strategy', 'updated_at') order by name",
+        "select name from pragma_table_info('runtime_settings') where name in ('id', 'model_aliases_json', 'refresh_margin_seconds', 'refresh_concurrency', 'max_concurrent_per_account', 'request_interval_ms', 'rotation_strategy', 'updated_at') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -41,7 +41,6 @@ async fn sqlite_schema_should_persist_runtime_settings_columns() {
     assert_eq!(
         rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
         [
-            "default_model",
             "id",
             "max_concurrent_per_account",
             "model_aliases_json",
@@ -518,17 +517,17 @@ async fn sqlite_schema_should_reject_invalid_runtime_settings() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let invalid_id_result = sqlx::query(
-        "insert into runtime_settings (id, default_model, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (2, 'gpt-5.5', 300, 2, 3, 50, 'least_used', '2026-06-14T00:00:00Z')",
+        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (2, 300, 2, 3, 50, 'least_used', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
     let invalid_refresh_result = sqlx::query(
-        "insert into runtime_settings (id, default_model, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 'gpt-5.5', 0, 2, 3, 50, 'least_used', '2026-06-14T00:00:00Z')",
+        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 0, 2, 3, 50, 'least_used', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;
     let invalid_strategy_result = sqlx::query(
-        "insert into runtime_settings (id, default_model, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 'gpt-5.5', 300, 2, 3, 50, 'random', '2026-06-14T00:00:00Z')",
+        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 300, 2, 3, 50, 'random', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;

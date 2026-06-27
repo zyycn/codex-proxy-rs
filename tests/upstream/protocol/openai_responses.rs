@@ -319,14 +319,7 @@ fn codex_responses_model_options_should_apply_suffix_defaults_and_include_reason
         reasoning_effort: Some("high".to_string()),
         service_tier: Some("fast".to_string()),
     };
-    let config = ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: Some("medium".to_string()),
-        service_tier: Some("flex".to_string()),
-        aliases: Default::default(),
-    };
-
-    apply_response_model_options(&mut request, &parsed, &config);
+    apply_response_model_options(&mut request, &parsed);
 
     assert_eq!(request.model, "gpt-5.5");
     assert_eq!(
@@ -351,14 +344,7 @@ fn codex_responses_model_options_should_preserve_client_include_and_normalize_bo
         reasoning_effort: Some("low".to_string()),
         service_tier: Some("flex".to_string()),
     };
-    let config = ModelConfig {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: Some("medium".to_string()),
-        service_tier: Some("flex".to_string()),
-        aliases: Default::default(),
-    };
-
-    apply_response_model_options(&mut request, &parsed, &config);
+    apply_response_model_options(&mut request, &parsed);
 
     assert_eq!(
         request.reasoning,

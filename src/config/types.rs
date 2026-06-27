@@ -4,30 +4,40 @@ use serde::{Deserialize, Serialize};
 
 /// 应用运行总配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     /// HTTP 服务配置。
     pub server: ServerConfig,
     /// API 地址配置。
     pub api: ApiConfig,
-    /// 模型默认值配置。
-    pub model: ModelConfig,
-    /// 认证与刷新配置。
+    /// 运行时模型别名，由数据库设置加载，配置文件不承载该字段。
+    #[serde(skip)]
+    pub model_aliases: BTreeMap<String, String>,
+    /// 运行时模型账号路由，由 `model_account_routes` 表加载，配置文件不承载该字段。
+    #[serde(skip)]
+    pub model_account_routes: BTreeMap<String, Vec<String>>,
+    /// 认证与刷新配置，由固定默认值和数据库运行时设置承载，配置文件不承载该字段。
+    #[serde(skip)]
     pub auth: AuthConfig,
-    /// 配额配置。
+    /// 配额配置，由固定默认值承载，配置文件不承载该字段。
+    #[serde(skip)]
     pub quota: QuotaConfig,
-    /// 用量统计配置。
-    pub usage_stats: UsageStatsConfig,
     /// 数据库配置。
     pub database: DatabaseConfig,
     /// TLS 偏好配置。
+    #[serde(default)]
     pub tls: TlsConfig,
     /// WebSocket 连接池配置。
+    #[serde(default)]
     pub ws_pool: WebSocketPoolConfig,
     /// 上游请求指纹默认配置。
+    #[serde(default)]
     pub fingerprint: FingerprintConfig,
     /// 管理员初始化配置。
+    #[serde(default)]
     pub admin: AdminConfig,
     /// 日志配置。
+    #[serde(default)]
     pub logging: LoggingConfig,
 }
 
@@ -45,23 +55,6 @@ pub struct ServerConfig {
 pub struct ApiConfig {
     /// 上游基础 URL。
     pub base_url: String,
-}
-
-/// 模型默认值与别名配置。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ModelConfig {
-    /// 默认模型名。
-    #[serde(rename = "default")]
-    pub default_model: String,
-    /// 默认推理强度。
-    pub default_reasoning_effort: Option<String>,
-    /// 默认服务层级。
-    #[serde(rename = "default_service_tier")]
-    pub service_tier: Option<String>,
-    /// 模型别名映射。
-    pub aliases: BTreeMap<String, String>,
-    /// 模型到账号 ID 的显式路由。
-    pub account_routes: BTreeMap<String, Vec<String>>,
 }
 
 /// 认证、轮换与 token 续期配置。
@@ -83,10 +76,24 @@ pub struct AuthConfig {
     pub tier_priority: Vec<String>,
     /// OAuth 客户端 ID。
     pub oauth_client_id: String,
-    /// OAuth 授权端点。
-    pub oauth_auth_endpoint: String,
     /// OAuth token 端点。
     pub oauth_token_endpoint: String,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            refresh_margin_seconds: 300,
+            refresh_enabled: true,
+            refresh_concurrency: 2,
+            max_concurrent_per_account: 3,
+            request_interval_ms: 50,
+            rotation_strategy: "least_used".to_string(),
+            tier_priority: Vec::new(),
+            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
+            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
+        }
+    }
 }
 
 /// 配额刷新与跳过配置。
@@ -96,8 +103,15 @@ pub struct QuotaConfig {
     pub refresh_interval_minutes: u64,
     /// 预警阈值。
     pub warning_thresholds: QuotaWarningThresholds,
-    /// 是否跳过耗尽账号。
-    pub skip_exhausted: bool,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            refresh_interval_minutes: 5,
+            warning_thresholds: QuotaWarningThresholds::default(),
+        }
+    }
 }
 
 /// 配额预警阈值集合。
@@ -109,11 +123,13 @@ pub struct QuotaWarningThresholds {
     pub secondary: Vec<u8>,
 }
 
-/// 用量历史保留配置。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UsageStatsConfig {
-    /// 历史保留天数。
-    pub history_retention_days: Option<u64>,
+impl Default for QuotaWarningThresholds {
+    fn default() -> Self {
+        Self {
+            primary: vec![80, 90],
+            secondary: vec![80, 90],
+        }
+    }
 }
 
 /// 数据库连接配置。
@@ -124,7 +140,7 @@ pub struct DatabaseConfig {
 }
 
 /// TLS/HTTP 协议偏好配置。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TlsConfig {
     /// 是否强制 HTTP/1.1。
     pub force_http11: bool,
@@ -256,6 +272,17 @@ pub struct AdminConfig {
     pub default_password: String,
 }
 
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            session_ttl_minutes: 1440,
+            session_cleanup_interval_secs: default_session_cleanup_interval(),
+            default_username: default_admin_username(),
+            default_password: default_admin_password(),
+        }
+    }
+}
+
 fn default_session_cleanup_interval() -> u64 {
     3600 // 默认每小时清理一次过期会话
 }
@@ -278,8 +305,14 @@ pub struct LoggingConfig {
     pub retention_days: usize,
     /// 是否启用日志。
     pub enabled: bool,
-    /// 内存容量。
-    pub capacity: u32,
-    /// 是否捕获请求体。
-    pub capture_body: bool,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            directory: ".runtime/logs".to_string(),
+            retention_days: 14,
+            enabled: true,
+        }
+    }
 }
