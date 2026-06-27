@@ -92,9 +92,7 @@ fn quota_snapshot_from_rate_limit(
     metered_feature: Option<&str>,
     rate_limit: Option<&Value>,
 ) -> Option<Value> {
-    let Some(rate_limit) = rate_limit.filter(|value| !value.is_null()) else {
-        return None;
-    };
+    let rate_limit = rate_limit.filter(|value| !value.is_null())?;
     let primary = window_from_rate_limit(rate_limit.get("primary_window"));
     let secondary = window_from_rate_limit(rate_limit.get("secondary_window"));
     if primary.is_null() && secondary.is_null() {
