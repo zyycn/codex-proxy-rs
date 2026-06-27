@@ -79,7 +79,7 @@ async fn create_admin_client_key(app: &axum::Router, name: &str) -> (String, Str
     let body = response_json(response).await;
     (
         body["data"]["id"].as_str().unwrap().to_string(),
-        body["data"]["plaintext"].as_str().unwrap().to_string(),
+        body["data"]["key"].as_str().unwrap().to_string(),
     )
 }
 

@@ -6,9 +6,15 @@ interface SegmentedOption {
   value: string
 }
 
-const props = defineProps<{
-  options: SegmentedOption[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    options: SegmentedOption[]
+    disabled?: boolean
+  }>(),
+  {
+    disabled: false,
+  },
+)
 
 const model = defineModel<string>({ required: true })
 
@@ -25,6 +31,11 @@ const indicatorStyle = computed(() => ({
   width: `calc((100% - 8px) / ${Math.max(props.options.length, 1)})`,
   transform: `translateX(${activeIndex.value * 100}%)`,
 }))
+
+function selectOption(value: string) {
+  if (props.disabled || value === model.value) return
+  model.value = value
+}
 </script>
 
 <template>
@@ -41,15 +52,17 @@ const indicatorStyle = computed(() => ({
       v-for="option in options"
       :key="option.value"
       class="relative z-10 h-7 min-w-0 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
-      :class="
+      :class="[
         model === option.value
           ? 'text-(--cp-text-primary)'
-          : 'text-(--cp-text-secondary) hover:text-(--cp-text-primary)'
-      "
+          : 'text-(--cp-text-secondary) hover:text-(--cp-text-primary)',
+        disabled ? 'cursor-not-allowed opacity-60 hover:text-(--cp-text-secondary)' : undefined,
+      ]"
       type="button"
       role="tab"
       :aria-selected="model === option.value"
-      @click="model = option.value"
+      :disabled="disabled"
+      @click="selectOption(option.value)"
     >
       {{ option.label }}
     </button>

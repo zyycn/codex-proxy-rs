@@ -12,6 +12,8 @@ use rand::Rng;
 use sha2::Sha256;
 use thiserror::Error;
 
+use crate::infra::crypto::SecretBox;
+
 // ---------------------------------------------------------------------------
 // AuthError / AuthResult
 // ---------------------------------------------------------------------------
@@ -72,7 +74,7 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Debug, Clone)]
 pub struct GeneratedClientApiKey {
     /// 仅显示一次的明文密钥。
-    pub plaintext: String,
+    pub key: String,
     /// 前缀缓存。
     pub prefix: String,
     /// 持久化哈希。
@@ -124,12 +126,12 @@ impl ApiKeyHasher {
     pub fn generate_client_api_key(&self, _name: &str) -> GeneratedClientApiKey {
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
-        // cpr_ 只用于客户端调用 /v1，不能复用成管理员登录密码。
-        let plaintext = format!("cpr_{}", URL_SAFE_NO_PAD.encode(bytes));
+        // sk_ 只用于客户端调用 /v1，不能复用成管理员登录密码。
+        let plaintext = format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes));
         let prefix = plaintext.chars().take(12).collect::<String>();
         let key_hash = self.hash_client_api_key(&plaintext);
         GeneratedClientApiKey {
-            plaintext,
+            key: plaintext,
             prefix,
             key_hash,
         }
@@ -144,12 +146,12 @@ impl ApiKeyHasher {
 
     /// 校验 API Key 是否有效。
     pub fn verify_client_api_key(&self, plaintext: &str, key_hash: &str) -> AuthResult<bool> {
-        let Some(suffix) = plaintext.strip_prefix("cpr_") else {
+        let Some(suffix) = plaintext.strip_prefix("sk_") else {
             return Ok(false);
         };
 
         let decoded_suffix = URL_SAFE_NO_PAD.decode(suffix)?;
-        let canonical = format!("cpr_{}", URL_SAFE_NO_PAD.encode(decoded_suffix));
+        let canonical = format!("sk_{}", URL_SAFE_NO_PAD.encode(decoded_suffix));
         let expected = URL_SAFE_NO_PAD.decode(key_hash)?;
         let mut mac = self.new_mac();
         mac.update(canonical.as_bytes());
@@ -161,5 +163,9 @@ impl ApiKeyHasher {
             Ok(mac) => mac,
             Err(error) => unreachable!("HMAC accepts any key size: {error}"),
         }
+    }
+
+    pub(crate) fn secret_box(&self) -> SecretBox {
+        SecretBox::new(self.pepper)
     }
 }

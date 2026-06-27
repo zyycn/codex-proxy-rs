@@ -47,10 +47,10 @@ const {
         class="mt-0.5 text-(--cp-normal)"
         size="md"
         label="刷新概览"
-        :loading="loading || refreshing"
+        :disabled="loading || refreshing"
         @click="refresh"
       >
-        <RefreshCw :size="19" />
+        <RefreshCw :size="19" :class="loading || refreshing ? 'animate-spin' : undefined" />
       </BaseButton>
     </header>
 

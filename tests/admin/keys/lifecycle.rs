@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn admin_client_keys_label_should_update_clear_and_validate_label() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-label.sqlite").await;
-    let (key_id, _plaintext) = create_admin_client_key(&app, "label-key").await;
+    let (key_id, _key) = create_admin_client_key(&app, "label-key").await;
 
     let renamed = app
         .clone()
@@ -61,8 +61,8 @@ async fn admin_client_keys_label_should_update_clear_and_validate_label() {
 #[tokio::test]
 async fn admin_client_keys_batch_delete_should_remove_found_keys_and_report_missing_ids() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-delete.sqlite").await;
-    let (key_a, plaintext_a) = create_admin_client_key(&app, "batch-a").await;
-    let (key_b, plaintext_b) = create_admin_client_key(&app, "batch-b").await;
+    let (key_a, api_key_a) = create_admin_client_key(&app, "batch-a").await;
+    let (key_b, api_key_b) = create_admin_client_key(&app, "batch-b").await;
 
     let response = app
         .clone()
@@ -84,14 +84,14 @@ async fn admin_client_keys_batch_delete_should_remove_found_keys_and_report_miss
     assert_eq!(body["data"]["deleted"], 2);
     assert_eq!(body["data"]["notFound"], json!(["ghost"]));
 
-    for plaintext in [plaintext_a, plaintext_b] {
+    for api_key in [api_key_a, api_key_b] {
         let rejected = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
                     .uri("/v1/models")
-                    .header("authorization", format!("Bearer {plaintext}"))
+                    .header("authorization", format!("Bearer {api_key}"))
                     .body(Body::empty())
                     .unwrap(),
             )

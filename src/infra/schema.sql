@@ -39,6 +39,7 @@ create table if not exists client_api_keys (
   name text not null,
   prefix text not null,
   key_hash text not null,
+  key_cipher text not null,
   label text,
   enabled integer not null default 1 check (enabled in (0, 1)),
   created_at text not null,

@@ -59,6 +59,7 @@ pub struct ClientApiKeyData {
     pub name: String,
     pub label: Option<String>,
     pub prefix: String,
+    pub key: String,
     pub enabled: bool,
     pub created_at: String,
     pub created_at_display: String,
@@ -73,12 +74,12 @@ pub struct CreatedClientApiKeyData {
     pub name: String,
     pub label: Option<String>,
     pub prefix: String,
+    pub key: String,
     pub enabled: bool,
     pub created_at: String,
     pub created_at_display: String,
     pub last_used_at: Option<String>,
     pub last_used_at_display: String,
-    pub plaintext: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +118,7 @@ impl From<AdminStoredClientApiKey> for ClientApiKeyData {
             name: k.name,
             label: k.label,
             prefix: k.prefix,
+            key: k.key,
             enabled: k.enabled,
             created_at_display: china_relative_time_str(Some(&k.created_at)),
             created_at: china_rfc3339_str(&k.created_at),
@@ -147,12 +149,12 @@ impl From<AdminCreatedClientApiKey> for CreatedClientApiKeyData {
             name: k.name,
             label: k.label,
             prefix: k.prefix,
+            key: k.key,
             enabled: k.enabled,
             created_at_display: china_relative_time_str(Some(&k.created_at)),
             created_at: china_rfc3339_str(&k.created_at),
             last_used_at_display: china_relative_time_str(k.last_used_at.as_deref()),
             last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
-            plaintext: k.plaintext,
         }
     }
 }

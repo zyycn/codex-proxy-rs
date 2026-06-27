@@ -159,6 +159,27 @@ async fn admin_accounts_test_app_with_oauth_token_endpoint(
     .await
 }
 
+async fn admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
+    db_name: &str,
+    key_byte: u8,
+    api_base_url: String,
+    oauth_token_endpoint: String,
+) -> (
+    axum::Router,
+    AppState,
+    SqlitePool,
+    tempfile::TempDir,
+    SecretBox,
+) {
+    admin_accounts_test_app_with_overrides(
+        db_name,
+        key_byte,
+        api_base_url,
+        Some(oauth_token_endpoint),
+    )
+    .await
+}
+
 async fn admin_accounts_test_app_with_overrides(
     db_name: &str,
     key_byte: u8,

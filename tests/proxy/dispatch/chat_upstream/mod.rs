@@ -590,19 +590,11 @@ async fn test_app_with_two_accounts(
 }
 
 async fn insert_client_api_key(pool: &SqlitePool, hasher: &ApiKeyHasher) -> String {
-    let generated = hasher.generate_client_api_key("test");
-    sqlx::query(
-        "insert into client_api_keys (id, name, prefix, key_hash, enabled, created_at) values (?, ?, ?, ?, 1, ?)",
-    )
-    .bind("key_test")
-    .bind("test")
-    .bind(&generated.prefix)
-    .bind(&generated.key_hash)
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-    generated.plaintext
+    SqliteClientKeyStore::new(pool.clone(), hasher.clone())
+        .create("test")
+        .await
+        .unwrap()
+        .key
 }
 
 async fn seed_openai_admin_session(pool: &SqlitePool, session_id: &str) {

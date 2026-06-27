@@ -265,7 +265,7 @@ async fn sqlite_schema_should_reject_non_boolean_flags() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let api_key_result = sqlx::query(
-        "insert into client_api_keys (id, name, prefix, key_hash, enabled, created_at) values ('key_bad', 'bad', 'cpr_x', 'hash', 2, '2026-06-14T00:00:00Z')",
+        "insert into client_api_keys (id, name, prefix, key_hash, key_cipher, enabled, created_at) values ('key_bad', 'bad', 'sk_x', 'hash', 'cipher', 2, '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;

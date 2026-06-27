@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseSegmented from '../../../components/base/BaseSegmented.vue'
-import BaseTable from '../../../components/base/BaseTable.vue'
+import BaseTable from '../../../components/base/BaseTable/index.vue'
 
 const props = defineProps<{
   rows: any[]

@@ -255,4 +255,6 @@ async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
     assert_eq!(body["data"]["page"]["pageSize"], 1);
     assert_eq!(body["data"]["page"]["total"], 2);
     assert_eq!(body["data"]["page"]["totalPages"], 2);
+    assert_eq!(body["data"]["summary"]["total"], 3);
+    assert_eq!(body["data"]["summary"]["active"], 3);
 }
