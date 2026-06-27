@@ -1,12 +1,13 @@
+use std::collections::BTreeMap;
+
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
 };
 use codex_proxy_rs::{
     config::types::{
-        AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
-        WebSocketPoolConfig,
+        AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
+        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
     },
     infra::database::connect_sqlite,
 };
@@ -134,13 +135,8 @@ fn test_config(database_url: String) -> AppConfig {
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),
         },
-        model: ModelConfig {
-            default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
-            aliases: Default::default(),
-            account_routes: Default::default(),
-        },
+        model_aliases: BTreeMap::new(),
+        model_account_routes: BTreeMap::new(),
         auth: AuthConfig {
             refresh_margin_seconds: 240,
             refresh_enabled: true,
@@ -150,7 +146,6 @@ fn test_config(database_url: String) -> AppConfig {
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
             oauth_client_id: "app_id".to_string(),
-            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
             oauth_token_endpoint: "https://auth.invalid/token".to_string(),
         },
         quota: QuotaConfig {
@@ -159,10 +154,6 @@ fn test_config(database_url: String) -> AppConfig {
                 primary: vec![80, 90],
                 secondary: vec![80, 90],
             },
-            skip_exhausted: true,
-        },
-        usage_stats: UsageStatsConfig {
-            history_retention_days: Some(30),
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
@@ -180,8 +171,6 @@ fn test_config(database_url: String) -> AppConfig {
             directory: "logs".to_string(),
             retention_days: 14,
             enabled: false,
-            capacity: 2_000,
-            capture_body: false,
         },
     }
 }

@@ -4,7 +4,10 @@ use std::sync::Arc as StdArc;
 
 use crate::{
     admin::monitoring::{
-        event_store::{AdminLogService, SqliteEventLogStore},
+        event_store::{
+            AdminLogService, SqliteEventLogStore, DEFAULT_EVENT_LOG_CAPACITY,
+            DEFAULT_EVENT_LOG_CAPTURE_BODY, DEFAULT_EVENT_LOG_ENABLED,
+        },
         service::AdminUsageService,
         usage_store::SqliteUsageStore,
     },
@@ -168,9 +171,9 @@ impl Services {
         ));
         let logs = StdArc::new(AdminLogService::new(
             stores.event_logs.clone(),
-            config.logging.enabled,
-            config.logging.capacity,
-            config.logging.capture_body,
+            DEFAULT_EVENT_LOG_ENABLED,
+            DEFAULT_EVENT_LOG_CAPACITY,
+            DEFAULT_EVENT_LOG_CAPTURE_BODY,
         ));
         let usage_store = SqliteUsageStore::new(stores.accounts.pool().clone());
         let usage = StdArc::new(AdminUsageService::new(usage_store));
@@ -184,10 +187,7 @@ impl Services {
         );
         let models = StdArc::new(ModelService::new(
             crate::upstream::models::ModelConfig {
-                default_model: config.model.default_model.clone(),
-                default_reasoning_effort: config.model.default_reasoning_effort.clone(),
-                service_tier: config.model.service_tier.clone(),
-                aliases: config.model.aliases.clone(),
+                model_aliases: config.model_aliases.clone(),
             },
             Some(snapshot_store.clone()),
             Some(upstream_client.clone()),
@@ -196,10 +196,7 @@ impl Services {
         let admin_models = StdArc::new(AdminModelService::new(
             StdArc::new(ModelService::new(
                 crate::upstream::models::ModelConfig {
-                    default_model: config.model.default_model.clone(),
-                    default_reasoning_effort: config.model.default_reasoning_effort.clone(),
-                    service_tier: config.model.service_tier.clone(),
-                    aliases: config.model.aliases.clone(),
+                    model_aliases: config.model_aliases.clone(),
                 },
                 Some(snapshot_store),
                 Some(upstream_client),

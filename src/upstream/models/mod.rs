@@ -16,17 +16,11 @@ use crate::upstream::accounts::{
 // 数据类型
 // ---------------------------------------------------------------------------
 
-/// 模型目录默认值与别名配置。
+/// 模型目录别名配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ModelConfig {
-    /// 默认模型名。
-    pub default_model: String,
-    /// 默认推理强度。
-    pub default_reasoning_effort: Option<String>,
-    /// 默认服务层级。
-    pub service_tier: Option<String>,
     /// 模型别名映射。
-    pub aliases: BTreeMap<String, String>,
+    pub model_aliases: BTreeMap<String, String>,
 }
 
 /// 单个 reasoning effort 的标准化展示信息。
@@ -349,14 +343,12 @@ use std::collections::BTreeSet;
 
 const SERVICE_TIER_SUFFIXES: [&str; 2] = ["fast", "flex"];
 const REASONING_EFFORT_SUFFIXES: [&str; 6] = ["none", "minimal", "low", "medium", "high", "xhigh"];
-const STATIC_REASONING_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
 
 /// 模型目录聚合。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCatalog {
     models: Vec<CodexModelInfo>,
-    aliases: BTreeMap<String, String>,
-    default_model: String,
+    model_aliases: BTreeMap<String, String>,
     model_plan_index: BTreeMap<String, Vec<String>>,
 }
 
@@ -376,12 +368,10 @@ impl ModelPlanSnapshot {
 impl ModelCatalog {
     /// 从静态配置构造模型目录。
     pub fn from_config(config: &ModelConfig) -> Self {
-        let default_model = config.default_model.trim().to_string();
-        let aliases = normalize_aliases(&config.aliases);
+        let model_aliases = normalize_aliases(&config.model_aliases);
         Self {
-            models: vec![default_model_info(config)],
-            aliases,
-            default_model,
+            models: Vec::new(),
+            model_aliases,
             model_plan_index: BTreeMap::new(),
         }
     }
@@ -395,8 +385,7 @@ impl ModelCatalog {
             return Self::from_config(config);
         }
 
-        let aliases = normalize_aliases(&config.aliases);
-        let default_model = config.default_model.trim().to_string();
+        let model_aliases = normalize_aliases(&config.model_aliases);
         let mut models_by_id = BTreeMap::new();
         let mut model_plan_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -417,8 +406,7 @@ impl ModelCatalog {
 
         Self {
             models,
-            aliases,
-            default_model,
+            model_aliases,
             model_plan_index,
         }
     }
@@ -447,7 +435,7 @@ impl ModelCatalog {
         if trimmed.is_empty() {
             return false;
         }
-        if self.aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
+        if self.model_aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
             return true;
         }
 
@@ -457,14 +445,14 @@ impl ModelCatalog {
         {
             return false;
         }
-        self.aliases.contains_key(&stripped.model_name)
+        self.model_aliases.contains_key(&stripped.model_name)
             || self.model_info(&stripped.model_name).is_some()
     }
 
     /// 解析外部传入的模型名，提取别名、推理强度和服务层级后缀。
     pub fn parse_model_name(&self, input: &str) -> ParsedModelName {
         let trimmed = input.trim();
-        if self.aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
+        if self.model_aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
             return ParsedModelName {
                 model_id: self.resolve_model_id(trimmed),
                 reasoning_effort: None,
@@ -495,11 +483,7 @@ impl ModelCatalog {
     }
 
     fn resolve_model_id(&self, input: &str) -> String {
-        let resolved = self.resolve_alias_chain(input);
-        if self.model_info(&resolved).is_some() {
-            return resolved;
-        }
-        self.default_model.clone()
+        self.resolve_alias_chain(input)
     }
 
     fn resolve_alias_chain(&self, input: &str) -> String {
@@ -507,7 +491,7 @@ impl ModelCatalog {
         let mut current = original.to_string();
         let mut seen = BTreeSet::new();
         for _ in 0..20 {
-            let Some(target) = self.aliases.get(&current).map(|value| value.trim()) else {
+            let Some(target) = self.model_aliases.get(&current).map(|value| value.trim()) else {
                 return current;
             };
             if !seen.insert(current.clone()) || seen.contains(target) {
@@ -556,37 +540,6 @@ fn normalize_aliases(input: &BTreeMap<String, String>) -> BTreeMap<String, Strin
                 .then(|| (alias.to_string(), target.to_string()))
         })
         .collect()
-}
-
-fn default_model_info(config: &ModelConfig) -> CodexModelInfo {
-    let id = config.default_model.trim().to_string();
-    let default_reasoning_effort = config
-        .default_reasoning_effort
-        .clone()
-        .unwrap_or_else(|| "medium".to_string());
-    CodexModelInfo {
-        id: id.clone(),
-        display_name: id,
-        description: "Codex default model".to_string(),
-        is_default: true,
-        supported_reasoning_efforts: STATIC_REASONING_EFFORTS
-            .into_iter()
-            .map(|effort| ReasoningEffortInfo {
-                reasoning_effort: effort.to_string(),
-                description: effort.to_string(),
-            })
-            .collect(),
-        default_reasoning_effort,
-        input_modalities: vec!["text".to_string(), "image".to_string()],
-        output_modalities: vec!["text".to_string()],
-        supports_personality: false,
-        upgrade: None,
-        source: "static".to_string(),
-        context_window: None,
-        max_context_window: None,
-        max_output_tokens: None,
-        truncation_policy_limit: None,
-    }
 }
 
 fn normalize_backend_model(raw: BackendModelEntry) -> CodexModelInfo {

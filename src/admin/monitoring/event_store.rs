@@ -12,6 +12,13 @@ use crate::admin::monitoring::events::{
 use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
 use crate::infra::time::china_quarter_hour_start;
 
+/// 默认启用事件日志，便于管理端诊断请求链路。
+pub const DEFAULT_EVENT_LOG_ENABLED: bool = true;
+/// 默认保留最新事件日志数量。
+pub const DEFAULT_EVENT_LOG_CAPACITY: u32 = 2_000;
+/// 默认不保存请求/响应体，避免把用户内容写入诊断日志。
+pub const DEFAULT_EVENT_LOG_CAPTURE_BODY: bool = false;
+
 /// SQLite 事件日志错误。
 #[derive(Debug, Error)]
 pub enum SqliteEventLogStoreError {

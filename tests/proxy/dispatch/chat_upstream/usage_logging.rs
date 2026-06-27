@@ -99,7 +99,8 @@ async fn responses_should_skip_event_log_when_logging_disabled() {
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
+    let (app, api_key, pool, _dir) =
+        test_app_with_account_pool_and_disabled_logging(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()

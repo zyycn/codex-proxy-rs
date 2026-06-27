@@ -135,7 +135,7 @@ export function useAccountConnectionTest() {
   function handleConnectionTestEvent(event: any) {
     if (event.type === 'test_start') {
       connectionTestModel.value = event.model || connectionTestModel.value
-      appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '默认模型'}`, 'info')
+      appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info')
       return
     }
     if (event.type === 'request') {

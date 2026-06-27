@@ -5,8 +5,6 @@ use codex_proxy_rs::config::settings::{AdminSettings, AdminSettingsPatch, Settin
 #[test]
 fn settings_service_should_apply_retained_settings_patch() {
     let mut current = AdminSettings {
-        default_model: "gpt-5.5".to_string(),
-        default_reasoning_effort: Some("high".to_string()),
         max_concurrent_per_account: 4,
         request_interval_ms: 50,
         rotation_strategy: "least_used".to_string(),
@@ -16,7 +14,6 @@ fn settings_service_should_apply_retained_settings_patch() {
     SettingsService::apply_patch(
         &mut current,
         AdminSettingsPatch {
-            default_model: Some(" gpt-6 ".to_string()),
             model_aliases: Some(
                 [
                     (" claude-sonnet ".to_string(), " gpt-5.5 ".to_string()),
@@ -40,7 +37,6 @@ fn settings_service_should_apply_retained_settings_patch() {
     )
     .expect("settings patch should be valid");
 
-    assert_eq!(current.default_model, "gpt-6");
     assert_eq!(current.model_aliases["claude-sonnet"], "gpt-5.5");
     assert_eq!(current.model_aliases["openai-fast"], "openai:gpt-4o");
     assert_eq!(
@@ -52,7 +48,6 @@ fn settings_service_should_apply_retained_settings_patch() {
     assert_eq!(current.rotation_strategy, "round_robin");
     assert_eq!(current.max_concurrent_per_account, 5);
     assert_eq!(current.request_interval_ms, 125);
-    assert_eq!(current.default_reasoning_effort.as_deref(), Some("high"));
 }
 
 #[test]

@@ -869,7 +869,14 @@ pub(crate) async fn test_account_connection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-        .unwrap_or_else(|| state.config.model.default_model.clone());
+        .ok_or_else(|| {
+            AdminError::new(
+                StatusCode::BAD_REQUEST,
+                40001,
+                "Model is required",
+                &request_id,
+            )
+        })?;
     let stream = state
         .services
         .admin_accounts

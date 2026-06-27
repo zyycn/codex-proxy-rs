@@ -919,11 +919,7 @@ pub async fn chat_completions(
             return invalid_chat_completion_request_response().into_response();
         }
     };
-    apply_response_model_options(
-        &mut codex_request,
-        &parsed_model,
-        state.services.models.config(),
-    );
+    apply_response_model_options(&mut codex_request, &parsed_model);
     let include_reasoning = codex_request
         .reasoning
         .as_ref()

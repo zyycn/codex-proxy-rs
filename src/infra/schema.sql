@@ -44,7 +44,6 @@ create index if not exists idx_client_api_keys_created_id on client_api_keys(cre
 -- ============================================
 create table if not exists runtime_settings (
   id integer primary key check (id = 1),
-  default_model text not null,
   model_aliases_json text not null default '{}',
   refresh_margin_seconds integer not null check (refresh_margin_seconds > 0),
   refresh_concurrency integer not null check (refresh_concurrency > 0),

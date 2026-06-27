@@ -210,12 +210,6 @@ struct UsageWindow {
     min_latency: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BillingContext<'a> {
-    default_model: &'a str,
-    default_service_tier: Option<&'a str>,
-}
-
 impl UsageWindow {
     fn tokens(self) -> u64 {
         self.input_tokens + self.output_tokens
@@ -288,13 +282,7 @@ pub async fn dashboard_summary(
         StatusCode::OK,
         AdminEnvelope::ok(
             DashboardSummaryData {
-                cards: dashboard_cards(
-                    &accounts,
-                    &summary,
-                    &time_buckets,
-                    &settings.model.default_model,
-                    settings.model.service_tier.as_deref(),
-                ),
+                cards: dashboard_cards(&accounts, &summary, &time_buckets),
                 trend,
                 health_timeline: dashboard_health_timeline_data(&time_buckets),
                 account_usage: account_usage_data(
@@ -337,38 +325,22 @@ fn dashboard_cards(
     accounts: &[Account],
     summary: &AdminUsageSummary,
     buckets: &[AdminUsageTimeBucketRecord],
-    default_model: &str,
-    default_service_tier: Option<&str>,
 ) -> DashboardCardsData {
-    dashboard_cards_at(
-        accounts,
-        summary,
-        buckets,
-        default_model,
-        default_service_tier,
-        Utc::now(),
-    )
+    dashboard_cards_at(accounts, summary, buckets, Utc::now())
 }
 
 fn dashboard_cards_at(
     accounts: &[Account],
     summary: &AdminUsageSummary,
     buckets: &[AdminUsageTimeBucketRecord],
-    default_model: &str,
-    default_service_tier: Option<&str>,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
     let yesterday_start = today_start - Duration::days(1);
-    let billing_context = BillingContext {
-        default_model,
-        default_service_tier,
-    };
-
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
-    let today_cost = cost_window(buckets, today_start, now, billing_context).unwrap_or(0.0);
-    let total_cost = total_cost(buckets, summary, billing_context);
+    let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
+    let total_cost = total_cost(buckets);
 
     let total_input = nonnegative_i64_to_u64(summary.input_tokens);
     let total_cached = nonnegative_i64_to_u64(summary.cached_tokens);
@@ -693,13 +665,12 @@ fn cost_window(
     records: &[AdminUsageTimeBucketRecord],
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-    context: BillingContext<'_>,
 ) -> Option<f64> {
     let mut total = 0.0;
     let mut has_usage = false;
     for record in records {
         if record.bucket_start >= start && record.bucket_start < end {
-            if let Some(cost) = bucket_cost(record, context) {
+            if let Some(cost) = bucket_cost(record) {
                 total += cost;
                 has_usage = true;
             }
@@ -708,15 +679,11 @@ fn cost_window(
     has_usage.then_some(total)
 }
 
-fn total_cost(
-    records: &[AdminUsageTimeBucketRecord],
-    summary: &AdminUsageSummary,
-    context: BillingContext<'_>,
-) -> f64 {
+fn total_cost(records: &[AdminUsageTimeBucketRecord]) -> f64 {
     let mut total = 0.0;
     let mut has_usage = false;
     for record in records {
-        if let Some(cost) = bucket_cost(record, context) {
+        if let Some(cost) = bucket_cost(record) {
             total += cost;
             has_usage = true;
         }
@@ -725,19 +692,10 @@ fn total_cost(
         return total;
     }
 
-    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
-    let output_tokens = nonnegative_i64_to_u64(summary.output_tokens);
-    let cached_tokens = nonnegative_i64_to_u64(summary.cached_tokens);
-    billing::calculate_cost(
-        input_tokens,
-        output_tokens,
-        cached_tokens,
-        context.default_model,
-        context.default_service_tier,
-    )
+    0.0
 }
 
-fn bucket_cost(record: &AdminUsageTimeBucketRecord, context: BillingContext<'_>) -> Option<f64> {
+fn bucket_cost(record: &AdminUsageTimeBucketRecord) -> Option<f64> {
     let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
     let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
     let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
@@ -745,18 +703,11 @@ fn bucket_cost(record: &AdminUsageTimeBucketRecord, context: BillingContext<'_>)
         return None;
     }
 
-    let model = {
-        let value = record.model.trim();
-        if value.is_empty() {
-            context.default_model
-        } else {
-            value
-        }
-    };
-    let service_tier = record
-        .service_tier
-        .as_deref()
-        .or(context.default_service_tier);
+    let model = record.model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let service_tier = record.service_tier.as_deref();
 
     Some(billing::calculate_cost(
         input_tokens,
@@ -1026,7 +977,7 @@ mod tests {
             usage_bucket_at("2026-06-24T15:30:00Z", 20),
         ];
 
-        let cards = dashboard_cards_at(&[], &empty_usage_summary(), &buckets, "gpt-5.5", None, now);
+        let cards = dashboard_cards_at(&[], &empty_usage_summary(), &buckets, now);
 
         assert_eq!(cards.traffic.today_requests, 1);
         assert_eq!(cards.traffic.yesterday_requests, 1);

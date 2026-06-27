@@ -385,7 +385,7 @@ impl ResponseDispatchService {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
-        apply_response_model_options(&mut request, &parsed_model, self.models.config());
+        apply_response_model_options(&mut request, &parsed_model);
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
@@ -976,7 +976,7 @@ impl ResponseDispatchService {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
-        apply_response_model_options(&mut request, &parsed_model, self.models.config());
+        apply_response_model_options(&mut request, &parsed_model);
         request.stream = true;
         let tuple_schema = request.tuple_schema.clone();
         let now = Utc::now();

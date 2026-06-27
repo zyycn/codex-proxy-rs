@@ -84,15 +84,12 @@
 
 - 服务监听地址和端口。
 - 数据库 URL。
-- API Key pepper 文件路径。
 - 上游基础地址。
-- OAuth endpoint。
 - 日志目录。
 - 首次启动管理员默认值。
 
-后台设置页改动的是运行态业务配置，更适合入库，例如：
+后台设置页改动的是需要人工决策的运行态配置，更适合入库，例如：
 
-- 默认模型。
 - 模型别名。
 - 提前刷新秒数。
 - 刷新并发数。
@@ -106,7 +103,6 @@
 ```sql
 create table runtime_settings (
   id integer primary key check (id = 1),
-  default_model text not null,
   model_aliases_json text not null default '{}',
   refresh_margin_seconds integer not null check (refresh_margin_seconds > 0),
   refresh_concurrency integer not null check (refresh_concurrency > 0),
@@ -326,16 +322,15 @@ create table usage_time_buckets (
 
 - server。
 - database。
-- API Key pepper 文件路径。
 - API base URL。
-- OAuth endpoint。
 - TLS。
 - 日志目录。
 - 首次管理员默认值。
 
+认证刷新、额度刷新和调度节奏不再作为 YAML 输入项；可人工调整的部分进入运行配置表，固定策略使用代码默认值。
+
 运行配置进入数据库：
 
-- default model。
 - model aliases。
 - model-account routes。
 - refresh margin。

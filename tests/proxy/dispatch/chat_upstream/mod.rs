@@ -16,14 +16,13 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
-        event_store::{EventLogFilter, SqliteEventLogStore},
+        event_store::{AdminLogStateUpdate, EventLogFilter, SqliteEventLogStore},
         events::EventLevel,
     },
     config::types::AppConfig,
     config::types::{
-        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, ModelConfig,
-        QuotaConfig, QuotaWarningThresholds, ServerConfig, TlsConfig, UsageStatsConfig,
-        WebSocketPoolConfig,
+        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
+        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
     },
     http::router,
     infra::database::connect_sqlite,
@@ -300,6 +299,7 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let api_key = insert_client_api_key(&pool).await;
+    insert_model_snapshot(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
         test_config(url, base_url),
         pool,
@@ -323,14 +323,70 @@ async fn test_app_with_account_pool_and_logging(
     .await
 }
 
+async fn test_app_with_account_pool_and_disabled_logging(
+    base_url: String,
+) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("openai-record-affinity.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let api_key = insert_client_api_key(&pool).await;
+    insert_account(&pool).await;
+    let state = test_app_state_with_pool_and_installation_id(
+        test_config(url, base_url),
+        pool.clone(),
+        TEST_INSTALLATION_ID.to_string(),
+    );
+    state
+        .services
+        .account_pool
+        .restore_from_repository()
+        .await
+        .expect("account pool should restore");
+    state
+        .services
+        .logs
+        .update_state(AdminLogStateUpdate {
+            enabled: Some(false),
+            ..AdminLogStateUpdate::default()
+        })
+        .await
+        .expect("event log should be disabled");
+    (router::router().with_state(state), api_key, pool, dir)
+}
+
 async fn test_app_with_account_pool_and_logging_capture_body(
     base_url: String,
 ) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
-    test_app_with_account_pool_config(base_url, |config| {
-        config.logging.enabled = true;
-        config.logging.capture_body = true;
-    })
-    .await
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("openai-record-affinity.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let api_key = insert_client_api_key(&pool).await;
+    insert_account(&pool).await;
+    let mut config = test_config(url, base_url);
+    config.logging.enabled = true;
+    let state = test_app_state_with_pool_and_installation_id(
+        config,
+        pool.clone(),
+        TEST_INSTALLATION_ID.to_string(),
+    );
+    state
+        .services
+        .account_pool
+        .restore_from_repository()
+        .await
+        .expect("account pool should restore");
+    state
+        .services
+        .logs
+        .update_state(AdminLogStateUpdate {
+            capture_body: Some(true),
+            ..AdminLogStateUpdate::default()
+        })
+        .await
+        .expect("log capture body should be enabled");
+    (router::router().with_state(state), api_key, pool, dir)
 }
 
 async fn test_app_with_account_pool_config(
@@ -579,6 +635,7 @@ async fn update_admin_account_status(app: &axum::Router, account_id: &str, statu
 }
 
 async fn insert_account(pool: &SqlitePool) {
+    insert_model_snapshot(pool).await;
     sqlx::query(
         "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -596,12 +653,45 @@ async fn insert_account(pool: &SqlitePool) {
     .unwrap();
 }
 
+async fn insert_model_snapshot(pool: &SqlitePool) {
+    let models_json = json!([
+        {
+            "id": "gpt-5.5",
+            "displayName": "GPT 5.5",
+            "description": "Test model",
+            "isDefault": false,
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low", "description": "low"},
+                {"reasoningEffort": "medium", "description": "medium"},
+                {"reasoningEffort": "high", "description": "high"}
+            ],
+            "defaultReasoningEffort": "medium",
+            "inputModalities": ["text", "image"],
+            "outputModalities": ["text"],
+            "supportsPersonality": false,
+            "upgrade": null,
+            "source": "test"
+        }
+    ])
+    .to_string();
+    sqlx::query(
+        "insert or replace into model_plan_snapshots (plan_type, models_json, fetched_at) values (?, ?, ?)",
+    )
+    .bind("plus")
+    .bind(models_json)
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn insert_named_account(
     pool: &SqlitePool,
     id: &str,
     access_token: &str,
     chatgpt_account_id: &str,
 ) {
+    insert_model_snapshot(pool).await;
     sqlx::query(
         "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -1566,13 +1656,8 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             port: 0,
         },
         api: ApiConfig { base_url },
-        model: ModelConfig {
-            default_model: "gpt-5.5".to_string(),
-            default_reasoning_effort: None,
-            service_tier: None,
-            aliases: BTreeMap::new(),
-            account_routes: BTreeMap::new(),
-        },
+        model_aliases: BTreeMap::new(),
+        model_account_routes: BTreeMap::new(),
         auth: AuthConfig {
             refresh_margin_seconds: 300,
             refresh_enabled: true,
@@ -1582,7 +1667,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             rotation_strategy: "least_used".to_string(),
             tier_priority: Vec::new(),
             oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            oauth_auth_endpoint: "https://auth.openai.com/oauth/authorize".to_string(),
             oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
         },
         quota: QuotaConfig {
@@ -1591,10 +1675,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
                 primary: vec![80, 90],
                 secondary: vec![80, 90],
             },
-            skip_exhausted: true,
-        },
-        usage_stats: UsageStatsConfig {
-            history_retention_days: None,
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
@@ -1612,8 +1692,6 @@ fn test_config(database_url: String, base_url: String) -> AppConfig {
             directory: "logs".to_string(),
             retention_days: 14,
             enabled: false,
-            capacity: 2_000,
-            capture_body: false,
         },
     }
 }

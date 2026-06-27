@@ -99,16 +99,15 @@ cargo run
 
 ## 配置重点
 
-常用配置都在 `config.yaml` 中：
+`config.yaml` 只放启动级配置，模型由客户端请求决定，网关不会兜底默认模型；`auth`、`quota`、模型别名和模型账号路由都不再从 YAML 读取：
 
 ```yaml
-model:
-  default: gpt-5.5
+server:
+  host: 0.0.0.0
+  port: 8080
 
-auth:
-  max_concurrent_per_account: 3
-  request_interval_ms: 50
-  rotation_strategy: least_used
+api:
+  base_url: https://chatgpt.com/backend-api
 
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
@@ -116,8 +115,6 @@ database:
 logging:
   directory: .runtime/logs
 ```
-
-本项目不依赖 `local.yaml`。本地敏感值、数据库路径、日志路径和管理员默认密码都应直接在 `config.yaml` 中配置。
 
 ## 开发验证
 

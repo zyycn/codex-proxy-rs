@@ -85,7 +85,7 @@ impl ChatDispatchService {
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
         let display_model = ModelCatalog::build_display_model_name(&parsed_model);
-        apply_response_model_options(&mut request, &parsed_model, self.models.config());
+        apply_response_model_options(&mut request, &parsed_model);
         let include_reasoning = request
             .reasoning
             .as_ref()
