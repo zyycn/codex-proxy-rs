@@ -138,7 +138,7 @@ const quotaToneClasses: Record<string, string> = {
       class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
     >
       <section
-        class="min-w-0 w-full pb-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:h-100.5 xl:pb-0 xl:shadow-none"
+        class="min-w-0 w-full pb-6 shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:h-100.5 xl:pb-0 xl:shadow-none"
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
@@ -158,7 +158,7 @@ const quotaToneClasses: Record<string, string> = {
               >{{ usedPercent }}% 已占用</span
             >
           </div>
-          <div class="mt-4.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+          <div class="mt-4.5 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
             <i
               class="block h-2.5 rounded-full bg-(--cp-success)"
               :style="{ width: `${usedPercent}%` }"
@@ -190,7 +190,7 @@ const quotaToneClasses: Record<string, string> = {
       </section>
 
       <section
-        class="min-w-0 w-full py-6 shadow-[inset_0_-1px_0_rgba(15,23,42,0.08)] xl:py-0 xl:shadow-none"
+        class="min-w-0 w-full py-6 shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:py-0 xl:shadow-none"
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
@@ -210,7 +210,7 @@ const quotaToneClasses: Record<string, string> = {
               v-for="(account, index) in accounts"
               :key="account.name"
               class="grid w-full grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] px-3.5 py-3.5 hover:bg-(--cp-bg-subtle) xl:h-19.5 xl:grid-cols-[34px_minmax(0,1.28fr)_minmax(132px,0.86fr)] xl:items-center xl:gap-x-3 xl:py-0"
-              :class="['bg-(--cp-bg-subtle)', 'bg-white'][index % 2]"
+              :class="index % 2 ? 'bg-(--cp-bg-surface)' : 'bg-(--cp-bg-subtle)'"
             >
               <span
                 class="inline-flex size-8.5 items-center justify-center rounded-full"

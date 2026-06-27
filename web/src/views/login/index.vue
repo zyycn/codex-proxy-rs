@@ -157,6 +157,28 @@ async function handleSubmit() {
 
 <style scoped>
 .login-page {
+  --login-glow-primary: #e6f4ff;
+  --login-glow-normal: #e9fbf7;
+  --login-bg-start: #f8fbff;
+  --login-bg-mid: #ffffff;
+  --login-bg-end: #eef4ff;
+  --login-wash-line: #ffffffd6;
+  --login-wash-a: #2563eb18;
+  --login-wash-b: #0f9f9a18;
+  --login-wash-c: #64748b10;
+  --login-grid-y: #0e17260a;
+  --login-grid-x: #0e172608;
+  --login-runner-a: #2563ebcc;
+  --login-runner-b: #0f9f9acc;
+  --login-runner-shadow: #2563eb24;
+  --login-form-top: #fffffff5;
+  --login-form-bottom: #fffffff0;
+  --login-form-edge-a: #ffffff;
+  --login-form-edge-b: #dbeafe80;
+  --login-form-edge-c: #c7efee66;
+  --login-form-shadow: #0e17264d;
+  --login-form-highlight-a: #93c5fd;
+  --login-form-highlight-b: #a7dfdd;
   position: relative;
   isolation: isolate;
   min-height: 100dvh;
@@ -164,9 +186,39 @@ async function handleSubmit() {
   overflow-y: auto;
   color: var(--cp-text-primary);
   background:
-    radial-gradient(circle at 12% 20%, #e6f4ff 0, transparent 30%),
-    radial-gradient(circle at 88% 24%, #e9fbf7 0, transparent 26%),
-    linear-gradient(116deg, #f8fbff 0%, #ffffff 50%, #eef4ff 100%);
+    radial-gradient(circle at 12% 20%, var(--login-glow-primary) 0, transparent 30%),
+    radial-gradient(circle at 88% 24%, var(--login-glow-normal) 0, transparent 26%),
+    linear-gradient(
+      116deg,
+      var(--login-bg-start) 0%,
+      var(--login-bg-mid) 50%,
+      var(--login-bg-end) 100%
+    );
+}
+
+:global(html[data-theme='dark'] .login-page) {
+  --login-glow-primary: #123153;
+  --login-glow-normal: #0b3a38;
+  --login-bg-start: #08101b;
+  --login-bg-mid: #0b111c;
+  --login-bg-end: #101a2a;
+  --login-wash-line: #dbeafe12;
+  --login-wash-a: #6ea8ff20;
+  --login-wash-b: #2dd4bf1f;
+  --login-wash-c: #8fa0b714;
+  --login-grid-y: #e6edf70b;
+  --login-grid-x: #e6edf708;
+  --login-runner-a: #6ea8ffcc;
+  --login-runner-b: #2dd4bfcc;
+  --login-runner-shadow: #6ea8ff30;
+  --login-form-top: #121b2af2;
+  --login-form-bottom: #101827f0;
+  --login-form-edge-a: #ffffff10;
+  --login-form-edge-b: #6ea8ff42;
+  --login-form-edge-c: #2dd4bf36;
+  --login-form-shadow: #000000a3;
+  --login-form-highlight-a: #6ea8ff;
+  --login-form-highlight-b: #2dd4bf;
 }
 
 .login-backdrop {
@@ -182,8 +234,14 @@ async function handleSubmit() {
   inset: -20%;
   content: '';
   background:
-    linear-gradient(112deg, #ffffff00 22%, #ffffffd6 50%, #ffffff00 74%),
-    conic-gradient(from 145deg at 46% 48%, #2563eb18, #0f9f9a18, #64748b10, #2563eb18);
+    linear-gradient(112deg, #ffffff00 22%, var(--login-wash-line) 50%, #ffffff00 74%),
+    conic-gradient(
+      from 145deg at 46% 48%,
+      var(--login-wash-a),
+      var(--login-wash-b),
+      var(--login-wash-c),
+      var(--login-wash-a)
+    );
   filter: blur(42px);
   opacity: 0.58;
   animation: login-wash 20s ease-in-out infinite alternate;
@@ -194,8 +252,8 @@ async function handleSubmit() {
   inset: -1px;
   content: '';
   background-image:
-    linear-gradient(#0e17260a 1px, transparent 1px),
-    linear-gradient(90deg, #0e172608 1px, transparent 1px);
+    linear-gradient(var(--login-grid-y) 1px, transparent 1px),
+    linear-gradient(90deg, var(--login-grid-x) 1px, transparent 1px);
   background-size: 58px 58px;
   mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 78%, transparent 100%);
   opacity: 0.32;
@@ -231,8 +289,14 @@ async function handleSubmit() {
   width: 42px;
   height: 2px;
   border-radius: var(--cp-radius-circle);
-  background: linear-gradient(90deg, transparent, #2563ebcc, #0f9f9acc, transparent);
-  box-shadow: 0 0 18px #2563eb24;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--login-runner-a),
+    var(--login-runner-b),
+    transparent
+  );
+  box-shadow: 0 0 18px var(--login-runner-shadow);
   opacity: 0;
 }
 
@@ -359,7 +423,7 @@ async function handleSubmit() {
   width: 1px;
   height: 10px;
   content: '';
-  background: #cbd8e8;
+  background: var(--cp-default-border-hover);
   transform: translateY(-50%);
 }
 
@@ -371,11 +435,17 @@ async function handleSubmit() {
   padding: clamp(32px, 7vw, 42px);
   border: 1px solid transparent;
   background:
-    linear-gradient(#fffffff5, #fffffff0) padding-box,
-    linear-gradient(135deg, #ffffff, #dbeafe80, #c7efee66) border-box;
+    linear-gradient(var(--login-form-top), var(--login-form-bottom)) padding-box,
+    linear-gradient(
+        135deg,
+        var(--login-form-edge-a),
+        var(--login-form-edge-b),
+        var(--login-form-edge-c)
+      )
+      border-box;
   box-shadow:
-    0 1px 0 #ffffff inset,
-    0 28px 64px -42px #0e17264d;
+    0 1px 0 var(--login-form-edge-a) inset,
+    0 28px 64px -42px var(--login-form-shadow);
   backdrop-filter: blur(20px);
 }
 
@@ -386,7 +456,13 @@ async function handleSubmit() {
   left: 34px;
   height: 1px;
   content: '';
-  background: linear-gradient(90deg, transparent, #93c5fd, #a7dfdd, transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--login-form-highlight-a),
+    var(--login-form-highlight-b),
+    transparent
+  );
   opacity: 0.7;
 }
 
@@ -519,8 +595,13 @@ async function handleSubmit() {
 @media (max-width: 520px) {
   .login-page {
     background:
-      radial-gradient(circle at 18% 12%, #e7f4ff 0, transparent 40%),
-      linear-gradient(116deg, #f7fbff 0%, #ffffff 50%, #eef4ff 100%);
+      radial-gradient(circle at 18% 12%, var(--login-glow-primary) 0, transparent 40%),
+      linear-gradient(
+        116deg,
+        var(--login-bg-start) 0%,
+        var(--login-bg-mid) 50%,
+        var(--login-bg-end) 100%
+      );
   }
 
   .login-backdrop::after {

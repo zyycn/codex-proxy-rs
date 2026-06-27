@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Codex Proxy RS</title>
+    <script>
+      ;(() => {
+        const state = JSON.parse(localStorage.getItem('codex-proxy-rs-ui') || '{}')
+        const mode = state.themeMode || 'system'
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        const theme = mode === 'dark' || (mode === 'system' && prefersDark) ? 'dark' : 'light'
+        document.documentElement.dataset.theme = theme
+        document.documentElement.style.colorScheme = theme
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>
