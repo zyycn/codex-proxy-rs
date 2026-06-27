@@ -61,13 +61,12 @@ const rotationOptions: Array<{
   },
 ]
 
-function numericModel(key: keyof Pick<
-  SettingsForm,
-  | 'refreshMarginSeconds'
-  | 'refreshConcurrency'
-  | 'maxConcurrentPerAccount'
-  | 'requestIntervalMs'
->) {
+function numericModel(
+  key: keyof Pick<
+    SettingsForm,
+    'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs'
+  >,
+) {
   return computed({
     get: () => String(form[key] ?? 0),
     set: (value: string) => {
@@ -192,12 +191,7 @@ onMounted(loadSettings)
       </div>
 
       <div class="mt-0.5 flex shrink-0 items-center gap-2">
-        <BaseButton
-          variant="primary"
-          :loading="saving"
-          :disabled="loading"
-          @click="handleSave"
-        >
+        <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="handleSave">
           <template #icon>
             <Save class="size-4" />
           </template>

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { EChartsOption } from 'echarts'
+import { storeToRefs } from 'pinia'
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseSegmented from '../../../components/base/BaseSegmented.vue'
+import { useUiStore } from '../../../stores/modules/ui'
 
 const props = defineProps<{
   points: any[]
@@ -22,6 +24,7 @@ const tabs = [
   { label: '错误', value: '错误' },
 ]
 const activeTab = ref('用量')
+const { effectiveTheme } = storeToRefs(useUiStore())
 
 const hasSamples = computed(() =>
   props.points.some(
@@ -42,33 +45,49 @@ const chartOption = computed<EChartsOption>(() => {
     xAxis: {
       type: 'category',
       data: times,
-      axisLabel: { color: '#94A3B8', fontSize: 10, fontFamily: 'JetBrains Mono' },
+      axisLabel: {
+        color: themeColor('--cp-text-muted', '#94A3B8'),
+        fontSize: 10,
+        fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
+      },
       axisLine: { show: false },
       axisTick: { show: false },
     },
     yAxis: [
-      { type: 'value', splitLine: { lineStyle: { color: '#F1F5F9' } }, axisLabel: { show: false } },
+      {
+        type: 'value',
+        splitLine: { lineStyle: { color: themeColor('--cp-bg-muted', '#F1F5F9') } },
+        axisLabel: { show: false },
+      },
       { type: 'value', min: 0, max: 100, splitLine: { show: false }, axisLabel: { show: false } },
     ],
     series,
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#fff',
+      backgroundColor: themeColor('--cp-bg-surface', '#fff'),
       borderColor: 'transparent',
       borderWidth: 0,
       padding: [10, 14],
       textStyle: {
-        color: '#334155',
+        color: themeColor('--cp-text-primary', '#334155'),
         fontSize: 12,
         fontFamily: 'Inter, system-ui, sans-serif',
         fontWeight: 600,
       },
-      extraCssText: 'border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);',
-      axisPointer: { type: 'line', lineStyle: { color: '#E2E8F0', type: 'dashed' } },
+      extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: themeColor('--cp-default-border-hover', '#E2E8F0'), type: 'dashed' },
+      },
       formatter: formatTooltip,
     },
   }
 })
+
+function themeColor(name: string, fallback: string) {
+  effectiveTheme.value
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
 
 function formatTooltip(params: unknown) {
   const rows = Array.isArray(params) ? params : [params]
@@ -101,18 +120,18 @@ function getSeries() {
       lineSeries(
         '输入',
         props.points.map((p) => p.inputTokens),
-        '#2563EB',
+        themeColor('--cp-info', '#2563EB'),
         true,
       ),
       lineSeries(
         '输出',
         props.points.map((p) => p.outputTokens),
-        '#10B981',
+        themeColor('--cp-success', '#10B981'),
       ),
       lineSeries(
         '缓存',
         props.points.map((p) => p.cachedTokens),
-        '#94A3B8',
+        themeColor('--cp-text-tertiary', '#94A3B8'),
       ),
     ]
   }
@@ -121,18 +140,18 @@ function getSeries() {
       lineSeries(
         '平均',
         props.points.map((p) => p.latency),
-        '#0F9F9A',
+        themeColor('--cp-normal', '#0F9F9A'),
         true,
       ),
       lineSeries(
         '最高',
         props.points.map((p) => p.maxLatency),
-        '#F59E0B',
+        themeColor('--cp-warning', '#F59E0B'),
       ),
       lineSeries(
         '最低',
         props.points.map((p) => p.minLatency),
-        '#10B981',
+        themeColor('--cp-success', '#10B981'),
       ),
     ]
   }
@@ -140,20 +159,20 @@ function getSeries() {
     lineSeries(
       '错误数',
       props.points.map((p) => p.errors),
-      '#EF4444',
+      themeColor('--cp-danger', '#EF4444'),
       true,
     ),
     lineSeries(
       '成功率',
       props.points.map((p) => p.successRate),
-      '#10B981',
+      themeColor('--cp-success', '#10B981'),
       false,
       1,
     ),
     lineSeries(
       '总请求',
       props.points.map((p) => p.requests),
-      '#2563EB',
+      themeColor('--cp-info', '#2563EB'),
     ),
   ]
 }
@@ -215,14 +234,14 @@ function formatLatency(ms: number): string {
       <div
         class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
       >
-        <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-white">
+        <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-(--cp-bg-subtle)">
           <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
           <BaseEmpty
             v-if="!hasSamples"
             compact
             title="暂无趋势数据"
             description="最近 24 小时还没有可用于绘制趋势的请求日志。"
-            class="h-full place-content-center bg-white"
+            class="h-full place-content-center bg-(--cp-bg-subtle)"
           />
         </div>
 

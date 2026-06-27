@@ -10,10 +10,10 @@ const props = defineProps<{
 const points = computed(() => props.timeline.points.split(''))
 
 function cellClass(point: string) {
-  if (point === '1') return 'bg-[#4FAD7A]'
-  if (point === '2') return 'bg-[#D9A13B]'
-  if (point === '3') return 'bg-[#D86A62]'
-  return 'bg-[#CBD2DC]'
+  if (point === '1') return 'bg-(--cp-success)'
+  if (point === '2') return 'bg-(--cp-warning)'
+  if (point === '3') return 'bg-(--cp-danger)'
+  return 'bg-(--cp-default-border-hover)'
 }
 </script>
 
@@ -38,10 +38,10 @@ function cellClass(point: string) {
           class="flex items-center gap-2 text-[11px] leading-none font-[650] text-(--cp-text-muted)"
         >
           <span>{{ timeline.oldestLabel }}</span>
-          <i class="size-2 rounded-xs bg-[#CBD2DC]" />
-          <i class="size-2 rounded-xs bg-[#D86A62]" />
-          <i class="size-2 rounded-xs bg-[#D9A13B]" />
-          <i class="size-2 rounded-xs bg-[#4FAD7A]" />
+          <i class="size-2 rounded-xs bg-(--cp-default-border-hover)" />
+          <i class="size-2 rounded-xs bg-(--cp-danger)" />
+          <i class="size-2 rounded-xs bg-(--cp-warning)" />
+          <i class="size-2 rounded-xs bg-(--cp-success)" />
           <span>{{ timeline.newestLabel }}</span>
         </div>
       </div>

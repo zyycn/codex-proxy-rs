@@ -45,14 +45,14 @@ defineProps<{
     </div>
 
     <div
-      class="min-w-0 pt-4 shadow-[inset_0_1px_0_rgba(216,224,234,0.42)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_rgba(216,224,234,0.42)]"
+      class="min-w-0 pt-4 shadow-[inset_0_1px_0_var(--cp-divider-subtle)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_var(--cp-divider-subtle)]"
     >
       <div class="mb-3 flex items-center justify-between">
         <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">模型使用排行</h3>
       </div>
 
       <div
-        class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-muted) shadow-[inset_0_-1px_0_rgba(216,224,234,0.42)]"
+        class="grid grid-cols-[1.2fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.4fr] gap-3 pb-2 text-[11px] font-[760] text-(--cp-text-secondary) shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
       >
         <span>模型</span>
         <span>调用</span>

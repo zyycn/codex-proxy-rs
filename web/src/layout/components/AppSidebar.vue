@@ -1,25 +1,32 @@
 <script setup lang="ts">
 import { gsap } from 'gsap'
-import { nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import {
   Cat,
   KeyRound,
   LayoutDashboard,
   List,
   LogOut,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Sun,
   Users,
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import { useAuthStore } from '@/stores/modules/auth'
+import { useUiStore } from '@/stores/modules/ui'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const uiStore = useUiStore()
+const { effectiveTheme } = storeToRefs(uiStore)
+const { toggleTheme } = uiStore
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -59,6 +66,9 @@ defineEmits<{
 const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
 const brandLabelVisible = shallowRef(!props.collapsed)
+const themeToggleLabel = computed(() =>
+  effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
+)
 
 function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -271,23 +281,34 @@ watch(
             icon-only
             variant="ghost"
             :size="collapsed ? 'default' : 'sm'"
-            data-sidebar-toggle
-            :label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
-            @click="$emit('toggle')"
+            label="退出登录"
+            class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
+            @click="handleLogout"
           >
-            <PanelLeftOpen v-if="collapsed" :size="19" />
-            <PanelLeftClose v-else :size="18" />
+            <LogOut :size="collapsed ? 19 : 18" />
           </BaseButton>
 
           <BaseButton
             icon-only
             variant="ghost"
             :size="collapsed ? 'default' : 'sm'"
-            label="退出登录"
-            class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
-            @click="handleLogout"
+            :label="themeToggleLabel"
+            @click="toggleTheme($event)"
           >
-            <LogOut :size="collapsed ? 19 : 18" />
+            <Sun v-if="effectiveTheme === 'dark'" :size="collapsed ? 19 : 18" />
+            <Moon v-else :size="collapsed ? 19 : 18" />
+          </BaseButton>
+
+          <BaseButton
+            icon-only
+            variant="ghost"
+            :size="collapsed ? 'default' : 'sm'"
+            data-sidebar-toggle
+            :label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
+            @click="$emit('toggle')"
+          >
+            <PanelLeftOpen v-if="collapsed" :size="19" />
+            <PanelLeftClose v-else :size="18" />
           </BaseButton>
         </div>
       </div>

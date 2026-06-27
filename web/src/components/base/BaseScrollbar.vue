@@ -26,6 +26,7 @@ const visible = shallowRef(false)
 const dragging = shallowRef(false)
 
 let resizeObserver: ResizeObserver | undefined
+let hideTimer: number | undefined
 let dragStartY = 0
 let dragStartScrollTop = 0
 
@@ -56,10 +57,32 @@ function showScrollbar() {
   visible.value = true
 }
 
+function clearHideTimer() {
+  window.clearTimeout(hideTimer)
+  hideTimer = undefined
+}
+
+function scheduleHideScrollbar() {
+  clearHideTimer()
+  if (props.forceVisible || dragging.value) {
+    return
+  }
+
+  hideTimer = window.setTimeout(() => {
+    hideScrollbar()
+  }, 900)
+}
+
 function hideScrollbar() {
-  if (!dragging.value) {
+  clearHideTimer()
+  if (!props.forceVisible && !dragging.value) {
     visible.value = false
   }
+}
+
+function activateScrollbar() {
+  showScrollbar()
+  scheduleHideScrollbar()
 }
 
 function update() {
@@ -74,6 +97,7 @@ function update() {
     thumbHeight.value = 0
     thumbTop.value = 0
     visible.value = false
+    clearHideTimer()
     return
   }
 
@@ -90,6 +114,7 @@ async function scrollToTop() {
   }
   dragging.value = false
   visible.value = false
+  clearHideTimer()
   await nextTick()
   update()
 }
@@ -101,7 +126,7 @@ function handleScroll() {
   }
 
   update()
-  showScrollbar()
+  activateScrollbar()
   emit('scroll', {
     scrollTop: wrap.scrollTop,
     scrollLeft: wrap.scrollLeft,
@@ -119,6 +144,7 @@ function handleTrackPointerDown(event: PointerEvent) {
   }
 
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  activateScrollbar()
   const nextThumbTop = event.clientY - rect.top - thumbHeight.value / 2
   const scrollRange = maxScrollTop(wrap)
   const thumbRange = maxThumbTop(wrap)
@@ -137,6 +163,7 @@ function handleThumbPointerDown(event: PointerEvent) {
   event.preventDefault()
   dragging.value = true
   visible.value = true
+  clearHideTimer()
   dragStartY = event.clientY
   dragStartScrollTop = wrap.scrollTop
   document.addEventListener('pointermove', handleThumbPointerMove)
@@ -161,7 +188,7 @@ function handleThumbPointerMove(event: PointerEvent) {
 function handleThumbPointerUp() {
   dragging.value = false
   document.removeEventListener('pointermove', handleThumbPointerMove)
-  showScrollbar()
+  activateScrollbar()
 }
 
 onMounted(async () => {
@@ -177,6 +204,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearHideTimer()
   resizeObserver?.disconnect()
   document.removeEventListener('pointermove', handleThumbPointerMove)
 })
@@ -193,7 +221,7 @@ defineExpose({
     <div
       ref="wrap"
       class="h-full min-h-0 overflow-auto max-h-[inherit] [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent"
-      @mouseenter="showScrollbar"
+      @mouseenter="activateScrollbar"
       @mouseleave="hideScrollbar"
       @scroll="handleScroll"
     >

@@ -113,7 +113,7 @@ function fixedHeaderClass(column: BaseTableColumn) {
 
   return [
     'sticky left-0 z-30 bg-(--cp-bg-subtle)',
-    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_rgba(15,23,42,0.38)]' : undefined,
+    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]' : undefined,
   ]
 }
 
@@ -124,7 +124,7 @@ function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
 
   return [
     'sticky left-0 z-20',
-    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_rgba(15,23,42,0.38)]' : undefined,
+    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]' : undefined,
     isRowSelected(row, index)
       ? 'bg-(--cp-bg-tertiary)'
       : props.stripe && index % 2 === 1

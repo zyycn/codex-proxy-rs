@@ -29,6 +29,8 @@
   --cp-default-text-hover: #111827;
   --cp-default-text-active: #0b1220;
   --cp-border-primary: #d8e0ea;
+  --cp-divider-subtle: #d8e0ea6b;
+  --cp-progress-track: #e2e8f0;
 
   --cp-control-bg: #ffffff;
   --cp-control-bg-hover: #fbfdff;
@@ -133,6 +135,7 @@
   --cp-shadow-input-focus: inset 0 1px 0 #ffffff, 0 0 0 3px #dbeafe;
   --cp-shadow-input-error: inset 0 1px 0 #ffffffcc, 0 0 0 3px #fee2e2;
   --cp-shadow-sidebar: 2px 0 12px -12px #0e172607;
+  --cp-shadow-sticky: #0f172a61;
   --cp-scrollbar-track: #eef3f8;
   --cp-scrollbar-thumb: #cbd7e6;
   --cp-scrollbar-thumb-hover: #aebed0;
@@ -142,4 +145,124 @@
   --cp-gap-card: 24px;
   --cp-sidebar-width: 256px;
   --cp-sidebar-collapsed-width: 88px;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+
+  --cp-bg-page: #0b111c;
+  --cp-bg-surface: #111a29;
+  --cp-bg-subtle: #162133;
+  --cp-bg-muted: #1c2a3d;
+  --cp-bg-primary: #121b2a;
+  --cp-bg-tertiary: #142946;
+  --cp-bg-nav-active: #1b2a40;
+  --cp-bg-dark: #050913;
+  --cp-white: #ffffff;
+  --cp-transparent: #ffffff00;
+  --cp-overlay-scrim: #030712a6;
+
+  --cp-text-primary: #d8e2ee;
+  --cp-text-strong: #f5f8fc;
+  --cp-text-secondary: #8fa0b7;
+  --cp-text-tertiary: #71839c;
+  --cp-text-muted: #64748b;
+  --cp-accent-primary: #6ea8ff;
+
+  --cp-default-bg: #151f30;
+  --cp-default-bg-hover: #1b2a40;
+  --cp-default-bg-active: #23354f;
+  --cp-default-border: #26364c;
+  --cp-default-border-hover: #344760;
+  --cp-default-text: #e6edf7;
+  --cp-default-text-hover: #f5f8fc;
+  --cp-default-text-active: #ffffff;
+  --cp-border-primary: #29384d;
+  --cp-divider-subtle: #26364c80;
+  --cp-progress-track: #24334a;
+
+  --cp-control-bg: #121b2a;
+  --cp-control-bg-hover: #162133;
+  --cp-control-highlight: #ffffff10;
+  --cp-control-border: #29384d;
+  --cp-control-border-hover: #3a4d66;
+  --cp-control-boundary: #29384d;
+  --cp-control-boundary-focus: #4f8ee8;
+  --cp-control-focus-ring: #1f3f68;
+  --cp-input-soft-bg: #182437;
+  --cp-input-soft-bg-hover: #1d2d43;
+  --cp-input-soft-bg-focus: #111d2d;
+  --cp-input-context-bg: #121b2a;
+  --cp-input-context-bg-hover: #162133;
+  --cp-input-error-soft-bg: #311b24;
+
+  --cp-disabled-bg: #182231;
+  --cp-disabled-border: #223047;
+  --cp-disabled-text: #53647a;
+  --cp-disabled-icon: #44556b;
+
+  --cp-info: #3b82f6;
+  --cp-info-hover: #4f8ee8;
+  --cp-info-pressed: #2563eb;
+  --cp-info-bg: #102747;
+  --cp-info-bg-hover: #163459;
+  --cp-info-bg-active: #1d426d;
+  --cp-info-border: #2e5e92;
+  --cp-info-text: #93c5fd;
+  --cp-info-on: var(--cp-text-primary);
+
+  --cp-normal: #2dd4bf;
+  --cp-normal-hover: #5eead4;
+  --cp-normal-pressed: #14b8a6;
+  --cp-normal-bg: #0c332f;
+  --cp-normal-bg-hover: #11423d;
+  --cp-normal-bg-active: #15524c;
+  --cp-normal-border: #1f6f67;
+  --cp-normal-text: #5eead4;
+  --cp-normal-on: #061412;
+
+  --cp-success: #34d399;
+  --cp-success-hover: #6ee7b7;
+  --cp-success-pressed: #10b981;
+  --cp-success-bg: #0e3427;
+  --cp-success-bg-hover: #13432f;
+  --cp-success-bg-active: #18543b;
+  --cp-success-border: #247554;
+  --cp-success-text: #86efac;
+  --cp-success-on: #06140e;
+
+  --cp-warning: #fbbf24;
+  --cp-warning-hover: #fcd34d;
+  --cp-warning-pressed: #f59e0b;
+  --cp-warning-bg: #38280c;
+  --cp-warning-bg-hover: #4a3510;
+  --cp-warning-bg-active: #5d4314;
+  --cp-warning-border: #7a581a;
+  --cp-warning-text: #fcd34d;
+  --cp-warning-on: #171006;
+
+  --cp-danger: #fb7185;
+  --cp-danger-hover: #fda4af;
+  --cp-danger-pressed: #f43f5e;
+  --cp-danger-bg: #3b1620;
+  --cp-danger-bg-hover: #4b1c28;
+  --cp-danger-bg-active: #612333;
+  --cp-danger-border: #7f2d42;
+  --cp-danger-text: #fda4af;
+  --cp-danger-on: #19070c;
+  --cp-danger-ring: #5a1f2d;
+
+  --cp-shadow-card: 0 18px 34px -26px #000000a3, inset 0 1px 0 #ffffff08;
+  --cp-shadow-control: 0 12px 24px -20px #000000a8, inset 0 1px 0 #ffffff08;
+  --cp-shadow-popover: 0 24px 52px -26px #000000d1, inset 0 1px 0 #ffffff0a;
+  --cp-shadow-input: inset 0 1px 0 #ffffff08, 0 12px 24px -20px #000000a8;
+  --cp-shadow-input-hover:
+    inset 0 1px 0 #ffffff10, 0 0 0 3px var(--cp-control-focus-ring), 0 14px 28px -22px #000000b8;
+  --cp-shadow-input-focus: inset 0 1px 0 #ffffff12, 0 0 0 3px #1f3f68;
+  --cp-shadow-input-error: inset 0 1px 0 #ffffff0d, 0 0 0 3px #5a1f2d;
+  --cp-shadow-sidebar: 2px 0 18px -14px #000000b8;
+  --cp-shadow-sticky: #000000bf;
+  --cp-scrollbar-track: #111a29;
+  --cp-scrollbar-thumb: #2b3e56;
+  --cp-scrollbar-thumb-hover: #405774;
 }
