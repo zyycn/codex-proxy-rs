@@ -1,0 +1,94 @@
+<script setup lang="ts">
+import { LoaderCircle, MoreHorizontal, Pencil, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
+
+import BaseButton from '@/components/base/BaseButton.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
+
+defineProps<{
+  account: any
+  deleting: boolean
+  refreshing: boolean
+  testing: boolean
+  updatingStatus: boolean
+  scheduleLabel: string
+}>()
+
+const emit = defineEmits<{
+  edit: [account: any]
+  delete: [account: any]
+  test: [account: any]
+  refresh: [accountId: string]
+  toggleSchedule: [account: any]
+}>()
+</script>
+
+<template>
+  <div class="relative flex items-center justify-end gap-1">
+    <BaseButton
+      icon-only
+      variant="ghost"
+      size="sm"
+      title="编辑账号"
+      @click.stop="emit('edit', account)"
+    >
+      <Pencil class="size-3.5" />
+    </BaseButton>
+
+    <BaseButton
+      icon-only
+      variant="ghost"
+      size="sm"
+      title="删除账号"
+      :disabled="deleting"
+      @click.stop="emit('delete', account)"
+    >
+      <Trash2 class="size-3.5 text-(--cp-danger)" />
+    </BaseButton>
+
+    <BasePopover placement="bottom-end" width="160px">
+      <template #trigger="{ open }">
+        <BaseButton icon-only variant="ghost" size="sm" title="更多操作" :active="open">
+          <MoreHorizontal class="size-4" />
+        </BaseButton>
+      </template>
+
+      <template #default="{ close }">
+        <button
+          type="button"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          :disabled="testing"
+          @click.stop="(close(), emit('test', account))"
+        >
+          <LoaderCircle v-if="testing" class="size-3.5 animate-spin text-(--cp-text-muted)" />
+          <Wifi v-else class="size-3.5 text-(--cp-text-muted)" />
+          测试连接
+        </button>
+        <button
+          type="button"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          :disabled="refreshing"
+          @click.stop="(close(), emit('refresh', account.id))"
+        >
+          <RefreshCw
+            class="size-3.5 text-(--cp-text-muted)"
+            :class="refreshing ? 'animate-spin' : undefined"
+          />
+          刷新 token
+        </button>
+        <button
+          type="button"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
+          :disabled="updatingStatus"
+          @click.stop="(close(), emit('toggleSchedule', account))"
+        >
+          <LoaderCircle
+            v-if="updatingStatus"
+            class="size-3.5 animate-spin text-(--cp-text-muted)"
+          />
+          <Power v-else class="size-3.5 text-(--cp-text-muted)" />
+          {{ scheduleLabel }}
+        </button>
+      </template>
+    </BasePopover>
+  </div>
+</template>

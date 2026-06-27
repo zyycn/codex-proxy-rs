@@ -64,6 +64,7 @@ async function refreshSettings() {
 }
 
 async function handleSave() {
+  if (saving.value || loading.value || refreshing.value) return
   try {
     saving.value = true
     const patch = {
@@ -99,18 +100,18 @@ onMounted(() => {
       </div>
 
       <div class="mt-0.5 flex shrink-0 items-center gap-2">
-        <BaseButton
-          variant="ghost"
-          :loading="refreshing"
-          :disabled="loading"
-          @click="refreshSettings"
-        >
+        <BaseButton variant="ghost" :disabled="loading || refreshing" @click="refreshSettings">
           <template #icon>
-            <RefreshCw class="size-4" />
+            <RefreshCw class="size-4" :class="refreshing ? 'animate-spin' : undefined" />
           </template>
           重置
         </BaseButton>
-        <BaseButton variant="primary" :disabled="saving" @click="handleSave">
+        <BaseButton
+          variant="primary"
+          :loading="saving"
+          :disabled="loading || refreshing"
+          @click="handleSave"
+        >
           <template #icon>
             <Save class="size-4" />
           </template>

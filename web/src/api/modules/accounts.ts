@@ -16,6 +16,14 @@ export function createAccount(data: any) {
   })
 }
 
+export function importAccounts(data: any) {
+  return request({
+    url: '/api/admin/accounts/import',
+    method: 'POST',
+    data,
+  })
+}
+
 export function deleteAccounts(data: any) {
   return request({
     url: '/api/admin/accounts/delete',
@@ -59,18 +67,16 @@ export function testAccountConnection(data: any) {
 export async function testAccountConnectionStream(data: any, onEvent: any, signal?: AbortSignal) {
   const { id, ...payload } = data
   const baseURL = import.meta.env.DEV ? '/dev' : ''
-  const response = await fetch(
-    `${baseURL}/api/admin/accounts/${encodeURIComponent(String(id))}/test`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-      signal,
+  const params = new URLSearchParams({ id: String(id) })
+  const response = await fetch(`${baseURL}/api/admin/accounts/test?${params}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
     },
-  )
+    credentials: 'include',
+    body: JSON.stringify(payload),
+    signal,
+  })
 
   if (!response.ok) {
     throw new Error((await response.text()) || `HTTP ${response.status}`)
@@ -96,8 +102,11 @@ export async function testAccountConnectionStream(data: any, onEvent: any, signa
 
 export function getAccountTestModels(data: any) {
   return request({
-    url: `/api/admin/accounts/${encodeURIComponent(String(data.id))}/test-models`,
+    url: '/api/admin/accounts/models',
     method: 'GET',
+    params: {
+      id: data.id,
+    },
   })
 }
 

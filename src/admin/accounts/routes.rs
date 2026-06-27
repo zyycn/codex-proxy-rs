@@ -2,7 +2,7 @@
 
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{
         header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
         HeaderMap, StatusCode,
@@ -518,9 +518,8 @@ pub(crate) async fn accounts(
     require_admin_session(&state, &headers, &request_id).await?;
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
-    let search = params.search.clone();
     let stats = account_list_stats(&state).await;
-    let summary = account_summary_data(&state, &stats, search.as_deref()).await;
+    let summary = account_summary_data(&state, &stats).await;
 
     if use_numbered_page {
         return match state
@@ -856,15 +855,16 @@ pub(crate) async fn import_accounts(
     }
 }
 
-/// `POST /api/admin/accounts/:id/test`
+/// `POST /api/admin/accounts/test?id=...`
 pub(crate) async fn test_account_connection(
     State(state): State<AppState>,
-    Path(account_id): Path<String>,
+    Query(query): Query<AccountIdQuery>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
     let request_id = request_id.as_str().to_string();
+    let account_id = query.id;
     let payload = parse_account_test_request(&body, &request_id)?;
     require_admin_session(&state, &headers, &request_id).await?;
 
@@ -899,14 +899,15 @@ pub(crate) async fn test_account_connection(
         })
 }
 
-/// `GET /api/admin/accounts/:id/test-models`
+/// `GET /api/admin/accounts/models?id=...`
 pub(crate) async fn account_test_models(
     State(state): State<AppState>,
-    Path(account_id): Path<String>,
+    Query(query): Query<AccountIdQuery>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
+    let account_id = query.id;
     require_admin_session(&state, &headers, &request_id).await?;
     match state
         .services
@@ -1044,9 +1045,8 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
 async fn account_summary_data(
     state: &AppState,
     stats: &AccountListStats,
-    search: Option<&str>,
 ) -> AdminAccountSummaryData {
-    let accounts = list_all_account_metadata(state, search).await;
+    let accounts = list_all_account_metadata(state).await;
     let total = accounts.len() as u64;
     let active = accounts
         .iter()
@@ -1074,21 +1074,14 @@ async fn account_summary_data(
     }
 }
 
-async fn list_all_account_metadata(
-    state: &AppState,
-    search: Option<&str>,
-) -> Vec<AdminAccountMetadata> {
+async fn list_all_account_metadata(state: &AppState) -> Vec<AdminAccountMetadata> {
     let mut page = 1;
     let mut accounts = Vec::new();
     loop {
         let Ok(result) = state
             .services
             .admin_accounts
-            .list_page(
-                page,
-                ACCOUNT_STATS_PAGE_LIMIT,
-                search.map(ToString::to_string),
-            )
+            .list_page(page, ACCOUNT_STATS_PAGE_LIMIT, None)
             .await
         else {
             return Vec::new();

@@ -57,7 +57,7 @@ async fn models_route_should_reject_unknown_client_api_key() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/models")
-                .header("authorization", "Bearer cpr_not_stored")
+                .header("authorization", "Bearer sk_not_stored")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -109,11 +109,11 @@ async fn models_route_should_accept_stored_client_api_key() {
 }
 
 async fn insert_client_api_key(pool: &SqlitePool, hasher: &ApiKeyHasher) -> String {
-    let generated = hasher.generate_client_api_key("test");
-    sqlx::query("insert into client_api_keys (id, name, prefix, key_hash, enabled, created_at) values (?, ?, ?, ?, 1, ?)")
-        .bind("key_test").bind("test").bind(&generated.prefix).bind(&generated.key_hash)
-        .bind("2026-06-18T00:00:00Z").execute(pool).await.unwrap();
-    generated.plaintext
+    SqliteClientKeyStore::new(pool.clone(), hasher.clone())
+        .create("test")
+        .await
+        .unwrap()
+        .key
 }
 
 fn test_config(database_url: String) -> AppConfig {

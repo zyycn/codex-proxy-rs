@@ -13,6 +13,7 @@ import {
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
+import { formatDateTime } from '@/utils/date'
 
 export function useDashboard(): any {
   const metrics = ref<any[]>(metricCards(emptyDashboardSummary()))
@@ -90,7 +91,7 @@ export function useDashboard(): any {
     poolSummary.value = summary.poolSummary
     capacityInfo.value = summary.capacityInfo
     rotationStrategy.value = summary.rotationStrategy ?? null
-    lastRefreshedAt.value = formatDateTime(new Date())
+    lastRefreshedAt.value = formatDateTime()
   }
 
   function emptyDashboardSummary() {
@@ -387,13 +388,6 @@ export function useDashboard(): any {
     if (!ms) return '-'
     if (ms >= 1000) return `${formatCompact(ms / 1000)}s`
     return `${ms}ms`
-  }
-
-  function formatDateTime(date: Date): string {
-    const pad = (value: number) => String(value).padStart(2, '0')
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-      date.getHours(),
-    )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
   }
 
   function startAutoRefresh() {

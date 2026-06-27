@@ -2,37 +2,30 @@
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
 
-import BaseEmpty from './BaseEmpty.vue'
-import BaseScrollbar from './BaseScrollbar.vue'
-import BaseSelect from './BaseSelect.vue'
-
-export interface BaseTableColumn {
-  key: string
-  label?: string
-  width?: number | string
-  minWidth?: number | string
-  maxWidth?: number | string
-  flex?: number
-  fixed?: 'left'
-  align?: 'left' | 'right' | 'center'
-  ellipsis?: boolean
-  emptyText?: string
-  mono?: boolean
-  tabular?: boolean
-  headerClass?: string
-  cellClass?: string
-}
-
-export interface BaseTablePagination {
-  page: number
-  pageSize: number
-  total: number
-  pageSizes?: number[]
-}
+import BaseEmpty from '../BaseEmpty.vue'
+import BaseScrollbar from '../BaseScrollbar.vue'
+import BaseSelect from '../BaseSelect.vue'
+import {
+  alignClass,
+  cellContentClass,
+  cellDisplayValue,
+  cellTitle,
+  cellValue,
+  columnStyle,
+  resolveColumns,
+  tableStyle as resolveTableStyle,
+  type BaseTableColumn,
+} from './columns'
+import {
+  getCurrentPage,
+  getPageSizeOptions,
+  getPagerItems,
+  getTotalPages,
+  type BaseTablePagination,
+} from './pagination'
 
 type TableRow = Record<string, any>
 type RowKey = string | ((row: TableRow, index: number) => string | number)
-type PagerItem = number | 'ellipsis'
 
 const props = withDefaults(
   defineProps<{
@@ -72,65 +65,11 @@ const headerCellClass =
 const bodyCellClass =
   'min-w-0 px-4 first:pl-3 text-[13px] text-(--cp-text-primary) first:rounded-l-lg'
 
-const computedColumns = computed(() => {
-  const fixedPercentTotal = props.columns.reduce((sum, column) => {
-    return column.width === undefined ? sum : sum + numericPercentWidth(column.width)
-  }, 0)
-  const fixedPixelTotal = props.columns.reduce((sum, column) => {
-    return column.width === undefined ? sum : sum + numericPixelWidth(column.width)
-  }, 0)
-  const minWidthPixels = props.minWidth === undefined ? 0 : numericPixelWidth(props.minWidth)
-  const flexibleColumns = props.columns.filter((column) => column.width === undefined)
-  const flexTotal = flexibleColumns.reduce((sum, column) => sum + (column.flex ?? 1), 0)
-  const available = Math.max(100 - fixedPercentTotal, 0)
-  const availablePixels = Math.max(minWidthPixels - fixedPixelTotal, 0)
-
-  return props.columns.map((column) => {
-    const flex = column.flex ?? 1
-    const width =
-      column.width === undefined
-        ? minWidthPixels > 0 && fixedPercentTotal === 0
-          ? `${availablePixels / Math.max(flexibleColumns.length, 1)}px`
-          : flexTotal > 0
-            ? `${(available * flex) / flexTotal}%`
-            : `${available / Math.max(flexibleColumns.length, 1)}%`
-        : normalizeWidth(column.width)
-
-    return {
-      ...column,
-      resolvedWidth: width,
-      resolvedMinWidth: column.minWidth === undefined ? undefined : normalizeWidth(column.minWidth),
-      resolvedMaxWidth: column.maxWidth === undefined ? undefined : normalizeWidth(column.maxWidth),
-    }
-  })
-})
-
-const totalPages = computed(() => {
-  if (!props.pagination || props.pagination.total <= 0) {
-    return 0
-  }
-
-  return Math.max(1, Math.ceil(props.pagination.total / props.pagination.pageSize))
-})
-
-const currentPage = computed(() => {
-  if (!props.pagination || totalPages.value === 0) {
-    return 0
-  }
-
-  return Math.min(Math.max(props.pagination.page, 1), totalPages.value)
-})
-
-const pageSizeOptions = computed(() => {
-  const pageSizes = props.pagination?.pageSizes?.length
-    ? props.pagination.pageSizes
-    : [10, 20, 50, 100]
-
-  return pageSizes.map((pageSize) => ({
-    label: `${pageSize} 条/页`,
-    value: String(pageSize),
-  }))
-})
+const computedColumns = computed(() => resolveColumns(props.columns, props.minWidth))
+const totalPages = computed(() => getTotalPages(props.pagination))
+const currentPage = computed(() => getCurrentPage(props.pagination, totalPages.value))
+const pageSizeOptions = computed(() => getPageSizeOptions(props.pagination))
+const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
 
 const pageSizeModel = computed({
   get: () => String(props.pagination?.pageSize ?? ''),
@@ -165,83 +104,7 @@ const horizontalThumbStyle = computed(() => ({
   transform: `translateX(${horizontalThumbLeft.value}px)`,
 }))
 
-const pagerItems = computed<PagerItem[]>(() => {
-  const total = totalPages.value
-  const current = currentPage.value
-  if (total <= 7) {
-    return Array.from({ length: total }, (_, index) => index + 1)
-  }
-
-  const pages = new Set<number>([1, total, current, current - 1, current + 1])
-  if (current <= 3) {
-    pages.add(2)
-    pages.add(3)
-    pages.add(4)
-  }
-  if (current >= total - 2) {
-    pages.add(total - 1)
-    pages.add(total - 2)
-    pages.add(total - 3)
-  }
-
-  const sorted = [...pages].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b)
-  const items: PagerItem[] = []
-  for (const page of sorted) {
-    const previous = items[items.length - 1]
-    if (typeof previous === 'number' && page - previous > 1) {
-      items.push('ellipsis')
-    }
-    items.push(page)
-  }
-
-  return items
-})
-
-function normalizeWidth(width: number | string) {
-  return typeof width === 'number' ? `${width}px` : width
-}
-
-function numericPercentWidth(width: number | string) {
-  if (typeof width === 'number') {
-    return 0
-  }
-
-  if (width.endsWith('%')) {
-    const parsed = Number.parseFloat(width)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-
-  return 0
-}
-
-function numericPixelWidth(width: number | string) {
-  if (typeof width === 'number') {
-    return width
-  }
-
-  if (width.endsWith('px')) {
-    const parsed = Number.parseFloat(width)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-
-  return 0
-}
-
-function columnStyle(column: (typeof computedColumns.value)[number]) {
-  return {
-    width: column.resolvedWidth,
-    minWidth: column.resolvedMinWidth,
-    maxWidth: column.resolvedMaxWidth,
-  }
-}
-
-function tableStyle() {
-  if (props.minWidth === undefined) {
-    return undefined
-  }
-
-  return { width: `max(100%, ${normalizeWidth(props.minWidth)})` }
-}
+const pagerItems = computed(() => getPagerItems(totalPages.value, currentPage.value))
 
 function fixedHeaderClass(column: BaseTableColumn) {
   if (column.fixed !== 'left') {
@@ -270,32 +133,6 @@ function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
   ]
 }
 
-function cellValue(row: TableRow, key: string) {
-  return row[key]
-}
-
-function isEmptyCellValue(value: unknown) {
-  return value === undefined || value === null || value === ''
-}
-
-function cellDisplayValue(column: BaseTableColumn, row: TableRow) {
-  const value = cellValue(row, column.key)
-  return isEmptyCellValue(value) ? (column.emptyText ?? '—') : value
-}
-
-function cellTitle(column: BaseTableColumn, row: TableRow) {
-  if (column.ellipsis === false || column.key === 'selection' || column.key === 'actions') {
-    return undefined
-  }
-
-  const value = cellDisplayValue(column, row)
-  if (isEmptyCellValue(value)) {
-    return undefined
-  }
-
-  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined
-}
-
 function getRowKey(row: TableRow, index: number) {
   if (typeof props.rowKey === 'function') {
     return props.rowKey(row, index)
@@ -311,18 +148,6 @@ function isRowSelected(row: TableRow, index: number) {
 
 function isRowExpanded(row: TableRow, index: number) {
   return props.expandedRowKeys.includes(getRowKey(row, index))
-}
-
-function alignClass(column: BaseTableColumn) {
-  if (column.align === 'center') {
-    return 'text-center'
-  }
-
-  if (column.align === 'right') {
-    return 'text-right'
-  }
-
-  return 'text-left'
 }
 
 function rowClass(row: TableRow, index: number) {
@@ -459,30 +284,6 @@ function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
 }
 
-function cellContentClass(column: BaseTableColumn) {
-  if (column.key === 'selection') {
-    return [
-      'flex min-w-0 items-center overflow-visible leading-none',
-      column.align === 'right'
-        ? 'justify-end'
-        : column.align === 'center'
-          ? 'justify-center'
-          : 'justify-start',
-    ]
-  }
-
-  if (column.key === 'actions') {
-    return 'min-w-0 overflow-visible'
-  }
-
-  return [
-    'min-w-0',
-    column.ellipsis === false ? undefined : 'truncate',
-    column.mono ? 'font-mono text-[12px] font-[650]' : undefined,
-    column.tabular ? 'tabular-nums' : undefined,
-  ]
-}
-
 function goToPage(page: number) {
   if (
     props.loading ||
@@ -527,7 +328,7 @@ function paginationPageClass(page: number) {
         <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
             class="w-full shrink-0 table-fixed border-separate border-spacing-y-1 text-left"
-            :style="tableStyle()"
+            :style="tableViewStyle"
             role="table"
           >
             <colgroup>
@@ -575,7 +376,7 @@ function paginationPageClass(page: number) {
           <table
             ref="tableView"
             class="w-full table-fixed border-separate border-spacing-y-2 text-left"
-            :style="tableStyle()"
+            :style="tableViewStyle"
             role="table"
           >
             <colgroup>

@@ -9,22 +9,32 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
 
     let created = store.create("cursor").await.unwrap();
     assert_eq!(created.name, "cursor");
-    assert!(created.plaintext.starts_with("cpr_"));
-    assert!(store.verify_and_touch(&created.plaintext).await.unwrap());
+    assert!(created.key.starts_with("sk_"));
+
+    let key_cipher: (String,) =
+        sqlx::query_as("select key_cipher from client_api_keys where id = ?")
+            .bind(&created.id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_ne!(key_cipher.0, created.key);
+
+    assert!(store.verify_and_touch(&created.key).await.unwrap());
 
     let first_page = store.list(None, 10).await.unwrap();
     assert_eq!(first_page.items.len(), 1);
     assert_eq!(first_page.items[0].name, "cursor");
+    assert_eq!(first_page.items[0].key, created.key);
     assert!(first_page.items[0].last_used_at.is_some());
 
     assert!(store.set_enabled(&created.id, false).await.unwrap());
-    assert!(!store.verify_and_touch(&created.plaintext).await.unwrap());
+    assert!(!store.verify_and_touch(&created.key).await.unwrap());
 
     assert!(store.set_enabled(&created.id, true).await.unwrap());
-    assert!(store.verify_and_touch(&created.plaintext).await.unwrap());
+    assert!(store.verify_and_touch(&created.key).await.unwrap());
 
     assert!(store.delete(&created.id).await.unwrap());
-    assert!(!store.verify_and_touch(&created.plaintext).await.unwrap());
+    assert!(!store.verify_and_touch(&created.key).await.unwrap());
 }
 
 #[tokio::test]

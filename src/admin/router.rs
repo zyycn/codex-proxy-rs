@@ -47,14 +47,8 @@ pub fn router() -> Router<AppState> {
             "/api/admin/accounts/health-check",
             post(health_check_accounts),
         )
-        .route(
-            "/api/admin/accounts/{id}/test",
-            post(test_account_connection),
-        )
-        .route(
-            "/api/admin/accounts/{id}/test-models",
-            get(account_test_models),
-        )
+        .route("/api/admin/accounts/test", post(test_account_connection))
+        .route("/api/admin/accounts/models", get(account_test_models))
         .route("/api/admin/accounts/delete", post(batch_delete_accounts))
         .route("/api/admin/accounts/update", post(update_account))
         .route("/api/admin/accounts/refresh", post(refresh_account))

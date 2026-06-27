@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use secrecy::{ExposeSecret, SecretString};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::infra::{
+    crypto::{CryptoError, SecretBox},
     identity::{ApiKeyHasher, AuthError},
     json::{decode_cursor, encode_cursor, Page},
 };
@@ -56,7 +58,7 @@ impl ClientKeyService {
 
     /// 验证客户端 API Key。
     pub async fn verify(&self, plaintext: &str) -> ClientKeyStoreResult<bool> {
-        if !plaintext.starts_with("cpr_") {
+        if !plaintext.starts_with("sk_") {
             return Ok(false);
         }
         self.store.verify_and_touch(plaintext).await
@@ -221,6 +223,7 @@ pub struct AdminStoredClientApiKey {
     pub name: String,
     pub label: Option<String>,
     pub prefix: String,
+    pub key: String,
     pub enabled: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
@@ -233,10 +236,10 @@ pub struct AdminCreatedClientApiKey {
     pub name: String,
     pub label: Option<String>,
     pub prefix: String,
+    pub key: String,
     pub enabled: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
-    pub plaintext: String,
 }
 
 /// 客户端 API Key 状态更新结果。
@@ -293,6 +296,7 @@ impl From<StoredClientApiKey> for AdminStoredClientApiKey {
             name: key.name,
             label: key.label,
             prefix: key.prefix,
+            key: key.key,
             enabled: key.enabled,
             created_at: key.created_at,
             last_used_at: key.last_used_at,
@@ -307,10 +311,10 @@ impl From<CreatedClientApiKey> for AdminCreatedClientApiKey {
             name: key.name,
             label: key.label,
             prefix: key.prefix,
+            key: key.key,
             enabled: key.enabled,
             created_at: key.created_at,
             last_used_at: key.last_used_at,
-            plaintext: key.plaintext,
         }
     }
 }
@@ -328,6 +332,9 @@ pub enum SqliteClientKeyStoreError {
     /// API Key 验证错误。
     #[error("sqlite client key auth error: {0}")]
     Auth(#[from] AuthError),
+    /// API Key 密文处理错误。
+    #[error("sqlite client key crypto error: {0}")]
+    Crypto(#[from] CryptoError),
     /// 分页游标无效。
     #[error("invalid client key pagination cursor")]
     InvalidCursor,
@@ -344,6 +351,8 @@ pub struct StoredClientApiKey {
     pub label: Option<String>,
     /// 明文 API Key 的短前缀。
     pub prefix: String,
+    /// 管理端可复制的完整 API Key。
+    pub key: String,
     /// 是否允许用于 `/v1` 认证。
     pub enabled: bool,
     /// 创建时间。
@@ -363,14 +372,14 @@ pub struct CreatedClientApiKey {
     pub label: Option<String>,
     /// 明文 API Key 的短前缀。
     pub prefix: String,
+    /// 管理端可复制的完整 API Key。
+    pub key: String,
     /// 是否允许用于 `/v1` 认证。
     pub enabled: bool,
     /// 创建时间。
     pub created_at: String,
     /// 最近一次成功使用时间。
     pub last_used_at: Option<String>,
-    /// 仅返回一次的明文 API Key。
-    pub plaintext: String,
 }
 
 /// SQLite 客户端 API Key 存储。
@@ -378,12 +387,18 @@ pub struct CreatedClientApiKey {
 pub struct SqliteClientKeyStore {
     pool: SqlitePool,
     hasher: ApiKeyHasher,
+    secret_box: SecretBox,
 }
 
 impl SqliteClientKeyStore {
     /// 构造存储适配器。
     pub fn new(pool: SqlitePool, hasher: ApiKeyHasher) -> Self {
-        Self { pool, hasher }
+        let secret_box = hasher.secret_box();
+        Self {
+            pool,
+            hasher,
+            secret_box,
+        }
     }
 
     /// 暴露底层连接池，供集成测试和运行时组合层复用。
@@ -399,13 +414,17 @@ impl SqliteClientKeyStore {
         let generated = self.hasher.generate_client_api_key(name);
         let id = format!("key_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
+        let key_cipher = self
+            .secret_box
+            .encrypt(&SecretString::new(generated.key.clone().into()))?;
         sqlx::query(
-            "insert into client_api_keys (id, name, label, prefix, key_hash, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, 1, ?, null)",
+            "insert into client_api_keys (id, name, label, prefix, key_hash, key_cipher, enabled, created_at, last_used_at) values (?, ?, null, ?, ?, ?, 1, ?, null)",
         )
         .bind(&id)
         .bind(name)
         .bind(&generated.prefix)
         .bind(&generated.key_hash)
+        .bind(&key_cipher)
         .bind(&now)
         .execute(&self.pool)
         .await?;
@@ -415,10 +434,10 @@ impl SqliteClientKeyStore {
             name: name.to_string(),
             label: None,
             prefix: generated.prefix,
+            key: generated.key,
             enabled: true,
             created_at: now,
             last_used_at: None,
-            plaintext: generated.plaintext,
         })
     }
 
@@ -433,7 +452,7 @@ impl SqliteClientKeyStore {
             let (created_at, id) =
                 decode_cursor(&cursor).ok_or(SqliteClientKeyStoreError::InvalidCursor)?;
             sqlx::query(
-                "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys where created_at < ? or (created_at = ? and id < ?) order by created_at desc, id desc limit ?",
             )
             .bind(&created_at)
             .bind(created_at)
@@ -443,7 +462,7 @@ impl SqliteClientKeyStore {
             .await?
         } else {
             sqlx::query(
-                "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
+                "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys order by created_at desc, id desc limit ?",
             )
             .bind(fetch_limit)
             .fetch_all(&self.pool)
@@ -455,8 +474,8 @@ impl SqliteClientKeyStore {
         let items = rows
             .into_iter()
             .take(take_count)
-            .map(|row| key_from_row(&row))
-            .collect::<Vec<_>>();
+            .map(|row| self.key_from_row(&row))
+            .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = if has_next {
             items
                 .last()
@@ -474,13 +493,13 @@ impl SqliteClientKeyStore {
         id: &str,
     ) -> Result<Option<StoredClientApiKey>, SqliteClientKeyStoreError> {
         let row = sqlx::query(
-            "select id, name, label, prefix, enabled, created_at, last_used_at from client_api_keys where id = ?",
+            "select id, name, label, prefix, key_cipher, enabled, created_at, last_used_at from client_api_keys where id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|row| key_from_row(&row)))
+        row.map(|row| self.key_from_row(&row)).transpose()
     }
 
     /// 更新客户端 API Key 启用状态。
@@ -525,6 +544,24 @@ impl SqliteClientKeyStore {
 
         Ok(result.rows_affected() > 0)
     }
+
+    fn key_from_row(
+        &self,
+        row: &sqlx::sqlite::SqliteRow,
+    ) -> Result<StoredClientApiKey, SqliteClientKeyStoreError> {
+        let key_cipher = row.get::<String, _>("key_cipher");
+        let key = self.secret_box.decrypt(&key_cipher)?;
+        Ok(StoredClientApiKey {
+            id: row.get("id"),
+            name: row.get("name"),
+            label: row.get("label"),
+            prefix: row.get("prefix"),
+            key: key.expose_secret().to_string(),
+            enabled: row.get::<i64, _>("enabled") != 0,
+            created_at: row.get("created_at"),
+            last_used_at: row.get("last_used_at"),
+        })
+    }
 }
 
 #[async_trait]
@@ -562,18 +599,6 @@ async fn verify_and_touch(
     }
 
     Ok(false)
-}
-
-fn key_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredClientApiKey {
-    StoredClientApiKey {
-        id: row.get("id"),
-        name: row.get("name"),
-        label: row.get("label"),
-        prefix: row.get("prefix"),
-        enabled: row.get::<i64, _>("enabled") != 0,
-        created_at: row.get("created_at"),
-        last_used_at: row.get("last_used_at"),
-    }
 }
 
 fn map_client_key_store_error(error: SqliteClientKeyStoreError) -> ClientKeyStoreError {

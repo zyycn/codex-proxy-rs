@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn admin_client_keys_export_should_return_metadata_without_secret_material() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-export.sqlite").await;
-    let (key_id, _plaintext) = create_admin_client_key(&app, "export-key").await;
+    let (key_id, _key) = create_admin_client_key(&app, "export-key").await;
 
     let response = app
         .oneshot(
@@ -21,5 +21,5 @@ async fn admin_client_keys_export_should_return_metadata_without_secret_material
     let body = response_json(response).await;
     assert_eq!(body["data"]["apiKeys"][0]["id"], key_id);
     assert_eq!(body["data"]["apiKeys"][0]["name"], "export-key");
-    assert!(body["data"]["apiKeys"][0].get("plaintext").is_none());
+    assert!(body["data"]["apiKeys"][0].get("key").is_none());
 }

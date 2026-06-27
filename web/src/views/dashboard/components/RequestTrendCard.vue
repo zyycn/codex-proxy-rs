@@ -205,6 +205,7 @@ function formatLatency(ms: number): string {
       <BaseSegmented
         v-model="activeTab"
         :options="tabs"
+        :disabled="loading"
         class="w-full max-w-61.5 sm:w-61.5"
         @update:model-value="emit('trendChange', $event)"
       />

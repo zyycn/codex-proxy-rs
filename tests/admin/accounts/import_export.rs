@@ -260,6 +260,102 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
 }
 
 #[tokio::test]
+async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_token() {
+    let server = MockServer::start().await;
+    let access_token = test_jwt_with_exp(
+        None,
+        Some("rt-import-user"),
+        Some("rt-import@example.com"),
+        None,
+        4_102_444_800,
+    );
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": access_token,
+            "refresh_token": "rt-import-rotated"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "wham-account-from-rt",
+            "user_id": "rt-import-user",
+            "email": "rt-import@example.com",
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 0,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir, secret_box) =
+        admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
+            "admin-accounts-import-rt-complete.sqlite",
+            125,
+            format!("{}/backend-api", server.uri()),
+            format!("{}/oauth/token", server.uri()),
+        )
+        .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_rt_complete")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{ "refreshToken": "rt-import-source" }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool, secret_box)
+        .list_metadata_page(1, 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .next()
+        .unwrap();
+    let list = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_rt_list")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_body = response_json(list).await;
+
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(stored.account_id.as_deref(), Some("wham-account-from-rt"));
+    assert_eq!(
+        list_body["data"]["items"][0]["accountId"],
+        "wham-account-from-rt"
+    );
+}
+
+#[tokio::test]
 async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_quota() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

@@ -65,7 +65,7 @@ async fn account_test_models_should_return_upstream_models_only() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/acct_test/test-models")
+                .uri("/api/admin/accounts/models?id=acct_test")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_account_test_models")
                 .body(Body::empty())
@@ -137,7 +137,7 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/admin/accounts/acct_test/test")
+                .uri("/api/admin/accounts/test?id=acct_test")
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_account_test_stream")
