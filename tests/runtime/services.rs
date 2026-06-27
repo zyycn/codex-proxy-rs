@@ -32,7 +32,7 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
         let hasher = ApiKeyHasher::load_or_create(temp_dir.path().join("api-key-pepper.key"))
             .expect("api key hasher");
         let stores = BackgroundTaskStores {
-            accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+            accounts: SqliteAccountStore::new(pool.clone()),
             admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
             cookies: SqliteCookieStore::new(pool.clone(), secret_box),
             fingerprints: FingerprintRepository::new(pool.clone()),

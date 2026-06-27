@@ -12,9 +12,8 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
     let pool = connect_sqlite(&url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
     let secret_box = SecretBox::new([77u8; 32]);
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_export".to_string(),
             email: Some("export@example.com".to_string()),
@@ -33,7 +32,7 @@ async fn admin_accounts_export_should_return_native_account_tokens() {
     let config = test_config(url);
     let hasher = ApiKeyHasher::new([78u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -91,7 +90,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     let config = test_config(url);
     let hasher = ApiKeyHasher::new([80u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -134,7 +133,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool, secret_box)
+    let stored = SqliteAccountStore::new(pool)
         .get("acct_import")
         .await
         .unwrap()
@@ -191,7 +190,7 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, secret_box) = admin_accounts_test_app_with_api_base_url(
+    let (app, _state, pool, _dir, _) = admin_accounts_test_app_with_api_base_url(
         "admin-accounts-import-current-openai-token.sqlite",
         118,
         format!("{}/backend-api", server.uri()),
@@ -240,7 +239,7 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool, secret_box)
+    let stored = SqliteAccountStore::new(pool)
         .get("a18bcfa9ae932857")
         .await
         .unwrap()
@@ -296,7 +295,7 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
         })))
         .mount(&server)
         .await;
-    let (app, _state, pool, _dir, secret_box) =
+    let (app, _state, pool, _dir, _) =
         admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
             "admin-accounts-import-rt-complete.sqlite",
             125,
@@ -325,7 +324,7 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
         .await
         .unwrap();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool, secret_box)
+    let stored = SqliteAccountStore::new(pool)
         .list_metadata_page(1, 10, None)
         .await
         .unwrap()
@@ -388,7 +387,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
     config.api.base_url = format!("{}/backend-api", server.uri());
     let hasher = ApiKeyHasher::new([121u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -441,7 +440,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool.clone(), secret_box)
+    let stored = SqliteAccountStore::new(pool.clone())
         .get("acct_import_supplement")
         .await
         .unwrap()
@@ -500,7 +499,7 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
 
 #[tokio::test]
 async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_stale_quota_lock() {
-    let (app, _state, pool, _dir, secret_box) =
+    let (app, _state, pool, _dir, _) =
         admin_accounts_test_app("admin-accounts-import-update-existing.sqlite", 116).await;
     let new_access_token = test_jwt(
         "chatgpt-import-update",
@@ -508,9 +507,8 @@ async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_
         Some("new@example.com"),
         Some("plus"),
     );
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_import_update".to_string(),
             email: Some("old@example.com".to_string()),
@@ -580,7 +578,7 @@ async fn admin_accounts_import_should_update_existing_sub2api_account_and_clear_
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool.clone(), secret_box)
+    let stored = SqliteAccountStore::new(pool.clone())
         .get("acct_import_update")
         .await
         .unwrap()
@@ -608,7 +606,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
     let secret_box = SecretBox::new([111u8; 32]);
     let hasher = ApiKeyHasher::new([112u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -642,7 +640,7 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
 }
 
 #[tokio::test]
-async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_accounts() {
+async fn admin_accounts_import_should_store_plain_tokens_and_list_sanitized_accounts() {
     let (app, _state, pool, _dir, _secret_box) =
         admin_accounts_test_app("admin-accounts-import-sanitized.sqlite", 113).await;
     let access_token = test_jwt(
@@ -670,17 +668,14 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
     let body = response_json(response).await;
     assert_eq!(body["data"]["imported"], 1);
 
-    let stored: (String, String) = sqlx::query_as(
-        "select access_token_cipher, refresh_token_cipher from accounts where id = ?",
-    )
-    .bind("acct_imported_sanitized")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(stored.0.starts_with("v1:"));
-    assert!(!stored.0.contains(&access_token));
-    assert!(stored.1.starts_with("v1:"));
-    assert!(!stored.1.contains("refresh-secret"));
+    let stored: (String, String) =
+        sqlx::query_as("select access_token, refresh_token from accounts where id = ?")
+            .bind("acct_imported_sanitized")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, access_token);
+    assert_eq!(stored.1, "refresh-secret");
 
     let list = app
         .clone()
@@ -705,11 +700,10 @@ async fn admin_accounts_import_should_store_tokens_encrypted_and_list_sanitized_
 
 #[tokio::test]
 async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_filter_ids() {
-    let (app, _state, pool, _dir, secret_box) =
+    let (app, _state, pool, _dir, _) =
         admin_accounts_test_app("admin-accounts-export-filter.sqlite", 117).await;
-    seed_encrypted_account(
+    seed_account(
         &pool,
-        secret_box.clone(),
         NewAccount {
             id: "acct_export_a".to_string(),
             email: Some("export-a@example.com".to_string()),

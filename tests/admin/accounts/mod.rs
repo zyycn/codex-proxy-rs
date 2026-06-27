@@ -78,8 +78,8 @@ async fn seed_usage_account(
     cached_tokens: i64,
     last_used_at: &str,
 ) {
-    sqlx::query("insert into accounts (id, email, label, plan_type, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?, 'active', ?, ?)")
-        .bind(id).bind(email).bind(label).bind(plan_type).bind("encrypted")
+    sqlx::query("insert into accounts (id, email, label, plan_type, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, 'active', ?, ?)")
+        .bind(id).bind(email).bind(label).bind(plan_type).bind("access-token")
         .bind("2026-06-11T00:00:00Z").bind("2026-06-11T00:00:00Z")
         .execute(pool).await.unwrap();
     sqlx::query("insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)")
@@ -205,7 +205,7 @@ async fn admin_accounts_test_app_with_overrides(
         config.auth.oauth_token_endpoint = oauth_token_endpoint;
     }
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box.clone()),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -224,8 +224,8 @@ async fn admin_accounts_test_app_with_overrides(
     (app, state, pool, dir, secret_box)
 }
 
-async fn seed_encrypted_account(pool: &SqlitePool, secret_box: SecretBox, account: NewAccount) {
-    SqliteAccountStore::new(pool.clone(), secret_box)
+async fn seed_account(pool: &SqlitePool, account: NewAccount) {
+    SqliteAccountStore::new(pool.clone())
         .insert(account)
         .await
         .unwrap();

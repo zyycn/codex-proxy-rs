@@ -7,7 +7,7 @@ async fn token_refresh_task_should_skip_account_when_refresh_lease_is_held() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool.clone(), SecretBox::new([12u8; 32]));
+    let store = SqliteAccountStore::new(pool.clone());
     let leases = RefreshLeaseStore::new(pool.clone());
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 8, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::seconds(30)).timestamp());
@@ -74,7 +74,7 @@ async fn token_refresh_task_should_skip_duplicate_in_flight_refresh() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([18u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 14, 0, 0).unwrap();
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
     store
@@ -163,7 +163,7 @@ async fn token_refresh_task_should_schedule_future_per_account_timer_without_ref
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([20u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 16, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::minutes(10)).timestamp());
     store
@@ -210,7 +210,7 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([21u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc::now() + Duration::minutes(5);
     let old_access_token = test_jwt((now + Duration::seconds(1)).timestamp());
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
@@ -281,7 +281,7 @@ async fn token_refresh_task_should_reschedule_next_timer_after_scheduled_refresh
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool, SecretBox::new([22u8; 32]));
+    let store = SqliteAccountStore::new(pool);
     let now = Utc::now();
     let old_expires_at = now + Duration::milliseconds(50);
     let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());

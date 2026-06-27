@@ -50,7 +50,7 @@ impl Write for SharedLogWriter {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn http_trace_should_include_request_id_and_completion_fields() {
     let logs = SharedLogBuffer::default();
     let subscriber = tracing_subscriber::fmt()

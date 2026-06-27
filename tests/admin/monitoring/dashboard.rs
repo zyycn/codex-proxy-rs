@@ -283,7 +283,7 @@ async fn dashboard_test_app(
     let secret_box = SecretBox::new([73u8; 32]);
     let hasher = ApiKeyHasher::new([74u8; 32]);
     let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone(), secret_box.clone()),
+        accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
         cookies: SqliteCookieStore::new(pool.clone(), secret_box),
         fingerprints: FingerprintRepository::new(pool.clone()),
@@ -357,7 +357,7 @@ async fn seed_usage_summary_with_last_used(
     last_used_at: &str,
 ) {
     sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
     )
     .bind("acct_usage")
     .bind("cipher")

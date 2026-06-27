@@ -205,7 +205,7 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
         .await
         .expect("sqlite pool");
     let secret_box = SecretBox::new([14u8; 32]);
-    let store = SqliteAccountStore::new(pool.clone(), secret_box.clone());
+    let store = SqliteAccountStore::new(pool.clone());
     let cookies = SqliteCookieStore::new(pool.clone(), secret_box);
     insert_quota_locked_account(&store, &pool, "acct-quota-cookie", "access-token-cookie").await;
     cookies
@@ -270,7 +270,7 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool.clone(), SecretBox::new([12u8; 32]));
+    let store = SqliteAccountStore::new(pool.clone());
     store
         .insert(NewAccount {
             id: "acct-quota".to_string(),
@@ -352,7 +352,7 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let store = SqliteAccountStore::new(pool.clone(), SecretBox::new([13u8; 32]));
+    let store = SqliteAccountStore::new(pool.clone());
     insert_quota_locked_account(&store, &pool, "acct-quota-1", "access-token-1").await;
     insert_quota_locked_account(&store, &pool, "acct-quota-2", "access-token-2").await;
     let codex = CodexBackendClient::new(

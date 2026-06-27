@@ -149,7 +149,7 @@ async fn session_affinity_store_should_forget_record_by_response_id() {
 
 async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {
     sqlx::query(
-        "insert into accounts (id, access_token_cipher, status, added_at, updated_at) values (?, 'cipher', 'active', '2026-06-18T12:00:00Z', '2026-06-18T12:00:00Z')",
+        "insert into accounts (id, access_token, status, added_at, updated_at) values (?, 'access-token', 'active', '2026-06-18T12:00:00Z', '2026-06-18T12:00:00Z')",
     )
     .bind(id)
     .execute(pool)

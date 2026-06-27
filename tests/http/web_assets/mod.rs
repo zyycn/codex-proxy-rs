@@ -44,10 +44,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     let secret_box = SecretBox::new([61u8; 32]);
     let hasher = ApiKeyHasher::new([62u8; 32]);
     let stores = codex_proxy_rs::runtime::services::BackgroundTaskStores {
-        accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(
-            pool.clone(),
-            secret_box.clone(),
-        ),
+        accounts: codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: codex_proxy_rs::admin::auth::service::SqliteAdminSessionStore::new(
             pool.clone(),
         ),

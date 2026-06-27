@@ -1,24 +1,19 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use codex_proxy_rs::{
-    infra::crypto::SecretBox,
-    upstream::accounts::{
-        pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
-        store::{AccountStore, SqliteAccountStore},
-    },
+use codex_proxy_rs::upstream::accounts::{
+    pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
+    store::{AccountStore, SqliteAccountStore},
 };
-use secrecy::SecretString;
 
 use crate::support::sqlite::init_test_db;
 
 #[tokio::test]
 async fn runtime_account_pool_should_restore_capacity_and_clear_runtime_state() {
     let (pool, _dir) = init_test_db("runtime-account-pool.sqlite").await;
-    let secret_box = SecretBox::new([34u8; 32]);
-    insert_account(&pool, &secret_box, "acct_pool").await;
+    insert_account(&pool, "acct_pool").await;
 
-    let store = SqliteAccountStore::new(pool, secret_box);
+    let store = SqliteAccountStore::new(pool);
     let service = RuntimeAccountPoolService::new(
         Arc::new(store) as Arc<dyn AccountStore>,
         AccountPoolOptions {
@@ -50,18 +45,15 @@ async fn runtime_account_pool_should_restore_capacity_and_clear_runtime_state() 
     assert_eq!(cleared_capacity.total_slots, 0);
 }
 
-async fn insert_account(pool: &sqlx::SqlitePool, secret_box: &SecretBox, id: &str) {
-    let access_token = secret_box
-        .encrypt(&SecretString::new(format!("access-{id}").into()))
-        .expect("access token should encrypt");
+async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {
     sqlx::query(
-        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token_cipher, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(format!("{id}@example.com"))
     .bind(format!("chatgpt-{id}"))
     .bind(format!("user-{id}"))
-    .bind(access_token)
+    .bind(format!("access-{id}"))
     .bind("2999-01-01T00:00:00Z")
     .bind("active")
     .bind("2026-06-18T00:00:00Z")

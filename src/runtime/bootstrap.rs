@@ -41,10 +41,7 @@ async fn build_application(
 
     let fingerprint_repository = FingerprintRepository::new(pool.clone());
     let stores = BackgroundTaskStores {
-        accounts: crate::upstream::accounts::store::SqliteAccountStore::new(
-            pool.clone(),
-            secret.clone(),
-        ),
+        accounts: crate::upstream::accounts::store::SqliteAccountStore::new(pool.clone()),
         admin_sessions: crate::admin::auth::service::SqliteAdminSessionStore::new(pool.clone()),
         cookies: crate::upstream::accounts::cookies::SqliteCookieStore::new(
             pool.clone(),
