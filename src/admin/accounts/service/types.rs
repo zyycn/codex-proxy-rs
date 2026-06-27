@@ -110,6 +110,14 @@ pub enum AdminAccountError {
     InvalidToken(&'static str),
     #[error("token refresh exchange failed: {0}")]
     RefreshTokenExchange(crate::upstream::accounts::token_refresh::RefreshFailure),
+    #[error("oauth session is invalid or expired")]
+    OAuthSessionInvalid,
+    #[error("oauth callback is missing code or state")]
+    OAuthCallbackInvalid,
+    #[error("oauth state does not match")]
+    OAuthStateMismatch,
+    #[error("oauth code exchange failed: {0}")]
+    OAuthCodeExchange(String),
     #[error("no valid cookies provided")]
     NoValidCookies,
     #[error("account is {0}")]
@@ -160,6 +168,21 @@ pub struct ImportedAccounts {
     pub imported: u32,
     pub skipped: u32,
     pub source_format: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct OAuthAuthorizeResult {
+    pub session_id: String,
+    pub auth_url: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OAuthExchangeInput {
+    pub session_id: String,
+    pub callback_url: Option<String>,
+    pub code: Option<String>,
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Clone)]

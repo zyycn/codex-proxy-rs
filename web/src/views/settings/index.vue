@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Gauge, GitBranch, Plus, RefreshCw, Save, Timer, Trash2, Zap } from '@lucide/vue'
+import { Gauge, GitBranch, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
 
 import { getSettings, updateSettings } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { toast } from '@/components/base/BaseToast'
-import { withMinimumDuration } from '@/utils/async'
 
 type RotationStrategy = 'least_used' | 'round_robin' | 'sticky'
 
@@ -26,7 +25,6 @@ interface SettingsForm {
 }
 
 const loading = ref(true)
-const refreshing = ref(false)
 const saving = ref(false)
 const aliasError = ref('')
 
@@ -150,18 +148,8 @@ async function loadSettings() {
   }
 }
 
-async function refreshSettings() {
-  if (refreshing.value || loading.value) return
-  refreshing.value = true
-  try {
-    await withMinimumDuration(loadSettings)
-  } finally {
-    refreshing.value = false
-  }
-}
-
 async function handleSave() {
-  if (saving.value || loading.value || refreshing.value) return
+  if (saving.value || loading.value) return
 
   const aliasResult = rowsToAliases(aliasRows.value)
   if (aliasResult.error) {
@@ -204,16 +192,10 @@ onMounted(loadSettings)
       </div>
 
       <div class="mt-0.5 flex shrink-0 items-center gap-2">
-        <BaseButton variant="ghost" :disabled="loading || refreshing || saving" @click="refreshSettings">
-          <template #icon>
-            <RefreshCw class="size-4" :class="refreshing ? 'animate-spin' : undefined" />
-          </template>
-          刷新
-        </BaseButton>
         <BaseButton
           variant="primary"
           :loading="saving"
-          :disabled="loading || refreshing"
+          :disabled="loading"
           @click="handleSave"
         >
           <template #icon>
@@ -226,14 +208,13 @@ onMounted(loadSettings)
 
     <div class="mt-5 grid max-w-6xl gap-5">
       <BaseCard
-        v-loading="loading"
         :padded="false"
         title="运行参数"
         description="请求节奏、账号并发和 Token 刷新。"
         header-class="px-5 pt-4"
         body-class="px-5 py-5"
       >
-        <div class="grid gap-4 lg:grid-cols-2">
+        <div class="grid items-start gap-4 lg:grid-cols-2">
           <div class="grid gap-2">
             <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
               单账号最大并发
@@ -287,7 +268,6 @@ onMounted(loadSettings)
       </BaseCard>
 
       <BaseCard
-        v-loading="loading"
         :padded="false"
         title="模型映射"
         description="把客户端可见名称指向真实上游模型。"
@@ -313,7 +293,7 @@ onMounted(loadSettings)
           <div
             v-for="(row, index) in aliasRows"
             :key="index"
-            class="grid items-start gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem]"
+            class="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem]"
           >
             <BaseInput
               :model-value="row.alias"
@@ -356,7 +336,6 @@ onMounted(loadSettings)
       </BaseCard>
 
       <BaseCard
-        v-loading="loading"
         :padded="false"
         title="账号选择"
         description="决定每次请求如何使用账号池。"

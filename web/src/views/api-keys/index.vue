@@ -71,7 +71,6 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
     </header>
 
     <BaseCard
-      v-loading="loading"
       :padded="false"
       class="mt-5 flex min-h-0 flex-1 flex-col"
       header-class="px-5 pt-4"
@@ -91,6 +90,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
         <BaseTable
           :columns="apiKeyColumns"
           :rows="pagedKeys"
+          :loading="loading"
           :selected-row-keys="selectedRowKeys"
           :pagination="apiKeyPagination"
           empty-text="暂无 API Key"

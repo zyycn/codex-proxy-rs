@@ -166,6 +166,11 @@ impl Services {
             codex.clone(),
             account_pool.clone(),
             token_client,
+            crate::admin::accounts::service::oauth::AccountOAuthService::new(
+                reqwest::Client::new(),
+                config.auth.oauth_client_id.clone(),
+                config.auth.oauth_token_endpoint.clone(),
+            ),
             config.auth.refresh_margin_seconds,
             installation_id.clone(),
         ));

@@ -3,6 +3,7 @@
 mod cookies;
 mod importing;
 mod lifecycle;
+pub(crate) mod oauth;
 mod quota;
 mod testing;
 mod types;
@@ -22,7 +23,8 @@ use crate::{
 
 pub use types::{
     AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, BatchDeleteAccounts,
-    BatchUpdateAccountStatus, ImportedAccounts, UpdatedAccountStatus,
+    BatchUpdateAccountStatus, ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
+    UpdatedAccountStatus,
 };
 
 #[derive(Clone)]
@@ -33,6 +35,7 @@ pub struct AdminAccountService {
     pub(crate) codex: StdArc<CodexBackendClient>,
     pub(crate) account_pool: StdArc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: StdArc<dyn TokenRefresher>,
+    pub(crate) oauth: oauth::AccountOAuthService,
     pub(crate) refresh_margin_seconds: u64,
     pub(crate) installation_id: Option<String>,
 }
@@ -49,6 +52,7 @@ impl AdminAccountService {
         codex: StdArc<CodexBackendClient>,
         account_pool: StdArc<RuntimeAccountPoolService>,
         token_refresher: StdArc<dyn TokenRefresher>,
+        oauth: oauth::AccountOAuthService,
         refresh_margin_seconds: u64,
         installation_id: Option<String>,
     ) -> Self {
@@ -59,6 +63,7 @@ impl AdminAccountService {
             codex,
             account_pool,
             token_refresher,
+            oauth,
             refresh_margin_seconds,
             installation_id,
         }

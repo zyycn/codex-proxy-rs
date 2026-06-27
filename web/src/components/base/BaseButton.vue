@@ -32,7 +32,7 @@ const slots = useSlots()
 
 const variantClasses = {
   default:
-    'bg-(--cp-bg-subtle) text-(--cp-text-primary) hover:bg-(--cp-default-bg-hover) active:bg-(--cp-default-bg-active)',
+    'bg-(--cp-bg-muted) text-(--cp-text-primary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-active) active:bg-(--cp-default-bg-active)',
   primary:
     'bg-(--cp-info) text-(--cp-info-on) hover:bg-(--cp-info-hover) active:bg-(--cp-info-pressed)',
   success:
@@ -94,7 +94,7 @@ const labelText = computed(() => {
 })
 
 const labelClasses = computed(() => [
-  'inline-flex min-w-0 items-center justify-center',
+  'inline-flex min-w-0 items-center justify-center gap-2 [&>svg]:shrink-0',
   labelText.value.length === 2 ? 'tracking-[0.12em]' : undefined,
 ])
 </script>

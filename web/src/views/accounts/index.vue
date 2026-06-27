@@ -71,14 +71,15 @@ const {
   updatingStatusAccountIds,
   deletingAccount,
   creatingAccount,
+  authorizingOAuth,
   savingAccount,
   batchDeleting,
   createForm,
   editForm,
   editStatusModel,
-  initialLoading,
   loadAccounts,
   handleCreate,
+  handleAuthorizeOAuth,
   openEditAccount,
   handleSaveAccount,
   requestDeleteAccount,
@@ -144,7 +145,6 @@ function planTypeClass(planType?: string) {
     <AccountOverviewCards :summary="accountSummary" />
 
     <BaseCard
-      v-loading="initialLoading"
       :padded="false"
       class="mt-4 flex min-h-0 flex-1 flex-col"
       header-class="px-4 pt-4 pb-2 md:px-5"
@@ -298,8 +298,10 @@ function planTypeClass(planType?: string) {
     <AccountCreateModal
       v-model="showCreateModal"
       v-model:form="createForm"
+      :oauth-loading="authorizingOAuth"
       :saving="creatingAccount"
       @create="handleCreate"
+      @generate-oauth="handleAuthorizeOAuth"
     />
 
     <AccountEditModal

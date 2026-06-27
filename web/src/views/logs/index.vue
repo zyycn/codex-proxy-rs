@@ -34,7 +34,6 @@ const {
   showClearModal,
   refreshingList,
   clearingLogs,
-  initialLoading,
   loadLogs,
   refreshLogs,
   handleClearLogs,
@@ -65,7 +64,6 @@ bindLogLoader(loadLogs)
     </header>
 
     <BaseCard
-      v-loading="initialLoading"
       :padded="false"
       class="mt-5 flex min-h-0 flex-1 flex-col"
       header-class="px-5 pt-4"
