@@ -79,12 +79,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
 </script>
 
 <template>
-  <BaseCard
-    as="article"
-    :padded="false"
-    radius-class="rounded-2xl"
-    class="relative h-38.5 w-full px-6 pt-5"
-  >
+  <BaseCard as="article" :padded="false" class="relative h-38.5 w-full px-6 pt-5">
     <div class="flex items-start gap-3">
       <span
         class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-[10px]"

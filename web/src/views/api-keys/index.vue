@@ -176,24 +176,28 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       v-model="showDeleteModal"
       title="确认删除"
       description="删除后这些 API Key 将立即失效，此操作不可撤销。"
-      :message="`确定要删除选中的 ${selectedIds.size} 个 API Key 吗？此操作不可撤销。`"
       variant="danger"
       confirm-text="确认删除"
       :loading="batchDeleting"
       width="480px"
       @confirm="handleBatchDelete"
-    />
+    >
+      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销。</p>
+    </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除 API Key"
       description="删除后该 API Key 将立即失效，此操作不可撤销。"
-      :message="`确定要删除 ${pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key'} 吗？`"
       variant="danger"
       confirm-text="确认删除"
       :loading="deletingKey"
       width="480px"
       @confirm="handleDelete"
-    />
+    >
+      <p class="m-0">
+        确定要删除 {{ pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key' }} 吗？
+      </p>
+    </BaseConfirmModal>
   </div>
 </template>

@@ -9,7 +9,6 @@ const props = withDefaults(
   defineProps<{
     title: string
     description?: string
-    message?: string
     variant?: ConfirmVariant
     confirmText?: string
     cancelText?: string
@@ -62,14 +61,10 @@ function handleConfirm() {
     :close-disabled="loading"
   >
     <div
-      v-if="$slots.default || message"
-      class="text-[14px] font-[620] leading-[1.55] text-(--cp-text-secondary)"
+      v-if="$slots.default"
+      class="text-[14px] leading-[1.55] font-[620] text-(--cp-text-secondary)"
     >
-      <slot>
-        <p class="m-0">
-          {{ message }}
-        </p>
-      </slot>
+      <slot />
     </div>
 
     <template #footer>

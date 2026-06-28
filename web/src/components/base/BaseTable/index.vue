@@ -393,7 +393,7 @@ function paginationPageClass(page: number) {
               <tr v-if="!loading && rows.length === 0" role="row">
                 <td :colspan="computedColumns.length" class="h-72 p-0" role="cell">
                   <div class="grid h-full min-h-72 place-items-center">
-                    <BaseEmpty :message="emptyText" plain class="w-full max-w-80" />
+                    <BaseEmpty :title="emptyText" plain class="w-full max-w-80" />
                   </div>
                 </td>
               </tr>
@@ -470,7 +470,7 @@ function paginationPageClass(page: number) {
           v-model="pageSizeModel"
           :options="pageSizeOptions"
           :disabled="loading"
-          size="pagination"
+          size="compact"
           class="w-28"
         />
 

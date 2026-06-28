@@ -5,14 +5,13 @@ import { Inbox } from '@lucide/vue'
 
 const props = defineProps<{
   title?: string
-  message?: string
   description?: string
   icon?: Component
   compact?: boolean
   plain?: boolean
 }>()
 
-const resolvedTitle = computed(() => props.title ?? props.message ?? '暂无数据')
+const resolvedTitle = computed(() => props.title ?? '暂无数据')
 const resolvedIcon = computed(() => props.icon ?? Inbox)
 </script>
 

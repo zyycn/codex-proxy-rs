@@ -16,7 +16,6 @@ import {
 import { toast } from '@/components/base/BaseToast'
 import { useJsonDownload } from '@/composables/useJsonDownload'
 import { withMinimumDuration } from '@/utils/async'
-import { editableStatusOptions } from '../constants'
 
 export function useAccountMutations(options: {
   page: Ref<number>
@@ -38,6 +37,7 @@ export function useAccountMutations(options: {
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const editingAccount = ref<any>(null)
+  const editingScheduleStatus = ref('active')
   const pendingDeleteAccount = ref<any>(null)
   const refreshingAccountIds = ref<Set<string>>(new Set())
   const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
@@ -60,10 +60,6 @@ export function useAccountMutations(options: {
 
   const editForm = ref({
     label: '',
-    email: '',
-    accountId: '',
-    userId: '',
-    planType: '',
     status: 'active',
   })
 
@@ -79,7 +75,7 @@ export function useAccountMutations(options: {
   const editStatusModel = computed<string>({
     get: () => editForm.value.status,
     set: (value) => {
-      if (editableStatusOptions.some((option) => option.value === value)) {
+      if (value === 'active' || value === 'disabled') {
         editForm.value.status = value
       }
     },
@@ -241,14 +237,12 @@ export function useAccountMutations(options: {
   }
 
   function openEditAccount(account: any) {
+    const scheduleStatus = account.status === 'disabled' ? 'disabled' : 'active'
     editingAccount.value = account
+    editingScheduleStatus.value = scheduleStatus
     editForm.value = {
       label: account.label || '',
-      email: account.email || '',
-      accountId: account.accountId || '',
-      userId: account.userId || '',
-      planType: account.planType || '',
-      status: account.status,
+      status: scheduleStatus,
     }
   }
 
@@ -260,15 +254,14 @@ export function useAccountMutations(options: {
 
     try {
       savingAccount.value = true
-      await updateAccount({
+      const payload: any = {
         id: account.id,
         label: nullableTrimmedValue(editForm.value.label),
-        email: nullableTrimmedValue(editForm.value.email),
-        accountId: nullableTrimmedValue(editForm.value.accountId),
-        userId: nullableTrimmedValue(editForm.value.userId),
-        planType: nullableTrimmedValue(editForm.value.planType),
-        status: editForm.value.status,
-      })
+      }
+      if (editForm.value.status !== editingScheduleStatus.value) {
+        payload.status = editForm.value.status
+      }
+      await updateAccount(payload)
       editingAccount.value = null
       await loadAccounts()
       toast.success('账号已更新')

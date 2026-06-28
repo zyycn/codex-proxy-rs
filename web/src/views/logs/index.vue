@@ -122,13 +122,14 @@ bindLogLoader(loadLogs)
       v-model="showClearModal"
       title="确认清空日志"
       description="清空后无法恢复，新的代理事件会继续记录。"
-      message="确定要清空所有日志记录吗？此操作不可撤销。"
       variant="danger"
       confirm-text="确认清空"
       :loading="clearingLogs"
       width="480px"
       @confirm="handleClearLogs"
-    />
+    >
+      <p class="m-0">确定要清空所有日志记录吗？此操作不可撤销。</p>
+    </BaseConfirmModal>
 
     <LogDetailModal v-model="showDetailModal" :log="selectedLog" />
   </div>

@@ -15,13 +15,31 @@ const filters = [
   { label: '错误', value: 'error' },
 ]
 const eventLogColumns = [
-  { key: 'time', label: '时间', width: 86, fixed: 'left' as const, mono: true, tabular: true },
+  {
+    key: 'time',
+    label: '时间',
+    width: 86,
+    fixed: 'left' as const,
+    cellClass: 'font-mono text-[12px] font-[650] tabular-nums',
+  },
   { key: 'level', label: '级别' },
-  { key: 'requestId', label: '请求 ID', mono: true, tabular: true },
+  {
+    key: 'requestId',
+    label: '请求 ID',
+    cellClass: 'font-mono text-[12px] font-[650] tabular-nums',
+  },
   { key: 'route', label: '路由' },
   { key: 'model', label: '模型' },
-  { key: 'statusCode', label: '状态码', mono: true, tabular: true },
-  { key: 'latency', label: '延迟', mono: true, tabular: true },
+  {
+    key: 'statusCode',
+    label: '状态码',
+    cellClass: 'font-mono text-[12px] font-[650] tabular-nums',
+  },
+  {
+    key: 'latency',
+    label: '延迟',
+    cellClass: 'font-mono text-[12px] font-[650] tabular-nums',
+  },
 ]
 
 const levelToneClasses: Record<string, string> = {

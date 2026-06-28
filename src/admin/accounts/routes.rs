@@ -23,7 +23,7 @@ use crate::{
     },
     admin::{
         accounts::service::{
-            AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, OAuthExchangeInput,
+            AdminAccountError, AdminAccountMetadata, AdminAccountUpdate, OAuthExchangeInput,
         },
         monitoring::{billing, service::AdminUsageRecord},
     },
@@ -753,7 +753,7 @@ pub(crate) async fn update_account(
     match state
         .services
         .admin_accounts
-        .update_metadata(&id, update)
+        .update_account(&id, update)
         .await
     {
         Ok(Some(account)) => Ok(AdminResponse::new(
@@ -1301,7 +1301,7 @@ fn format_cost(value: f64) -> String {
 
 struct ParsedAccountUpdate {
     id: String,
-    update: AdminAccountMetadataUpdate,
+    update: AdminAccountUpdate,
 }
 
 fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminError> {
@@ -1312,24 +1312,22 @@ fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminErr
             "Account update request must be an object",
         )
     })?;
+    for field in object.keys() {
+        if !matches!(field.as_str(), "id" | "label" | "status") {
+            return Err(AdminError::new(
+                StatusCode::BAD_REQUEST,
+                40001,
+                format!("{field} is not editable"),
+            ));
+        }
+    }
     let id = required_string_field(object, "id")?;
     let label = optional_string_update_field(object, "label")?;
-    let email = optional_string_update_field(object, "email")?;
-    let account_id = optional_string_update_field(object, "accountId")?;
-    let user_id = optional_string_update_field(object, "userId")?;
-    let plan_type = optional_string_update_field(object, "planType")?;
     let status = object
         .get("status")
         .map(|value| required_string_value(value, "status"))
         .transpose()?;
-    let update = AdminAccountMetadataUpdate {
-        email,
-        account_id,
-        user_id,
-        label,
-        plan_type,
-        status,
-    };
+    let update = AdminAccountUpdate { label, status };
     if !update.any() {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,

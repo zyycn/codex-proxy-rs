@@ -8,7 +8,7 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { accountColumns, editableStatusOptions } from './constants'
+import { accountColumns } from './constants'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
 import { useAccountFilters } from './composables/useAccountFilters'
 import { useAccountMutations } from './composables/useAccountMutations'
@@ -321,7 +321,6 @@ function planTypeClass(planType?: string) {
       v-model:status="editStatusModel"
       :account="editingAccount"
       :saving="savingAccount"
-      :status-options="editableStatusOptions"
       @save="handleSaveAccount"
     />
 
@@ -329,24 +328,35 @@ function planTypeClass(planType?: string) {
       v-model="showDeleteModal"
       title="确认删除"
       description="删除后该账号将不再参与调度，此操作不可撤销。"
-      :message="`确定要删除选中的 ${selectedIds.size} 个账号吗？此操作不可撤销。`"
       variant="danger"
       confirm-text="确认删除"
       :loading="batchDeleting"
       width="480px"
       @confirm="handleBatchDelete"
-    />
+    >
+      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销。</p>
+    </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除账号"
       description="删除后该账号将不再参与调度，此操作不可撤销。"
-      :message="`确定要删除 ${pendingDeleteAccount?.email || pendingDeleteAccount?.accountId || pendingDeleteAccount?.id || '该账号'} 吗？`"
       variant="danger"
       confirm-text="确认删除"
       :loading="deletingAccount"
       width="480px"
       @confirm="handleDelete"
-    />
+    >
+      <p class="m-0">
+        确定要删除
+        {{
+          pendingDeleteAccount?.email ||
+          pendingDeleteAccount?.accountId ||
+          pendingDeleteAccount?.id ||
+          '该账号'
+        }}
+        吗？
+      </p>
+    </BaseConfirmModal>
   </div>
 </template>
