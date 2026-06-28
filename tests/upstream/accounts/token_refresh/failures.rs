@@ -338,7 +338,7 @@ async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable
         stored
             .refresh_token
             .as_ref()
-            .map(|token| token.expose_secret()),
+            .map(secrecy::ExposeSecret::expose_secret),
         Some("refresh-rotated")
     );
 }

@@ -1,3 +1,3 @@
-pub mod dashboard;
-pub mod events_store;
-pub mod logs_routes;
+pub(crate) mod dashboard;
+pub(crate) mod events_store;
+pub(crate) mod logs_routes;

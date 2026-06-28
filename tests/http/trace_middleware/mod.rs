@@ -4,13 +4,14 @@ use std::{
 };
 
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
     middleware::from_fn,
     routing::get,
     Router,
 };
 use codex_proxy_rs::http::middleware::{request_id::attach_request_id, trace::http_trace_layer};
+use tokio::time::{sleep, Duration};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -50,6 +51,17 @@ impl Write for SharedLogWriter {
     }
 }
 
+async fn wait_for_trace_output(logs: &SharedLogBuffer) -> String {
+    for _ in 0..20 {
+        let output = logs.content();
+        if output.contains("completed HTTP request") {
+            return output;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    logs.content()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn http_trace_should_include_request_id_and_completion_fields() {
     let logs = SharedLogBuffer::default();
@@ -78,8 +90,11 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let output = logs.content();
+    let status = response.status();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let output = wait_for_trace_output(&logs).await;
     assert!(
         output.contains("req_trace")
             && output.contains("received HTTP request")

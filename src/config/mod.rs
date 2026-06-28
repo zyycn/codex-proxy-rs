@@ -8,6 +8,3 @@ pub mod loader;
 pub mod settings;
 /// 配置类型定义。
 pub mod types;
-
-/// 配置加载结果类型。
-pub type ConfigResult<T> = Result<T, ::config::ConfigError>;

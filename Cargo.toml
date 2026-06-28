@@ -28,13 +28,10 @@ rustls-pki-types = "1.14.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-serde_yml = "0.0.13"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "fs", "time", "sync", "net", "test-util"] }
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
-tokio-stream = "0.1.17"
 tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tower-http = { version = "0.6.11", features = ["trace", "cors", "request-id", "timeout"] }
 tracing = "0.1.44"
@@ -44,6 +41,7 @@ tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+serde_yml = "0.0.13"
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 wiremock = "0.6.5"

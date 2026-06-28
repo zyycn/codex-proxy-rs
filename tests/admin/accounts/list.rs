@@ -59,16 +59,18 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         admin_accounts_test_app("admin-accounts-stats.sqlite", 68).await;
     seed_usage_account(
         &pool,
-        "acct_stats",
-        "stats@example.com",
-        "stats",
-        "free",
-        41,
-        5,
-        3_500_000,
-        13_900,
-        3_400_000,
-        "2026-06-23T08:50:13Z",
+        UsageAccountSeed {
+            id: "acct_stats",
+            email: "stats@example.com",
+            label: "stats",
+            plan_type: "free",
+            request_count: 41,
+            empty_response_count: 5,
+            input_tokens: 3_500_000,
+            output_tokens: 13_900,
+            cached_tokens: 3_400_000,
+            last_used_at: "2026-06-23T08:50:13Z",
+        },
     )
     .await;
     sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ? where id = ?")

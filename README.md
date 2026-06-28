@@ -39,7 +39,7 @@ Codex Proxy RS 关注这些细节：
 
 **Codex 账号池**
 
-- 支持 ChatGPT/Codex OAuth、device code、refresh token 账号接入
+- 支持 ChatGPT/Codex OAuth、CPR JSON、Sub2API JSON 和 refresh token 账号接入
 - 支持账号轮转、并发控制、请求间隔和会话亲和性
 - 支持账号状态、配额、Cookie、模型目录和连接测试管理
 
@@ -52,7 +52,7 @@ Codex Proxy RS 关注这些细节：
 **可观测与管理**
 
 - 管理控制台内置账号、密钥、事件日志、用量统计和系统设置
-- SQLite 持久化，敏感密钥加密存储
+- SQLite 持久化，账号、Cookie 与访问密钥采用统一的本地存储策略
 - 结构化事件日志，便于定位请求失败、上游状态和调度路径
 
 ## 快速开始
@@ -69,7 +69,7 @@ admin:
   default_password: admin
 ```
 
-长期运行前请修改默认密码，并确认数据库、密钥和日志路径符合你的部署环境。
+长期运行前请修改默认密码，并确认数据库和日志路径符合你的部署环境。
 
 运行时数据默认写入 `.runtime`：
 
@@ -142,7 +142,7 @@ flowchart LR
     proxy --> codex[codex<br/>Codex 协议、模型和上游传输]
     http --> admin[admin<br/>管理端 API]
     admin --> runtime[runtime<br/>启动装配、状态和后台任务]
-    runtime --> infra[infra<br/>SQLite、加密、路径和日志]
+    runtime --> infra[infra<br/>SQLite、路径和日志]
     proxy --> telemetry[telemetry<br/>事件日志和用量记录]
     admin --> telemetry
     http --> web[web<br/>管理控制台静态资源]

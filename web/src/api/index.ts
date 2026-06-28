@@ -10,9 +10,6 @@ export * from './modules/api-keys'
 // 事件日志
 export * from './modules/logs'
 
-// 使用统计
-export * from './modules/usage'
-
 // Dashboard 聚合
 export * from './modules/dashboard'
 

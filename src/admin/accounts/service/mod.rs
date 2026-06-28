@@ -13,7 +13,6 @@ use std::sync::Arc as StdArc;
 use chrono::{DateTime, Duration};
 
 use crate::{
-    config::types::QuotaWarningThresholds,
     upstream::accounts::{
         cookies::SqliteCookieStore, pool::RuntimeAccountPoolService, store::SqliteAccountStore,
         token_refresh::TokenRefresher,
@@ -23,15 +22,13 @@ use crate::{
 
 pub use types::{
     AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, BatchDeleteAccounts,
-    BatchUpdateAccountStatus, ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
-    UpdatedAccountStatus,
+    ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput, UpdatedAccountStatus,
 };
 
 #[derive(Clone)]
 pub struct AdminAccountService {
     pub store: SqliteAccountStore,
     pub(crate) cookies: SqliteCookieStore,
-    pub(crate) quota_thresholds: QuotaWarningThresholds,
     pub(crate) codex: StdArc<CodexBackendClient>,
     pub(crate) account_pool: StdArc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: StdArc<dyn TokenRefresher>,
@@ -40,32 +37,28 @@ pub struct AdminAccountService {
     pub(crate) installation_id: Option<String>,
 }
 
+pub struct AdminAccountServiceParts {
+    pub store: SqliteAccountStore,
+    pub cookies: SqliteCookieStore,
+    pub codex: StdArc<CodexBackendClient>,
+    pub account_pool: StdArc<RuntimeAccountPoolService>,
+    pub token_refresher: StdArc<dyn TokenRefresher>,
+    pub oauth: oauth::AccountOAuthService,
+    pub refresh_margin_seconds: u64,
+    pub installation_id: Option<String>,
+}
+
 impl AdminAccountService {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "service constructor wires independent stores and runtime collaborators"
-    )]
-    pub fn new(
-        store: SqliteAccountStore,
-        cookies: SqliteCookieStore,
-        quota_thresholds: QuotaWarningThresholds,
-        codex: StdArc<CodexBackendClient>,
-        account_pool: StdArc<RuntimeAccountPoolService>,
-        token_refresher: StdArc<dyn TokenRefresher>,
-        oauth: oauth::AccountOAuthService,
-        refresh_margin_seconds: u64,
-        installation_id: Option<String>,
-    ) -> Self {
+    pub fn new(parts: AdminAccountServiceParts) -> Self {
         Self {
-            store,
-            cookies,
-            quota_thresholds,
-            codex,
-            account_pool,
-            token_refresher,
-            oauth,
-            refresh_margin_seconds,
-            installation_id,
+            store: parts.store,
+            cookies: parts.cookies,
+            codex: parts.codex,
+            account_pool: parts.account_pool,
+            token_refresher: parts.token_refresher,
+            oauth: parts.oauth,
+            refresh_margin_seconds: parts.refresh_margin_seconds,
+            installation_id: parts.installation_id,
         }
     }
 

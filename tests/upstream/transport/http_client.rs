@@ -29,17 +29,17 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             "unset" => None,
             "ssl_cert_file" => Some(format!(
                 "{}={SSL_CERT_PATH}",
-                codex_proxy_rs::upstream::transport::SSL_CERT_FILE_ENV
+                codex_proxy_rs::upstream::transport::tls::SSL_CERT_FILE_ENV
             )),
             "codex_ca_priority" => Some(format!(
                 "{}={CODEX_CA_PATH}",
-                codex_proxy_rs::upstream::transport::CODEX_CA_CERT_ENV
+                codex_proxy_rs::upstream::transport::tls::CODEX_CA_CERT_ENV
             )),
             _ => panic!("unknown custom CA cache key test case: {case}"),
         };
 
         assert_eq!(
-            codex_proxy_rs::upstream::transport::custom_ca_env_cache_key(),
+            codex_proxy_rs::upstream::transport::tls::custom_ca_env_cache_key(),
             expected
         );
         return;
@@ -52,18 +52,18 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             "ssl_cert_file",
             None,
             Some((
-                codex_proxy_rs::upstream::transport::SSL_CERT_FILE_ENV,
+                codex_proxy_rs::upstream::transport::tls::SSL_CERT_FILE_ENV,
                 SSL_CERT_PATH,
             )),
         ),
         (
             "codex_ca_priority",
             Some((
-                codex_proxy_rs::upstream::transport::CODEX_CA_CERT_ENV,
+                codex_proxy_rs::upstream::transport::tls::CODEX_CA_CERT_ENV,
                 CODEX_CA_PATH,
             )),
             Some((
-                codex_proxy_rs::upstream::transport::SSL_CERT_FILE_ENV,
+                codex_proxy_rs::upstream::transport::tls::SSL_CERT_FILE_ENV,
                 SSL_CERT_PATH,
             )),
         ),
@@ -76,8 +76,8 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             .arg("custom_ca_should_report_environment_cache_key_consistently")
             .arg("--nocapture")
             .env(CASE_ENV, case)
-            .env_remove(codex_proxy_rs::upstream::transport::CODEX_CA_CERT_ENV)
-            .env_remove(codex_proxy_rs::upstream::transport::SSL_CERT_FILE_ENV);
+            .env_remove(codex_proxy_rs::upstream::transport::tls::CODEX_CA_CERT_ENV)
+            .env_remove(codex_proxy_rs::upstream::transport::tls::SSL_CERT_FILE_ENV);
         if let Some((key, value)) = codex_ca {
             command.env(key, value);
         }
@@ -93,45 +93,6 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-}
-
-#[tokio::test]
-async fn codex_backend_client_probe_should_return_models_endpoint_status() {
-    let server = wiremock::MockServer::start().await;
-    wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path("/codex/models"))
-        .respond_with(wiremock::ResponseTemplate::new(204))
-        .mount(&server)
-        .await;
-    let client = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
-    );
-
-    let probe = client
-        .probe_connectivity(CodexRequestContext {
-            access_token: "access-token",
-            account_id: Some("chatgpt-account"),
-            request_id: "req_probe",
-            turn_state: None,
-            turn_metadata: None,
-            beta_features: None,
-            include_timing_metrics: None,
-            version: None,
-            codex_window_id: None,
-            parent_thread_id: None,
-            cookie_header: None,
-            installation_id: None,
-            session_id: None,
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(probe.status, reqwest::StatusCode::NO_CONTENT);
-    assert!(probe
-        .endpoint
-        .ends_with("/codex/models?client_version=26.519.81530"));
 }
 
 #[tokio::test]
@@ -204,7 +165,7 @@ async fn build_reqwest_client_should_reuse_cached_connection_pool() {
                 write_empty_http_response(&mut second_stream).await;
                 false
             }
-            _ = tokio::time::sleep(Duration::from_millis(500)) => false,
+            () = tokio::time::sleep(Duration::from_millis(500)) => false,
         }
     });
 

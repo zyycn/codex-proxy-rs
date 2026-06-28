@@ -8,30 +8,6 @@ use crate::upstream::protocol::sse::encode_sse_event;
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
 
-/// WebSocket 消息包装。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WsMessage<T> {
-    /// 消息类型。
-    #[serde(rename = "type")]
-    pub message_type: String,
-    /// 消息负载。
-    pub payload: T,
-}
-
-/// Codex WebSocket 聚合响应。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct CodexWebSocketResponse {
-    /// 聚合后的事件。
-    pub events: Vec<Value>,
-}
-
-/// Codex WebSocket 流响应。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct CodexWebSocketStreamResponse {
-    /// 聚合响应。
-    pub response: CodexWebSocketResponse,
-}
-
 /// WebSocket 握手审计快照。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpeningAuditSnapshot {
@@ -61,13 +37,6 @@ pub struct PayloadAuditSnapshot {
     pub body: Value,
 }
 
-/// WebSocket 一致性差异。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WsParityDiff {
-    /// 差异说明。
-    pub differences: Vec<String>,
-}
-
 /// WebSocket audit artifact.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WebSocketAuditArtifact {
@@ -90,24 +59,6 @@ pub struct WebSocketAuditErrorSnapshot {
     pub classification: String,
     /// 错误消息。
     pub message: String,
-}
-
-/// Structured parity diff between two WebSocket audit artifacts.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct WebSocketParityDiff {
-    /// 逐字段差异。
-    pub differences: Vec<WebSocketParityDifference>,
-}
-
-/// Single WebSocket parity difference.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct WebSocketParityDifference {
-    /// 字段路径。
-    pub path: String,
-    /// 当前值。
-    pub current: Value,
-    /// 参考值。
-    pub reference: Value,
 }
 
 /// WebSocket 错误帧分类模式。
@@ -184,20 +135,6 @@ struct ResponsesStreamEventShape {
     _summary_index: Option<i64>,
     #[serde(default, rename = "content_index")]
     _content_index: Option<i64>,
-}
-
-/// 将单条 WebSocket 消息编码为文本帧。
-pub fn encode_ws_message<T: Serialize>(
-    message: &WsMessage<T>,
-) -> Result<String, serde_json::Error> {
-    serde_json::to_string(message)
-}
-
-/// 从文本帧解码单条 WebSocket 消息。
-pub fn decode_ws_message<T: for<'de> Deserialize<'de>>(
-    frame: &str,
-) -> Result<WsMessage<T>, serde_json::Error> {
-    serde_json::from_str(frame)
 }
 
 /// 将一条公开 WebSocket JSON 事件编码为 SSE 帧。
@@ -1081,120 +1018,12 @@ pub fn websocket_audit_artifact_from_attempt(
     }
 }
 
-/// 按 parity 检查字段比较两个 WebSocket audit artifact。
-pub fn websocket_parity_diff(
-    current: &WebSocketAuditArtifact,
-    reference: &WebSocketAuditArtifact,
-) -> WebSocketParityDiff {
-    let mut differences = Vec::new();
-    push_websocket_parity_difference(
-        &mut differences,
-        "transport_mode",
-        serde_json::json!(current.transport_mode),
-        serde_json::json!(reference.transport_mode),
-    );
-    push_websocket_parity_difference(
-        &mut differences,
-        "fallback_allowed",
-        serde_json::json!(current.fallback_allowed),
-        serde_json::json!(reference.fallback_allowed),
-    );
-    push_websocket_parity_difference(
-        &mut differences,
-        "opening.request_line",
-        opening_request_line(&current.opening),
-        opening_request_line(&reference.opening),
-    );
-    push_websocket_parity_difference(
-        &mut differences,
-        "opening.header_order",
-        opening_header_order(&current.opening),
-        opening_header_order(&reference.opening),
-    );
-    push_websocket_parity_difference(
-        &mut differences,
-        "opening.sec_websocket_extensions",
-        opening_header_value(&current.opening, "Sec-WebSocket-Extensions"),
-        opening_header_value(&reference.opening, "Sec-WebSocket-Extensions"),
-    );
-    push_websocket_parity_difference(
-        &mut differences,
-        "payload.top_level_keys",
-        payload_top_level_keys(&current.payload),
-        payload_top_level_keys(&reference.payload),
-    );
-    WebSocketParityDiff { differences }
-}
-
 fn websocket_transport_mode_name(request: &CodexResponsesRequest) -> &'static str {
     match transport_for_request(request) {
         CodexTransport::HttpSse => "http_sse",
         CodexTransport::WebSocketPreferred => "websocket_preferred",
         CodexTransport::WebSocketRequired => "websocket_required",
     }
-}
-
-fn push_websocket_parity_difference(
-    differences: &mut Vec<WebSocketParityDifference>,
-    path: &'static str,
-    current: Value,
-    reference: Value,
-) {
-    if current != reference {
-        differences.push(WebSocketParityDifference {
-            path: path.to_string(),
-            current,
-            reference,
-        });
-    }
-}
-
-fn opening_request_line(opening: &Option<OpeningAuditSnapshot>) -> Value {
-    opening
-        .as_ref()
-        .map(|o| Value::String(o.request_line.clone()))
-        .unwrap_or(Value::Null)
-}
-
-fn opening_header_order(opening: &Option<OpeningAuditSnapshot>) -> Value {
-    opening
-        .as_ref()
-        .map(|o| {
-            Value::Array(
-                o.header_order
-                    .iter()
-                    .map(|h| Value::String(h.clone()))
-                    .collect(),
-            )
-        })
-        .unwrap_or(Value::Null)
-}
-
-fn opening_header_value(opening: &Option<OpeningAuditSnapshot>, name: &str) -> Value {
-    opening
-        .as_ref()
-        .map(|o| {
-            o.header_order
-                .iter()
-                .find(|h| h.starts_with(&format!("{name}:")))
-                .map(|h| Value::String(h.clone()))
-                .unwrap_or(Value::Null)
-        })
-        .unwrap_or(Value::Null)
-}
-
-fn payload_top_level_keys(payload: &Option<PayloadAuditSnapshot>) -> Value {
-    payload
-        .as_ref()
-        .map(|p| {
-            Value::Array(
-                p.top_level_keys
-                    .iter()
-                    .map(|k| Value::String(k.clone()))
-                    .collect(),
-            )
-        })
-        .unwrap_or(Value::Null)
 }
 
 /// 生成 Responses WebSocket `response.create` payload。

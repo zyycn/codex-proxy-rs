@@ -109,7 +109,7 @@ fn model_catalog_should_merge_backend_snapshots_and_build_plan_allowlist() {
 
 #[tokio::test]
 async fn model_service_should_return_empty_catalog_when_snapshot_store_is_missing() {
-    let service = ModelService::new(test_model_config(), None, None, None);
+    let service = ModelService::new(test_model_config(), None, None);
 
     let catalog = service.catalog().await;
 
@@ -127,11 +127,10 @@ async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist(
         test_model_config(),
         Some(snapshot_store.clone()),
         Some(upstream.clone()),
-        None,
     );
 
     let result = service
-        .refresh_backend_models(
+        .refresh_backend_models_with_installation_id(
             &[
                 active_account("acct-plus-1", "plus"),
                 active_account("acct-plus-2", "plus"),
@@ -139,6 +138,7 @@ async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist(
                 inactive_account("acct-disabled", "plus"),
             ],
             "req-model-refresh",
+            None,
         )
         .await
         .expect("refresh should succeed");
@@ -170,17 +170,13 @@ async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist(
 async fn model_service_should_return_no_accounts_when_no_active_plans_exist() {
     let snapshot_store = Arc::new(InMemorySnapshotStore::default());
     let upstream = Arc::new(FakeModelCatalogClient::default());
-    let service = ModelService::new(
-        test_model_config(),
-        Some(snapshot_store),
-        Some(upstream),
-        None,
-    );
+    let service = ModelService::new(test_model_config(), Some(snapshot_store), Some(upstream));
 
     let error = service
-        .refresh_backend_models(
+        .refresh_backend_models_with_installation_id(
             &[inactive_account("acct-disabled", "plus")],
             "req-model-refresh",
+            None,
         )
         .await
         .expect_err("refresh should fail");

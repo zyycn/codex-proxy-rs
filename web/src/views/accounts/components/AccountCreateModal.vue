@@ -34,7 +34,7 @@ const fileError = ref('')
 const modeOptions = [
   { label: 'OAuth 授权', value: 'oauth' },
   { label: 'RT 导入', value: 'rt' },
-  { label: 'CPR', value: 'native' },
+  { label: 'CPR', value: 'cpr' },
   { label: 'Sub2API', value: 'sub2api' },
 ]
 

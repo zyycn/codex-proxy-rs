@@ -46,9 +46,10 @@ impl CodexBackendClient {
         Err(CodexClientError::Upstream {
             status: StatusCode::BAD_GATEWAY,
             retry_after_seconds: None,
-            body: last_invalid_body
-                .map(|body| format!("invalid usage response: {}", truncate_for_error(&body)))
-                .unwrap_or_else(|| "usage endpoint is unavailable".to_string()),
+            body: last_invalid_body.map_or_else(
+                || "usage endpoint is unavailable".to_string(),
+                |body| format!("invalid usage response: {}", truncate_for_error(&body)),
+            ),
             set_cookie_headers: Vec::new(),
         })
     }

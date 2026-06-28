@@ -8,5 +8,3 @@ pub mod quota_refresh;
 pub mod session_affinity_cleanup;
 pub mod session_cleanup;
 pub mod token_refresh;
-
-pub use coordinator::{SchedulerHandle, TaskCoordinator};

@@ -13,7 +13,6 @@ use axum::{
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -31,21 +30,17 @@ use crate::{
     http::middleware::request_id::RequestId,
     infra::{
         json::{clamp_limit, clamp_page, total_pages, Page},
-        time::{china_datetime, china_relative_time, china_rfc3339, china_rfc3339_str},
+        time::{china_datetime, china_relative_time, china_rfc3339},
     },
     runtime::state::AppState,
     upstream::accounts::model::AccountStatus,
-    upstream::accounts::store::{AccountModelUsageRecord, StoredAccount},
+    upstream::accounts::store::AccountModelUsageRecord,
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
 const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
 const WEEK_WINDOW_SECONDS: u64 = 604_800;
 const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
-
-// ============================================================================
-// Query / Request types
-// ============================================================================
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,13 +67,6 @@ pub(crate) struct BatchDeleteAccountsRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SetAccountCookiesRequest {
-    id: String,
-    cookies: Value,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct AccountActionRequest {
     id: String,
 }
@@ -87,21 +75,6 @@ pub(crate) struct AccountActionRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AccountIdQuery {
     id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AccountExportQuery {
-    ids: Option<String>,
-    format: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct HealthCheckRequest {
-    ids: Option<Vec<String>>,
-    stagger_ms: Option<u64>,
-    concurrency: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -122,20 +95,16 @@ pub(crate) struct AccountOAuthExchangeRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AccountTestModelsData {
-    models: Vec<AccountTestModelData>,
+struct AccountModelsData {
+    models: Vec<AccountModelData>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AccountTestModelData {
+struct AccountModelData {
     id: String,
     label: String,
 }
-
-// ============================================================================
-// Response types
-// ============================================================================
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -416,73 +385,9 @@ struct BatchDeleteAccountsData {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchUpdateAccountStatusData {
-    updated: u32,
-    not_found: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 enum AccountUpdateData {
     Account(Box<AdminAccountData>),
-    BatchStatus(BatchUpdateAccountStatusData),
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResetAccountUsageData {
-    id: String,
-    reset: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountCookiesData {
-    cookies: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AdminAccountExportData {
-    id: String,
-    email: Option<String>,
-    account_id: Option<String>,
-    user_id: Option<String>,
-    label: Option<String>,
-    plan_type: Option<String>,
-    status: String,
-    access_token_expires_at: Option<String>,
-    added_at: String,
-    updated_at: String,
-    token: String,
-    refresh_token: Option<String>,
-}
-
-impl From<StoredAccount> for AdminAccountExportData {
-    fn from(a: StoredAccount) -> Self {
-        Self {
-            id: a.id,
-            email: a.email,
-            account_id: a.account_id,
-            user_id: a.user_id,
-            label: a.label,
-            plan_type: a.plan_type,
-            status: account_status_str(a.status).to_string(),
-            access_token_expires_at: a.access_token_expires_at.map(|dt| china_rfc3339(&dt)),
-            added_at: china_rfc3339_str(&a.added_at),
-            updated_at: china_rfc3339_str(&a.updated_at),
-            token: a.access_token.expose_secret().to_string(),
-            refresh_token: a.refresh_token.map(|t| t.expose_secret().to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountExportData {
-    source_format: &'static str,
-    accounts: Vec<AdminAccountExportData>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -502,35 +407,13 @@ struct AccountOAuthAuthorizeData {
     expires_at_display: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HealthCheckData {
-    summary: HealthCheckSummary,
-    results: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HealthCheckSummary {
-    total: usize,
-    alive: usize,
-    dead: usize,
-    skipped: usize,
-}
-
-// ============================================================================
-// Handlers
-// ============================================================================
-
 /// `GET /api/admin/accounts`
 pub(crate) async fn accounts(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Query(params): Query<AccountsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
     let stats = account_list_stats(&state).await;
@@ -559,7 +442,7 @@ pub(crate) async fn accounts(
                     AdminAccountPageEnvelope::numbered(page, summary),
                 ))
             }
-            Err(error) => Err(account_error(error, request_id)),
+            Err(error) => Err(account_error(&error)),
         };
     }
 
@@ -583,19 +466,17 @@ pub(crate) async fn accounts(
                 AdminAccountPageEnvelope::cursor(page, limit, summary),
             ))
         }
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts`
 pub(crate) async fn create_account(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -604,22 +485,20 @@ pub(crate) async fn create_account(
     {
         Ok(account) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(AdminAccountData::from(account), request_id),
+            AdminEnvelope::ok(AdminAccountData::from(account)),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts/refresh`
 pub(crate) async fn refresh_account(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
     let account_id = payload.id;
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -628,101 +507,28 @@ pub(crate) async fn refresh_account(
     {
         Ok(account) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(AdminAccountData::from(account), request_id),
+            AdminEnvelope::ok(AdminAccountData::from(account)),
         )),
-        Err(error) => Err(account_error(error, request_id)),
-    }
-}
-
-/// `POST /api/admin/accounts/reset-usage`
-pub(crate) async fn reset_account_usage(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    Json(payload): Json<AccountActionRequest>,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    let account_id = payload.id;
-    require_admin_session(&state, &headers, &request_id).await?;
-    match state.services.admin_accounts.reset_usage(&account_id).await {
-        Ok(account) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(
-                ResetAccountUsageData {
-                    id: account.id,
-                    reset: true,
-                },
-                request_id,
-            ),
-        )),
-        Err(error) => Err(account_error(error, request_id)),
-    }
-}
-
-/// `GET /api/admin/accounts/cookies`
-pub(crate) async fn get_account_cookies(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    Query(query): Query<AccountIdQuery>,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    let account_id = query.id;
-    require_admin_session(&state, &headers, &request_id).await?;
-    match state.services.admin_accounts.cookies(&account_id).await {
-        Ok(cookies) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(AccountCookiesData { cookies }, request_id),
-        )),
-        Err(error) => Err(account_error(error, request_id)),
-    }
-}
-
-/// `POST /api/admin/accounts/cookies`
-pub(crate) async fn set_account_cookies(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    Json(payload): Json<SetAccountCookiesRequest>,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    let account_id = payload.id;
-    require_admin_session(&state, &headers, &request_id).await?;
-    match state
-        .services
-        .admin_accounts
-        .set_cookies(&account_id, payload.cookies)
-        .await
-    {
-        Ok(cookies) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(AccountCookiesData { cookies }, request_id),
-        )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `GET /api/admin/accounts/quota`
 pub(crate) async fn account_quota(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
     let account_id = query.id;
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
         .account_quota(&account_id)
         .await
     {
-        Ok(data) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(data, request_id),
-        )),
-        Err(AdminAccountError::NotFound) => Err(account_not_found(request_id)),
+        Ok(data) => Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data))),
+        Err(AdminAccountError::NotFound) => Err(account_not_found()),
         Err(AdminAccountError::Inactive(status)) => Err(AdminError::new(
             StatusCode::CONFLICT,
             40901,
@@ -730,180 +536,63 @@ pub(crate) async fn account_quota(
                 "Account is {}, cannot query quota",
                 account_status_str(status)
             ),
-            request_id,
         )),
         Err(AdminAccountError::FetchQuota(msg)) => Err(AdminError::new(
             StatusCode::BAD_GATEWAY,
             50201,
             format!("Failed to fetch quota from Codex API: {msg}"),
-            request_id,
         )),
-        Err(e) => Err(account_error(e, request_id)),
-    }
-}
-
-/// `GET /api/admin/accounts/quota-warnings`
-pub(crate) async fn quota_warnings(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
-    match state.services.admin_accounts.quota_warnings().await {
-        Ok(data) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(data, request_id),
-        )),
-        Err(error) => Err(account_error(error, request_id)),
-    }
-}
-
-/// `POST /api/admin/accounts/health-check`
-pub(crate) async fn health_check_accounts(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    let payload = parse_health_check_request(&body, &request_id)?;
-    validate_health_check_request(&payload, &request_id)?;
-    require_admin_session(&state, &headers, &request_id).await?;
-
-    let mut req = serde_json::json!({});
-    if let Some(ids) = &payload.ids {
-        req["ids"] = serde_json::json!(ids);
-    }
-
-    match state
-        .services
-        .admin_accounts
-        .health_check_accounts(req)
-        .await
-    {
-        Ok(result) => {
-            let summary = HealthCheckSummary {
-                total: result
-                    .get("summary")
-                    .and_then(|s| s.get("total").and_then(Value::as_u64))
-                    .unwrap_or(0) as usize,
-                alive: result
-                    .get("summary")
-                    .and_then(|s| s.get("alive").and_then(Value::as_u64))
-                    .unwrap_or(0) as usize,
-                dead: result
-                    .get("summary")
-                    .and_then(|s| s.get("dead").and_then(Value::as_u64))
-                    .unwrap_or(0) as usize,
-                skipped: result
-                    .get("summary")
-                    .and_then(|s| s.get("skipped").and_then(Value::as_u64))
-                    .unwrap_or(0) as usize,
-            };
-            let results = result
-                .get("results")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            Ok(AdminResponse::new(
-                StatusCode::OK,
-                AdminEnvelope::ok(HealthCheckData { summary, results }, request_id),
-            ))
-        }
-        Err(error) => Err(account_error(error, request_id)),
-    }
-}
-
-/// `GET /api/admin/accounts/export`
-pub(crate) async fn export_accounts(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    Query(query): Query<AccountExportQuery>,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
-    validate_account_export_format(query.format.as_deref())
-        .map_err(|msg| AdminError::new(StatusCode::BAD_REQUEST, 40001, msg, request_id.clone()))?;
-    let ids = account_export_ids(query.ids.as_deref());
-    match state.services.admin_accounts.export_with_tokens(ids).await {
-        Ok(accounts) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(
-                AccountExportData {
-                    source_format: "native",
-                    accounts: accounts
-                        .into_iter()
-                        .map(AdminAccountExportData::from)
-                        .collect(),
-                },
-                request_id,
-            ),
-        )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(e) => Err(account_error(&e)),
     }
 }
 
 /// `POST /api/admin/accounts/import`
 pub(crate) async fn import_accounts(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state.services.admin_accounts.import(payload).await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                AccountImportData {
-                    imported: result.imported,
-                    skipped: result.skipped,
-                    source_format: result.source_format.to_string(),
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(AccountImportData {
+                imported: result.imported,
+                skipped: result.skipped,
+                source_format: result.source_format.to_string(),
+            }),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts/oauth/authorize`
 pub(crate) async fn oauth_authorize_account(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state.services.admin_accounts.oauth_authorize().await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                AccountOAuthAuthorizeData {
-                    session_id: result.session_id,
-                    auth_url: result.auth_url,
-                    expires_at: china_rfc3339(&result.expires_at),
-                    expires_at_display: china_datetime(&result.expires_at),
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(AccountOAuthAuthorizeData {
+                session_id: result.session_id,
+                auth_url: result.auth_url,
+                expires_at: china_rfc3339(&result.expires_at),
+                expires_at_display: china_datetime(&result.expires_at),
+            }),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts/oauth/exchange`
 pub(crate) async fn oauth_exchange_account(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<AccountOAuthExchangeRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -917,16 +606,13 @@ pub(crate) async fn oauth_exchange_account(
     {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                AccountImportData {
-                    imported: result.imported,
-                    skipped: result.skipped,
-                    source_format: result.source_format.to_string(),
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(AccountImportData {
+                imported: result.imported,
+                skipped: result.skipped,
+                source_format: result.source_format.to_string(),
+            }),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
@@ -934,14 +620,12 @@ pub(crate) async fn oauth_exchange_account(
 pub(crate) async fn test_account_connection(
     State(state): State<AppState>,
     Query(query): Query<AccountIdQuery>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let request_id = request_id.as_str().to_string();
     let account_id = query.id;
-    let payload = parse_account_test_request(&body, &request_id)?;
-    require_admin_session(&state, &headers, &request_id).await?;
+    let payload = parse_account_test_request(&body)?;
+    require_admin_session(&state, &headers).await?;
 
     let model = payload
         .model_id
@@ -949,20 +633,13 @@ pub(crate) async fn test_account_connection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-        .ok_or_else(|| {
-            AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                "Model is required",
-                &request_id,
-            )
-        })?;
+        .ok_or_else(|| AdminError::new(StatusCode::BAD_REQUEST, 40001, "Model is required"))?;
     let stream = state
         .services
         .admin_accounts
         .test_connection_stream(&account_id, model)
         .await
-        .map_err(|error| account_error(error, request_id.clone()))?;
+        .map_err(|error| account_error(&error))?;
 
     Response::builder()
         .status(StatusCode::OK)
@@ -976,13 +653,12 @@ pub(crate) async fn test_account_connection(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 50001,
                 "Failed to build account test stream",
-                request_id,
             )
         })
 }
 
 /// `GET /api/admin/accounts/models?id=...`
-pub(crate) async fn account_test_models(
+pub(crate) async fn account_models(
     State(state): State<AppState>,
     Query(query): Query<AccountIdQuery>,
     Extension(request_id): Extension<RequestId>,
@@ -990,41 +666,36 @@ pub(crate) async fn account_test_models(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     let account_id = query.id;
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
-        .test_connection_models(&account_id, &request_id)
+        .account_models(&account_id, &request_id)
         .await
     {
         Ok(models) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                AccountTestModelsData {
-                    models: models
-                        .into_iter()
-                        .map(|model| AccountTestModelData {
-                            id: model.id,
-                            label: model.label,
-                        })
-                        .collect(),
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(AccountModelsData {
+                models: models
+                    .into_iter()
+                    .map(|model| AccountModelData {
+                        id: model.id,
+                        label: model.label,
+                    })
+                    .collect(),
+            }),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts/delete`
 pub(crate) async fn batch_delete_accounts(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<BatchDeleteAccountsRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -1033,65 +704,37 @@ pub(crate) async fn batch_delete_accounts(
     {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                BatchDeleteAccountsData {
-                    deleted: result.deleted,
-                    not_found: result.not_found,
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(BatchDeleteAccountsData {
+                deleted: result.deleted,
+                not_found: result.not_found,
+            }),
         )),
-        Err(error) => Err(account_error(error, request_id)),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
 /// `POST /api/admin/accounts/update`
 pub(crate) async fn update_account(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
 
-    match parse_account_update(payload, &request_id)? {
-        ParsedAccountUpdate::Single { id, update } => {
-            match state
-                .services
-                .admin_accounts
-                .update_metadata(&id, update)
-                .await
-            {
-                Ok(Some(account)) => Ok(AdminResponse::new(
-                    StatusCode::OK,
-                    AdminEnvelope::ok(
-                        AccountUpdateData::Account(Box::new(account.into())),
-                        request_id,
-                    ),
-                )),
-                Ok(None) => Err(account_not_found(request_id)),
-                Err(error) => Err(account_error(error, request_id)),
-            }
-        }
-        ParsedAccountUpdate::BatchStatus { ids, status } => match state
-            .services
-            .admin_accounts
-            .batch_update_status(ids, &status)
-            .await
-        {
-            Ok(result) => Ok(AdminResponse::new(
-                StatusCode::OK,
-                AdminEnvelope::ok(
-                    AccountUpdateData::BatchStatus(BatchUpdateAccountStatusData {
-                        updated: result.updated,
-                        not_found: result.not_found,
-                    }),
-                    request_id,
-                ),
-            )),
-            Err(error) => Err(account_error(error, request_id)),
-        },
+    let ParsedAccountUpdate { id, update } = parse_account_update(&payload)?;
+
+    match state
+        .services
+        .admin_accounts
+        .update_metadata(&id, update)
+        .await
+    {
+        Ok(Some(account)) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AccountUpdateData::Account(Box::new(account.into()))),
+        )),
+        Ok(None) => Err(account_not_found()),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
@@ -1345,13 +988,10 @@ fn push_monthly_quota_window(
         window_seconds,
         label_display: "月限额".to_string(),
         used_percent,
-        used_percent_display: used_percent
-            .map(format_percent)
-            .unwrap_or_else(|| "-".to_string()),
+        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
         reset_at_display: reset_at
             .as_ref()
-            .map(china_datetime)
-            .unwrap_or_else(|| "-".to_string()),
+            .map_or_else(|| "-".to_string(), china_datetime),
         window_used_display: quota_window_used_display(reset_at, window_seconds),
     });
     true
@@ -1430,13 +1070,10 @@ fn push_quota_window(
         window_seconds,
         label_display,
         used_percent,
-        used_percent_display: used_percent
-            .map(format_percent)
-            .unwrap_or_else(|| "-".to_string()),
+        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
         reset_at_display: reset_at
             .as_ref()
-            .map(china_datetime)
-            .unwrap_or_else(|| "-".to_string()),
+            .map_or_else(|| "-".to_string(), china_datetime),
         window_used_display: quota_window_used_display(reset_at, window_seconds),
     });
 }
@@ -1569,7 +1206,8 @@ fn quota_window_used_display(
     let remaining = reset_at
         .signed_duration_since(Utc::now())
         .num_seconds()
-        .max(0) as u64;
+        .max(0)
+        .cast_unsigned();
     let used = window_seconds.saturating_sub(remaining);
     format!(
         "{} / {}",
@@ -1634,66 +1272,28 @@ fn format_cost(value: f64) -> String {
     format!("${value:.2}")
 }
 
-// ============================================================================
-// Error handling
-// ============================================================================
-
-enum ParsedAccountUpdate {
-    Single {
-        id: String,
-        update: AdminAccountMetadataUpdate,
-    },
-    BatchStatus {
-        ids: Vec<String>,
-        status: String,
-    },
+struct ParsedAccountUpdate {
+    id: String,
+    update: AdminAccountMetadataUpdate,
 }
 
-fn parse_account_update(
-    payload: Value,
-    request_id: &str,
-) -> Result<ParsedAccountUpdate, AdminError> {
+fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminError> {
     let object = payload.as_object().ok_or_else(|| {
         AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             "Account update request must be an object",
-            request_id,
         )
     })?;
-    if object.contains_key("ids") {
-        if object.contains_key("id") {
-            return Err(AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                "Account batch update must not include id",
-                request_id,
-            ));
-        }
-        if ["label", "email", "accountId", "userId", "planType"]
-            .iter()
-            .any(|field| object.contains_key(*field))
-        {
-            return Err(AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                "Account batch update only supports status",
-                request_id,
-            ));
-        }
-        let ids = required_string_array_field(object, "ids", request_id)?;
-        let status = required_string_field(object, "status", request_id)?;
-        return Ok(ParsedAccountUpdate::BatchStatus { ids, status });
-    }
-    let id = required_string_field(object, "id", request_id)?;
-    let label = optional_string_update_field(object, "label", request_id)?;
-    let email = optional_string_update_field(object, "email", request_id)?;
-    let account_id = optional_string_update_field(object, "accountId", request_id)?;
-    let user_id = optional_string_update_field(object, "userId", request_id)?;
-    let plan_type = optional_string_update_field(object, "planType", request_id)?;
+    let id = required_string_field(object, "id")?;
+    let label = optional_string_update_field(object, "label")?;
+    let email = optional_string_update_field(object, "email")?;
+    let account_id = optional_string_update_field(object, "accountId")?;
+    let user_id = optional_string_update_field(object, "userId")?;
+    let plan_type = optional_string_update_field(object, "planType")?;
     let status = object
         .get("status")
-        .map(|value| required_string_value(value, "status", request_id))
+        .map(|value| required_string_value(value, "status"))
         .transpose()?;
     let update = AdminAccountMetadataUpdate {
         email,
@@ -1708,33 +1308,26 @@ fn parse_account_update(
             StatusCode::BAD_REQUEST,
             40001,
             "Account update request must include editable fields",
-            request_id,
         ));
     }
-    Ok(ParsedAccountUpdate::Single { id, update })
+    Ok(ParsedAccountUpdate { id, update })
 }
 
 fn required_string_field(
     object: &serde_json::Map<String, Value>,
     field: &'static str,
-    request_id: &str,
 ) -> Result<String, AdminError> {
     let Some(value) = object.get(field) else {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             format!("{field} is required"),
-            request_id,
         ));
     };
-    required_string_value(value, field, request_id)
+    required_string_value(value, field)
 }
 
-fn required_string_value(
-    value: &Value,
-    field: &'static str,
-    request_id: &str,
-) -> Result<String, AdminError> {
+fn required_string_value(value: &Value, field: &'static str) -> Result<String, AdminError> {
     value
         .as_str()
         .map(str::trim)
@@ -1745,51 +1338,11 @@ fn required_string_value(
                 StatusCode::BAD_REQUEST,
                 40001,
                 format!("{field} must be a non-empty string"),
-                request_id,
             )
         })
 }
 
-fn required_string_array_field(
-    object: &serde_json::Map<String, Value>,
-    field: &'static str,
-    request_id: &str,
-) -> Result<Vec<String>, AdminError> {
-    let Some(value) = object.get(field) else {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("{field} is required"),
-            request_id,
-        ));
-    };
-    let Some(values) = value.as_array() else {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("{field} must be an array of non-empty strings"),
-            request_id,
-        ));
-    };
-    if values.is_empty() {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("{field} must not be empty"),
-            request_id,
-        ));
-    }
-    values
-        .iter()
-        .map(|value| required_string_value(value, field, request_id))
-        .collect()
-}
-
-fn optional_string_field(
-    value: &Value,
-    field: &'static str,
-    request_id: &str,
-) -> Result<Option<String>, AdminError> {
+fn optional_string_field(value: &Value, field: &'static str) -> Result<Option<String>, AdminError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -1802,7 +1355,6 @@ fn optional_string_field(
             StatusCode::BAD_REQUEST,
             40001,
             format!("{field} must be a string or null"),
-            request_id,
         )),
     }
 }
@@ -1810,15 +1362,14 @@ fn optional_string_field(
 fn optional_string_update_field(
     object: &serde_json::Map<String, Value>,
     field: &'static str,
-    request_id: &str,
 ) -> Result<Option<Option<String>>, AdminError> {
     object
         .get(field)
-        .map(|value| optional_string_field(value, field, request_id))
+        .map(|value| optional_string_field(value, field))
         .transpose()
 }
 
-fn account_error(error: AdminAccountError, request_id: String) -> AdminError {
+fn account_error(error: &AdminAccountError) -> AdminError {
     match error {
         AdminAccountError::InvalidStatus(_)
         | AdminAccountError::LabelTooLong
@@ -1832,38 +1383,22 @@ fn account_error(error: AdminAccountError, request_id: String) -> AdminError {
         | AdminAccountError::OAuthSessionInvalid
         | AdminAccountError::OAuthCallbackInvalid
         | AdminAccountError::OAuthStateMismatch
-        | AdminAccountError::NoValidCookies => AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            error.to_string(),
-            request_id,
-        ),
-        AdminAccountError::OAuthCodeExchange(_) => AdminError::new(
-            StatusCode::BAD_GATEWAY,
-            50201,
-            error.to_string(),
-            request_id,
-        ),
-        AdminAccountError::NotFound => account_not_found(request_id),
-        AdminAccountError::Inactive(_) => {
-            AdminError::new(StatusCode::CONFLICT, 40901, error.to_string(), request_id)
+        | AdminAccountError::NoValidCookies => {
+            AdminError::new(StatusCode::BAD_REQUEST, 40001, error.to_string())
         }
-        _ => AdminError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            50001,
-            error.to_string(),
-            request_id,
-        ),
+        AdminAccountError::OAuthCodeExchange(_) => {
+            AdminError::new(StatusCode::BAD_GATEWAY, 50201, error.to_string())
+        }
+        AdminAccountError::NotFound => account_not_found(),
+        AdminAccountError::Inactive(_) => {
+            AdminError::new(StatusCode::CONFLICT, 40901, error.to_string())
+        }
+        _ => AdminError::new(StatusCode::INTERNAL_SERVER_ERROR, 50001, error.to_string()),
     }
 }
 
-fn account_not_found(request_id: String) -> AdminError {
-    AdminError::new(
-        StatusCode::NOT_FOUND,
-        40401,
-        "Account not found",
-        request_id,
-    )
+fn account_not_found() -> AdminError {
+    AdminError::new(StatusCode::NOT_FOUND, 40401, "Account not found")
 }
 
 fn account_status_str(status: crate::upstream::accounts::model::AccountStatus) -> &'static str {
@@ -1877,27 +1412,7 @@ fn account_status_str(status: crate::upstream::accounts::model::AccountStatus) -
     }
 }
 
-fn parse_health_check_request(
-    body: &Bytes,
-    request_id: &str,
-) -> Result<HealthCheckRequest, AdminError> {
-    if body.is_empty() {
-        return Ok(HealthCheckRequest::default());
-    }
-    serde_json::from_slice(body).map_err(|_| {
-        AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "Invalid health check request",
-            request_id,
-        )
-    })
-}
-
-fn parse_account_test_request(
-    body: &Bytes,
-    request_id: &str,
-) -> Result<AccountTestRequest, AdminError> {
+fn parse_account_test_request(body: &Bytes) -> Result<AccountTestRequest, AdminError> {
     if body.is_empty() {
         return Ok(AccountTestRequest::default());
     }
@@ -1906,61 +1421,6 @@ fn parse_account_test_request(
             StatusCode::BAD_REQUEST,
             40001,
             "Invalid account test request",
-            request_id,
         )
     })
-}
-
-fn validate_health_check_request(
-    payload: &HealthCheckRequest,
-    request_id: &str,
-) -> Result<(), AdminError> {
-    if payload.ids.as_ref().is_some_and(Vec::is_empty) {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "Account ids must not be empty",
-            request_id,
-        ));
-    }
-    if payload
-        .stagger_ms
-        .is_some_and(|value| !(500..=30_000).contains(&value))
-    {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "staggerMs must be between 500 and 30000",
-            request_id,
-        ));
-    }
-    if payload
-        .concurrency
-        .is_some_and(|value| !(1..=10).contains(&value))
-    {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "concurrency must be between 1 and 10",
-            request_id,
-        ));
-    }
-    Ok(())
-}
-
-fn validate_account_export_format(value: Option<&str>) -> Result<(), &'static str> {
-    match value.unwrap_or("native").trim() {
-        "" | "native" => Ok(()),
-        _ => Err("Unsupported account export format"),
-    }
-}
-
-fn account_export_ids(value: Option<&str>) -> Vec<String> {
-    value
-        .into_iter()
-        .flat_map(|ids| ids.split(','))
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToString::to_string)
-        .collect()
 }

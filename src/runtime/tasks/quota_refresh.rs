@@ -16,8 +16,6 @@ use crate::{
 
 use super::coordinator::SchedulerHandle;
 
-const DEFAULT_INTERVAL_SECS: u64 = 15 * 60;
-
 /// 主动配额刷新后台任务。
 pub struct QuotaRefreshTask {
     service: RuntimeQuotaRefreshService,
@@ -25,14 +23,6 @@ pub struct QuotaRefreshTask {
 }
 
 impl QuotaRefreshTask {
-    /// 构造默认配额刷新后台任务。
-    pub fn new(store: SqliteAccountStore, codex: Arc<CodexBackendClient>) -> Self {
-        Self {
-            service: RuntimeQuotaRefreshService::new(store, codex),
-            interval_secs: DEFAULT_INTERVAL_SECS,
-        }
-    }
-
     /// 使用自定义间隔构造配额刷新后台任务。
     pub fn with_intervals(
         store: SqliteAccountStore,

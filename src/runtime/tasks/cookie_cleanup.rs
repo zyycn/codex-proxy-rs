@@ -27,14 +27,6 @@ impl CookieCleanupTask {
         }
     }
 
-    /// 使用自定义间隔构造 Cookie 清理任务。
-    pub fn with_interval_secs(store: SqliteCookieStore, interval_secs: u64) -> Self {
-        Self {
-            store,
-            interval_secs,
-        }
-    }
-
     /// 启动后台清理任务。
     pub fn start(self) -> SchedulerHandle {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);

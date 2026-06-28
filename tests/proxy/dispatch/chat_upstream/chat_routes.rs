@@ -1,14 +1,5 @@
 use super::*;
-
-fn assert_substrings_appear_in_order(haystack: &str, needles: &[&str]) {
-    let mut cursor = 0;
-    for needle in needles {
-        let Some(offset) = haystack[cursor..].find(needle) else {
-            panic!("expected substring {needle:?} after byte {cursor} in:\n{haystack}");
-        };
-        cursor += offset + needle.len();
-    }
-}
+use crate::support::assertions::assert_substrings_appear_in_order;
 
 #[tokio::test]
 async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() {
@@ -753,11 +744,17 @@ async fn chat_completions_should_cool_down_cloudflare_403_and_fallback() {
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_primary", "cf_clearance=old")
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=old; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     cookie_store
-        .set_cookie_header("acct_secondary", "cf_clearance=keep")
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=keep; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     let response = app

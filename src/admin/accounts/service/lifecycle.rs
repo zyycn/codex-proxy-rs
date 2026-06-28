@@ -3,7 +3,13 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::infra::json::{NumberedPage, Page};
 
-use super::{types::*, AdminAccountService};
+use super::{
+    types::{
+        parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountMetadata,
+        AdminAccountMetadataUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
+    },
+    AdminAccountService,
+};
 
 impl AdminAccountService {
     pub async fn list(
@@ -65,10 +71,12 @@ impl AdminAccountService {
         refresh_token: Option<String>,
     ) -> Result<AdminAccountMetadata, AdminAccountError> {
         let provided_refresh_token =
-            crate::upstream::accounts::import_export::normalize_nonempty(refresh_token);
+            crate::upstream::accounts::importing::normalize_nonempty(refresh_token);
         let tokens = if let Some(access_token) =
-            crate::upstream::accounts::import_export::normalize_nonempty(
-                token.map(crate::upstream::accounts::import_export::normalize_bearer_token),
+            crate::upstream::accounts::importing::normalize_nonempty(
+                token
+                    .as_deref()
+                    .map(crate::upstream::accounts::importing::normalize_bearer_token),
             ) {
             ManualCreateTokens {
                 access_token,
@@ -81,9 +89,9 @@ impl AdminAccountService {
                 .refresh(&refresh_token)
                 .await
                 .map_err(AdminAccountError::RefreshTokenExchange)?;
-            let access_token = crate::upstream::accounts::import_export::normalize_nonempty(Some(
-                crate::upstream::accounts::import_export::normalize_bearer_token(
-                    token_pair.access_token,
+            let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
+                crate::upstream::accounts::importing::normalize_bearer_token(
+                    &token_pair.access_token,
                 ),
             ))
             .ok_or(AdminAccountError::TokenRequired)?;
@@ -141,7 +149,7 @@ impl AdminAccountService {
             }
             existing.id
         } else {
-            let id = crate::upstream::accounts::import_export::normalized_account_id(None);
+            let id = crate::upstream::accounts::importing::normalized_account_id(None);
             self.store
                 .insert(crate::upstream::accounts::store::NewAccount {
                     id: id.clone(),
@@ -300,13 +308,12 @@ impl AdminAccountService {
             .await
         {
             Ok(tokens) => {
-                let access_token =
-                    crate::upstream::accounts::import_export::normalize_nonempty(Some(
-                        crate::upstream::accounts::import_export::normalize_bearer_token(
-                            tokens.access_token,
-                        ),
-                    ))
-                    .ok_or(AdminAccountError::TokenRequired)?;
+                let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
+                    crate::upstream::accounts::importing::normalize_bearer_token(
+                        &tokens.access_token,
+                    ),
+                ))
+                .ok_or(AdminAccountError::TokenRequired)?;
                 let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
                     &access_token,
                     Utc::now(),
@@ -351,7 +358,7 @@ impl AdminAccountService {
                     if !updated {
                         return Err(AdminAccountError::NotFound);
                     }
-                    if crate::upstream::accounts::import_export::refresh_failure_status_clears_next_refresh_at(
+                    if crate::upstream::accounts::importing::refresh_failure_status_clears_next_refresh_at(
                         status,
                     ) {
                         let cleared = self
@@ -376,47 +383,6 @@ impl AdminAccountService {
             .map_err(|_| AdminAccountError::Inspect)?
             .map(stored_to_admin_metadata)
             .ok_or(AdminAccountError::NotFound)
-    }
-    pub async fn reset_usage(
-        &self,
-        account_id: &str,
-    ) -> Result<AdminAccountMetadata, AdminAccountError> {
-        self.store
-            .reset_usage(account_id)
-            .await
-            .map_err(|_| AdminAccountError::ResetUsage)?;
-        self.sync_account_pool(account_id).await?;
-        self.store
-            .get(account_id)
-            .await
-            .map_err(|_| AdminAccountError::NotFound)?
-            .map(stored_to_admin_metadata)
-            .ok_or(AdminAccountError::NotFound)
-    }
-    pub async fn batch_update_status(
-        &self,
-        ids: Vec<String>,
-        status: &str,
-    ) -> Result<BatchUpdateAccountStatus, AdminAccountError> {
-        if ids.is_empty() {
-            return Err(AdminAccountError::EmptyIds);
-        }
-        let status = parse_batch_account_status(status)?;
-        let mut updated = 0u32;
-        let mut not_found = Vec::new();
-        for id in ids {
-            match self.store.set_status(&id, status).await {
-                Ok(true) => {
-                    updated += 1;
-                    self.sync_account_pool_best_effort(&id, "account batch status update")
-                        .await;
-                    self.evict_account_websocket_pool(&id).await;
-                }
-                Ok(false) => not_found.push(id),
-                Err(_) => return Err(AdminAccountError::UpdateStatus),
-            }
-        }
-        Ok(BatchUpdateAccountStatus { updated, not_found })
     }
 }
 

@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -16,20 +15,16 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
-        event_store::{AdminLogStateUpdate, EventLogFilter, SqliteEventLogStore},
+        event_store::{EventLogFilter, SqliteEventLogStore, DEFAULT_EVENT_LOG_CAPACITY},
         events::EventLevel,
     },
     config::types::AppConfig,
-    config::types::{
-        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
-        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
-    },
     http::router,
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::{
         build_conversation_identity, SessionAffinityEntry, SqliteSessionAffinityStore,
     },
-    runtime::services::{BackgroundTaskStores, Services},
+    runtime::services::{BackgroundTaskStores, EventLogOptions, Services},
     runtime::state::AppState,
     upstream::accounts::{
         cookies::SqliteCookieStore, store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
@@ -61,6 +56,11 @@ use tower::util::ServiceExt;
 use wiremock::{
     matchers::{header, method, path},
     Mock, MockServer, ResponseTemplate,
+};
+
+use crate::support::{
+    client_keys::insert_client_api_key, config::test_config as base_test_config,
+    http::response_json,
 };
 
 const TEST_INSTALLATION_ID: &str = "b4f9d503-07b1-457b-a0da-87e6836b1c43";
@@ -236,9 +236,23 @@ mod responses_websocket;
 mod usage_logging;
 
 fn test_app_state_with_pool_and_installation_id(
+    config: &AppConfig,
+    pool: SqlitePool,
+    installation_id: String,
+) -> AppState {
+    test_app_state_with_pool_installation_id_and_log_options(
+        config.clone(),
+        pool,
+        installation_id,
+        EventLogOptions::from_config(config),
+    )
+}
+
+fn test_app_state_with_pool_installation_id_and_log_options(
     config: AppConfig,
     pool: SqlitePool,
     installation_id: String,
+    log_options: EventLogOptions,
 ) -> AppState {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
@@ -250,12 +264,14 @@ fn test_app_state_with_pool_and_installation_id(
         client_keys: SqliteClientKeyStore::new(pool.clone()),
         event_logs: SqliteEventLogStore::new(pool),
     };
-    let services = Services::with_installation_id(
+    let services = Services::try_with_installation_id_and_log_options(
         &config,
         stores,
         crate::support::fingerprint::test_fingerprint(),
         Some(installation_id),
-    );
+        log_options,
+    )
+    .expect("failed to build runtime services with configured TLS transport");
     AppState { config, services }
 }
 
@@ -274,7 +290,7 @@ async fn test_app_with_account_and_installation_id(
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool,
         installation_id,
     );
@@ -301,7 +317,7 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
     let api_key = insert_client_api_key(&pool).await;
     insert_model_snapshot(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool,
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -333,7 +349,7 @@ async fn test_app_with_account_pool_and_disabled_logging(
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -343,15 +359,6 @@ async fn test_app_with_account_pool_and_disabled_logging(
         .restore_from_repository()
         .await
         .expect("account pool should restore");
-    state
-        .services
-        .logs
-        .update_state(AdminLogStateUpdate {
-            enabled: Some(false),
-            ..AdminLogStateUpdate::default()
-        })
-        .await
-        .expect("event log should be disabled");
     (router::router().with_state(state), api_key, pool, dir)
 }
 
@@ -366,10 +373,16 @@ async fn test_app_with_account_pool_and_logging_capture_body(
     insert_account(&pool).await;
     let mut config = test_config(url, base_url);
     config.logging.enabled = true;
-    let state = test_app_state_with_pool_and_installation_id(
+    let log_options = EventLogOptions {
+        enabled: true,
+        capacity: DEFAULT_EVENT_LOG_CAPACITY,
+        capture_body: true,
+    };
+    let state = test_app_state_with_pool_installation_id_and_log_options(
         config,
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
+        log_options,
     );
     state
         .services
@@ -377,15 +390,6 @@ async fn test_app_with_account_pool_and_logging_capture_body(
         .restore_from_repository()
         .await
         .expect("account pool should restore");
-    state
-        .services
-        .logs
-        .update_state(AdminLogStateUpdate {
-            capture_body: Some(true),
-            ..AdminLogStateUpdate::default()
-        })
-        .await
-        .expect("log capture body should be enabled");
     (router::router().with_state(state), api_key, pool, dir)
 }
 
@@ -402,7 +406,7 @@ async fn test_app_with_account_pool_config(
     let mut config = test_config(url, base_url);
     configure(&mut config);
     let state = test_app_state_with_pool_and_installation_id(
-        config,
+        &config,
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -425,7 +429,7 @@ async fn test_app_with_restored_pool_then_disabled_account(
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -472,7 +476,7 @@ async fn test_app_with_two_accounts_and_affinity(
         .await
         .unwrap();
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool,
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -535,7 +539,7 @@ async fn test_app_with_two_accounts_and_affinity_status(
         .await
         .unwrap();
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -571,7 +575,7 @@ async fn test_app_with_two_accounts(
     )
     .await;
     let state = test_app_state_with_pool_and_installation_id(
-        test_config(url, base_url),
+        &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -582,14 +586,6 @@ async fn test_app_with_two_accounts(
         .await
         .expect("account pool should restore");
     (router::router().with_state(state), api_key, pool, dir)
-}
-
-async fn insert_client_api_key(pool: &SqlitePool) -> String {
-    SqliteClientKeyStore::new(pool.clone())
-        .create("test")
-        .await
-        .unwrap()
-        .key
 }
 
 async fn seed_openai_admin_session(pool: &SqlitePool, session_id: &str) {
@@ -738,11 +734,6 @@ fn tuple_response_request_body(stream: bool) -> String {
         }
     })
     .to_string()
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
 
 struct CapturedWebSocketRequest {
@@ -975,7 +966,7 @@ async fn accept_two_successful_websocket_responses_with_authorization(
                         websocket.close(None).await.unwrap();
                         break (true, first_payload, second_payload);
                     }
-                    Some(_) => continue,
+                    Some(_) => {}
                     None => {
                         let second_payload = accept_successful_websocket_response_with_authorization(
                             listener,
@@ -1199,7 +1190,7 @@ fn responses_http_sse_request(api_key: &str, request_id: &str) -> Request<Body> 
         .unwrap()
 }
 
-fn responses_json_request(api_key: &str, body: Value) -> Request<Body> {
+fn responses_json_request(api_key: &str, body: &Value) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri("/v1/responses")
@@ -1520,10 +1511,13 @@ async fn spawn_chunked_sse_upstream_then_close_with_headers(
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         read_http_request(&mut socket).await;
-        let extra_headers = headers
-            .iter()
-            .map(|(name, value)| format!("{name}: {value}\r\n"))
-            .collect::<String>();
+        let mut extra_headers = String::new();
+        for (name, value) in headers {
+            extra_headers.push_str(name);
+            extra_headers.push_str(": ");
+            extra_headers.push_str(value);
+            extra_headers.push_str("\r\n");
+        }
         let response_head = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n{extra_headers}\r\n"
         );
@@ -1650,48 +1644,7 @@ async fn received_authorizations(server: &MockServer) -> Vec<String> {
 }
 
 fn test_config(database_url: String, base_url: String) -> AppConfig {
-    AppConfig {
-        server: ServerConfig {
-            host: "127.0.0.1".to_string(),
-            port: 0,
-        },
-        api: ApiConfig { base_url },
-        model_aliases: BTreeMap::new(),
-        model_account_routes: BTreeMap::new(),
-        auth: AuthConfig {
-            refresh_margin_seconds: 300,
-            refresh_enabled: true,
-            refresh_concurrency: 2,
-            max_concurrent_per_account: 3,
-            request_interval_ms: 50,
-            rotation_strategy: "least_used".to_string(),
-            tier_priority: Vec::new(),
-            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
-        },
-        quota: QuotaConfig {
-            refresh_interval_minutes: 5,
-            warning_thresholds: QuotaWarningThresholds {
-                primary: vec![80, 90],
-                secondary: vec![80, 90],
-            },
-        },
-        database: DatabaseConfig { url: database_url },
-        tls: TlsConfig {
-            force_http11: false,
-        },
-        ws_pool: WebSocketPoolConfig::default(),
-        fingerprint: Default::default(),
-        admin: AdminConfig {
-            session_ttl_minutes: 1440,
-            session_cleanup_interval_secs: 3600,
-            default_username: "admin".to_string(),
-            default_password: "admin".to_string(),
-        },
-        logging: LoggingConfig {
-            directory: "logs".to_string(),
-            retention_days: 14,
-            enabled: false,
-        },
-    }
+    let mut config = base_test_config(database_url);
+    config.api.base_url = base_url;
+    config
 }

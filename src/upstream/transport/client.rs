@@ -65,7 +65,7 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError>
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut clients = cache
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     if let Some(client) = clients.get(&cache_key) {
         return Ok(client.clone());
@@ -300,15 +300,6 @@ pub struct CodexCompactResponse {
     pub set_cookie_headers: Vec<String>,
     /// 上游透传的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
-}
-
-/// 上游模型端点探测结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexConnectivityProbe {
-    /// 请求的完整端点。
-    pub endpoint: String,
-    /// 返回状态码。
-    pub status: StatusCode,
 }
 
 // ---------------------------------------------------------------------------
@@ -648,32 +639,6 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
         })
-    }
-
-    /// 探测模型端点连通性。
-    pub async fn probe_connectivity(
-        &self,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexConnectivityProbe> {
-        let headers = self.auxiliary_request_headers(context)?;
-        let endpoint = format!(
-            "{}/codex/models?client_version={}",
-            self.base_url, self.fingerprint.app_version
-        );
-        let response = self.client.get(&endpoint).headers(headers).send().await?;
-        let status = response.status();
-        let retry_after_seconds = retry_after_seconds(response.headers(), None);
-        if !status.is_success() {
-            let body = read_capped_error_body(response).await?;
-            return Err(CodexClientError::Upstream {
-                status,
-                retry_after_seconds: retry_after_seconds
-                    .or_else(|| retry_after_seconds_from_body(&body)),
-                body,
-                set_cookie_headers: Vec::new(),
-            });
-        }
-        Ok(CodexConnectivityProbe { endpoint, status })
     }
 
     /// 获取后端模型目录条目。

@@ -61,14 +61,6 @@ pub struct CodexWebSocketConnection {
     headers: Vec<(String, String)>,
 }
 
-/// 构造握手审计快照。
-pub fn opening_audit_snapshot(header_order: Vec<String>) -> OpeningAuditSnapshot {
-    OpeningAuditSnapshot {
-        header_order,
-        ..OpeningAuditSnapshot::default()
-    }
-}
-
 /// 显式写入 WebSocket audit artifact。
 pub async fn write_websocket_audit_artifact_for_dir(
     dir: Option<&Path>,
@@ -206,14 +198,6 @@ pub enum CodexWebSocketExchangeError {
 }
 
 impl CodexWebSocketRequest {
-    /// 构造 WebSocket 请求。
-    pub fn new(connection: CodexWebSocketConnection, payload_text: String) -> Self {
-        Self {
-            connection,
-            payload_text,
-        }
-    }
-
     /// 返回连接描述。
     pub fn connection(&self) -> &CodexWebSocketConnection {
         &self.connection
@@ -282,11 +266,6 @@ impl CodexWebSocketConnection {
         &self.headers
     }
 
-    /// 生成真实 WebSocket opening 请求文本，用于 capture/audit parity。
-    pub fn opening_request_text(&self) -> String {
-        String::from_utf8_lossy(&opening_request_bytes(self)).into_owned()
-    }
-
     /// 生成打开握手审计快照。
     pub fn opening_audit_snapshot(&self) -> OpeningAuditSnapshot {
         OpeningAuditSnapshot {
@@ -337,12 +316,12 @@ async fn connect_websocket(
     connection: &CodexWebSocketConnection,
 ) -> Result<(CodexWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
-    let connector = super::maybe_build_rustls_client_config_with_custom_ca()
+    let connector = super::tls::maybe_build_rustls_client_config_with_custom_ca()
         .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?
         .map(Connector::Rustls);
     match connect_async_tls_with_config(request, Some(websocket_config()), false, connector).await {
         Ok((websocket, response)) => Ok((websocket, response)),
-        Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(*response)),
+        Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
         Err(error) => Err(error.into()),
     }
 }
@@ -371,7 +350,7 @@ fn websocket_config() -> WebSocketConfig {
     config
 }
 
-fn websocket_opening_error(response: WsResponse<Option<Vec<u8>>>) -> CodexWebSocketExchangeError {
+fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSocketExchangeError {
     let status_code = response.status().as_u16();
     let body = response
         .body()
@@ -391,20 +370,6 @@ fn websocket_opening_error(response: WsResponse<Option<Vec<u8>>>) -> CodexWebSoc
         body,
         set_cookie_headers: websocket_set_cookie_headers(response.headers()),
     }
-}
-
-fn opening_request_bytes(connection: &CodexWebSocketConnection) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(request_line_for_endpoint(connection.endpoint()).as_bytes());
-    bytes.extend_from_slice(b"\r\n");
-    for (name, value) in connection.headers() {
-        bytes.extend_from_slice(name.as_bytes());
-        bytes.extend_from_slice(b": ");
-        bytes.extend_from_slice(value.as_bytes());
-        bytes.extend_from_slice(b"\r\n");
-    }
-    bytes.extend_from_slice(b"\r\n");
-    bytes
 }
 
 fn request_line_for_endpoint(endpoint: &str) -> String {
@@ -673,7 +638,7 @@ async fn first_reused_stream_text(
                     },
                 );
             }
-            Err(error) => return Err(reused_connection_died_before_first_frame(error)),
+            Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
         };
         match message {
             Message::Text(text) => return Ok(text.to_string()),
@@ -685,7 +650,7 @@ async fn first_reused_stream_text(
                 );
             }
             Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
-            _ => continue,
+            _ => {}
         }
     }
 }
@@ -724,7 +689,7 @@ async fn collect_websocket_response(
         let message = match next_websocket_message(&mut websocket).await {
             Ok(message) => message,
             Err(error) if reused_connection && !saw_response_frame => {
-                return Err(reused_connection_died_before_first_frame(error));
+                return Err(reused_connection_died_before_first_frame(&error));
             }
             Err(error) => return Err(error),
         };
@@ -808,7 +773,7 @@ async fn collect_websocket_response(
 }
 
 fn reused_connection_died_before_first_frame(
-    error: CodexWebSocketExchangeError,
+    error: &CodexWebSocketExchangeError,
 ) -> CodexWebSocketExchangeError {
     CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
         message: error.to_string(),

@@ -1,78 +1,12 @@
 use super::*;
+use crate::support::jwt::unsigned_jwt;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
 #[tokio::test]
-async fn admin_accounts_export_should_return_native_account_tokens() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("admin-accounts-export.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-    seed_admin_session(&pool, "session_1").await;
-    seed_account(
-        &pool,
-        NewAccount {
-            id: "acct_export".to_string(),
-            email: Some("export@example.com".to_string()),
-            account_id: Some("chatgpt_export".to_string()),
-            user_id: Some("user_export".to_string()),
-            label: Some("primary".to_string()),
-            plan_type: Some("plus".to_string()),
-            access_token: SecretString::new("access-export".to_string().into()),
-            refresh_token: Some(SecretString::new("refresh-export".to_string().into())),
-            access_token_expires_at: None,
-            status: AccountStatus::Active,
-            added_at: None,
-        },
-    )
-    .await;
-    let config = test_config(url);
-    let stores = BackgroundTaskStores {
-        accounts: SqliteAccountStore::new(pool.clone()),
-        admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-        cookies: SqliteCookieStore::new(pool.clone()),
-        fingerprints: FingerprintRepository::new(pool.clone()),
-        session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
-        refresh_leases: RefreshLeaseStore::new(pool.clone()),
-        client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
-    };
-    let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
-    let state = AppState {
-        config,
-        services: (*services).clone(),
-    };
-    let app = codex_proxy_rs::http::router::router().with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/admin/accounts/export?ids=acct_export")
-                .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_accounts_export")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["data"]["sourceFormat"], "native");
-    assert_eq!(body["data"]["accounts"][0]["id"], "acct_export");
-    assert_eq!(body["data"]["accounts"][0]["token"], "access-export");
-    assert_eq!(
-        body["data"]["accounts"][0]["refreshToken"],
-        "refresh-export"
-    );
-}
-
-#[tokio::test]
-async fn admin_accounts_import_should_store_native_account_tokens() {
+async fn admin_accounts_import_should_store_cpr_account_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-accounts-import.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -138,7 +72,7 @@ async fn admin_accounts_import_should_store_native_account_tokens() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["imported"], 1);
     assert_eq!(body["data"]["skipped"], 0);
-    assert_eq!(body["data"]["sourceFormat"], "native");
+    assert_eq!(body["data"]["sourceFormat"], "cpr");
     assert_eq!(stored.access_token.expose_secret(), access_token);
     assert_eq!(
         stored.refresh_token.unwrap().expose_secret(),
@@ -192,7 +126,6 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
         format!("{}/backend-api", server.uri()),
     )
     .await;
-    let header = json!({"alg": "none", "typ": "JWT"});
     let payload = json!({
         "exp": 4_102_444_800i64,
         "https://api.openai.com/auth": {
@@ -204,7 +137,7 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
             "email_verified": true,
         },
     });
-    let access_token = format!("{}.{}.", jwt_part(&header), jwt_part(&payload));
+    let access_token = unsigned_jwt(&payload);
 
     let response = app
         .clone()
@@ -688,45 +621,4 @@ async fn admin_accounts_import_should_store_plain_tokens_and_list_sanitized_acco
         "acct_imported_sanitized"
     );
     assert!(list_body["data"]["items"][0].get("token").is_none());
-}
-
-#[tokio::test]
-async fn admin_accounts_export_should_return_native_accounts_with_tokens_and_filter_ids() {
-    let (app, _state, pool, _dir) =
-        admin_accounts_test_app("admin-accounts-export-filter.sqlite", 117).await;
-    seed_account(
-        &pool,
-        NewAccount {
-            id: "acct_export_a".to_string(),
-            email: Some("export-a@example.com".to_string()),
-            account_id: Some("chatgpt-export-a".to_string()),
-            user_id: Some("user-export-a".to_string()),
-            label: None,
-            plan_type: Some("plus".to_string()),
-            access_token: SecretString::new("access-acct_export_a".to_string().into()),
-            refresh_token: Some(SecretString::new(
-                "refresh-acct_export_a".to_string().into(),
-            )),
-            access_token_expires_at: None,
-            status: AccountStatus::Active,
-            added_at: None,
-        },
-    )
-    .await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/admin/accounts/export?ids=acct_export_a")
-                .header("cookie", "cpr_admin_session=session_1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response_json(response).await;
-    assert_eq!(body["data"]["accounts"].as_array().unwrap().len(), 1);
-    assert_eq!(body["data"]["accounts"][0]["id"], "acct_export_a");
 }

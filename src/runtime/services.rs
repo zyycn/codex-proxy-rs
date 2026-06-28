@@ -6,13 +6,13 @@ use crate::{
     admin::monitoring::{
         event_store::{
             AdminLogService, SqliteEventLogStore, DEFAULT_EVENT_LOG_CAPACITY,
-            DEFAULT_EVENT_LOG_CAPTURE_BODY, DEFAULT_EVENT_LOG_ENABLED,
+            DEFAULT_EVENT_LOG_CAPTURE_BODY,
         },
         service::AdminUsageService,
         usage_store::SqliteUsageStore,
     },
     admin::{
-        accounts::service::AdminAccountService,
+        accounts::service::{AdminAccountService, AdminAccountServiceParts},
         auth::service::{AdminSessionService, SqliteAdminSessionStore},
         keys::service::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
     },
@@ -33,10 +33,10 @@ use crate::{
     },
     upstream::{
         fingerprint::{Fingerprint, FingerprintRepository},
-        models::{AdminModelService, ModelService, ModelSnapshotStore},
+        models::{ModelService, ModelSnapshotStore},
         token_client::{default_openai_token_client, TokenClientConfig},
         transport::{
-            build_reqwest_client, CodexBackendClient, CodexModelCatalogClient, CustomCaError,
+            build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
         },
     },
 };
@@ -66,7 +66,6 @@ pub struct BackgroundTaskStores {
 #[derive(Clone)]
 pub struct Services {
     pub models: StdArc<ModelService>,
-    pub admin_models: StdArc<AdminModelService>,
     pub accounts: StdArc<dyn AccountStoreTrait>,
     pub client_keys: StdArc<ClientKeyService>,
     pub admin_client_keys: StdArc<AdminClientKeyService>,
@@ -85,6 +84,24 @@ pub struct Services {
     pub background_tasks: BackgroundTaskStores,
 }
 
+/// 事件日志运行选项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventLogOptions {
+    pub enabled: bool,
+    pub capacity: u32,
+    pub capture_body: bool,
+}
+
+impl EventLogOptions {
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            enabled: config.logging.enabled,
+            capacity: DEFAULT_EVENT_LOG_CAPACITY,
+            capture_body: DEFAULT_EVENT_LOG_CAPTURE_BODY,
+        }
+    }
+}
+
 impl Services {
     pub fn new(config: &AppConfig, stores: BackgroundTaskStores, fingerprint: Fingerprint) -> Self {
         Self::try_new(config, stores, fingerprint)
@@ -99,21 +116,27 @@ impl Services {
         Self::try_with_installation_id(config, stores, fingerprint, None)
     }
 
-    pub fn with_installation_id(
+    pub(crate) fn try_with_installation_id(
         config: &AppConfig,
         stores: BackgroundTaskStores,
         fingerprint: Fingerprint,
         installation_id: Option<String>,
-    ) -> Self {
-        Self::try_with_installation_id(config, stores, fingerprint, installation_id)
-            .expect("failed to build runtime services with configured TLS transport")
+    ) -> Result<Self, CustomCaError> {
+        Self::try_with_installation_id_and_log_options(
+            config,
+            stores,
+            fingerprint,
+            installation_id,
+            EventLogOptions::from_config(config),
+        )
     }
 
-    pub fn try_with_installation_id(
+    pub fn try_with_installation_id_and_log_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
         fingerprint: Fingerprint,
         installation_id: Option<String>,
+        log_options: EventLogOptions,
     ) -> Result<Self, CustomCaError> {
         let installation_id = installation_id.filter(|id| !id.trim().is_empty());
         let account_store_trait =
@@ -159,26 +182,25 @@ impl Services {
             stores.client_keys.clone(),
         )));
         let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
-        let admin_accounts = StdArc::new(AdminAccountService::new(
-            stores.accounts.clone(),
-            stores.cookies.clone(),
-            config.quota.warning_thresholds.clone(),
-            codex.clone(),
-            account_pool.clone(),
-            token_client,
-            crate::admin::accounts::service::oauth::AccountOAuthService::new(
+        let admin_accounts = StdArc::new(AdminAccountService::new(AdminAccountServiceParts {
+            store: stores.accounts.clone(),
+            cookies: stores.cookies.clone(),
+            codex: codex.clone(),
+            account_pool: account_pool.clone(),
+            token_refresher: token_client,
+            oauth: crate::admin::accounts::service::oauth::AccountOAuthService::new(
                 reqwest::Client::new(),
                 config.auth.oauth_client_id.clone(),
                 config.auth.oauth_token_endpoint.clone(),
             ),
-            config.auth.refresh_margin_seconds,
-            installation_id.clone(),
-        ));
+            refresh_margin_seconds: config.auth.refresh_margin_seconds,
+            installation_id: installation_id.clone(),
+        }));
         let logs = StdArc::new(AdminLogService::new(
             stores.event_logs.clone(),
-            DEFAULT_EVENT_LOG_ENABLED,
-            DEFAULT_EVENT_LOG_CAPACITY,
-            DEFAULT_EVENT_LOG_CAPTURE_BODY,
+            log_options.enabled,
+            log_options.capacity,
+            log_options.capture_body,
         ));
         let usage_store = SqliteUsageStore::new(stores.accounts.pool().clone());
         let usage = StdArc::new(AdminUsageService::new(usage_store));
@@ -194,21 +216,8 @@ impl Services {
             crate::upstream::models::ModelConfig {
                 model_aliases: config.model_aliases.clone(),
             },
-            Some(snapshot_store.clone()),
-            Some(upstream_client.clone()),
-            None,
-        ));
-        let admin_models = StdArc::new(AdminModelService::new(
-            StdArc::new(ModelService::new(
-                crate::upstream::models::ModelConfig {
-                    model_aliases: config.model_aliases.clone(),
-                },
-                Some(snapshot_store),
-                Some(upstream_client),
-                None,
-            )),
-            account_store_trait.clone(),
-            installation_id.clone(),
+            Some(snapshot_store),
+            Some(upstream_client),
         ));
         let cloudflare_recovery =
             crate::proxy::dispatch::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
@@ -232,7 +241,6 @@ impl Services {
 
         Ok(Self {
             models,
-            admin_models,
             accounts: account_store_trait,
             client_keys,
             admin_client_keys,

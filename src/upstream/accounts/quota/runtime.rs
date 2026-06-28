@@ -45,8 +45,7 @@ impl RuntimeQuotaRefreshService {
         }
     }
 
-    /// 返回连续 quota 请求之间的默认错峰间隔。
-    pub fn default_request_spacing() -> Duration {
+    fn default_request_spacing() -> Duration {
         Duration::from_secs(DEFAULT_REQUEST_SPACING_SECS)
     }
 
@@ -82,14 +81,6 @@ impl RuntimeQuotaRefreshService {
     pub fn with_cookie_store(mut self, cookie_store: SqliteCookieStore) -> Self {
         self.cookie_store = Some(cookie_store);
         self
-    }
-
-    /// 执行一次配额锁定或待验证账号刷新。
-    pub async fn refresh_locked_accounts_once(
-        &self,
-    ) -> QuotaRefreshServiceResult<QuotaRefreshSummary> {
-        let mut last_refreshed = HashMap::new();
-        self.refresh_locked_accounts(&mut last_refreshed).await
     }
 
     /// 执行一次配额锁定或待验证账号刷新，复用调用方传入的最近刷新记录。

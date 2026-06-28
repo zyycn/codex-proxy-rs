@@ -101,33 +101,12 @@ impl Default for AuthConfig {
 pub struct QuotaConfig {
     /// 配额刷新周期。
     pub refresh_interval_minutes: u64,
-    /// 预警阈值。
-    pub warning_thresholds: QuotaWarningThresholds,
 }
 
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
             refresh_interval_minutes: 5,
-            warning_thresholds: QuotaWarningThresholds::default(),
-        }
-    }
-}
-
-/// 配额预警阈值集合。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct QuotaWarningThresholds {
-    /// 主阈值列表。
-    pub primary: Vec<u8>,
-    /// 次阈值列表。
-    pub secondary: Vec<u8>,
-}
-
-impl Default for QuotaWarningThresholds {
-    fn default() -> Self {
-        Self {
-            primary: vec![80, 90],
-            secondary: vec![80, 90],
         }
     }
 }

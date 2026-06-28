@@ -1,9 +1,9 @@
-//! 账号领域模块 —— 模型、仓库、池调度、Cookie、配额、刷新与导入导出。
+//! 账号领域模块 —— 模型、仓库、池调度、Cookie、配额、刷新与导入。
 
 /// Cookie 捕获与重放策略。
 pub mod cookies;
-/// 账号导入导出逻辑。
-pub mod import_export;
+/// 账号导入逻辑。
+pub mod importing;
 /// 账号领域模型。
 pub mod model;
 /// 账号池调度策略。

@@ -1,5 +1,5 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     http::{Request, StatusCode},
 };
 use chrono::Utc;
@@ -7,7 +7,7 @@ use codex_proxy_rs::infra::{database::connect_sqlite, identity::hash_admin_passw
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
-use crate::support::config::test_config;
+use crate::support::{config::test_config, http::response_json};
 
 #[tokio::test]
 async fn admin_login_should_issue_http_only_session_cookie() {
@@ -58,9 +58,7 @@ async fn admin_login_should_issue_http_only_session_cookie() {
                 .uri("/api/admin/login")
                 .header("content-type", "application/json")
                 .header("x-request-id", "req_login")
-                .body(Body::from(
-                    r#"{"username":"admin","password":"correct-password"}"#,
-                ))
+                .body(Body::from(r#"{"password":"correct-password"}"#))
                 .unwrap(),
         )
         .await
@@ -80,6 +78,19 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     assert!(cookie.contains("SameSite=Lax"));
     assert_eq!(body["code"], 200);
     assert!(body["data"]["expiresAt"].is_string());
+
+    let logs_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/logs")
+                .header("cookie", cookie.split(';').next().unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(logs_response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -132,9 +143,7 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
                 .header("content-type", "application/json")
                 .header("authorization", "Bearer cpr_not_an_admin_session")
                 .header("x-request-id", "req_login_bad")
-                .body(Body::from(
-                    r#"{"username":"admin","password":"cpr_not_an_admin_password"}"#,
-                ))
+                .body(Body::from(r#"{"password":"cpr_not_an_admin_password"}"#))
                 .unwrap(),
         )
         .await
@@ -161,9 +170,4 @@ async fn seed_admin_user(pool: &SqlitePool, password: &str) {
     .execute(pool)
     .await
     .unwrap();
-}
-
-async fn response_json(response: axum::response::Response) -> serde_json::Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }

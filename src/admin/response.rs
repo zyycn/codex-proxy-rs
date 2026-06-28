@@ -10,18 +10,13 @@ use serde::Serialize;
 
 /// 管理端错误。
 pub struct AdminError {
-    pub status: StatusCode,
-    pub code: u32,
-    pub message: String,
+    status: StatusCode,
+    code: u32,
+    message: String,
 }
 
 impl AdminError {
-    pub fn new(
-        status: StatusCode,
-        code: u32,
-        message: impl Into<String>,
-        _request_id: impl Into<String>,
-    ) -> Self {
+    pub fn new(status: StatusCode, code: u32, message: impl Into<String>) -> Self {
         Self {
             status,
             code,
@@ -48,52 +43,47 @@ impl IntoResponse for AdminError {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminEnvelope<T> {
-    pub code: u32,
-    pub message: String,
-    pub data: T,
+    code: u32,
+    message: String,
+    data: T,
 }
 
 impl<T> AdminEnvelope<T> {
-    pub fn new(
-        code: u32,
-        message: impl Into<String>,
-        data: T,
-        _request_id: impl Into<String>,
-    ) -> Self {
+    pub fn new(code: u32, message: impl Into<String>, data: T) -> Self {
         Self {
             code,
             message: message.into(),
             data,
         }
     }
-    pub fn ok(data: T, request_id: impl Into<String>) -> Self {
-        Self::new(200, "OK", data, request_id)
+    pub fn ok(data: T) -> Self {
+        Self::new(200, "OK", data)
     }
 }
 
 /// 分页元数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CursorPageMeta {
-    pub limit: u32,
+pub(crate) struct CursorPageMeta {
+    pub(crate) limit: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
+    pub(crate) next_cursor: Option<String>,
 }
 
 /// 页码分页元数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NumberedPageMeta {
-    pub page: u32,
-    pub page_size: u32,
-    pub total: u64,
-    pub total_pages: u32,
+pub(crate) struct NumberedPageMeta {
+    pub(crate) page: u32,
+    pub(crate) page_size: u32,
+    pub(crate) total: u64,
+    pub(crate) total_pages: u32,
 }
 
 /// 分页元数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub enum PageMeta {
+pub(crate) enum PageMeta {
     Cursor(CursorPageMeta),
     Numbered(NumberedPageMeta),
 }
@@ -102,21 +92,21 @@ pub enum PageMeta {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminPageEnvelope<T> {
-    pub code: u32,
-    pub message: String,
-    pub data: PageData<T>,
+    code: u32,
+    message: String,
+    data: PageData<T>,
 }
 
 /// 分页响应数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PageData<T> {
-    pub items: Vec<T>,
-    pub page: PageMeta,
+struct PageData<T> {
+    items: Vec<T>,
+    page: PageMeta,
 }
 
 impl<T> AdminPageEnvelope<T> {
-    pub fn ok(page: Page<T>, limit: u32, _request_id: impl Into<String>) -> Self {
+    pub fn ok(page: Page<T>, limit: u32) -> Self {
         let Page { items, next_cursor } = page;
         Self {
             code: 200,
@@ -128,7 +118,7 @@ impl<T> AdminPageEnvelope<T> {
         }
     }
 
-    pub fn numbered(page: NumberedPage<T>, _request_id: impl Into<String>) -> Self {
+    pub fn numbered(page: NumberedPage<T>) -> Self {
         let NumberedPage {
             items,
             total,
@@ -153,8 +143,8 @@ impl<T> AdminPageEnvelope<T> {
 
 /// 管理端响应。
 pub struct AdminResponse<T: Serialize> {
-    pub status: StatusCode,
-    pub body: T,
+    status: StatusCode,
+    body: T,
 }
 
 impl<T: Serialize> AdminResponse<T> {

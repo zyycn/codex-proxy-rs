@@ -11,15 +11,13 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// 指纹历史记录的来源标识。
-pub const CODEX_DESKTOP_UPDATE_SOURCE: &str = "codex_desktop_update_source";
 /// 运行时当前指纹槽位。
 pub const CURRENT_FINGERPRINT_ID: &str = "current";
 
 const AUTO_UPDATE_SOURCE: &str = "auto_update";
 const CONFIG_SEED_SOURCE: &str = "config_seed";
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
-const POLL_INTERVAL: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+const POLL_INTERVAL: Duration = Duration::from_hours(72);
 
 type AppcastFields = (Option<String>, Option<String>, Option<String>);
 
@@ -74,64 +72,6 @@ impl Fingerprint {
         }
     }
 
-    /// 返回默认的 Codex Desktop 指纹。
-    pub fn default_codex_desktop() -> Self {
-        Self {
-            originator: "Codex Desktop".to_string(),
-            app_version: "26.519.81530".to_string(),
-            build_number: "3178".to_string(),
-            platform: "darwin".to_string(),
-            arch: "arm64".to_string(),
-            chromium_version: "146".to_string(),
-            user_agent_template: "Codex Desktop/{version} ({platform}; {arch})".to_string(),
-            default_headers: Self::default_headers(),
-            header_order: Self::default_header_order(),
-            updated_at: None,
-        }
-    }
-
-    /// 返回默认请求头集合。
-    pub fn default_headers() -> IndexMap<String, String> {
-        let mut headers = IndexMap::new();
-        headers.insert(
-            "Accept-Encoding".to_string(),
-            "gzip, deflate, br, zstd".to_string(),
-        );
-        headers.insert("Accept-Language".to_string(), "en-US,en;q=0.9".to_string());
-        headers.insert("sec-ch-ua-mobile".to_string(), "?0".to_string());
-        headers.insert("sec-ch-ua-platform".to_string(), "\"macOS\"".to_string());
-        headers.insert("sec-fetch-site".to_string(), "same-origin".to_string());
-        headers.insert("sec-fetch-mode".to_string(), "cors".to_string());
-        headers.insert("sec-fetch-dest".to_string(), "empty".to_string());
-        headers
-    }
-
-    /// 返回默认请求头顺序。
-    pub fn default_header_order() -> Vec<String> {
-        vec![
-            "authorization".to_string(),
-            "chatgpt-account-id".to_string(),
-            "originator".to_string(),
-            "x-openai-internal-codex-residency".to_string(),
-            "x-client-request-id".to_string(),
-            "x-codex-installation-id".to_string(),
-            "x-codex-turn-state".to_string(),
-            "openai-beta".to_string(),
-            "user-agent".to_string(),
-            "sec-ch-ua".to_string(),
-            "sec-ch-ua-mobile".to_string(),
-            "sec-ch-ua-platform".to_string(),
-            "accept-encoding".to_string(),
-            "accept-language".to_string(),
-            "sec-fetch-site".to_string(),
-            "sec-fetch-mode".to_string(),
-            "sec-fetch-dest".to_string(),
-            "content-type".to_string(),
-            "accept".to_string(),
-            "cookie".to_string(),
-        ]
-    }
-
     /// 根据模板展开最终 User-Agent。
     pub fn user_agent(&self) -> String {
         self.user_agent_template
@@ -150,61 +90,8 @@ impl Fingerprint {
 }
 
 // ---------------------------------------------------------------------------
-// 更新清单解析
-// ---------------------------------------------------------------------------
-
-/// 更新清单解析结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FingerprintUpdate {
-    /// 应用版本。
-    pub app_version: String,
-    /// 构建号。
-    pub build_number: String,
-}
-
-/// 指纹更新错误。
-#[derive(Debug, Error)]
-pub enum FingerprintError {
-    /// 更新清单 JSON 无效。
-    #[error("invalid update manifest: {0}")]
-    InvalidManifest(#[from] serde_json::Error),
-    /// HTTP 请求失败。
-    #[error("failed to fetch update manifest: {0}")]
-    Http(#[from] reqwest::Error),
-    /// 数据库存储失败。
-    #[error("failed to persist fingerprint update: {0}")]
-    Database(#[from] sqlx::Error),
-}
-
-#[derive(Deserialize)]
-struct Manifest {
-    version: String,
-    build_number: String,
-}
-
-/// 从更新清单 JSON 中提取版本信息。
-pub fn parse_update_manifest(input: &str) -> Result<FingerprintUpdate, FingerprintError> {
-    let manifest: Manifest = serde_json::from_str(input)?;
-    Ok(FingerprintUpdate {
-        app_version: manifest.version,
-        build_number: manifest.build_number,
-    })
-}
-
-// ---------------------------------------------------------------------------
 // 指纹历史记录与仓储
 // ---------------------------------------------------------------------------
-
-/// 指纹历史记录。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredFingerprint {
-    /// 应用版本。
-    pub app_version: String,
-    /// 构建号。
-    pub build_number: String,
-    /// 来源。
-    pub source: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredHeader {
@@ -266,22 +153,6 @@ impl FingerprintRepository {
         Self { pool }
     }
 
-    /// 插入一条指纹更新历史。
-    pub async fn insert_update(&self, update: &FingerprintUpdate) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "insert into fingerprint_update_history (id, current_fingerprint_id, app_version, build_number, source, created_at) values (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(CURRENT_FINGERPRINT_ID)
-        .bind(&update.app_version)
-        .bind(&update.build_number)
-        .bind(CODEX_DESKTOP_UPDATE_SOURCE)
-        .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     /// 写入当前指纹默认值；如果当前槽位已存在，直接读取数据库值。
     pub async fn ensure_current_seed(
         &self,
@@ -293,7 +164,7 @@ impl FingerprintRepository {
 
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            r#"
+            r"
             insert into fingerprints (
               id,
               originator,
@@ -309,7 +180,7 @@ impl FingerprintRepository {
               created_at,
               updated_at
             ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(CURRENT_FINGERPRINT_ID)
         .bind(&default_fingerprint.originator)
@@ -371,7 +242,7 @@ impl FingerprintRepository {
     /// 读取当前运行时指纹。
     pub async fn load_current(&self) -> Result<Option<Fingerprint>, sqlx::Error> {
         let row = sqlx::query(
-            r#"
+            r"
             select
               originator,
               app_version,
@@ -385,7 +256,7 @@ impl FingerprintRepository {
               updated_at
             from fingerprints
             where id = ?
-            "#,
+            ",
         )
         .bind(CURRENT_FINGERPRINT_ID)
         .fetch_optional(&self.pool)
@@ -416,21 +287,6 @@ impl FingerprintRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
-    }
-
-    /// 读取最新一条指纹历史记录。
-    pub async fn latest(&self) -> Result<Option<StoredFingerprint>, sqlx::Error> {
-        let row = sqlx::query(
-            "select app_version, build_number, source from fingerprint_update_history order by created_at desc, id desc limit 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|row| StoredFingerprint {
-            app_version: row.get("app_version"),
-            build_number: row.get("build_number"),
-            source: row.get("source"),
-        }))
     }
 }
 
@@ -480,49 +336,6 @@ fn decode_header_order(value: &str) -> Result<Vec<String>, sqlx::Error> {
 
 fn json_error(error: serde_json::Error) -> sqlx::Error {
     sqlx::Error::Decode(Box::new(error))
-}
-
-// ---------------------------------------------------------------------------
-// 指纹更新器（HTTP 拉取 + 持久化）
-// ---------------------------------------------------------------------------
-
-/// 通过 HTTP 拉取更新清单并写入历史记录。
-#[derive(Clone)]
-pub struct FingerprintUpdater {
-    client: reqwest::Client,
-    repository: FingerprintRepository,
-    update_url: String,
-}
-
-impl FingerprintUpdater {
-    /// 构造更新器。
-    pub fn new(
-        client: reqwest::Client,
-        repository: FingerprintRepository,
-        update_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            client,
-            repository,
-            update_url: update_url.into(),
-        }
-    }
-
-    /// 执行一次更新清单拉取并持久化历史记录。
-    pub async fn poll_once(&self) -> Result<FingerprintUpdate, FingerprintError> {
-        let manifest = self
-            .client
-            .get(&self.update_url)
-            .timeout(APPCAST_TIMEOUT)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let update = parse_update_manifest(&manifest)?;
-        self.repository.insert_update(&update).await?;
-        Ok(update)
-    }
 }
 
 // ---------------------------------------------------------------------------

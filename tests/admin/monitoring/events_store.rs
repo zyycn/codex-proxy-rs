@@ -92,7 +92,7 @@ async fn event_log_store_should_promote_diagnostic_metadata_fields() {
 }
 
 #[tokio::test]
-async fn event_log_store_should_get_count_and_clear_events() {
+async fn event_log_store_should_get_and_clear_events() {
     let (store, _dir) = event_log_store("event-logs-clear.sqlite").await;
     let mut event = EventLog::new("request", EventLevel::Warn, "detail");
     event.id = "log_detail".to_string();
@@ -100,9 +100,12 @@ async fn event_log_store_should_get_count_and_clear_events() {
 
     let loaded = store.get("log_detail").await.unwrap().unwrap();
     assert_eq!(loaded.id, "log_detail");
-    assert_eq!(store.count().await.unwrap(), 1);
     assert_eq!(store.clear().await.unwrap(), 1);
-    assert_eq!(store.count().await.unwrap(), 0);
+    let page = store
+        .list(EventLogFilter::default(), None, 10)
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
 }
 
 async fn event_log_store(db_name: &str) -> (SqliteEventLogStore, tempfile::TempDir) {

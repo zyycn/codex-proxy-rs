@@ -1,20 +1,5 @@
 use super::*;
 
-#[test]
-fn websocket_pool_should_apply_capacity_and_age_policy() {
-    let pool = CodexWebSocketPool::new(2, Duration::from_secs(60));
-
-    assert_eq!(
-        (
-            pool.permits_new_connection(1),
-            pool.permits_new_connection(2),
-            pool.should_recycle(Duration::from_secs(59)),
-            pool.should_recycle(Duration::from_secs(60)),
-        ),
-        (true, false, false, true)
-    );
-}
-
 #[tokio::test]
 async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and_conversation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -50,7 +35,7 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
         }
         websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_secs(60)));
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -139,7 +124,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
             .unwrap();
         first_websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::with_default_max_age());
+    let pool = Arc::new(CodexWebSocketPool::default());
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -210,7 +195,7 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
             }
         }
     });
-    let pool = Arc::new(CodexWebSocketPool::with_limits(Duration::from_secs(60), 1));
+    let pool = Arc::new(CodexWebSocketPool::new(1, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -479,7 +464,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
         .await
         .expect("first websocket response should succeed");
     tokio::time::sleep(Duration::from_millis(15)).await;
-    pool.gc_sweep().await;
+    pool.maintain_idle_connections().await;
     let second = backend
         .create_response(
             &request,
@@ -562,7 +547,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
     let pool = Arc::new(CodexWebSocketPool::with_config(
         websocket_pool_config_for_tests(
             Some(Duration::from_millis(20)),
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             None,
         ),
     ));
@@ -973,7 +958,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
             .unwrap();
         second_websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_secs(60)));
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

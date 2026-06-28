@@ -1,4 +1,4 @@
-//! 账号导入导出逻辑。
+//! 账号导入逻辑。
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub struct AccountImportEntry {
     pub access_token_expires_at: Option<String>,
     /// 导入时的原始状态。
     pub status: Option<String>,
-    /// Sub2api 导入时的缓存配额 JSON。
+    /// Sub2API 导入时的缓存配额 JSON。
     pub cached_quota: Option<Value>,
     /// 配额抓取时间。
     pub quota_fetched_at: Option<String>,
@@ -40,18 +40,18 @@ pub struct AccountImportEntry {
 /// 账号导入来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountImportSource {
-    /// 原生格式。
-    Native,
-    /// Sub2api 格式。
-    Sub2api,
+    /// CPR 格式。
+    Cpr,
+    /// Sub2API 格式。
+    Sub2Api,
 }
 
 impl AccountImportSource {
     /// 返回来源的字符串标识。
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Native => "native",
-            Self::Sub2api => "sub2api",
+            Self::Cpr => "cpr",
+            Self::Sub2Api => "sub2api",
         }
     }
 }
@@ -179,8 +179,8 @@ fn account_import_entry_from_value(
         return Ok(None);
     };
     let allowed_keys = match source {
-        AccountImportSource::Native => ACCOUNT_IMPORT_ACCOUNT_KEYS,
-        AccountImportSource::Sub2api => SUB2API_ACCOUNT_IMPORT_KEYS,
+        AccountImportSource::Cpr => ACCOUNT_IMPORT_ACCOUNT_KEYS,
+        AccountImportSource::Sub2Api => SUB2API_ACCOUNT_IMPORT_KEYS,
     };
     if account
         .keys()
@@ -209,13 +209,13 @@ fn account_import_entry_from_value(
             &["accessTokenExpiresAt", "access_token_expires_at"],
         ),
         status: first_string(value, &["status"]),
-        cached_quota: (source == AccountImportSource::Sub2api)
+        cached_quota: (source == AccountImportSource::Sub2Api)
             .then(|| first_value(value, &["cachedQuota", "cached_quota"]))
             .flatten(),
-        quota_fetched_at: (source == AccountImportSource::Sub2api)
+        quota_fetched_at: (source == AccountImportSource::Sub2Api)
             .then(|| first_string(value, &["quotaFetchedAt", "quota_fetched_at"]))
             .flatten(),
-        quota_verify_required: (source == AccountImportSource::Sub2api)
+        quota_verify_required: (source == AccountImportSource::Sub2Api)
             .then(|| first_bool(value, &["quotaVerifyRequired", "quota_verify_required"]))
             .flatten(),
     }))
@@ -241,16 +241,16 @@ fn account_import_source(
 ) -> Result<AccountImportSource, &'static str> {
     if let Some(source_format) = first_string(value, &["sourceFormat", "source_format"]) {
         return match source_format.trim().to_ascii_lowercase().as_str() {
-            "native" => Ok(AccountImportSource::Native),
-            "sub2api" => Ok(AccountImportSource::Sub2api),
+            "cpr" => Ok(AccountImportSource::Cpr),
+            "sub2api" => Ok(AccountImportSource::Sub2Api),
             _ => Err("no importable accounts"),
         };
     }
 
     if accounts.iter().any(account_import_entry_looks_sub2api) {
-        Ok(AccountImportSource::Sub2api)
+        Ok(AccountImportSource::Sub2Api)
     } else {
-        Ok(AccountImportSource::Native)
+        Ok(AccountImportSource::Cpr)
     }
 }
 
@@ -284,7 +284,7 @@ pub fn normalized_imported_account_status(
     source: AccountImportSource,
     access_token: &str,
 ) -> AccountStatus {
-    if source == AccountImportSource::Sub2api
+    if source == AccountImportSource::Sub2Api
         && status == AccountStatus::Active
         && jwt_expiry(access_token, Utc::now()) != JwtExpiry::Valid
     {
@@ -314,46 +314,13 @@ pub fn parse_account_status(status: &str) -> Result<AccountStatus, &'static str>
     }
 }
 
-/// 对管理端修改用的状态做严格校验。
-pub fn parse_batch_account_status(status: &str) -> Result<AccountStatus, &'static str> {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "active" => Ok(AccountStatus::Active),
-        "disabled" => Ok(AccountStatus::Disabled),
-        _ => Err("invalid account status (only active/disabled allowed)"),
-    }
-}
-
-/// 将 RefreshFailure 映射为账号状态。
-pub fn refresh_failure_status(
-    failure: &crate::upstream::accounts::token_refresh::RefreshFailure,
-) -> AccountStatus {
-    match failure {
-        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant => {
-            AccountStatus::Expired
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted => {
-            AccountStatus::QuotaExhausted
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::Banned => AccountStatus::Banned,
-        crate::upstream::accounts::token_refresh::RefreshFailure::Disabled => {
-            AccountStatus::Disabled
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport => {
-            AccountStatus::Active
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::Transport => {
-            AccountStatus::Active
-        }
-    }
-}
-
 /// 判断是否需要清除 next_refresh_at。
 pub fn refresh_failure_status_clears_next_refresh_at(status: AccountStatus) -> bool {
     !matches!(status, AccountStatus::Active)
 }
 
 /// 标准化 Bearer token（去除 Bearer 前缀，去除空白）。
-pub fn normalize_bearer_token(value: String) -> String {
+pub fn normalize_bearer_token(value: &str) -> String {
     value
         .trim()
         .strip_prefix("Bearer ")
@@ -385,7 +352,7 @@ pub fn normalize_nonempty_str(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-pub fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
+fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| value.get(key).and_then(Value::as_str))
         .map(str::trim)

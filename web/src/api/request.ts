@@ -18,11 +18,6 @@ class ApiError extends Error {
   }
 }
 
-interface RequestConfig extends AxiosRequestConfig {
-  skipErrorHandler?: boolean
-  skipAuth?: boolean
-}
-
 const http: AxiosInstance = axios.create({
   baseURL: import.meta.env.DEV ? '/dev' : '',
   timeout: 30000,
@@ -51,11 +46,7 @@ http.interceptors.response.use(
     return response
   },
   (error: AxiosError<any>) => {
-    const { response, config } = error
-
-    if ((config as RequestConfig)?.skipErrorHandler) {
-      return Promise.reject(error)
-    }
+    const { response } = error
 
     const status = response?.status || 0
     const message = response?.data?.message || error.message || '请求失败'
@@ -93,7 +84,7 @@ function isApiEnvelope(value: any): value is { data: any } {
   )
 }
 
-export default async function request<T = any>(config: RequestConfig): Promise<T> {
+export default async function request<T = any>(config: AxiosRequestConfig): Promise<T> {
   const response = await http.request<any, AxiosResponse<any>>({
     ...config,
   })

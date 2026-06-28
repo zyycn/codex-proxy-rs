@@ -1,4 +1,4 @@
-pub mod routes;
+pub(crate) mod routes;
 
 use codex_proxy_rs::config::settings::{AdminSettings, AdminSettingsPatch, SettingsService};
 

@@ -103,49 +103,25 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
 }
 
 #[test]
-fn config_should_reject_runtime_model_section() {
+fn config_should_reject_unknown_top_level_sections() {
     let err = serde_yml::from_str::<AppConfig>(
-        r#"
+        r"
 server:
   host: 127.0.0.1
   port: 8080
 api:
   base_url: https://chatgpt.com/backend-api
-model: {}
+unexpected: {}
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
-"#,
+",
     )
     .unwrap_err();
 
     assert!(
-        err.to_string().contains("model"),
-        "expected model section to be rejected, got {err}"
+        err.to_string().contains("unexpected"),
+        "expected unknown section to be rejected, got {err}"
     );
-}
-
-#[test]
-fn config_should_reject_runtime_auth_and_quota_sections() {
-    for section in ["auth", "quota"] {
-        let yaml = format!(
-            r#"
-server:
-  host: 127.0.0.1
-  port: 8080
-api:
-  base_url: https://chatgpt.com/backend-api
-{section}: {{}}
-database:
-  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
-"#
-        );
-        let err = serde_yml::from_str::<AppConfig>(&yaml).unwrap_err();
-
-        assert!(
-            err.to_string().contains(section),
-            "expected {section} section to be rejected, got {err}"
-        );
-    }
 }
 
 #[test]
@@ -222,7 +198,7 @@ logging:
     .unwrap();
     fs::write(
         dir.path().join("ignored-extra.yaml"),
-        r#"
+        r"
 server:
   host: 0.0.0.0
 logging:
@@ -231,7 +207,7 @@ ws_pool:
   enabled: false
   max_age_ms: 120000
   max_per_account: 2
-"#,
+",
     )
     .unwrap();
 
@@ -258,19 +234,19 @@ ws_pool:
 }
 
 #[test]
-fn logging_config_rejects_unsupported_size_rotation_field() {
+fn logging_config_should_reject_unknown_fields() {
     let err = serde_yml::from_str::<LoggingConfig>(
-        r#"
+        r"
 directory: .runtime/logs
-max_file_bytes: 10485760
+unexpected: true
 retention_days: 14
 enabled: false
-"#,
+",
     )
     .unwrap_err();
 
     assert!(
-        err.to_string().contains("max_file_bytes"),
-        "expected max_file_bytes to be rejected, got {err}"
+        err.to_string().contains("unexpected"),
+        "expected unknown logging field to be rejected, got {err}"
     );
 }

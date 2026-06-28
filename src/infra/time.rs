@@ -19,21 +19,23 @@ pub fn china_rfc3339_millis(value: &DateTime<Utc>) -> String {
 
 /// 将 RFC3339 字符串输出为中国时区 RFC3339 字符串。
 pub fn china_rfc3339_str(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|datetime| datetime.with_timezone(&china_offset()).to_rfc3339())
-        .unwrap_or_else(|_| value.to_string())
+    DateTime::parse_from_rfc3339(value).map_or_else(
+        |_| value.to_string(),
+        |datetime| datetime.with_timezone(&china_offset()).to_rfc3339(),
+    )
 }
 
 /// 将 RFC3339 字符串输出为中国时区日期时间。
 pub fn china_datetime_rfc3339_str(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|datetime| {
+    DateTime::parse_from_rfc3339(value).map_or_else(
+        |_| value.to_string(),
+        |datetime| {
             datetime
                 .with_timezone(&china_offset())
                 .format("%Y-%m-%d %H:%M:%S")
                 .to_string()
-        })
-        .unwrap_or_else(|_| value.to_string())
+        },
+    )
 }
 
 /// 将 UTC 时间输出为中国时区日期时间。
@@ -149,9 +151,10 @@ pub fn china_relative_time_str(value: Option<&str>) -> String {
     let Some(value) = value else {
         return "-".to_string();
     };
-    DateTime::parse_from_rfc3339(value)
-        .map(|datetime| china_relative_time(Some(datetime.with_timezone(&Utc)), Utc::now()))
-        .unwrap_or_else(|_| value.to_string())
+    DateTime::parse_from_rfc3339(value).map_or_else(
+        |_| value.to_string(),
+        |datetime| china_relative_time(Some(datetime.with_timezone(&Utc)), Utc::now()),
+    )
 }
 
 /// Serde 序列化 UTC 时间为中国时区 RFC3339 字符串。

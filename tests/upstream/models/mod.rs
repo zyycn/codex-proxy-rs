@@ -1,2 +1,2 @@
-pub mod catalog;
-pub mod store;
+pub(crate) mod catalog;
+pub(crate) mod store;

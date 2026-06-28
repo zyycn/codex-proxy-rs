@@ -1,19 +1,13 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     http::{Request, StatusCode},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::event_store::SqliteEventLogStore,
-    config::types::AppConfig,
-    config::types::{
-        AdminConfig, ApiConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
-        QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
-    },
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
@@ -31,65 +25,43 @@ use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
-mod import_export;
+use crate::support::jwt::unsigned_jwt;
+use crate::support::{admin::seed_admin_session, config::test_config, http::response_json};
+
+mod importing;
 mod lifecycle;
 mod list;
 mod oauth;
 mod quota;
 mod testing;
 
-async fn seed_admin_session(pool: &SqlitePool, session_id: &str) {
-    sqlx::query(
-        "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
-    )
-    .bind("admin_1")
-    .bind("hash")
-    .bind("2026-06-18T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind("admin_1")
-    .bind("2999-01-01T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test fixture keeps usage rows explicit"
-)]
-async fn seed_usage_account(
-    pool: &SqlitePool,
-    id: &str,
-    email: &str,
-    label: &str,
-    plan_type: &str,
+struct UsageAccountSeed<'a> {
+    id: &'a str,
+    email: &'a str,
+    label: &'a str,
+    plan_type: &'a str,
     request_count: i64,
     empty_response_count: i64,
     input_tokens: i64,
     output_tokens: i64,
     cached_tokens: i64,
-    last_used_at: &str,
-) {
+    last_used_at: &'a str,
+}
+
+async fn seed_usage_account(pool: &SqlitePool, seed: UsageAccountSeed<'_>) {
     sqlx::query("insert into accounts (id, email, label, plan_type, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, 'active', ?, ?)")
-        .bind(id).bind(email).bind(label).bind(plan_type).bind("access-token")
+        .bind(seed.id).bind(seed.email).bind(seed.label).bind(seed.plan_type).bind("access-token")
         .bind("2026-06-11T00:00:00Z").bind("2026-06-11T00:00:00Z")
         .execute(pool).await.unwrap();
     sqlx::query("insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)")
-        .bind(id).bind(request_count).bind(empty_response_count).bind(input_tokens).bind(output_tokens).bind(cached_tokens).bind(last_used_at)
+        .bind(seed.id)
+        .bind(seed.request_count)
+        .bind(seed.empty_response_count)
+        .bind(seed.input_tokens)
+        .bind(seed.output_tokens)
+        .bind(seed.cached_tokens)
+        .bind(seed.last_used_at)
         .execute(pool).await.unwrap();
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
 
 async fn post_admin_account(app: &axum::Router, payload: Value) -> axum::response::Response {
@@ -215,7 +187,6 @@ fn test_jwt_with_exp(
     plan_type: Option<&str>,
     exp: i64,
 ) -> String {
-    let header = json!({"alg": "none", "typ": "JWT"});
     let payload = json!({
         "exp": exp,
         "https://api.openai.com/auth": {
@@ -225,58 +196,5 @@ fn test_jwt_with_exp(
         },
         "https://api.openai.com/profile": { "email": email }
     });
-    format!("{}.{}.", jwt_part(&header), jwt_part(&payload))
-}
-
-fn jwt_part(value: &Value) -> String {
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap())
-}
-
-fn test_config(database_url: String) -> AppConfig {
-    AppConfig {
-        server: ServerConfig {
-            host: "127.0.0.1".to_string(),
-            port: 0,
-        },
-        api: ApiConfig {
-            base_url: "https://chatgpt.com/backend-api".to_string(),
-        },
-        model_aliases: BTreeMap::new(),
-        model_account_routes: BTreeMap::new(),
-        auth: AuthConfig {
-            refresh_margin_seconds: 300,
-            refresh_enabled: true,
-            refresh_concurrency: 2,
-            max_concurrent_per_account: 3,
-            request_interval_ms: 50,
-            rotation_strategy: "least_used".to_string(),
-            tier_priority: Vec::new(),
-            oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
-            oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
-        },
-        quota: QuotaConfig {
-            refresh_interval_minutes: 5,
-            warning_thresholds: QuotaWarningThresholds {
-                primary: vec![80, 90],
-                secondary: vec![80, 90],
-            },
-        },
-        database: DatabaseConfig { url: database_url },
-        tls: TlsConfig {
-            force_http11: false,
-        },
-        ws_pool: WebSocketPoolConfig::default(),
-        fingerprint: Default::default(),
-        admin: AdminConfig {
-            session_ttl_minutes: 1440,
-            session_cleanup_interval_secs: 3600,
-            default_username: "admin".to_string(),
-            default_password: "admin".to_string(),
-        },
-        logging: LoggingConfig {
-            directory: "logs".to_string(),
-            retention_days: 14,
-            enabled: false,
-        },
-    }
+    unsigned_jwt(&payload)
 }

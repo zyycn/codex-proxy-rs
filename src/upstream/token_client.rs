@@ -62,7 +62,7 @@ impl TokenRefresher for OpenAiTokenClient {
         if !status.is_success() {
             return Err(classify_refresh_failure(status, &body));
         }
-        parse_token_pair(&body).map_err(|_| RefreshFailure::Transport)
+        parse_token_pair(&body).map_err(|()| RefreshFailure::Transport)
     }
 }
 

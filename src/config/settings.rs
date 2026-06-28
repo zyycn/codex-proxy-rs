@@ -102,7 +102,7 @@ impl SettingsService {
             current.request_interval_ms = request_interval_ms;
         }
         if let Some(rotation_strategy) = patch.rotation_strategy {
-            current.rotation_strategy = validate_rotation_strategy(rotation_strategy)?;
+            current.rotation_strategy = validate_rotation_strategy(&rotation_strategy)?;
         }
         Ok(())
     }
@@ -128,12 +128,6 @@ impl SettingsServiceError {
             Self::InvalidField { field, .. } => field,
         }
     }
-    /// 返回字段错误说明。
-    pub fn message(&self) -> &str {
-        match self {
-            Self::InvalidField { message, .. } => message,
-        }
-    }
 }
 
 fn validate_model_aliases(
@@ -141,8 +135,8 @@ fn validate_model_aliases(
 ) -> Result<BTreeMap<String, String>, SettingsServiceError> {
     let mut normalized = BTreeMap::new();
     for (alias, target) in aliases {
-        let alias = non_empty_string("modelAliases", alias)?;
-        let target = non_empty_string("modelAliases", target)?;
+        let alias = non_empty_string("modelAliases", &alias)?;
+        let target = non_empty_string("modelAliases", &target)?;
         if alias == target {
             return Err(invalid_field(
                 "modelAliases",
@@ -159,10 +153,10 @@ fn validate_model_account_routes(
 ) -> Result<BTreeMap<String, Vec<String>>, SettingsServiceError> {
     let mut normalized = BTreeMap::new();
     for (model, account_ids) in routes {
-        let model = non_empty_string("modelAccountRoutes", model)?;
+        let model = non_empty_string("modelAccountRoutes", &model)?;
         let mut normalized_account_ids = Vec::new();
         for account_id in account_ids {
-            let account_id = non_empty_string("modelAccountRoutes", account_id)?;
+            let account_id = non_empty_string("modelAccountRoutes", &account_id)?;
             if normalized_account_ids.contains(&account_id) {
                 return Err(invalid_field(
                     "modelAccountRoutes",
@@ -182,7 +176,7 @@ fn validate_model_account_routes(
     Ok(normalized)
 }
 
-fn validate_rotation_strategy(strategy: String) -> Result<String, SettingsServiceError> {
+fn validate_rotation_strategy(strategy: &str) -> Result<String, SettingsServiceError> {
     let strategy = non_empty_string("rotationStrategy", strategy)?;
     if ROTATION_STRATEGIES.contains(&strategy.as_str()) {
         Ok(strategy)
@@ -194,7 +188,7 @@ fn validate_rotation_strategy(strategy: String) -> Result<String, SettingsServic
     }
 }
 
-fn non_empty_string(field: &str, value: String) -> Result<String, SettingsServiceError> {
+fn non_empty_string(field: &str, value: &str) -> Result<String, SettingsServiceError> {
     let value = value.trim().to_string();
     if value.is_empty() {
         Err(invalid_field(field, "must not be empty"))
@@ -243,15 +237,6 @@ pub struct RuntimeSettingsService {
 }
 
 impl RuntimeSettingsService {
-    /// 构造运行时设置服务。
-    pub fn new(config: AppConfig, pool: SqlitePool) -> Self {
-        Self {
-            current: Arc::new(StdRwLock::new(Arc::new(config))),
-            pool,
-            account_pool: None,
-        }
-    }
-
     /// 构造带账号池同步的运行时设置服务。
     pub fn with_account_pool(
         config: AppConfig,
@@ -494,7 +479,7 @@ fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSe
             "requestIntervalMs",
             row.get("request_interval_ms"),
         )?,
-        rotation_strategy: validate_rotation_strategy(row.get("rotation_strategy"))?,
+        rotation_strategy: validate_rotation_strategy(&row.get::<String, _>("rotation_strategy"))?,
     })
 }
 

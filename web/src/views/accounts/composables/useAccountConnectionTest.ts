@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
 
-import { getAccountTestModels, testAccountConnectionStream } from '@/api'
+import { getAccountModels, testAccountConnectionStream } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
 
@@ -182,7 +182,7 @@ export function useAccountConnectionTest() {
     loadingConnectionTestModels.value = true
     connectionTestError.value = ''
     try {
-      const result = await getAccountTestModels({ id: account.id })
+      const result = await getAccountModels({ id: account.id })
       connectionTestModelOptions.value = (result.models || []).map((model: any) => ({
         label: model.label || model.id,
         value: model.id,

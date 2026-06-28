@@ -45,7 +45,6 @@ function rowTone(row: object) {
 }
 
 const filteredRows = computed(() => {
-  if (activeFilter.value === 'warn') return props.rows.filter((row) => row.tone === 'warning')
   if (activeFilter.value === 'error') return props.rows.filter((row) => row.tone === 'danger')
   return props.rows
 })

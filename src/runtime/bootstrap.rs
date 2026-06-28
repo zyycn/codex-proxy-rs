@@ -105,5 +105,5 @@ fn init_logging(config: &AppConfig) -> Result<Option<LogGuard>, crate::infra::lo
     }
 
     let rotation = RotationConfig::new(&config.logging.directory, config.logging.retention_days);
-    Ok(Some(init_tracing(rotation)?))
+    Ok(Some(init_tracing(&rotation)?))
 }

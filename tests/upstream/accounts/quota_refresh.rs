@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration as StdDuration};
+use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::database::connect_sqlite;
@@ -15,14 +15,6 @@ use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-
-#[test]
-fn quota_refresh_service_should_expose_default_request_spacing() {
-    assert_eq!(
-        RuntimeQuotaRefreshService::default_request_spacing(),
-        StdDuration::from_secs(3)
-    );
-}
 
 #[test]
 fn quota_from_usage_should_preserve_spend_control_individual_limit() {
@@ -207,7 +199,10 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
     let cookies = SqliteCookieStore::new(pool.clone());
     insert_quota_locked_account(&store, &pool, "acct-quota-cookie", "access-token-cookie").await;
     cookies
-        .set_cookie_header("acct-quota-cookie", "cf_clearance=quota-refresh")
+        .capture_set_cookie(
+            "acct-quota-cookie",
+            "cf_clearance=quota-refresh; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .expect("cookie should be stored");
     let codex = CodexBackendClient::new(
@@ -218,8 +213,9 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
     let service =
         RuntimeQuotaRefreshService::new(store, Arc::new(codex)).with_cookie_store(cookies);
 
+    let mut last_refreshed = HashMap::new();
     let summary = service
-        .refresh_locked_accounts_once()
+        .refresh_locked_accounts(&mut last_refreshed)
         .await
         .expect("quota refresh should succeed");
     let requests = server
@@ -297,8 +293,9 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
     );
     let service = RuntimeQuotaRefreshService::new(store.clone(), Arc::new(codex));
 
+    let mut last_refreshed = HashMap::new();
     let summary = service
-        .refresh_locked_accounts_once()
+        .refresh_locked_accounts(&mut last_refreshed)
         .await
         .expect("quota refresh should succeed");
     let stored = store
@@ -361,7 +358,10 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
     let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex))
         .with_request_spacing(StdDuration::from_millis(200));
 
-    let refresh = tokio::spawn(async move { service.refresh_locked_accounts_once().await });
+    let refresh = tokio::spawn(async move {
+        let mut last_refreshed = HashMap::new();
+        service.refresh_locked_accounts(&mut last_refreshed).await
+    });
     wait_for_usage_requests(&server, 1).await;
     tokio::time::sleep(StdDuration::from_millis(50)).await;
 

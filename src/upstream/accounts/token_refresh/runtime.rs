@@ -113,13 +113,6 @@ where
         self
     }
 
-    /// 执行一次到期刷新扫描。
-    pub async fn refresh_due_accounts_once(
-        &self,
-    ) -> TokenRefreshServiceResult<TokenRefreshSummary> {
-        self.refresh_due_accounts_once_at(Utc::now()).await
-    }
-
     /// 执行一次账号级刷新定时器调度。
     pub async fn schedule_account_timers_once(
         &self,
@@ -530,11 +523,8 @@ where
                 }
                 Ok(_) => return Ok(TokenRefreshOutcome::Skipped),
                 Err(RefreshError::RetryableTransport)
-                    if self.sleep_before_retry(attempt_index).await =>
-                {
-                    continue;
-                }
-                Err(RefreshError::RetryableTransport) | Err(RefreshError::Transport) => {
+                    if self.sleep_before_retry(attempt_index).await => {}
+                Err(RefreshError::RetryableTransport | RefreshError::Transport) => {
                     persist_status(&self.store, &attempt.id, AccountStatus::Active).await?;
                     let next_refresh_at = now + chrono::Duration::seconds(RECOVERY_DELAY_SECONDS);
                     persist_next_refresh_at(&self.store, &attempt.id, Some(next_refresh_at))

@@ -273,7 +273,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let pool = Arc::new(
         codex_proxy_rs::upstream::transport::websocket_pool::CodexWebSocketPool::new(
             8,
-            std::time::Duration::from_secs(60),
+            std::time::Duration::from_mins(1),
         ),
     );
     let backend = CodexBackendClient::new(

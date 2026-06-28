@@ -5,8 +5,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::time::{interval, sleep};
 use tracing::{info, warn};
 
-use crate::upstream::accounts::model::Account;
-use crate::upstream::accounts::store::AccountStore;
+use crate::upstream::accounts::{
+    model::Account, pool::RuntimeAccountPoolService, store::AccountStore,
+};
 use crate::upstream::models::{ModelRefreshResult, ModelService, ModelServiceError};
 
 use super::coordinator::SchedulerHandle;
@@ -15,6 +16,7 @@ use super::coordinator::SchedulerHandle;
 pub struct ModelRefreshTask {
     model_service: Arc<ModelService>,
     account_store: Arc<dyn AccountStore>,
+    account_pool: Arc<RuntimeAccountPoolService>,
     refresh_interval_secs: u64,
     initial_delay_ms: u64,
     retry_delay_ms: u64,
@@ -29,10 +31,15 @@ const MAX_RETRIES: u32 = 12;
 
 impl ModelRefreshTask {
     /// 构造默认任务。
-    pub fn new(model_service: Arc<ModelService>, account_store: Arc<dyn AccountStore>) -> Self {
+    pub fn new(
+        model_service: Arc<ModelService>,
+        account_store: Arc<dyn AccountStore>,
+        account_pool: Arc<RuntimeAccountPoolService>,
+    ) -> Self {
         Self {
             model_service,
             account_store,
+            account_pool,
             refresh_interval_secs: DEFAULT_REFRESH_INTERVAL_SECS,
             initial_delay_ms: INITIAL_DELAY_MS,
             retry_delay_ms: RETRY_DELAY_MS,
@@ -65,7 +72,7 @@ impl ModelRefreshTask {
                         info!("模型刷新任务在首次拉取前关闭");
                         return;
                     }
-                    _ = async {} => {}
+                    () = async {} => {}
                 }
 
                 match self.refresh_once().await {
@@ -98,7 +105,7 @@ impl ModelRefreshTask {
                                     info!("模型刷新任务在重试等待期间关闭");
                                     return;
                                 }
-                                _ = sleep(Duration::from_millis(self.retry_delay_ms)) => {}
+                                () = sleep(Duration::from_millis(self.retry_delay_ms)) => {}
                             }
                         }
                     }
@@ -130,16 +137,23 @@ impl ModelRefreshTask {
         SchedulerHandle::new(shutdown_tx)
     }
 
-    async fn refresh_once(&self) -> Result<ModelRefreshResult, ModelServiceError> {
+    /// 执行一次模型刷新并同步账号池模型计划约束。
+    pub async fn refresh_once(&self) -> Result<ModelRefreshResult, ModelServiceError> {
         let request_id = uuid::Uuid::new_v4().to_string();
         let accounts = self.load_accounts().await?;
-        self.model_service
+        let result = self
+            .model_service
             .refresh_backend_models_with_installation_id(
                 &accounts,
                 &request_id,
                 self.installation_id.as_deref(),
             )
-            .await
+            .await?;
+        let allowlist = self.model_service.model_plan_allowlist().await?;
+        self.account_pool
+            .apply_model_plan_allowlist(allowlist)
+            .await;
+        Ok(result)
     }
 
     async fn load_accounts(&self) -> Result<Vec<Account>, ModelServiceError> {

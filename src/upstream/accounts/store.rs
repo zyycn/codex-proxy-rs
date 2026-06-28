@@ -350,61 +350,6 @@ select
 from account_model_usage
 order by account_id asc, request_count desc, last_used_at desc, model asc";
 
-const GET_USAGE_SQL: &str = r"
-select
-  account_id,
-  request_count,
-  empty_response_count,
-  input_tokens,
-  output_tokens,
-  cached_tokens,
-  reasoning_tokens,
-  total_tokens,
-  image_input_tokens,
-  image_output_tokens,
-  image_request_count,
-  image_request_failed_count,
-  window_request_count,
-  window_input_tokens,
-  window_output_tokens,
-  window_cached_tokens,
-  window_image_input_tokens,
-  window_image_output_tokens,
-  window_image_request_count,
-  window_image_request_failed_count,
-  window_started_at,
-  window_reset_at,
-  limit_window_seconds,
-  last_used_at
-from account_usage
-where account_id = ?";
-
-const RESET_USAGE_SQL: &str = r"
-update account_usage
-set
-  request_count = 0,
-  empty_response_count = 0,
-  input_tokens = 0,
-  output_tokens = 0,
-  cached_tokens = 0,
-  reasoning_tokens = 0,
-  total_tokens = 0,
-  image_input_tokens = 0,
-  image_output_tokens = 0,
-  image_request_count = 0,
-  image_request_failed_count = 0,
-  window_request_count = 0,
-  window_input_tokens = 0,
-  window_output_tokens = 0,
-  window_cached_tokens = 0,
-  window_image_input_tokens = 0,
-  window_image_output_tokens = 0,
-  window_image_request_count = 0,
-  window_image_request_failed_count = 0,
-  window_started_at = null,
-  last_used_at = null
-where account_id = ?";
-
 const LIST_QUOTA_SNAPSHOTS_SQL: &str = r"
 select
   id,
@@ -585,8 +530,6 @@ set
   updated_at = ?
 where id = ?";
 
-const DELETE_ALL_ACCOUNTS_SQL: &str = "delete from accounts";
-
 const DELETE_ACCOUNT_SQL: &str = "delete from accounts where id = ?";
 
 // ============================================================================
@@ -755,59 +698,6 @@ impl AccountMetadataUpdate {
             || self.plan_type.is_some()
             || self.status.is_some()
     }
-}
-
-/// 账号用量记录。
-#[derive(Debug, Clone)]
-pub struct AccountUsageRecord {
-    /// 账号 ID。
-    pub account_id: String,
-    /// 历史请求总数。
-    pub request_count: i64,
-    /// 历史空响应次数。
-    pub empty_response_count: i64,
-    /// 累计输入 token。
-    pub input_tokens: i64,
-    /// 累计输出 token。
-    pub output_tokens: i64,
-    /// 累计缓存 token。
-    pub cached_tokens: i64,
-    /// 累计 reasoning token。
-    pub reasoning_tokens: i64,
-    /// 累计总 token。
-    pub total_tokens: i64,
-    /// 累计图片输入 token。
-    pub image_input_tokens: i64,
-    /// 累计图片输出 token。
-    pub image_output_tokens: i64,
-    /// 累计图片请求成功次数。
-    pub image_request_count: i64,
-    /// 累计图片请求失败次数。
-    pub image_request_failed_count: i64,
-    /// 当前窗口请求数。
-    pub window_request_count: i64,
-    /// 当前窗口输入 token。
-    pub window_input_tokens: i64,
-    /// 当前窗口输出 token。
-    pub window_output_tokens: i64,
-    /// 当前窗口缓存 token。
-    pub window_cached_tokens: i64,
-    /// 当前窗口图片输入 token。
-    pub window_image_input_tokens: i64,
-    /// 当前窗口图片输出 token。
-    pub window_image_output_tokens: i64,
-    /// 当前窗口图片请求数。
-    pub window_image_request_count: i64,
-    /// 当前窗口图片请求失败数。
-    pub window_image_request_failed_count: i64,
-    /// 当前窗口起始时间。
-    pub window_started_at: Option<DateTime<Utc>>,
-    /// 当前窗口重置时间。
-    pub window_reset_at: Option<DateTime<Utc>>,
-    /// 限流窗口大小。
-    pub limit_window_seconds: Option<u64>,
-    /// 最近使用时间。
-    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// 账号模型维度用量记录。
@@ -1010,8 +900,7 @@ impl SqliteAccountStore {
             .bind(
                 account
                     .added_at
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                    .map_or_else(|| Utc::now().to_rfc3339(), |dt| dt.to_rfc3339()),
             )
             .bind(&now)
             .execute(&self.pool)
@@ -1061,7 +950,7 @@ impl SqliteAccountStore {
                 .fetch_all(&self.pool)
                 .await?;
             Ok(to_page(
-                rows,
+                &rows,
                 limit,
                 stored_account_from_row,
                 ("added_at", "id"),
@@ -1072,7 +961,7 @@ impl SqliteAccountStore {
                 .fetch_all(&self.pool)
                 .await?;
             Ok(to_page(
-                rows,
+                &rows,
                 limit,
                 stored_account_from_row,
                 ("added_at", "id"),
@@ -1097,13 +986,13 @@ impl SqliteAccountStore {
                 .bind(limit + 1)
                 .fetch_all(&self.pool)
                 .await?;
-            Ok(to_page(rows, limit, metadata_from_row, ("added_at", "id")))
+            Ok(to_page(&rows, limit, metadata_from_row, ("added_at", "id")))
         } else {
             let rows = sqlx::query(LIST_ACCOUNT_METADATA_SQL)
                 .bind(limit + 1)
                 .fetch_all(&self.pool)
                 .await?;
-            Ok(to_page(rows, limit, metadata_from_row, ("added_at", "id")))
+            Ok(to_page(&rows, limit, metadata_from_row, ("added_at", "id")))
         }
     }
 
@@ -1426,27 +1315,6 @@ impl SqliteAccountStore {
         rows.iter().map(model_usage_from_row).collect()
     }
 
-    /// 获取用量记录。
-    pub async fn get_usage(
-        &self,
-        account_id: &str,
-    ) -> SqliteAccountStoreResult<Option<AccountUsageRecord>> {
-        let row = sqlx::query(GET_USAGE_SQL)
-            .bind(account_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        row.as_ref().map(usage_from_row).transpose()
-    }
-
-    /// 重置用量。
-    pub async fn reset_usage(&self, account_id: &str) -> SqliteAccountStoreResult<bool> {
-        let result = sqlx::query(RESET_USAGE_SQL)
-            .bind(account_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
     /// 读取配额快照列表。
     pub async fn list_quota_snapshots(
         &self,
@@ -1551,10 +1419,11 @@ impl SqliteAccountStore {
         let should_reset = existing
             .as_ref()
             .map(|row| {
-                let existing_reset_at =
-                    parse_optional_rfc3339(row.get::<Option<String>, _>("window_reset_at"))
-                        .ok()
-                        .flatten();
+                let existing_reset_at = parse_optional_rfc3339(
+                    row.get::<Option<String>, _>("window_reset_at").as_deref(),
+                )
+                .ok()
+                .flatten();
                 let existing_limit_window_seconds =
                     optional_positive_i64_to_u64(row.get::<Option<i64>, _>("limit_window_seconds"));
                 should_reset_usage_window(
@@ -1587,14 +1456,6 @@ impl SqliteAccountStore {
         Ok(())
     }
 
-    /// 删除全部账号。
-    pub async fn delete_all(&self) -> SqliteAccountStoreResult<u64> {
-        let result = sqlx::query(DELETE_ALL_ACCOUNTS_SQL)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-
     /// 删除单个账号。
     pub async fn delete(&self, account_id: &str) -> SqliteAccountStoreResult<bool> {
         let result = sqlx::query(DELETE_ACCOUNT_SQL)
@@ -1622,16 +1483,6 @@ impl SqliteAccountStore {
             .map_err(SqliteAccountStoreError::Database)?;
         Ok(result.rows_affected() > 0)
     }
-
-    /// 按 ID 删除账号。
-    pub async fn delete_account(&self, account_id: &str) -> Result<bool, SqliteAccountStoreError> {
-        let result = sqlx::query("DELETE FROM accounts WHERE id = ?1")
-            .bind(account_id)
-            .execute(&self.pool)
-            .await
-            .map_err(SqliteAccountStoreError::Database)?;
-        Ok(result.rows_affected() > 0)
-    }
 }
 
 #[async_trait]
@@ -1639,13 +1490,13 @@ impl AccountStore for SqliteAccountStore {
     async fn list_pool_accounts(&self) -> AccountStoreResult<Vec<Account>> {
         list_pool_accounts(self)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn get_pool_account(&self, account_id: &str) -> AccountStoreResult<Option<Account>> {
         get_pool_account(self, account_id)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn mark_quota_limited_until(
@@ -1655,7 +1506,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<bool> {
         SqliteAccountStore::mark_quota_limited_until(self, account_id, cooldown_until)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn set_cloudflare_cooldown_until(
@@ -1665,7 +1516,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<bool> {
         SqliteAccountStore::set_cloudflare_cooldown_until(self, account_id, cooldown_until)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn set_status(
@@ -1675,7 +1526,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<bool> {
         SqliteAccountStore::set_status(self, account_id, status)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn record_usage_delta(
@@ -1685,7 +1536,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<()> {
         self.record_usage(account_id, sqlite_usage_delta(usage))
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn record_model_usage_delta(
@@ -1696,13 +1547,13 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<()> {
         self.record_model_usage(account_id, model, usage)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>> {
         SqliteAccountStore::get_quota_json(self, account_id)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn update_quota_json(
@@ -1712,7 +1563,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<bool> {
         SqliteAccountStore::update_quota_json(self, account_id, quota_json)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn apply_quota_snapshot(
@@ -1730,7 +1581,7 @@ impl AccountStore for SqliteAccountStore {
             cooldown_until,
         )
         .await
-        .map_err(map_account_store_error)
+        .map_err(|error| map_account_store_error(&error))
     }
 
     async fn sync_rate_limit_window(
@@ -1741,7 +1592,7 @@ impl AccountStore for SqliteAccountStore {
     ) -> AccountStoreResult<()> {
         SqliteAccountStore::sync_rate_limit_window(self, account_id, reset_at, limit_window_seconds)
             .await
-            .map_err(map_account_store_error)
+            .map_err(|error| map_account_store_error(&error))
     }
 }
 
@@ -1784,17 +1635,22 @@ fn pool_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<Account> {
         access_token: row.get("access_token"),
         refresh_token: row.get("refresh_token"),
         access_token_expires_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("access_token_expires_at"),
+            row.get::<Option<String>, _>("access_token_expires_at")
+                .as_deref(),
         )?,
-        next_refresh_at: parse_optional_rfc3339(row.get::<Option<String>, _>("next_refresh_at"))?,
+        next_refresh_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("next_refresh_at").as_deref(),
+        )?,
         status: status_from_db(&row.get::<String, _>("status"))?,
         quota_limit_reached: row.get::<i64, _>("quota_limit_reached") != 0,
         quota_verify_required: row.get::<i64, _>("quota_verify_required") != 0,
         quota_cooldown_until: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("quota_cooldown_until"),
+            row.get::<Option<String>, _>("quota_cooldown_until")
+                .as_deref(),
         )?,
         cloudflare_cooldown_until: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("cloudflare_cooldown_until"),
+            row.get::<Option<String>, _>("cloudflare_cooldown_until")
+                .as_deref(),
         )?,
         request_count: nonnegative_i64_to_u64(row.get::<i64, _>("usage_request_count")),
         empty_response_count: nonnegative_i64_to_u64(
@@ -1829,10 +1685,12 @@ fn pool_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<Account> {
             row.get::<i64, _>("usage_window_image_request_failed_count"),
         ),
         window_started_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("usage_window_started_at"),
+            row.get::<Option<String>, _>("usage_window_started_at")
+                .as_deref(),
         )?,
         window_reset_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("usage_window_reset_at"),
+            row.get::<Option<String>, _>("usage_window_reset_at")
+                .as_deref(),
         )?,
         limit_window_seconds: optional_positive_i64_to_u64(
             row.get::<Option<i64>, _>("usage_limit_window_seconds"),
@@ -1855,9 +1713,12 @@ fn stored_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<StoredAc
             .get::<Option<String>, _>("refresh_token")
             .map(|token| SecretString::new(token.into())),
         access_token_expires_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("access_token_expires_at"),
+            row.get::<Option<String>, _>("access_token_expires_at")
+                .as_deref(),
         )?,
-        next_refresh_at: parse_optional_rfc3339(row.get::<Option<String>, _>("next_refresh_at"))?,
+        next_refresh_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("next_refresh_at").as_deref(),
+        )?,
         status: status_from_db(&row.get::<String, _>("status"))?,
         added_at: row.get("added_at"),
         updated_at: row.get("updated_at"),
@@ -1873,7 +1734,8 @@ fn metadata_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<StoredAccountM
         label: row.get("label"),
         plan_type: row.get("plan_type"),
         access_token_expires_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("access_token_expires_at"),
+            row.get::<Option<String>, _>("access_token_expires_at")
+                .as_deref(),
         )?,
         status: status_from_db(&row.get::<String, _>("status"))?,
         added_at: row.get("added_at"),
@@ -1881,7 +1743,7 @@ fn metadata_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<StoredAccountM
     })
 }
 
-fn map_account_store_error(error: impl ToString) -> AccountStoreError {
+fn map_account_store_error(error: &impl ToString) -> AccountStoreError {
     AccountStoreError::OperationFailed {
         message: error.to_string(),
     }
@@ -1958,39 +1820,6 @@ fn quota_plan_type(quota_json: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn usage_from_row(row: &sqlx::sqlite::SqliteRow) -> SqliteAccountStoreResult<AccountUsageRecord> {
-    Ok(AccountUsageRecord {
-        account_id: row.get("account_id"),
-        request_count: row.get("request_count"),
-        empty_response_count: row.get("empty_response_count"),
-        input_tokens: row.get("input_tokens"),
-        output_tokens: row.get("output_tokens"),
-        cached_tokens: row.get("cached_tokens"),
-        reasoning_tokens: row.get("reasoning_tokens"),
-        total_tokens: row.get("total_tokens"),
-        image_input_tokens: row.get("image_input_tokens"),
-        image_output_tokens: row.get("image_output_tokens"),
-        image_request_count: row.get("image_request_count"),
-        image_request_failed_count: row.get("image_request_failed_count"),
-        window_request_count: row.get("window_request_count"),
-        window_input_tokens: row.get("window_input_tokens"),
-        window_output_tokens: row.get("window_output_tokens"),
-        window_cached_tokens: row.get("window_cached_tokens"),
-        window_image_input_tokens: row.get("window_image_input_tokens"),
-        window_image_output_tokens: row.get("window_image_output_tokens"),
-        window_image_request_count: row.get("window_image_request_count"),
-        window_image_request_failed_count: row.get("window_image_request_failed_count"),
-        window_started_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("window_started_at"),
-        )?,
-        window_reset_at: parse_optional_rfc3339(row.get::<Option<String>, _>("window_reset_at"))?,
-        limit_window_seconds: optional_positive_i64_to_u64(
-            row.get::<Option<i64>, _>("limit_window_seconds"),
-        ),
-        last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
-    })
-}
-
 fn model_usage_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> SqliteAccountStoreResult<AccountModelUsageRecord> {
@@ -2002,7 +1831,9 @@ fn model_usage_from_row(
         input_tokens: row.get("input_tokens"),
         output_tokens: row.get("output_tokens"),
         cached_tokens: row.get("cached_tokens"),
-        last_used_at: parse_optional_rfc3339(row.get::<Option<String>, _>("last_used_at"))?,
+        last_used_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("last_used_at").as_deref(),
+        )?,
     })
 }
 
@@ -2013,7 +1844,9 @@ fn quota_snapshot_from_row(
         account_id: row.get("id"),
         email: row.get("email"),
         quota_json: row.get("quota_json"),
-        quota_fetched_at: parse_optional_rfc3339(row.get::<Option<String>, _>("quota_fetched_at"))?,
+        quota_fetched_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("quota_fetched_at").as_deref(),
+        )?,
     })
 }
 
@@ -2044,10 +1877,8 @@ fn status_from_db(value: &str) -> SqliteAccountStoreResult<AccountStatus> {
     }
 }
 
-fn parse_optional_rfc3339(
-    value: Option<String>,
-) -> SqliteAccountStoreResult<Option<DateTime<Utc>>> {
-    value.as_deref().map(parse_rfc3339).transpose()
+fn parse_optional_rfc3339(value: Option<&str>) -> SqliteAccountStoreResult<Option<DateTime<Utc>>> {
+    value.map(parse_rfc3339).transpose()
 }
 
 fn parse_rfc3339(value: &str) -> SqliteAccountStoreResult<DateTime<Utc>> {
@@ -2055,7 +1886,7 @@ fn parse_rfc3339(value: &str) -> SqliteAccountStoreResult<DateTime<Utc>> {
 }
 
 fn nonnegative_i64_to_u64(value: i64) -> u64 {
-    value.max(0) as u64
+    value.max(0).cast_unsigned()
 }
 
 fn u64_to_i64_saturating(value: u64) -> i64 {
@@ -2075,7 +1906,7 @@ async fn count_account_metadata(
     let mut builder = QueryBuilder::<Sqlite>::new("select count(*) from accounts");
     push_account_metadata_search(&mut builder, search);
     let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
-    Ok(total.max(0) as u64)
+    Ok(total.max(0).cast_unsigned())
 }
 
 fn push_account_metadata_search(builder: &mut QueryBuilder<Sqlite>, search: Option<&str>) {
@@ -2097,7 +1928,7 @@ fn push_account_metadata_search(builder: &mut QueryBuilder<Sqlite>, search: Opti
 }
 
 fn to_page<T>(
-    rows: Vec<SqliteRow>,
+    rows: &[SqliteRow],
     limit: u32,
     mapper: impl Fn(&SqliteRow) -> SqliteAccountStoreResult<T>,
     cursor_fields: (&str, &str),

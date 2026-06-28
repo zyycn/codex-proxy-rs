@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 #[test]
 fn admin_envelope_should_not_duplicate_request_id_in_body() {
-    let body = AdminEnvelope::ok(json!({ "id": "acct_1" }), "req_1");
+    let body = AdminEnvelope::ok(json!({ "id": "acct_1" }));
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -31,7 +31,7 @@ fn admin_page_envelope_should_expose_items_and_page_metadata_inside_data() {
         items: vec![json!({ "id": "evt_1" })],
         next_cursor: Some("cursor_1".to_string()),
     };
-    let body = AdminPageEnvelope::ok(page, 50, "req_1");
+    let body = AdminPageEnvelope::ok(page, 50);
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -57,7 +57,7 @@ fn admin_page_envelope_should_skip_empty_next_cursor() {
         items: vec![json!({ "id": "evt_1" })],
         next_cursor: None,
     };
-    let body = AdminPageEnvelope::ok(page, 50, "req_1");
+    let body = AdminPageEnvelope::ok(page, 50);
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -84,7 +84,7 @@ fn admin_page_envelope_should_expose_numbered_page_metadata() {
         page: 2,
         page_size: 10,
     };
-    let body = AdminPageEnvelope::numbered(page, "req_1");
+    let body = AdminPageEnvelope::numbered(page);
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -108,7 +108,7 @@ fn admin_page_envelope_should_expose_numbered_page_metadata() {
 
 #[test]
 fn admin_response_should_keep_http_status_separate_from_body_code() {
-    let body = AdminEnvelope::new(40101, "Admin login required", (), "req_1");
+    let body = AdminEnvelope::new(40101, "Admin login required", ());
     let response: Response = AdminResponse::new(StatusCode::UNAUTHORIZED, body).into_response();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -116,7 +116,7 @@ fn admin_response_should_keep_http_status_separate_from_body_code() {
 
 #[test]
 fn admin_error_body_should_use_null_data() {
-    let body = AdminEnvelope::new(40101, "Admin login required", (), "req_1");
+    let body = AdminEnvelope::new(40101, "Admin login required", ());
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -125,13 +125,8 @@ fn admin_error_body_should_use_null_data() {
 
 #[tokio::test]
 async fn admin_error_into_response_should_use_admin_envelope() {
-    let response: Response = AdminError::new(
-        StatusCode::UNAUTHORIZED,
-        40101,
-        "Admin login required",
-        "req_1",
-    )
-    .into_response();
+    let response: Response =
+        AdminError::new(StatusCode::UNAUTHORIZED, 40101, "Admin login required").into_response();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();

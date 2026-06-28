@@ -15,15 +15,15 @@ fn account_pool_should_respect_max_concurrent_slots_per_account() {
         AccountStatus::Active,
     ));
 
-    let first = pool.acquire("gpt-5.5").unwrap();
-    let second = pool.acquire("gpt-5.5").unwrap();
-    let third = pool.acquire("gpt-5.5");
+    let first = acquire_account(&mut pool, "gpt-5.5").unwrap();
+    let second = acquire_account(&mut pool, "gpt-5.5").unwrap();
+    let third = acquire_account(&mut pool, "gpt-5.5");
 
     assert_ne!(first.id, second.id);
     assert!(third.is_none());
 
     pool.release(&first.id);
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, first.id);
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, first.id);
 }
 
 #[test]
@@ -46,10 +46,10 @@ fn account_pool_should_rotate_round_robin_across_candidates() {
         AccountStatus::Active,
     ));
 
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_a");
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_c");
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_b");
-    assert!(pool.acquire("gpt-5.5").is_none());
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "acct_a");
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "acct_c");
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "acct_b");
+    assert!(acquire_account(&mut pool, "gpt-5.5").is_none());
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn acquire_should_skip_accounts_with_expired_token_metadata() {
     let mut pool = AccountPool::default();
     pool.insert(expired);
 
-    let acquired = pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
+    let acquired = pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now));
 
     assert!(acquired.is_none());
 }
@@ -74,7 +74,7 @@ fn acquire_should_skip_accounts_with_expired_jwt_when_metadata_is_missing() {
     let mut pool = AccountPool::default();
     pool.insert(expired);
 
-    let acquired = pool.acquire_with(AccountAcquireRequest::new("gpt-5.5", now));
+    let acquired = pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now));
 
     assert!(acquired.is_none());
 }
@@ -108,7 +108,7 @@ async fn runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_d
     runtime_pool.restore_from_repository().await.unwrap();
 
     let acquired = runtime_pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
         .await;
     let status: (String,) = sqlx::query_as("select status from accounts where id = ?")
         .bind("acct_expired")
@@ -133,7 +133,7 @@ fn account_pool_should_prefer_configured_tier_priority() {
     pool.insert(free);
     pool.insert(team);
 
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "team");
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "team");
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn account_pool_should_filter_by_model_plan_allowlist() {
     pool.insert(free);
     pool.insert(plus);
 
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "plus");
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "plus");
 }
 
 #[test]
@@ -172,8 +172,8 @@ fn account_pool_should_filter_by_model_account_routes() {
         AccountStatus::Active,
     ));
 
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "acct_b");
-    assert!(pool.acquire("gpt-5.5").is_none());
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "acct_b");
+    assert!(acquire_account(&mut pool, "gpt-5.5").is_none());
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn account_pool_should_exclude_requested_account_ids() {
 
     let acquired = pool
         .acquire_with(
-            AccountAcquireRequest::new("gpt-5.5", fixed_time())
+            &AccountAcquireRequest::new("gpt-5.5", fixed_time())
                 .with_exclude_account_ids(["acct_a"]),
         )
         .unwrap();
@@ -212,7 +212,8 @@ fn account_pool_should_prefer_session_affinity_account_when_available() {
 
     let acquired = pool
         .acquire_with(
-            AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_preferred_account_id("acct_b"),
+            &AccountAcquireRequest::new("gpt-5.5", fixed_time())
+                .with_preferred_account_id("acct_b"),
         )
         .unwrap();
 
@@ -233,10 +234,10 @@ fn account_pool_should_cleanup_stale_slots_before_acquire() {
     ));
 
     assert!(pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .is_some());
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new(
+        .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
             now + Duration::minutes(5) + Duration::seconds(1),
         ))
@@ -261,9 +262,9 @@ fn account_pool_should_rotate_tied_least_used_accounts() {
         AccountStatus::Active,
     ));
 
-    let first = pool.acquire("gpt-5.5").unwrap();
+    let first = acquire_account(&mut pool, "gpt-5.5").unwrap();
     pool.release(&first.id);
-    let second = pool.acquire("gpt-5.5").unwrap();
+    let second = acquire_account(&mut pool, "gpt-5.5").unwrap();
 
     assert_ne!(first.id, second.id);
 }
@@ -283,7 +284,7 @@ fn least_used_should_prefer_lower_runtime_request_count() {
     pool.insert(quiet);
 
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert_eq!(acquired.account.id, "quiet");

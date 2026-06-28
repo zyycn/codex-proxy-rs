@@ -164,27 +164,6 @@ pub struct AccountWindowUsageDelta {
     pub image_request_failed: bool,
 }
 
-/// 账号池状态摘要。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AccountPoolStatusSummary {
-    /// 账号总数。
-    pub total: usize,
-    /// 可调度账号数。
-    pub active: usize,
-    /// token 过期账号数。
-    pub expired: usize,
-    /// 配额耗尽账号数。
-    pub quota_exhausted: usize,
-    /// 处于限流冷却的账号数。
-    pub rate_limited: usize,
-    /// 正在刷新账号数。
-    pub refreshing: usize,
-    /// 禁用账号数。
-    pub disabled: usize,
-    /// 封禁账号数。
-    pub banned: usize,
-}
-
 /// 纯内存账号池，负责账号调度和运行时状态维护。
 #[derive(Debug)]
 pub struct AccountPool {
@@ -238,28 +217,9 @@ impl AccountPool {
         self.least_used_cursor = 0;
     }
 
-    /// 替换模型计划 allowlist。
-    pub fn set_model_plan_allowlist(&mut self, allowlist: BTreeMap<String, Vec<String>>) {
-        self.options.model_plan_allowlist = allowlist;
-    }
-
-    /// 替换模型账号路由。
-    pub fn set_model_account_routes(&mut self, routes: BTreeMap<String, Vec<String>>) {
-        self.options.model_account_routes = routes;
-    }
-
     /// 替换账号池运行参数。
     pub fn set_options(&mut self, options: AccountPoolOptions) {
         self.options = options;
-    }
-
-    /// 更新账号标签。
-    pub fn set_label(&mut self, account_id: &str, label: Option<String>) -> bool {
-        let Some(account) = self.accounts.get_mut(account_id) else {
-            return false;
-        };
-        account.label = label;
-        true
     }
 
     /// 更新账号状态。
@@ -271,30 +231,6 @@ impl AccountPool {
         if status != AccountStatus::Active {
             self.slots.remove(account_id);
         }
-        true
-    }
-
-    /// 重置账号累计和窗口用量。
-    pub fn reset_usage(&mut self, account_id: &str) -> bool {
-        let Some(account) = self.accounts.get_mut(account_id) else {
-            return false;
-        };
-        account.last_used_at = None;
-        account.request_count = 0;
-        account.empty_response_count = 0;
-        account.image_input_tokens = 0;
-        account.image_output_tokens = 0;
-        account.image_request_count = 0;
-        account.image_request_failed_count = 0;
-        account.window_request_count = 0;
-        account.window_input_tokens = 0;
-        account.window_output_tokens = 0;
-        account.window_cached_tokens = 0;
-        account.window_image_input_tokens = 0;
-        account.window_image_output_tokens = 0;
-        account.window_image_request_count = 0;
-        account.window_image_request_failed_count = 0;
-        account.window_started_at = account.window_reset_at.map(|_| Utc::now());
         true
     }
 
@@ -324,15 +260,6 @@ impl AccountPool {
             account.limit_window_seconds.get_or_insert(seconds);
         }
         self.slots.remove(account_id);
-        true
-    }
-
-    /// 设置账号是否需要额外配额校验。
-    pub fn set_quota_verify_required(&mut self, account_id: &str, required: bool) -> bool {
-        let Some(account) = self.accounts.get_mut(account_id) else {
-            return false;
-        };
-        account.quota_verify_required = required;
         true
     }
 
@@ -433,24 +360,18 @@ impl AccountPool {
         true
     }
 
-    /// 使用当前时间为指定模型获取账号。
-    pub fn acquire(&mut self, model: &str) -> Option<Account> {
-        self.acquire_with(AccountAcquireRequest::new(model, Utc::now()))
-            .map(|acquired| acquired.account)
-    }
-
     /// 使用完整调度请求获取账号。
-    pub fn acquire_with(&mut self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
+    pub fn acquire_with(&mut self, request: &AccountAcquireRequest) -> Option<AcquiredAccount> {
         self.acquire_with_status_refresh(request).acquired
     }
 
     fn acquire_with_status_refresh(
         &mut self,
-        request: AccountAcquireRequest,
+        request: &AccountAcquireRequest,
     ) -> AccountAcquireWithStatusRefresh {
         self.cleanup_stale_slots(request.now);
         let expired_account_ids = self.refresh_account_statuses(request.now);
-        let candidates = self.candidates(&request);
+        let candidates = self.candidates(request);
         let selected = if let Some(preferred_account_id) = &request.preferred_account_id {
             let preferred = candidates
                 .iter()
@@ -473,7 +394,7 @@ impl AccountPool {
                     (account, previous)
                 }
                 RotationStrategy::Sticky => {
-                    let account = self.select_sticky(&candidates)?;
+                    let account = Self::select_sticky(&candidates)?;
                     let previous = self.previous_slot_at(&account.id);
                     (account, previous)
                 }
@@ -562,47 +483,6 @@ impl AccountPool {
         }
     }
 
-    /// 计算账号池状态摘要。
-    pub fn status_summary(&mut self, now: DateTime<Utc>) -> AccountPoolStatusSummary {
-        self.cleanup_stale_slots(now);
-        self.refresh_account_statuses(now);
-        let mut summary = AccountPoolStatusSummary {
-            total: self.accounts.len(),
-            ..AccountPoolStatusSummary::default()
-        };
-        for account in self.accounts.values() {
-            match account.status {
-                AccountStatus::Active
-                    if !AccountService::quota_available_at(
-                        account,
-                        now,
-                        self.options.skip_quota_limited,
-                    ) =>
-                {
-                    summary.rate_limited += 1;
-                }
-                AccountStatus::Active => summary.active += 1,
-                AccountStatus::Expired => summary.expired += 1,
-                AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
-                AccountStatus::Refreshing => summary.refreshing += 1,
-                AccountStatus::Disabled => summary.disabled += 1,
-                AccountStatus::Banned => summary.banned += 1,
-            }
-        }
-        summary
-    }
-
-    /// 获取所有处于配额锁定状态的账号 ID。
-    pub fn list_quota_locked_accounts(&self) -> Vec<String> {
-        self.accounts
-            .values()
-            .filter(|account| {
-                account.status == AccountStatus::Active && account.quota_limit_reached
-            })
-            .map(|account| account.id.clone())
-            .collect()
-    }
-
     fn select_least_used(&mut self, candidates: &[Account]) -> Option<Account> {
         let best_key = candidates
             .iter()
@@ -618,7 +498,7 @@ impl AccountPool {
         Some((*tied[index]).clone())
     }
 
-    fn select_sticky(&self, candidates: &[Account]) -> Option<Account> {
+    fn select_sticky(candidates: &[Account]) -> Option<Account> {
         candidates
             .iter()
             .max_by_key(|account| account.last_used_at.clone())
@@ -793,13 +673,23 @@ impl RuntimeAccountPoolService {
     }
 
     /// 更新账号池运行参数。
-    pub async fn apply_options(&self, options: AccountPoolOptions, request_interval_ms: u64) {
-        self.pool.lock().await.set_options(options);
+    pub async fn apply_options(&self, mut options: AccountPoolOptions, request_interval_ms: u64) {
+        let mut pool = self.pool.lock().await;
+        options.model_plan_allowlist = pool.options.model_plan_allowlist.clone();
+        pool.set_options(options);
         *self
             .request_interval
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             StdDuration::from_millis(request_interval_ms);
+    }
+
+    /// 更新模型到可用账号计划的调度约束。
+    pub(crate) async fn apply_model_plan_allowlist(
+        &self,
+        model_plan_allowlist: BTreeMap<String, Vec<String>>,
+    ) {
+        self.pool.lock().await.options.model_plan_allowlist = model_plan_allowlist;
     }
 
     /// 从持久化账号恢复运行时账号池。
@@ -816,11 +706,6 @@ impl RuntimeAccountPoolService {
             pool.insert(account);
         }
         Ok(count)
-    }
-
-    /// 清空运行时账号池。
-    pub async fn clear(&self) {
-        self.pool.lock().await.clear();
     }
 
     /// 读取账号池容量摘要。
@@ -877,7 +762,7 @@ impl RuntimeAccountPoolService {
     }
 
     /// 按请求上下文获取可用账号。
-    pub async fn acquire_with(&self, request: AccountAcquireRequest) -> Option<AcquiredAccount> {
+    pub async fn acquire_with(&self, request: &AccountAcquireRequest) -> Option<AcquiredAccount> {
         let model = request.model.clone();
         let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
         self.persist_expired_statuses(refresh.expired_account_ids)
@@ -1162,11 +1047,6 @@ impl RuntimeAccountPoolService {
         self.pool.lock().await.remove(account_id)
     }
 
-    /// 从运行时账号池删除账号。
-    pub async fn delete_account(&self, account_id: &str) -> bool {
-        self.remove_account(account_id).await
-    }
-
     /// 从仓储同步单个账号到运行时账号池。
     pub async fn sync_account_from_repository(
         &self,
@@ -1183,11 +1063,6 @@ impl RuntimeAccountPoolService {
             return Ok(true);
         }
         Ok(pool.remove(account_id))
-    }
-
-    /// 重置运行时账号用量。
-    pub async fn reset_usage(&self, account_id: &str) -> bool {
-        self.pool.lock().await.reset_usage(account_id)
     }
 
     /// 设置 Cloudflare 冷却状态。
@@ -1298,7 +1173,11 @@ fn next_window_reset_at(
         return None;
     }
 
-    let elapsed_seconds = now.signed_duration_since(reset_at).num_seconds().max(0) as u64;
+    let elapsed_seconds = now
+        .signed_duration_since(reset_at)
+        .num_seconds()
+        .max(0)
+        .cast_unsigned();
     let windows_to_advance = elapsed_seconds / window_seconds + 1;
     let advance_seconds = window_seconds
         .saturating_mul(windows_to_advance)
@@ -1342,7 +1221,7 @@ fn compare_least_used_group(a: &LeastUsedGroupKey, b: &LeastUsedGroupKey) -> Ord
 fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_), None) | (None, Some(_)) | (None, None) => Ordering::Equal,
+        (Some(_) | None, None) | (None, Some(_)) => Ordering::Equal,
     }
 }
 

@@ -104,7 +104,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
             websocket.send(Message::Text(payload.into())).await.unwrap();
         }
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_secs(60)));
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -132,73 +132,6 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
     assert!(response
         .body
         .contains("resp_6f8d0c2b5a4e4a0d9c1b7e3f2a8d5c6b"));
-}
-
-#[test]
-fn websocket_connection_should_render_raw_opening_bytes_for_capture_parity() {
-    let connection =
-        CodexWebSocketConnection::responses(
-            "https://chatgpt.com/backend-api",
-            "test-websocket-key",
-            vec![
-                (
-                    "chatgpt-account-id".to_string(),
-                    "chatgpt-account".to_string(),
-                ),
-                (
-                    "authorization".to_string(),
-                    "Bearer access-token".to_string(),
-                ),
-                (
-                    "user-agent".to_string(),
-                    "Codex Desktop/26.519.81530 (darwin; arm64)".to_string(),
-                ),
-                ("originator".to_string(), "Codex Desktop".to_string()),
-                (
-                    "openai-beta".to_string(),
-                    "responses_websockets=2026-02-06".to_string(),
-                ),
-                (
-                    "x-codex-beta-features".to_string(),
-                    "terminal_resize_reflow,memories,network_proxy,prevent_idle_sleep,remote_compaction_v2".to_string(),
-                ),
-                ("x-client-request-id".to_string(), "session-1".to_string()),
-                ("session-id".to_string(), "session-1".to_string()),
-                ("thread-id".to_string(), "session-1".to_string()),
-                ("x-codex-window-id".to_string(), "session-1:0".to_string()),
-                (
-                    "x-codex-turn-metadata".to_string(),
-                    r#"{"installation_id":"install-1","session_id":"session-1","thread_id":"session-1","turn_id":"","window_id":"session-1:0","request_kind":"prewarm","sandbox":"seccomp"}"#.to_string(),
-                ),
-            ],
-        );
-
-    let opening = connection.opening_request_text();
-
-    assert!(opening.starts_with("GET /backend-api/codex/responses HTTP/1.1\r\n"));
-    assert_substrings_appear_in_order(
-        &opening,
-        &[
-            "Host: chatgpt.com\r\n",
-            "Connection: Upgrade\r\n",
-            "Upgrade: websocket\r\n",
-            "Sec-WebSocket-Version: 13\r\n",
-            "Sec-WebSocket-Key: test-websocket-key\r\n",
-            "chatgpt-account-id: chatgpt-account\r\n",
-            "authorization: Bearer access-token\r\n",
-            "user-agent: Codex Desktop/26.519.81530 (darwin; arm64)\r\n",
-            "originator: Codex Desktop\r\n",
-            "openai-beta: responses_websockets=2026-02-06\r\n",
-            "x-codex-beta-features: terminal_resize_reflow,memories,network_proxy,prevent_idle_sleep,remote_compaction_v2\r\n",
-            "x-client-request-id: session-1\r\n",
-            "session-id: session-1\r\n",
-            "thread-id: session-1\r\n",
-            "x-codex-window-id: session-1:0\r\n",
-            r#"x-codex-turn-metadata: {"installation_id":"install-1","session_id":"session-1","thread_id":"session-1","turn_id":"","window_id":"session-1:0","request_kind":"prewarm","sandbox":"seccomp"}"#,
-            "sec-websocket-extensions: permessage-deflate; client_max_window_bits\r\n",
-        ],
-    );
-    assert!(opening.ends_with("\r\n\r\n"));
 }
 
 #[test]
@@ -1196,7 +1129,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
             Vec::new(),
         );
     request.previous_response_id = Some("resp_previous".to_string());
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_secs(60)));
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

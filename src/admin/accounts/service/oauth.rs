@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Write as _, sync::Arc};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
@@ -147,7 +147,7 @@ impl AdminAccountService {
     ) -> Result<super::types::ImportedAccounts, AdminAccountError> {
         let tokens = self.oauth.exchange(input).await?;
         self.import(serde_json::json!({
-            "sourceFormat": "native",
+            "sourceFormat": "cpr",
             "accounts": [{
                 "token": tokens.access_token,
                 "refreshToken": tokens.refresh_token,
@@ -218,7 +218,11 @@ fn random_url_token(size: usize) -> String {
 fn random_hex_token(size: usize) -> String {
     let mut bytes = vec![0u8; size];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut token = String::with_capacity(size * 2);
+    for byte in bytes {
+        let _ = write!(token, "{byte:02x}");
+    }
+    token
 }
 
 fn exchange_error_text(status: StatusCode, body: &str) -> String {

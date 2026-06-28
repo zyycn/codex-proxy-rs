@@ -1,3 +1,3 @@
-pub mod dispatch;
-pub mod keys;
-pub mod openai;
+pub(crate) mod dispatch;
+pub(crate) mod keys;
+pub(crate) mod openai;
