@@ -4,9 +4,12 @@ import { computed, ref } from 'vue'
 import { Copy, KeyRound, Upload } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 
 const props = withDefaults(
@@ -138,17 +141,16 @@ async function copyOAuthAuthUrl() {
     <div class="flex flex-col gap-4">
       <BaseSegmented v-model="mode" :options="modeOptions" class="w-full" />
 
-      <div v-if="mode === 'rt'">
-        <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
-          Refresh Token <span class="text-(--cp-danger)">*</span>
-        </label>
-        <textarea
-          v-model="refreshToken"
-          class="h-40 w-full resize-none rounded-(--cp-input-radius-base) border-0 bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 font-mono text-[12px] leading-[1.55] font-[650] text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow] duration-160 placeholder:text-(--cp-text-muted) hover:bg-(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover)) hover:shadow-(--cp-shadow-input-hover) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus) disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none"
-          placeholder="rt_...&#10;rt_..."
-          :disabled="saving"
-        />
-      </div>
+      <BaseForm v-if="mode === 'rt'">
+        <BaseFormItem label="Refresh Token" required>
+          <BaseTextarea
+            v-model="refreshToken"
+            size="md"
+            placeholder="rt_...&#10;rt_..."
+            :disabled="saving"
+          />
+        </BaseFormItem>
+      </BaseForm>
 
       <div v-else-if="mode === 'oauth'" class="flex flex-col gap-4">
         <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3">
@@ -180,67 +182,63 @@ async function copyOAuthAuthUrl() {
           </BaseButton>
         </div>
 
-        <div v-if="oauthAuthUrl" class="flex flex-col gap-2">
-          <div class="flex items-center justify-between gap-3">
-            <label class="block text-[13px] font-medium text-(--cp-text-secondary)">
-              授权链接
-            </label>
-            <BaseButton
-              icon-only
-              variant="default"
-              size="sm"
-              title="复制链接"
-              label="复制链接"
-              :disabled="saving || oauthLoading"
-              @click="copyOAuthAuthUrl"
+        <BaseForm v-if="oauthAuthUrl">
+          <BaseFormItem label="授权链接">
+            <template #extra>
+              <BaseButton
+                icon-only
+                variant="default"
+                size="sm"
+                title="复制链接"
+                label="复制链接"
+                :disabled="saving || oauthLoading"
+                @click="copyOAuthAuthUrl"
+              >
+                <Copy class="size-3.5" />
+              </BaseButton>
+            </template>
+            <BaseScrollbar
+              max-height="92px"
+              view-class="rounded-(--cp-input-radius-base) bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 shadow-(--cp-shadow-input)"
             >
-              <Copy class="size-3.5" />
-            </BaseButton>
-          </div>
-          <BaseScrollbar
-            max-height="92px"
-            view-class="rounded-(--cp-input-radius-base) bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 shadow-(--cp-shadow-input)"
-          >
-            <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-[650] text-(--cp-text-secondary)"
-              >{{ oauthAuthUrl }}</pre
-            >
-          </BaseScrollbar>
-        </div>
+              <pre
+                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-[650] text-(--cp-text-secondary)"
+                >{{ oauthAuthUrl }}</pre
+              >
+            </BaseScrollbar>
+          </BaseFormItem>
+        </BaseForm>
 
-        <div class="flex flex-col gap-2">
-          <label class="block text-[13px] font-medium text-(--cp-text-secondary)">
-            回调地址 <span class="text-(--cp-danger)">*</span>
-          </label>
-          <textarea
-            v-model="oauthCallback"
-            class="h-28 w-full resize-none rounded-(--cp-input-radius-base) border-0 bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 font-mono text-[12px] leading-[1.55] font-[650] text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow] duration-160 placeholder:text-(--cp-text-muted) hover:bg-(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover)) hover:shadow-(--cp-shadow-input-hover) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus) disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none"
-            placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+        <BaseForm>
+          <BaseFormItem label="回调地址" required>
+            <BaseTextarea
+              v-model="oauthCallback"
+              size="sm"
+              placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+              :disabled="saving"
+            />
+          </BaseFormItem>
+        </BaseForm>
+      </div>
+
+      <BaseForm v-else>
+        <BaseFormItem label="JSON 内容" required :error="fileError || undefined">
+          <template #extra>
+            <BaseButton variant="default" size="sm" :disabled="saving" @click="openImportFile()">
+              <template #icon>
+                <Upload class="size-3.5" />
+              </template>
+              上传文件
+            </BaseButton>
+          </template>
+          <BaseTextarea
+            v-model="importText"
+            size="lg"
+            placeholder='{"accounts":[...]}'
             :disabled="saving"
           />
-        </div>
-      </div>
-
-      <div v-else class="flex flex-col gap-3">
-        <div class="flex items-center justify-between gap-3">
-          <label class="block text-[13px] font-medium text-(--cp-text-secondary)">
-            JSON 内容 <span class="text-(--cp-danger)">*</span>
-          </label>
-          <BaseButton variant="default" size="sm" :disabled="saving" @click="openImportFile()">
-            <Upload class="size-3.5" />
-            上传文件
-          </BaseButton>
-        </div>
-        <textarea
-          v-model="importText"
-          class="h-56 w-full resize-none rounded-(--cp-input-radius-base) border-0 bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 font-mono text-[12px] leading-[1.55] font-[650] text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow] duration-160 placeholder:text-(--cp-text-muted) hover:bg-(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover)) hover:shadow-(--cp-shadow-input-hover) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus) disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none"
-          placeholder='{"accounts":[...]}'
-          :disabled="saving"
-        />
-        <p v-if="fileError" class="m-0 text-[12px] font-[650] text-(--cp-danger-text)">
-          {{ fileError }}
-        </p>
-      </div>
+        </BaseFormItem>
+      </BaseForm>
     </div>
 
     <template #footer>

@@ -120,23 +120,14 @@ pub struct UpdatedAccountStatus {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AdminAccountMetadataUpdate {
-    pub email: Option<Option<String>>,
-    pub account_id: Option<Option<String>>,
-    pub user_id: Option<Option<String>>,
+pub struct AdminAccountUpdate {
     pub label: Option<Option<String>>,
-    pub plan_type: Option<Option<String>>,
     pub status: Option<String>,
 }
 
-impl AdminAccountMetadataUpdate {
+impl AdminAccountUpdate {
     pub fn any(&self) -> bool {
-        self.email.is_some()
-            || self.account_id.is_some()
-            || self.user_id.is_some()
-            || self.label.is_some()
-            || self.plan_type.is_some()
-            || self.status.is_some()
+        self.label.is_some() || self.status.is_some()
     }
 }
 

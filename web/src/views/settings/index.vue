@@ -6,6 +6,8 @@ import { Gauge, GitBranch, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
 import { getSettings, updateSettings } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { toast } from '@/components/base/BaseToast'
 
@@ -210,57 +212,42 @@ onMounted(loadSettings)
         header-class="px-5 pt-4"
         body-class="px-5 py-5"
       >
-        <div class="grid items-start gap-4 lg:grid-cols-2">
-          <div class="grid gap-2">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
-              单账号最大并发
-            </span>
+        <BaseForm :columns="2">
+          <BaseFormItem label="单账号最大并发" description="限制单个账号同一时间可承载的请求数。">
             <BaseInput v-model="maxConcurrentPerAccountValue" type="number">
               <template #prefix>
                 <Gauge class="size-4" />
               </template>
             </BaseInput>
-          </div>
+          </BaseFormItem>
 
-          <div class="grid gap-2">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
-              提前刷新秒数
-            </span>
+          <BaseFormItem label="提前刷新秒数" description="Token 过期前多少秒触发刷新。">
             <BaseInput v-model="refreshMarginSecondsValue" type="number">
               <template #prefix>
                 <Timer class="size-4" />
               </template>
             </BaseInput>
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-muted)">
-              Token 过期前多少秒触发刷新。
-            </span>
-          </div>
+          </BaseFormItem>
 
-          <div class="grid gap-2">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
-              刷新并发数
-            </span>
+          <BaseFormItem
+            label="刷新并发数"
+            description="同时刷新 Token 的最大请求数，减小可避免限流。"
+          >
             <BaseInput v-model="refreshConcurrencyValue" type="number">
               <template #prefix>
                 <Zap class="size-4" />
               </template>
             </BaseInput>
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-muted)">
-              同时刷新 Token 的最大请求数，减小可避免限流。
-            </span>
-          </div>
+          </BaseFormItem>
 
-          <div class="grid gap-2 lg:col-span-2">
-            <span class="text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">
-              请求间隔 ms
-            </span>
+          <BaseFormItem label="请求间隔 ms" description="控制同一账号两次调度之间的最小等待时间。">
             <BaseInput v-model="requestIntervalMsValue" type="number">
               <template #prefix>
                 <Timer class="size-4" />
               </template>
             </BaseInput>
-          </div>
-        </div>
+          </BaseFormItem>
+        </BaseForm>
       </BaseCard>
 
       <BaseCard

@@ -52,15 +52,6 @@ export const statusLabels: Record<string, string> = {
   refreshing: '刷新中',
 }
 
-export const editableStatusOptions = [
-  { value: 'active', label: statusLabels.active },
-  { value: 'disabled', label: statusLabels.disabled },
-  { value: 'expired', label: statusLabels.expired },
-  { value: 'quota_exhausted', label: statusLabels.quota_exhausted },
-  { value: 'refreshing', label: statusLabels.refreshing },
-  { value: 'banned', label: statusLabels.banned },
-]
-
 export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
   active: 'success',
   expired: 'warning',

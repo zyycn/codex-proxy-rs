@@ -43,7 +43,7 @@ const iconClasses = computed(() => [
 ])
 
 const inputClasses = computed(() => [
-  'h-full min-w-0 flex-1 border-0 bg-transparent font-[650] leading-[1.15] outline-0',
+  'h-full min-w-0 flex-1 border-0 bg-transparent text-[13px] font-[650] leading-[1.15] outline-0',
   'placeholder:text-(--cp-text-muted) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)',
   props.error
     ? 'text-(--cp-danger-text)'

@@ -3,6 +3,8 @@ import { Copy } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 
@@ -42,21 +44,15 @@ const label = formField('label')
     width="540px"
     :close-disabled="saving"
   >
-    <div class="flex flex-col gap-4">
-      <div>
-        <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
-          名称 <span class="text-(--cp-danger)">*</span>
-        </label>
+    <BaseForm>
+      <BaseFormItem label="名称" required>
         <BaseInput v-model="name" placeholder="例如：生产环境、测试账号..." />
-      </div>
+      </BaseFormItem>
 
-      <div>
-        <label class="block text-[13px] font-medium text-(--cp-text-secondary) mb-2">
-          标签（可选）
-        </label>
+      <BaseFormItem label="标签（可选）">
         <BaseInput v-model="label" placeholder="备注信息..." />
-      </div>
-    </div>
+      </BaseFormItem>
+    </BaseForm>
 
     <template #footer>
       <BaseButton variant="ghost" :disabled="saving" @click="open = false">取消</BaseButton>

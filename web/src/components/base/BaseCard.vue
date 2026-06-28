@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-type CardVariant = 'default' | 'dashboard'
+type CardVariant = 'default' | 'dashboard' | 'elevated'
 type HeaderCollapseAt = 'sm' | 'lg' | 'none'
 
 const props = withDefaults(
@@ -12,11 +12,7 @@ const props = withDefaults(
     title?: string
     description?: string
     headerCollapseAt?: HeaderCollapseAt
-    radiusClass?: string
-    shadowClass?: string
     headerClass?: string
-    headerContentClass?: string
-    actionsClass?: string
     bodyClass?: string
   }>(),
   {
@@ -26,11 +22,7 @@ const props = withDefaults(
     title: undefined,
     description: undefined,
     headerCollapseAt: 'sm',
-    radiusClass: 'rounded-(--cp-card-radius)',
-    shadowClass: 'shadow-(--cp-shadow-card)',
     headerClass: undefined,
-    headerContentClass: '',
-    actionsClass: '',
     bodyClass: '',
   },
 )
@@ -38,6 +30,13 @@ const props = withDefaults(
 const paddingClasses: Record<CardVariant, string> = {
   default: 'px-5 py-3',
   dashboard: 'px-7 py-5.5',
+  elevated: 'px-5 py-3',
+}
+
+const shadowClasses: Record<CardVariant, string> = {
+  default: 'shadow-(--cp-shadow-card)',
+  dashboard: 'shadow-(--cp-shadow-card)',
+  elevated: 'shadow-(--cp-shadow-popover)',
 }
 
 const slots = defineSlots<{
@@ -72,8 +71,8 @@ const managedHeaderLayoutClasses = computed(() => {
     :is="props.as"
     class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden bg-(--cp-bg-surface)"
     :class="[
-      props.radiusClass,
-      props.shadowClass,
+      'rounded-(--cp-card-radius)',
+      shadowClasses[props.variant],
       props.padded ? paddingClasses[props.variant] : undefined,
     ]"
   >
@@ -81,7 +80,7 @@ const managedHeaderLayoutClasses = computed(() => {
       <header v-if="$slots.header || hasManagedHeader" class="shrink-0" :class="props.headerClass">
         <slot name="header">
           <div :class="managedHeaderLayoutClasses">
-            <div class="min-w-0 pt-0.5" :class="props.headerContentClass">
+            <div class="min-w-0 pt-0.5">
               <h2
                 v-if="props.title || $slots.title"
                 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)"
@@ -96,7 +95,7 @@ const managedHeaderLayoutClasses = computed(() => {
               </p>
             </div>
 
-            <div v-if="$slots.actions" class="shrink-0" :class="props.actionsClass">
+            <div v-if="$slots.actions" class="shrink-0">
               <slot name="actions" />
             </div>
           </div>

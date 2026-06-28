@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub use types::{
-    AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, BatchDeleteAccounts,
+    AdminAccountError, AdminAccountMetadata, AdminAccountUpdate, BatchDeleteAccounts,
     ExportedAccounts, ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
     UpdatedAccountStatus,
 };

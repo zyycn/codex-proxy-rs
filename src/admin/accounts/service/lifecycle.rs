@@ -6,7 +6,7 @@ use crate::infra::json::{NumberedPage, Page};
 use super::{
     types::{
         parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountMetadata,
-        AdminAccountMetadataUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
+        AdminAccountUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
     },
     AdminAccountService,
 };
@@ -219,10 +219,10 @@ impl AdminAccountService {
             Err(_) => Err(AdminAccountError::UpdateStatus),
         }
     }
-    pub async fn update_metadata(
+    pub async fn update_account(
         &self,
         account_id: &str,
-        update: AdminAccountMetadataUpdate,
+        update: AdminAccountUpdate,
     ) -> Result<Option<AdminAccountMetadata>, AdminAccountError> {
         if !update.any() {
             return self.get(account_id).await;
@@ -247,11 +247,11 @@ impl AdminAccountService {
             .update_metadata(
                 account_id,
                 crate::upstream::accounts::store::AccountMetadataUpdate {
-                    email: update.email,
-                    account_id: update.account_id,
-                    user_id: update.user_id,
+                    email: None,
+                    account_id: None,
+                    user_id: None,
                     label: update.label,
-                    plan_type: update.plan_type,
+                    plan_type: None,
                     status,
                 },
             )

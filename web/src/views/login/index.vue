@@ -95,8 +95,7 @@ async function handleSubmit() {
       <BaseCard
         as="form"
         :padded="false"
-        radius-class="rounded-(--cp-card-radius)"
-        shadow-class="shadow-(--cp-shadow-popover)"
+        variant="elevated"
         class="login-form"
         @submit.prevent="handleSubmit"
       >

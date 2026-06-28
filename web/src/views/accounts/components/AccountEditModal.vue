@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import { Fingerprint } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import AccountStatusBadge from './AccountStatusBadge.vue'
 
-defineProps<{
+const props = defineProps<{
   account: any
-  statusOptions: any[]
   saving: boolean
 }>()
 
@@ -20,6 +23,30 @@ const emit = defineEmits<{
   save: []
 }>()
 
+const accountEmail = computed(() => props.account?.email || '未绑定邮箱')
+const accountPlan = computed(() => props.account?.planType || '-')
+
+const detailItems = computed(() => [
+  {
+    label: 'ChatGPT 账号 ID',
+    value: props.account?.accountId,
+    itemClass: 'sm:col-span-2',
+    valueClass: 'font-mono text-[12px]',
+  },
+  {
+    label: '用户 ID',
+    value: props.account?.userId,
+    itemClass: '',
+    valueClass: 'font-mono text-[12px]',
+  },
+  {
+    label: '内部 ID',
+    value: props.account?.id,
+    itemClass: '',
+    valueClass: 'font-mono text-[12px]',
+  },
+])
+
 function formField(key: string) {
   return computed({
     get: () => form.value[key] ?? '',
@@ -30,68 +57,82 @@ function formField(key: string) {
 }
 
 const label = formField('label')
-const email = formField('email')
-const accountId = formField('accountId')
-const userId = formField('userId')
-const planType = formField('planType')
+
+const scheduleEnabled = computed({
+  get: () => status.value !== 'disabled',
+  set: (enabled: boolean) => {
+    status.value = enabled ? 'active' : 'disabled'
+  },
+})
 </script>
 
 <template>
   <BaseModal
     v-model="open"
     title="编辑账号"
-    description="更新账号元信息、套餐和调度状态。"
-    variant="info"
+    description="调整账号备注和调度状态。"
     width="680px"
     :close-disabled="saving"
   >
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div class="sm:col-span-2">
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
-          内部 ID
-        </label>
-        <div
-          class="flex h-10 items-center truncate rounded-lg bg-(--cp-bg-subtle) px-3 font-mono text-[12px] font-[650] text-(--cp-text-muted)"
-        >
-          {{ account?.id || '-' }}
+    <div class="space-y-6">
+      <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-5 py-5">
+        <div class="grid min-w-0 gap-4 sm:grid-cols-[44px_minmax(0,1fr)_auto] sm:items-center">
+          <div
+            class="hidden size-11 items-center justify-center rounded-[14px] bg-(--cp-info-bg) text-(--cp-info-text) sm:inline-flex"
+          >
+            <Fingerprint class="size-5" :stroke-width="2.2" />
+          </div>
+          <div class="min-w-0">
+            <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-info-text)">账号身份</p>
+            <p
+              class="mt-2 mb-0 truncate text-[16px] leading-tight font-[760] text-(--cp-text-primary)"
+              :title="accountEmail"
+            >
+              {{ accountEmail }}
+            </p>
+            <p class="mt-2 mb-0 text-[12px] leading-none font-[650] text-(--cp-text-secondary)">
+              套餐 {{ accountPlan }}
+            </p>
+          </div>
+          <AccountStatusBadge :status="account?.status" variant="pill" />
         </div>
-      </div>
 
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
-          备注标签
-        </label>
-        <BaseInput v-model="label" placeholder="例如：主账号 / 备用账号" />
-      </div>
+        <dl
+          class="mt-5 grid gap-x-7 gap-y-3.5 pt-4 shadow-[inset_0_1px_0_var(--cp-divider-subtle)] sm:grid-cols-2"
+        >
+          <div
+            v-for="item in detailItems"
+            :key="item.label"
+            class="min-w-0"
+            :class="item.itemClass"
+          >
+            <dt class="text-[11px] leading-none font-[760] text-(--cp-text-muted)">
+              {{ item.label }}
+            </dt>
+            <dd
+              class="mt-2 mb-0 truncate text-[13px] leading-tight font-[650] text-(--cp-text-primary)"
+              :class="item.valueClass"
+              :title="item.value || '-'"
+            >
+              {{ item.value || '-' }}
+            </dd>
+          </div>
+        </dl>
+      </section>
 
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">邮箱</label>
-        <BaseInput v-model="email" placeholder="account@example.com" />
-      </div>
+      <BaseForm :columns="2">
+        <BaseFormItem label="备注标签">
+          <BaseInput v-model="label" placeholder="例如：主账号 / 备用账号" :disabled="saving" />
+        </BaseFormItem>
 
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
-          ChatGPT 账号 ID
-        </label>
-        <BaseInput v-model="accountId" placeholder="chatgpt account id" />
-      </div>
-
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">
-          用户 ID
-        </label>
-        <BaseInput v-model="userId" placeholder="user id" />
-      </div>
-
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">套餐</label>
-        <BaseInput v-model="planType" placeholder="free / plus / pro / team" />
-      </div>
-
-      <div>
-        <label class="mb-2 block text-[13px] font-medium text-(--cp-text-secondary)">状态</label>
-        <BaseSelect v-model="status" :options="statusOptions" />
-      </div>
+        <BaseFormItem label="调度开关">
+          <div class="grid box-content overflow-visible p-0.75">
+            <div class="flex h-(--cp-input-height-default) items-center">
+              <BaseSwitch v-model="scheduleEnabled" label="调度开关" :disabled="saving" />
+            </div>
+          </div>
+        </BaseFormItem>
+      </BaseForm>
     </div>
 
     <template #footer>

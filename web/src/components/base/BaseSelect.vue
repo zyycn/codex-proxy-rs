@@ -11,7 +11,7 @@ interface SelectOption {
   disabled?: boolean
 }
 
-type SelectSize = 'default' | 'pagination'
+type SelectSize = 'default' | 'compact'
 
 defineOptions({
   inheritAttrs: false,
@@ -58,7 +58,7 @@ const sizeConfig: Record<
     option: 'h-8.5 px-3 text-[13px]',
     icon: 16,
   },
-  pagination: {
+  compact: {
     trigger: 'h-8 px-2.5 pr-7 text-xs rounded-(--cp-input-radius-base)',
     option: 'h-8 px-2.5 text-xs',
     icon: 14,
@@ -328,7 +328,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               <Check
                 v-if="option.value === model"
                 class="shrink-0 text-(--cp-info)"
-                :size="size === 'pagination' ? 13 : 15"
+                :size="size === 'compact' ? 13 : 15"
               />
             </button>
           </template>

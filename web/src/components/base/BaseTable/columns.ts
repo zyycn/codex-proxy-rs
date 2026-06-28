@@ -12,8 +12,6 @@ export interface BaseTableColumn {
   align?: 'left' | 'right' | 'center'
   ellipsis?: boolean
   emptyText?: string
-  mono?: boolean
-  tabular?: boolean
   headerClass?: string
   cellClass?: string
 }
@@ -133,12 +131,7 @@ export function cellContentClass(column: BaseTableColumn) {
     return 'min-w-0 overflow-visible'
   }
 
-  return [
-    'min-w-0',
-    column.ellipsis === false ? undefined : 'truncate',
-    column.mono ? 'font-mono text-[12px] font-[650]' : undefined,
-    column.tabular ? 'tabular-nums' : undefined,
-  ]
+  return ['min-w-0', column.ellipsis === false ? undefined : 'truncate']
 }
 
 function numericPercentWidth(width: number | string) {
