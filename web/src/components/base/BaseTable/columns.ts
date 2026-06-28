@@ -1,3 +1,5 @@
+import { clamp, sumBy } from 'es-toolkit'
+
 export interface BaseTableColumn {
   key: string
   label?: string
@@ -23,27 +25,28 @@ export type ResolvedTableColumn = BaseTableColumn & {
 }
 
 export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | string) {
-  const fixedPercentTotal = columns.reduce((sum, column) => {
-    return column.width === undefined ? sum : sum + numericPercentWidth(column.width)
-  }, 0)
-  const fixedPixelTotal = columns.reduce((sum, column) => {
-    return column.width === undefined ? sum : sum + numericPixelWidth(column.width)
-  }, 0)
+  const fixedPercentTotal = sumBy(columns, (column) =>
+    column.width === undefined ? 0 : numericPercentWidth(column.width),
+  )
+  const fixedPixelTotal = sumBy(columns, (column) =>
+    column.width === undefined ? 0 : numericPixelWidth(column.width),
+  )
   const minWidthPixels = minWidth === undefined ? 0 : numericPixelWidth(minWidth)
   const flexibleColumns = columns.filter((column) => column.width === undefined)
-  const flexTotal = flexibleColumns.reduce((sum, column) => sum + (column.flex ?? 1), 0)
-  const available = Math.max(100 - fixedPercentTotal, 0)
-  const availablePixels = Math.max(minWidthPixels - fixedPixelTotal, 0)
+  const flexTotal = sumBy(flexibleColumns, (column) => column.flex ?? 1)
+  const flexibleColumnCount = clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)
+  const available = clamp(100 - fixedPercentTotal, 0, Number.POSITIVE_INFINITY)
+  const availablePixels = clamp(minWidthPixels - fixedPixelTotal, 0, Number.POSITIVE_INFINITY)
 
   return columns.map((column) => {
     const flex = column.flex ?? 1
     const width =
       column.width === undefined
         ? minWidthPixels > 0 && fixedPercentTotal === 0
-          ? `${availablePixels / Math.max(flexibleColumns.length, 1)}px`
+          ? `${availablePixels / flexibleColumnCount}px`
           : flexTotal > 0
             ? `${(available * flex) / flexTotal}%`
-            : `${available / Math.max(flexibleColumns.length, 1)}%`
+            : `${available / flexibleColumnCount}%`
         : normalizeWidth(column.width)
 
     return {

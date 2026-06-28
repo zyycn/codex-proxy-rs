@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { useEventListener, useResizeObserver } from '@vueuse/core'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { clamp } from 'es-toolkit'
+import { computed, nextTick, onMounted, shallowRef, useTemplateRef } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
@@ -94,7 +96,6 @@ const horizontalHovering = shallowRef(false)
 const horizontalDragging = shallowRef(false)
 const horizontalScrolled = shallowRef(false)
 
-let resizeObserver: ResizeObserver | undefined
 let horizontalDragStartX = 0
 let horizontalDragStartScrollLeft = 0
 
@@ -160,15 +161,15 @@ function rowClass(row: TableRow, index: number) {
 }
 
 function horizontalTrackWidth(wrap: HTMLElement) {
-  return Math.max(wrap.clientWidth - 8, 0)
+  return clamp(wrap.clientWidth - 8, 0, Number.POSITIVE_INFINITY)
 }
 
 function maxScrollLeft(wrap: HTMLElement) {
-  return Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
+  return clamp(wrap.scrollWidth - wrap.clientWidth, 0, Number.POSITIVE_INFINITY)
 }
 
 function maxHorizontalThumbLeft(wrap: HTMLElement) {
-  return Math.max(horizontalTrackWidth(wrap) - horizontalThumbWidth.value, 0)
+  return clamp(horizontalTrackWidth(wrap) - horizontalThumbWidth.value, 0, Number.POSITIVE_INFINITY)
 }
 
 function scrollWrap() {
@@ -190,9 +191,10 @@ function updateHorizontalScrollbar() {
     return
   }
 
-  horizontalThumbWidth.value = Math.min(
+  horizontalThumbWidth.value = clamp(
+    trackWidth * (wrap.clientWidth / wrap.scrollWidth),
+    32,
     trackWidth,
-    Math.max(trackWidth * (wrap.clientWidth / wrap.scrollWidth), 32),
   )
   horizontalThumbLeft.value = (wrap.scrollLeft / scrollRange) * maxHorizontalThumbLeft(wrap)
   horizontalScrolled.value = wrap.scrollLeft > 0
@@ -221,9 +223,7 @@ function handleHorizontalTrackPointerDown(event: PointerEvent) {
   const scrollRange = maxScrollLeft(wrap)
   const thumbRange = maxHorizontalThumbLeft(wrap)
   wrap.scrollLeft =
-    thumbRange > 0
-      ? (Math.max(0, Math.min(nextThumbLeft, thumbRange)) / thumbRange) * scrollRange
-      : 0
+    thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleHorizontalThumbPointerDown(event: PointerEvent) {
@@ -236,11 +236,13 @@ function handleHorizontalThumbPointerDown(event: PointerEvent) {
   horizontalDragging.value = true
   horizontalDragStartX = event.clientX
   horizontalDragStartScrollLeft = wrap.scrollLeft
-  document.addEventListener('pointermove', handleHorizontalThumbPointerMove)
-  document.addEventListener('pointerup', handleHorizontalThumbPointerUp, { once: true })
 }
 
 function handleHorizontalThumbPointerMove(event: PointerEvent) {
+  if (!horizontalDragging.value) {
+    return
+  }
+
   const wrap = scrollWrap()
   if (!wrap) {
     return
@@ -258,27 +260,27 @@ function handleHorizontalThumbPointerMove(event: PointerEvent) {
 }
 
 function handleHorizontalThumbPointerUp() {
+  if (!horizontalDragging.value) {
+    return
+  }
+
   horizontalDragging.value = false
-  document.removeEventListener('pointermove', handleHorizontalThumbPointerMove)
 }
 
 onMounted(async () => {
   await nextTick()
   updateHorizontalScrollbar()
-  resizeObserver = new ResizeObserver(updateHorizontalScrollbar)
-  const wrap = scrollWrap()
-  if (wrap) {
-    resizeObserver.observe(wrap)
-  }
-  if (tableViewRef.value) {
-    resizeObserver.observe(tableViewRef.value)
-  }
 })
 
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  document.removeEventListener('pointermove', handleHorizontalThumbPointerMove)
-})
+useResizeObserver(
+  () =>
+    [scrollWrap(), tableViewRef.value].filter(
+      (element): element is HTMLDivElement | HTMLTableElement => Boolean(element),
+    ),
+  updateHorizontalScrollbar,
+)
+useEventListener(document, 'pointermove', handleHorizontalThumbPointerMove)
+useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
 
 function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1

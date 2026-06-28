@@ -1,3 +1,4 @@
+import { clamp } from 'es-toolkit'
 import { computed, ref, watch, type Ref } from 'vue'
 
 export function useApiKeyFilters(apiKeys: Ref<any[]>) {
@@ -42,7 +43,11 @@ export function useApiKeyFilters(apiKeys: Ref<any[]>) {
   })
 
   watch(filteredKeys, () => {
-    const totalPages = Math.max(1, Math.ceil(filteredKeys.value.length / pageSize.value))
+    const totalPages = clamp(
+      Math.ceil(filteredKeys.value.length / pageSize.value),
+      1,
+      Number.POSITIVE_INFINITY,
+    )
     if (page.value > totalPages) {
       page.value = totalPages
     }

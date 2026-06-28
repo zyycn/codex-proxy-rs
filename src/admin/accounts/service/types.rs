@@ -1,6 +1,7 @@
 //! 管理端账号 DTO、错误与内部转换辅助。
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
@@ -56,6 +57,8 @@ pub enum AdminAccountError {
     List,
     #[error("failed to import accounts")]
     Import,
+    #[error("failed to export accounts")]
+    Export,
     #[error("failed to inspect account")]
     Inspect,
     #[error("account not found")]
@@ -148,6 +151,30 @@ pub struct ImportedAccounts {
     pub imported: u32,
     pub skipped: u32,
     pub source_format: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedAccount {
+    pub id: String,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub label: Option<String>,
+    pub plan_type: Option<String>,
+    pub token: String,
+    pub refresh_token: Option<String>,
+    pub access_token_expires_at: Option<String>,
+    pub status: String,
+    pub added_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedAccounts {
+    pub source_format: &'static str,
+    pub accounts: Vec<ExportedAccount>,
 }
 
 #[derive(Debug, Clone)]

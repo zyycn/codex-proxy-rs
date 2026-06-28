@@ -28,6 +28,7 @@ use tower::util::ServiceExt;
 use crate::support::jwt::unsigned_jwt;
 use crate::support::{admin::seed_admin_session, config::test_config, http::response_json};
 
+mod exporting;
 mod importing;
 mod lifecycle;
 mod list;

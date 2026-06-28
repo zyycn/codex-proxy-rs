@@ -1,11 +1,12 @@
 // @env browser
+import { useClipboard } from '@vueuse/core'
 import { onMounted, ref, type Ref } from 'vue'
 
 import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
 import { toast } from '@/components/base/BaseToast'
-import { copyText } from '@/utils/clipboard'
 
 export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
+  const { copy } = useClipboard()
   const loading = ref(true)
   const apiKeys = ref<any[]>([])
   const showCreateModal = ref(false)
@@ -165,13 +166,17 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   }
 
   async function copyToClipboard(text: string) {
-    const copied = await copyText(text)
-    if (copied) {
-      toast.success('已复制到剪贴板')
+    if (!text) {
+      toast.error('复制失败')
       return
     }
 
-    toast.error('复制失败')
+    try {
+      await copy(text)
+      toast.success('已复制到剪贴板')
+    } catch {
+      toast.error('复制失败')
+    }
   }
 
   function maskKey(prefix: string): string {

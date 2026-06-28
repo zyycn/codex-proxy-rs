@@ -3,6 +3,11 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 
+function shouldIgnoreRolldownLog(log: { code?: string; id?: string; loc?: { file?: string } }) {
+  const source = String(log.id ?? log.loc?.file ?? '')
+  return log.code === 'INVALID_ANNOTATION' && source.includes('@vueuse/core')
+}
+
 export default defineConfig({
   base: '/',
   plugins: [vue(), tailwindcss()],
@@ -25,6 +30,13 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     rolldownOptions: {
+      onLog(level, log, handler) {
+        if (level === 'warn' && shouldIgnoreRolldownLog(log)) {
+          return
+        }
+
+        handler(level, log)
+      },
       output: {
         codeSplitting: {
           groups: [

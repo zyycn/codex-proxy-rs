@@ -1,3 +1,5 @@
+import { delay } from 'es-toolkit'
+
 export async function withMinimumDuration<T>(
   task: Promise<T> | (() => Promise<T>),
   minimumMs = 1000,
@@ -8,7 +10,7 @@ export async function withMinimumDuration<T>(
   } finally {
     const remaining = minimumMs - (Date.now() - startedAt)
     if (remaining > 0) {
-      await new Promise((resolve) => window.setTimeout(resolve, remaining))
+      await delay(remaining)
     }
   }
 }

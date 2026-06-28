@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { useEventListener, useResizeObserver, useScroll, useTimeoutFn } from '@vueuse/core'
+import { clamp } from 'es-toolkit'
+import { computed, nextTick, onMounted, shallowRef, useTemplateRef } from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -25,10 +27,11 @@ const thumbTop = shallowRef(0)
 const visible = shallowRef(false)
 const dragging = shallowRef(false)
 
-let resizeObserver: ResizeObserver | undefined
-let hideTimer: number | undefined
 let dragStartY = 0
 let dragStartScrollTop = 0
+const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollbar, 900, {
+  immediate: false,
+})
 
 const canScrollY = computed(() => thumbHeight.value > 0)
 const scrollbarVisible = computed(() => props.forceVisible || dragging.value || visible.value)
@@ -42,15 +45,15 @@ const rootClasses = computed(() => [
 ])
 
 function trackHeight(wrap: HTMLElement) {
-  return Math.max(wrap.clientHeight - 8, 0)
+  return clamp(wrap.clientHeight - 8, 0, Number.POSITIVE_INFINITY)
 }
 
 function maxScrollTop(wrap: HTMLElement) {
-  return Math.max(wrap.scrollHeight - wrap.clientHeight, 0)
+  return clamp(wrap.scrollHeight - wrap.clientHeight, 0, Number.POSITIVE_INFINITY)
 }
 
 function maxThumbTop(wrap: HTMLElement) {
-  return Math.max(trackHeight(wrap) - thumbHeight.value, 0)
+  return clamp(trackHeight(wrap) - thumbHeight.value, 0, Number.POSITIVE_INFINITY)
 }
 
 function showScrollbar() {
@@ -58,8 +61,7 @@ function showScrollbar() {
 }
 
 function clearHideTimer() {
-  window.clearTimeout(hideTimer)
-  hideTimer = undefined
+  stopHideTimer()
 }
 
 function scheduleHideScrollbar() {
@@ -68,9 +70,7 @@ function scheduleHideScrollbar() {
     return
   }
 
-  hideTimer = window.setTimeout(() => {
-    hideScrollbar()
-  }, 900)
+  startHideTimer()
 }
 
 function hideScrollbar() {
@@ -102,7 +102,7 @@ function update() {
   }
 
   const ratio = wrap.clientHeight / wrap.scrollHeight
-  thumbHeight.value = Math.min(availableTrackHeight, Math.max(availableTrackHeight * ratio, 32))
+  thumbHeight.value = clamp(availableTrackHeight * ratio, 32, availableTrackHeight)
   thumbTop.value = (wrap.scrollTop / scrollRange) * maxThumbTop(wrap)
 }
 
@@ -149,9 +149,7 @@ function handleTrackPointerDown(event: PointerEvent) {
   const scrollRange = maxScrollTop(wrap)
   const thumbRange = maxThumbTop(wrap)
   wrap.scrollTop =
-    thumbRange > 0
-      ? (Math.max(0, Math.min(nextThumbTop, thumbRange)) / thumbRange) * scrollRange
-      : 0
+    thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleThumbPointerDown(event: PointerEvent) {
@@ -166,11 +164,13 @@ function handleThumbPointerDown(event: PointerEvent) {
   clearHideTimer()
   dragStartY = event.clientY
   dragStartScrollTop = wrap.scrollTop
-  document.addEventListener('pointermove', handleThumbPointerMove)
-  document.addEventListener('pointerup', handleThumbPointerUp, { once: true })
 }
 
 function handleThumbPointerMove(event: PointerEvent) {
+  if (!dragging.value) {
+    return
+  }
+
   const wrap = wrapRef.value
   if (!wrap) {
     return
@@ -186,28 +186,23 @@ function handleThumbPointerMove(event: PointerEvent) {
 }
 
 function handleThumbPointerUp() {
+  if (!dragging.value) {
+    return
+  }
+
   dragging.value = false
-  document.removeEventListener('pointermove', handleThumbPointerMove)
   activateScrollbar()
 }
 
 onMounted(async () => {
   await nextTick()
   update()
-  resizeObserver = new ResizeObserver(update)
-  if (wrapRef.value) {
-    resizeObserver.observe(wrapRef.value)
-  }
-  if (viewRef.value) {
-    resizeObserver.observe(viewRef.value)
-  }
 })
 
-onBeforeUnmount(() => {
-  clearHideTimer()
-  resizeObserver?.disconnect()
-  document.removeEventListener('pointermove', handleThumbPointerMove)
-})
+useResizeObserver([wrapRef, viewRef], update)
+useScroll(wrapRef, { onScroll: handleScroll })
+useEventListener(document, 'pointermove', handleThumbPointerMove)
+useEventListener(document, 'pointerup', handleThumbPointerUp)
 
 defineExpose({
   update,
@@ -223,7 +218,6 @@ defineExpose({
       class="h-full min-h-0 overflow-auto max-h-[inherit] [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent"
       @mouseenter="activateScrollbar"
       @mouseleave="hideScrollbar"
-      @scroll="handleScroll"
     >
       <div ref="view" :class="viewClass">
         <slot />

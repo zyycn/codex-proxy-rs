@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePreferredReducedMotion } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -27,6 +28,7 @@ const authStore = useAuthStore()
 const uiStore = useUiStore()
 const { effectiveTheme } = storeToRefs(uiStore)
 const { toggleTheme } = uiStore
+const preferredMotion = usePreferredReducedMotion()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -71,7 +73,7 @@ const themeToggleLabel = computed(() =>
 )
 
 function prefersReducedMotion() {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  return preferredMotion.value === 'reduce'
 }
 
 function animateSidebarLabels(collapsed: boolean) {

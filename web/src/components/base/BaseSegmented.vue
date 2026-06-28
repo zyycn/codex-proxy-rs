@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
 
 interface SegmentedOption {
@@ -23,12 +24,14 @@ const activeIndex = computed(() => {
   return index >= 0 ? index : 0
 })
 
+const optionCount = computed(() => clamp(props.options.length, 1, Number.POSITIVE_INFINITY))
+
 const gridStyle = computed(() => ({
-  gridTemplateColumns: `repeat(${Math.max(props.options.length, 1)}, minmax(0, 1fr))`,
+  gridTemplateColumns: `repeat(${optionCount.value}, minmax(0, 1fr))`,
 }))
 
 const indicatorStyle = computed(() => ({
-  width: `calc((100% - 8px) / ${Math.max(props.options.length, 1)})`,
+  width: `calc((100% - 8px) / ${optionCount.value})`,
   transform: `translateX(${activeIndex.value * 100}%)`,
 }))
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ChevronDown, Plus, Search, Trash2 } from '@lucide/vue'
+import { ChevronDown, Download, Plus, Search, Trash2 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -74,6 +74,7 @@ const {
   authorizingOAuth,
   savingAccount,
   batchDeleting,
+  exportingAccounts,
   createForm,
   editForm,
   editStatusModel,
@@ -85,6 +86,7 @@ const {
   requestDeleteAccount,
   handleDelete,
   handleBatchDelete,
+  handleExportAccounts,
   handleRefresh,
   handleRefreshQuota,
   handleToggleSchedule,
@@ -175,6 +177,15 @@ function planTypeClass(planType?: string) {
           </div>
 
           <div class="flex shrink-0 items-center gap-2">
+            <BaseButton
+              variant="default"
+              :loading="exportingAccounts"
+              :disabled="accounts.length === 0"
+              @click="handleExportAccounts"
+            >
+              <Download class="size-4" />
+              {{ selectedIds.size > 0 ? '导出选中' : '导出' }}
+            </BaseButton>
             <BaseButton variant="primary" @click="showCreateModal = true">
               <Plus class="size-4" />
               添加账号

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { sortBy } from 'es-toolkit'
 import { Gauge, GitBranch, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
 
 import { getSettings, updateSettings } from '@/api'
@@ -82,9 +83,10 @@ const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
 const requestIntervalMsValue = numericModel('requestIntervalMs')
 
 function modelAliasesToRows(modelAliases: Record<string, string> = {}) {
-  return Object.entries(modelAliases)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([alias, target]) => ({ alias, target }))
+  return sortBy(Object.entries(modelAliases), [([alias]) => alias]).map(([alias, target]) => ({
+    alias,
+    target,
+  }))
 }
 
 function rowsToAliases(rows: AliasRow[]) {

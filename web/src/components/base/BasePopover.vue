@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue'
+import {
+  onClickOutside,
+  onKeyStroke,
+  useEventListener,
+  useThrottleFn,
+  whenever,
+} from '@vueuse/core'
+import { clamp } from 'es-toolkit'
+import { computed, nextTick, ref, useAttrs } from 'vue'
 import type { CSSProperties } from 'vue'
 
 type PopoverPlacement = 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end'
@@ -51,10 +59,6 @@ function toCssLength(value?: number | string) {
   return trimmed || undefined
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(value, max))
-}
-
 function updatePopoverPosition() {
   if (!open.value || !triggerRef.value) return
 
@@ -91,6 +95,8 @@ function updatePopoverPosition() {
   }
 }
 
+const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
+
 async function openPopover() {
   if (props.disabled || open.value) return
 
@@ -118,39 +124,19 @@ function handleTriggerKeydown(event: KeyboardEvent) {
   }
 }
 
-function handleDocumentKeydown(event: KeyboardEvent) {
-  if (!open.value || event.key !== 'Escape') return
-  closePopover()
-}
-
-function handlePointerDown(event: PointerEvent) {
-  const target = event.target as Node | null
-  if (!target) return
-
-  if (rootRef.value?.contains(target) || popoverRef.value?.contains(target)) return
-  closePopover()
-}
-
-watch(open, async (isOpen) => {
-  if (!isOpen) return
-
+whenever(open, async () => {
   await nextTick()
   updatePopoverPosition()
 })
 
-onMounted(() => {
-  document.addEventListener('pointerdown', handlePointerDown)
-  document.addEventListener('keydown', handleDocumentKeydown)
-  window.addEventListener('resize', updatePopoverPosition)
-  window.addEventListener('scroll', updatePopoverPosition, true)
+onClickOutside(rootRef, closePopover, { ignore: [popoverRef] })
+onKeyStroke('Escape', () => {
+  if (open.value) {
+    closePopover()
+  }
 })
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', handlePointerDown)
-  document.removeEventListener('keydown', handleDocumentKeydown)
-  window.removeEventListener('resize', updatePopoverPosition)
-  window.removeEventListener('scroll', updatePopoverPosition, true)
-})
+useEventListener(window, 'resize', updatePopoverPositionThrottled)
+useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: true })
 </script>
 
 <template>

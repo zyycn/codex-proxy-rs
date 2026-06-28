@@ -1,11 +1,11 @@
 // @env browser
-import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { watchDebounced } from '@vueuse/core'
+import { computed, ref, type Ref } from 'vue'
 
 export function useAccountFilters(totalAccounts: Ref<number>) {
   const page = ref(1)
   const pageSize = ref(20)
   const searchQuery = ref('')
-  let searchTimer: number | undefined
   let loadAccounts: (() => Promise<void> | void) | undefined
 
   const accountPagination = computed(() => ({
@@ -36,19 +36,14 @@ export function useAccountFilters(totalAccounts: Ref<number>) {
     requestLoad()
   }
 
-  watch(searchQuery, () => {
-    page.value = 1
-    if (searchTimer) {
-      window.clearTimeout(searchTimer)
-    }
-    searchTimer = window.setTimeout(requestLoad, 250)
-  })
-
-  onBeforeUnmount(() => {
-    if (searchTimer) {
-      window.clearTimeout(searchTimer)
-    }
-  })
+  watchDebounced(
+    searchQuery,
+    () => {
+      page.value = 1
+      requestLoad()
+    },
+    { debounce: 250 },
+  )
 
   return {
     page,

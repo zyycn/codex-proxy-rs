@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { Check, ChevronDown } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue'
+import { clamp } from 'es-toolkit'
+import { computed, nextTick, ref, useAttrs, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 
 interface SelectOption {
@@ -111,16 +113,16 @@ function updatePopoverPosition() {
 
   const rect = triggerRef.value.getBoundingClientRect()
   const gap = 6
-  const estimatedMenuHeight = Math.min(Math.max(props.options.length, 1) * 34 + 8, 244)
+  const estimatedMenuHeight = clamp(props.options.length * 34 + 8, 42, 244)
   const belowSpace = window.innerHeight - rect.bottom - gap
   const aboveSpace = rect.top - gap
   const placeAbove = belowSpace < estimatedMenuHeight && aboveSpace > belowSpace
   const availableHeight = Math.max(placeAbove ? aboveSpace : belowSpace, 120)
-  const maxHeight = Math.min(estimatedMenuHeight, availableHeight)
+  const maxHeight = clamp(estimatedMenuHeight, 0, availableHeight)
   const top = placeAbove
     ? Math.max(8, rect.top - maxHeight - gap)
     : Math.min(rect.bottom + gap, window.innerHeight - maxHeight - 8)
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))
+  const left = clamp(rect.left, 8, window.innerWidth - rect.width - 8)
 
   popoverStyle.value = {
     left: `${left}px`,
@@ -129,6 +131,8 @@ function updatePopoverPosition() {
     maxHeight: `${maxHeight}px`,
   }
 }
+
+const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
 
 async function openMenu() {
   if (props.disabled || open.value) return
@@ -214,14 +218,6 @@ function handleTriggerKeydown(event: KeyboardEvent) {
   }
 }
 
-function handlePointerDown(event: PointerEvent) {
-  const target = event.target as Node | null
-  if (!target) return
-
-  if (rootRef.value?.contains(target) || popoverRef.value?.contains(target)) return
-  closeMenu()
-}
-
 function optionClasses(option: SelectOption, index: number) {
   return [
     'flex w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 px-3 text-left font-[650] leading-none outline-none transition-colors',
@@ -236,9 +232,7 @@ function optionClasses(option: SelectOption, index: number) {
   ]
 }
 
-watch(open, async (isOpen) => {
-  if (!isOpen) return
-
+whenever(open, async () => {
   await nextTick()
   updatePopoverPosition()
 })
@@ -251,17 +245,9 @@ watch(
   },
 )
 
-onMounted(() => {
-  document.addEventListener('pointerdown', handlePointerDown)
-  window.addEventListener('resize', updatePopoverPosition)
-  window.addEventListener('scroll', updatePopoverPosition, true)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', handlePointerDown)
-  window.removeEventListener('resize', updatePopoverPosition)
-  window.removeEventListener('scroll', updatePopoverPosition, true)
-})
+onClickOutside(rootRef, closeMenu, { ignore: [popoverRef] })
+useEventListener(window, 'resize', updatePopoverPositionThrottled)
+useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: true })
 </script>
 
 <template>

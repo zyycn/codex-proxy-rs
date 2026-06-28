@@ -1,9 +1,12 @@
+import { clamp } from 'es-toolkit'
 import { computed, onMounted, ref, type Ref } from 'vue'
+import dayjs from 'dayjs'
 
 import {
   authorizeAccountOAuth,
   deleteAccounts,
   exchangeAccountOAuth,
+  exportAccounts,
   getAccountQuota,
   getAccounts,
   importAccounts,
@@ -11,6 +14,7 @@ import {
   updateAccount,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { useJsonDownload } from '@/composables/useJsonDownload'
 import { withMinimumDuration } from '@/utils/async'
 import { editableStatusOptions } from '../constants'
 
@@ -21,6 +25,7 @@ export function useAccountMutations(options: {
   selectedIds: Ref<Set<string>>
   totalAccounts: Ref<number>
 }) {
+  const { downloadJson } = useJsonDownload()
   const loading = ref(true)
   const accounts = ref<any[]>([])
   const accountSummary = ref({
@@ -42,6 +47,7 @@ export function useAccountMutations(options: {
   const authorizingOAuth = ref(false)
   const savingAccount = ref(false)
   const batchDeleting = ref(false)
+  const exportingAccounts = ref(false)
 
   const createForm = ref({
     mode: 'oauth',
@@ -98,7 +104,11 @@ export function useAccountMutations(options: {
         options.totalAccounts.value > 0 &&
         options.page.value > 1
       ) {
-        options.page.value = Math.max(1, result.page.totalPages ?? options.page.value - 1)
+        options.page.value = clamp(
+          result.page.totalPages ?? options.page.value - 1,
+          1,
+          Number.POSITIVE_INFINITY,
+        )
         await loadAccounts()
       }
     } finally {
@@ -316,6 +326,24 @@ export function useAccountMutations(options: {
     }
   }
 
+  async function handleExportAccounts() {
+    if (exportingAccounts.value) return
+
+    try {
+      exportingAccounts.value = true
+      const selected = [...options.selectedIds.value]
+      const payload = await exportAccounts(
+        selected.length ? { ids: selected.join(',') } : undefined,
+      )
+      await downloadJson(payload, exportFileName(selected.length))
+      toast.success(selected.length ? `已导出 ${selected.length} 个账号` : '账号已导出')
+    } catch (error: any) {
+      toast.error(error.message || '导出失败')
+    } finally {
+      exportingAccounts.value = false
+    }
+  }
+
   async function handleRefresh(accountId: string) {
     if (refreshingAccountIds.value.has(accountId)) return
     refreshingAccountIds.value = new Set(refreshingAccountIds.value).add(accountId)
@@ -372,6 +400,11 @@ export function useAccountMutations(options: {
     return account.status === 'disabled' ? '启用调度' : '禁用调度'
   }
 
+  function exportFileName(selectedCount: number) {
+    const suffix = selectedCount > 0 ? `selected-${selectedCount}` : 'all'
+    return `cpr-accounts-${suffix}-${dayjs().format('YYYY-MM-DD')}.json`
+  }
+
   onMounted(() => {
     loadAccounts()
   })
@@ -394,6 +427,7 @@ export function useAccountMutations(options: {
     authorizingOAuth,
     savingAccount,
     batchDeleting,
+    exportingAccounts,
     createForm,
     editForm,
     editStatusModel,
@@ -406,6 +440,7 @@ export function useAccountMutations(options: {
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,
+    handleExportAccounts,
     handleRefresh,
     handleRefreshQuota,
     handleToggleSchedule,
