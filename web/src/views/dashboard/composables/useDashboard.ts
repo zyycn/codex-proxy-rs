@@ -24,7 +24,7 @@ export function useDashboard(): any {
   const healthTimeline = ref<any>(emptyDashboardSummary().healthTimeline)
   const accountUsage = ref<any[]>([])
   const serviceStatuses = ref<any[]>([])
-  const eventLogs = ref<any[]>([])
+  const usageRecords = ref<any[]>([])
   const poolSummary = ref<any>(null)
   const capacityInfo = ref<any>(null)
   const rotationStrategy = ref<any>(null)
@@ -85,17 +85,7 @@ export function useDashboard(): any {
     healthTimeline.value = summary.healthTimeline
     accountUsage.value = summary.accountUsage.map(accountUsageItem)
     serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
-    eventLogs.value = (summary.eventLogs as any[]).map((log) => ({
-      id: log.id,
-      time: log.time,
-      level: levelLabel(log.level),
-      requestId: log.requestId || '-',
-      route: log.route || '-',
-      model: log.model || '-',
-      statusCode: log.statusCode !== undefined ? String(log.statusCode) : '-',
-      latency: log.latencyMs !== undefined ? formatLatency(log.latencyMs) : '-',
-      tone: eventTone(log.level, log.statusCode),
-    }))
+    usageRecords.value = summary.usageRecords
     poolSummary.value = summary.poolSummary
     capacityInfo.value = summary.capacityInfo
     rotationStrategy.value = summary.rotationStrategy ?? null
@@ -149,7 +139,7 @@ export function useDashboard(): any {
       },
       accountUsage: [],
       serviceStatuses: [],
-      eventLogs: [],
+      usageRecords: [],
       poolSummary: {
         total: 0,
         active: 0,
@@ -192,7 +182,7 @@ export function useDashboard(): any {
         ],
       },
       {
-        title: '今日流量',
+        title: '今日请求',
         value: formatNumber(traffic.todayRequests),
         icon: Activity,
         tone: 'info',
@@ -204,8 +194,8 @@ export function useDashboard(): any {
         details: [
           { label: '总请求', value: formatNumber(traffic.totalRequests), tone: 'info' },
           {
-            label: 'RPM / TPM',
-            value: `${formatNumber(traffic.rpm)} / ${formatTokens(traffic.tpm)}`,
+            label: '首 Token',
+            value: formatLatency(cache.firstTokenLatencyMs),
             tone: 'info',
           },
         ],
@@ -345,23 +335,6 @@ export function useDashboard(): any {
     return 'normal'
   }
 
-  function eventTone(level: string, statusCode?: number) {
-    if (level === 'warn') return 'warning'
-    if (level === 'error' || (typeof statusCode === 'number' && statusCode >= 400)) return 'danger'
-    if (level === 'debug') return 'normal'
-    return 'info'
-  }
-
-  function levelLabel(level: string): string {
-    const labels: Record<string, string> = {
-      debug: '调试',
-      info: '信息',
-      warn: '警告',
-      error: '错误',
-    }
-    return labels[level] ?? level
-  }
-
   function formatNumber(num: number): string {
     if (num >= 1_000_000_000) return `${formatCompact(num / 1_000_000_000)}B`
     if (num >= 1_000_000) return `${formatCompact(num / 1_000_000)}M`
@@ -414,7 +387,7 @@ export function useDashboard(): any {
     healthTimeline,
     accountUsage,
     serviceStatuses,
-    eventLogs,
+    usageRecords,
     poolSummary,
     capacityInfo,
     rotationStrategy,

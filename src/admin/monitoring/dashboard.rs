@@ -19,21 +19,21 @@ use crate::{
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
-            event_store::AdminLogFilter,
-            events::{EventLevel, EventLog},
             service::{AdminUsageRecord, AdminUsageSummary, AdminUsageTimeBucketRecord},
+            usage_record_store::AdminUsageRecordFilter,
+            usage_records::{account_email_map, usage_record_items, UsageRecordData},
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
     infra::time::{
         china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour, china_hour_start,
-        china_quarter_hour_start, china_relative_time, china_time,
+        china_quarter_hour_start, china_relative_time,
     },
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
 };
 
-const DASHBOARD_LOG_LIMIT: u32 = 1000;
+const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 1000;
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 7 * 24 * 4;
 
@@ -60,7 +60,7 @@ struct DashboardSummaryData {
     health_timeline: DashboardHealthTimelineData,
     account_usage: Vec<DashboardAccountUsageData>,
     service_statuses: Vec<DashboardServiceStatusData>,
-    event_logs: Vec<DashboardEventLogData>,
+    usage_records: Vec<UsageRecordData>,
     pool_summary: AccountPoolDiagnostics,
     capacity_info: AccountCapacityDiagnostics,
     rotation_strategy: Option<String>,
@@ -173,19 +173,6 @@ struct DashboardAccountUsageData {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DashboardEventLogData {
-    id: String,
-    time: String,
-    level: EventLevel,
-    request_id: Option<String>,
-    route: Option<String>,
-    model: Option<String>,
-    status_code: Option<i64>,
-    latency_ms: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct DashboardServiceStatusData {
     label: String,
     value: String,
@@ -258,10 +245,14 @@ pub(crate) async fn dashboard_summary(
         .await
         .map(|page| page.items)
         .unwrap_or_default();
-    let logs = state
+    let recent_events = state
         .services
-        .logs
-        .list(None, DASHBOARD_LOG_LIMIT, AdminLogFilter::default())
+        .usage_records
+        .list(
+            None,
+            DASHBOARD_USAGE_RECORD_LIMIT,
+            AdminUsageRecordFilter::default(),
+        )
         .await
         .map(|page| page.items)
         .unwrap_or_default();
@@ -269,10 +260,16 @@ pub(crate) async fn dashboard_summary(
     let now = Utc::now();
     let time_buckets = dashboard_time_buckets(&state, now).await;
     let pool_summary = account_pool_summary(&accounts);
-    let dashboard_logs = logs.iter().take(10).map(dashboard_event_log_data).collect();
     let trend = dashboard_trend_data(&time_buckets, DashboardTrendKind::Usage);
     let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
     let settings = state.services.settings.current();
+    let recent_usage_records = recent_events.into_iter().take(10).collect::<Vec<_>>();
+    let account_emails = account_email_map(&state, &recent_usage_records).await?;
+    let dashboard_usage_records = usage_record_items(
+        recent_usage_records,
+        &account_emails,
+        &settings.model_aliases,
+    );
 
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -282,7 +279,7 @@ pub(crate) async fn dashboard_summary(
             health_timeline: dashboard_health_timeline_data(&time_buckets),
             account_usage: account_usage_data(&accounts, &usage_records, &quota_used_by_account),
             service_statuses: service_status_data(&state),
-            event_logs: dashboard_logs,
+            usage_records: dashboard_usage_records,
             pool_summary,
             capacity_info: AccountCapacityDiagnostics::from(capacity),
             rotation_strategy: Some(settings.auth.rotation_strategy.clone()),
@@ -421,10 +418,10 @@ fn dashboard_trend_data_at(
         if record.bucket_start < start || record.bucket_start > now {
             continue;
         }
-        let log_hour = china_hour_start(record.bucket_start);
+        let record_hour = china_hour_start(record.bucket_start);
         if let Some((_, bucket)) = buckets
             .iter_mut()
-            .find(|(bucket_start, _)| *bucket_start == log_hour)
+            .find(|(bucket_start, _)| *bucket_start == record_hour)
         {
             apply_bucket(bucket, record);
         }
@@ -487,10 +484,10 @@ fn dashboard_health_timeline_data_at(
         if record.bucket_start < start || record.bucket_start > now {
             continue;
         }
-        let log_slot = china_quarter_hour_start(record.bucket_start);
+        let record_slot = china_quarter_hour_start(record.bucket_start);
         if let Some((_, bucket)) = buckets
             .iter_mut()
-            .find(|(bucket_start, _)| *bucket_start == log_slot)
+            .find(|(bucket_start, _)| *bucket_start == record_slot)
         {
             apply_bucket(bucket, record);
         }
@@ -796,19 +793,6 @@ fn account_usage_data(
     rows.sort_by_key(|row| Reverse(row.requests));
     rows.truncate(4);
     rows
-}
-
-fn dashboard_event_log_data(log: &EventLog) -> DashboardEventLogData {
-    DashboardEventLogData {
-        id: log.id.clone(),
-        time: china_time(&log.created_at),
-        level: log.level,
-        request_id: log.request_id.clone(),
-        route: log.route.clone(),
-        model: log.model.clone(),
-        status_code: log.status_code,
-        latency_ms: log.latency_ms,
-    }
 }
 
 async fn account_quota_used_percent_by_id(

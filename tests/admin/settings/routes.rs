@@ -1,20 +1,26 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration as StdDuration, Instant},
+};
 
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
-    admin::monitoring::event_store::SqliteEventLogStore,
+    admin::monitoring::usage_record_store::SqliteUsageRecordStore,
     config::{settings::RuntimeSettingsService, types::AppConfig},
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
     runtime::state::AppState,
-    upstream::accounts::token_refresh::RefreshLeaseStore,
-    upstream::accounts::{cookies::SqliteCookieStore, store::SqliteAccountStore},
+    upstream::accounts::{
+        cookies::SqliteCookieStore, pool::AccountAcquireRequest, store::SqliteAccountStore,
+        token_refresh::RefreshLeaseStore,
+    },
     upstream::fingerprint::FingerprintRepository,
 };
 use serde_json::json;
@@ -271,7 +277,7 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Services::new(&config, stores, fingerprint);
@@ -384,6 +390,122 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
 }
 
 #[tokio::test]
+async fn admin_settings_update_should_apply_runtime_services() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("admin-settings-runtime.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let config = test_config(url);
+    let pool = connect_sqlite(&config.database.url).await.unwrap();
+    seed_admin_session(&pool, "session_1").await;
+    seed_schedulable_account(&pool, "acct_runtime_a").await;
+    seed_schedulable_account(&pool, "acct_runtime_b").await;
+    let stores = BackgroundTaskStores {
+        accounts: SqliteAccountStore::new(pool.clone()),
+        admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
+        fingerprints: FingerprintRepository::new(pool.clone()),
+        session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
+        refresh_leases: RefreshLeaseStore::new(pool.clone()),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
+    };
+    let fingerprint = crate::support::fingerprint::test_fingerprint();
+    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    services
+        .account_pool
+        .restore_from_repository()
+        .await
+        .unwrap();
+    let state = AppState {
+        config,
+        services: (*services).clone(),
+    };
+    let app = codex_proxy_rs::http::router::router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/settings")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_runtime")
+                .body(Body::from(
+                    json!({
+                        "modelAliases": {
+                            "runtime-alias": "gpt-5.5"
+                        },
+                        "modelAccountRoutes": {
+                            "gpt-5.5": ["acct_runtime_b"],
+                            "gpt-5.6": ["acct_runtime_a", "acct_runtime_b"]
+                        },
+                        "refreshMarginSeconds": 120,
+                        "refreshConcurrency": 3,
+                        "maxConcurrentPerAccount": 2,
+                        "requestIntervalMs": 30,
+                        "rotationStrategy": "round_robin"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let parsed = services
+        .models
+        .catalog()
+        .await
+        .parse_model_name("runtime-alias");
+    assert_eq!(parsed.model_id, "gpt-5.5");
+
+    let refresh_policy = services.refresh_policy.snapshot();
+    assert_eq!(refresh_policy.refresh_margin_seconds, 120);
+    assert_eq!(refresh_policy.refresh_concurrency, 3);
+
+    let capacity = services.account_pool.capacity_summary(Utc::now()).await;
+    assert_eq!(capacity.total_slots, 4);
+    assert_eq!(capacity.max_concurrent_per_account, 2);
+
+    let route_request = AccountAcquireRequest::new("gpt-5.5", Utc::now());
+    let routed = services
+        .account_pool
+        .acquire_with(&route_request)
+        .await
+        .unwrap();
+    assert_eq!(routed.account.id, "acct_runtime_b");
+    services.account_pool.release(&routed.account.id).await;
+
+    let rotation_request = AccountAcquireRequest::new("gpt-5.6", Utc::now());
+    let first = services
+        .account_pool
+        .acquire_with(&rotation_request)
+        .await
+        .unwrap();
+    let second = services
+        .account_pool
+        .acquire_with(&rotation_request)
+        .await
+        .unwrap();
+    assert_eq!(first.account.id, "acct_runtime_a");
+    assert_eq!(second.account.id, "acct_runtime_b");
+
+    let repeated = services
+        .account_pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await
+        .unwrap();
+    assert_eq!(repeated.account.id, "acct_runtime_b");
+    let started_at = Instant::now();
+    services
+        .account_pool
+        .wait_for_request_interval(&repeated)
+        .await;
+    assert!(started_at.elapsed() >= StdDuration::from_millis(20));
+}
+
+#[tokio::test]
 async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("admin-settings-update-invalid.sqlite");
@@ -399,7 +521,7 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
@@ -442,7 +564,7 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
@@ -469,6 +591,28 @@ insert into accounts (
     )
     .bind(account_id)
     .bind("access-token")
+    .bind("2026-06-18T00:00:00Z")
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_schedulable_account(pool: &SqlitePool, account_id: &str) {
+    sqlx::query(
+        r"
+insert into accounts (
+  id,
+  access_token,
+  access_token_expires_at,
+  status,
+  added_at,
+  updated_at
+) values (?, ?, ?, 'active', ?, ?)",
+    )
+    .bind(account_id)
+    .bind("access-token")
+    .bind("2099-01-01T00:00:00Z")
     .bind("2026-06-18T00:00:00Z")
     .bind("2026-06-18T00:00:00Z")
     .execute(pool)

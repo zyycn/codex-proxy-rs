@@ -53,9 +53,10 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
             pool.clone(),
         ),
         client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
-        event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
-            pool.clone(),
-        ),
+        usage_records:
+            codex_proxy_rs::admin::monitoring::usage_record_store::SqliteUsageRecordStore::new(
+                pool.clone(),
+            ),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(

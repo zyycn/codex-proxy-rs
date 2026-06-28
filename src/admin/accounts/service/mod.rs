@@ -15,8 +15,10 @@ use chrono::{DateTime, Duration};
 
 use crate::{
     upstream::accounts::{
-        cookies::SqliteCookieStore, pool::RuntimeAccountPoolService, store::SqliteAccountStore,
-        token_refresh::TokenRefresher,
+        cookies::SqliteCookieStore,
+        pool::RuntimeAccountPoolService,
+        store::SqliteAccountStore,
+        token_refresh::{RuntimeRefreshPolicy, TokenRefresher},
     },
     upstream::transport::CodexBackendClient,
 };
@@ -35,7 +37,7 @@ pub struct AdminAccountService {
     pub(crate) account_pool: StdArc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: StdArc<dyn TokenRefresher>,
     pub(crate) oauth: oauth::AccountOAuthService,
-    pub(crate) refresh_margin_seconds: u64,
+    pub(crate) refresh_policy: RuntimeRefreshPolicy,
     pub(crate) installation_id: Option<String>,
 }
 
@@ -46,7 +48,7 @@ pub struct AdminAccountServiceParts {
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub token_refresher: StdArc<dyn TokenRefresher>,
     pub oauth: oauth::AccountOAuthService,
-    pub refresh_margin_seconds: u64,
+    pub refresh_policy: RuntimeRefreshPolicy,
     pub installation_id: Option<String>,
 }
 
@@ -59,7 +61,7 @@ impl AdminAccountService {
             account_pool: parts.account_pool,
             token_refresher: parts.token_refresher,
             oauth: parts.oauth,
-            refresh_margin_seconds: parts.refresh_margin_seconds,
+            refresh_policy: parts.refresh_policy,
             installation_id: parts.installation_id,
         }
     }
@@ -68,7 +70,10 @@ impl AdminAccountService {
         &self,
         expires_at: DateTime<chrono::Utc>,
     ) -> DateTime<chrono::Utc> {
-        let margin_seconds = self.refresh_margin_seconds.min(i64::MAX as u64) as i64;
+        let margin_seconds = self
+            .refresh_policy
+            .refresh_margin_seconds()
+            .min(i64::MAX as u64) as i64;
         expires_at - Duration::seconds(margin_seconds)
     }
 

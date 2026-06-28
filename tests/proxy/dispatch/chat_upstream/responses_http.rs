@@ -249,7 +249,7 @@ async fn responses_non_stream_should_record_websocket_transport_metadata() {
     assert_eq!(body["id"], "resp_ws_non_stream_log");
     assert_eq!(captured.payload["type"], "response.create");
 
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["transport"], "websocket");

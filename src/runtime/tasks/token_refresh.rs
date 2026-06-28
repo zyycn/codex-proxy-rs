@@ -7,7 +7,9 @@ use tracing::{debug, info, warn};
 
 use crate::upstream::accounts::{
     store::SqliteAccountStore,
-    token_refresh::{RefreshLeaseStore, RefreshPolicy, RuntimeTokenRefreshService, TokenRefresher},
+    token_refresh::{
+        RefreshLeaseStore, RuntimeRefreshPolicy, RuntimeTokenRefreshService, TokenRefresher,
+    },
 };
 
 use super::coordinator::SchedulerHandle;
@@ -28,7 +30,7 @@ where
     C: TokenRefresher,
 {
     /// 构造默认后台任务。
-    pub fn new(store: SqliteAccountStore, policy: RefreshPolicy, client: C) -> Self {
+    pub fn new(store: SqliteAccountStore, policy: RuntimeRefreshPolicy, client: C) -> Self {
         Self {
             service: RuntimeTokenRefreshService::new(store, policy, client),
             interval_secs: DEFAULT_INTERVAL_SECS,

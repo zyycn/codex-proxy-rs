@@ -1,10 +1,13 @@
 use std::{
     io::{self, Write},
+    net::SocketAddr,
     sync::{Arc, Mutex},
 };
 
 use axum::{
     body::{to_bytes, Body},
+    extract::connect_info::ConnectInfo,
+    http::HeaderMap,
     http::{Request, StatusCode},
     middleware::from_fn,
     routing::get,
@@ -103,4 +106,61 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
             && output.contains("latency_ms"),
         "unexpected trace output: {output}"
     );
+}
+
+#[tokio::test]
+async fn request_context_should_attach_real_ip_from_connection() {
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|headers: HeaderMap| async move {
+                headers
+                    .get("x-real-ip")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+        )
+        .layer(from_fn(attach_request_id));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "127.0.0.1");
+}
+
+#[tokio::test]
+async fn request_context_should_not_override_forwarded_ip_headers() {
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|headers: HeaderMap| async move {
+                headers
+                    .get("x-real-ip")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("missing")
+                    .to_string()
+            }),
+        )
+        .layer(from_fn(attach_request_id));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-forwarded-for", "203.0.113.42, 10.0.0.2")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "missing");
 }

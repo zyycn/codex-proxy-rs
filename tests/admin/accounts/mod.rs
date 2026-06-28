@@ -7,7 +7,7 @@ use axum::{
 use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
-    admin::monitoring::event_store::SqliteEventLogStore,
+    admin::monitoring::usage_record_store::SqliteUsageRecordStore,
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},
@@ -153,7 +153,7 @@ async fn admin_accounts_test_app_with_overrides(
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));

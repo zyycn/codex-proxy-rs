@@ -23,7 +23,7 @@ use crate::upstream::accounts::{
     },
     token_refresh::{
         jwt_expiration, RefreshError, RefreshLeaseStore, RefreshLeaseStoreError, RefreshPolicy,
-        RefreshScheduler, RefreshTrigger, TokenRefresher,
+        RefreshScheduler, RefreshTrigger, RuntimeRefreshPolicy, TokenRefresher,
     },
 };
 
@@ -41,7 +41,7 @@ where
 {
     store: SqliteAccountStore,
     scheduler: Arc<RefreshScheduler<C>>,
-    refresh_margin_seconds: u64,
+    policy: RuntimeRefreshPolicy,
     refresh_leases: Option<RefreshLeaseStore>,
     lease_owner: String,
     retry_delays: Vec<Duration>,
@@ -70,7 +70,7 @@ where
         Self {
             store: self.store.clone(),
             scheduler: self.scheduler.clone(),
-            refresh_margin_seconds: self.refresh_margin_seconds,
+            policy: self.policy.clone(),
             refresh_leases: self.refresh_leases.clone(),
             lease_owner: self.lease_owner.clone(),
             retry_delays: self.retry_delays.clone(),
@@ -85,11 +85,16 @@ where
     C: TokenRefresher,
 {
     /// 构造运行时 token refresh 服务。
-    pub fn new(store: SqliteAccountStore, policy: RefreshPolicy, client: C) -> Self {
+    pub fn new(
+        store: SqliteAccountStore,
+        policy: impl Into<RuntimeRefreshPolicy>,
+        client: C,
+    ) -> Self {
+        let policy = policy.into();
         Self {
             store,
-            scheduler: Arc::new(RefreshScheduler::new(policy, client)),
-            refresh_margin_seconds: policy.refresh_margin_seconds,
+            scheduler: Arc::new(RefreshScheduler::new(policy.clone(), client)),
+            policy,
             refresh_leases: None,
             lease_owner: refresh_lease_owner(),
             retry_delays: default_refresh_retry_delays(),
@@ -102,6 +107,11 @@ where
     pub fn with_refresh_lease_store(mut self, refresh_leases: RefreshLeaseStore) -> Self {
         self.refresh_leases = Some(refresh_leases);
         self
+    }
+
+    /// 更新刷新策略。
+    pub fn update_policy(&self, policy: RefreshPolicy) {
+        self.policy.update(policy);
     }
 
     /// 使用自定义刷新重试延迟。
@@ -300,7 +310,7 @@ where
         let expires_at = account
             .access_token_expires_at
             .or_else(|| jwt_expiration(&account.access_token))?;
-        let margin_seconds = self.refresh_margin_seconds.min(i64::MAX as u64) as i64;
+        let margin_seconds = self.policy.refresh_margin_seconds().min(i64::MAX as u64) as i64;
         Some(expires_at - chrono::Duration::seconds(margin_seconds))
     }
 

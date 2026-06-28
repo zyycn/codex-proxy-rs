@@ -1,6 +1,6 @@
 //! 刷新租约存储、JWT 解码与账号 claims 验证。
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -159,6 +159,64 @@ pub struct RefreshPolicy {
     pub refresh_concurrency: u32,
 }
 
+/// 运行时共享刷新策略。
+#[derive(Clone)]
+pub struct RuntimeRefreshPolicy {
+    policy: Arc<RwLock<RefreshPolicy>>,
+    semaphore: Arc<RwLock<Arc<Semaphore>>>,
+}
+
+impl RuntimeRefreshPolicy {
+    /// 构造共享刷新策略。
+    pub fn new(policy: RefreshPolicy) -> Self {
+        Self {
+            policy: Arc::new(RwLock::new(policy)),
+            semaphore: Arc::new(RwLock::new(Arc::new(Semaphore::new(
+                policy.refresh_concurrency.max(1) as usize,
+            )))),
+        }
+    }
+
+    /// 返回当前策略快照。
+    pub fn snapshot(&self) -> RefreshPolicy {
+        *self
+            .policy
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// 更新当前策略。
+    pub fn update(&self, policy: RefreshPolicy) {
+        *self
+            .policy
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
+        *self
+            .semaphore
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Arc::new(Semaphore::new(policy.refresh_concurrency.max(1) as usize));
+    }
+
+    /// 返回当前提前刷新秒数。
+    pub fn refresh_margin_seconds(&self) -> u64 {
+        self.snapshot().refresh_margin_seconds
+    }
+
+    fn semaphore(&self) -> Arc<Semaphore> {
+        self.semaphore
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl From<RefreshPolicy> for RuntimeRefreshPolicy {
+    fn from(policy: RefreshPolicy) -> Self {
+        Self::new(policy)
+    }
+}
+
 /// 触发刷新动作的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshTrigger {
@@ -215,9 +273,8 @@ pub trait TokenRefresher: Send + Sync + 'static {
 /// 负责执行单账号刷新策略的调度器。
 #[derive(Clone)]
 pub struct RefreshScheduler<C> {
-    policy: RefreshPolicy,
+    policy: RuntimeRefreshPolicy,
     client: Arc<C>,
-    semaphore: Arc<Semaphore>,
 }
 
 impl<C> RefreshScheduler<C>
@@ -225,13 +282,16 @@ where
     C: TokenRefresher,
 {
     /// 使用策略和上游刷新端口构造调度器。
-    pub fn new(policy: RefreshPolicy, client: C) -> Self {
-        let concurrency = policy.refresh_concurrency.max(1) as usize;
+    pub fn new(policy: impl Into<RuntimeRefreshPolicy>, client: C) -> Self {
         Self {
-            policy,
+            policy: policy.into(),
             client: Arc::new(client),
-            semaphore: Arc::new(Semaphore::new(concurrency)),
         }
+    }
+
+    /// 更新刷新策略。
+    pub fn update_policy(&self, policy: RefreshPolicy) {
+        self.policy.update(policy);
     }
 
     /// 在给定时间点按触发原因刷新账号。
@@ -258,8 +318,8 @@ where
             return Ok(expired);
         };
 
-        let _permit = self
-            .semaphore
+        let semaphore = self.policy.semaphore();
+        let _permit = semaphore
             .acquire()
             .await
             .map_err(|_| RefreshError::ConcurrencyClosed)?;
@@ -301,7 +361,8 @@ where
     }
 
     fn refresh_margin(&self) -> Duration {
-        let seconds = self.policy.refresh_margin_seconds.min(86_400 * 7) as i64;
+        let policy = self.policy.snapshot();
+        let seconds = policy.refresh_margin_seconds.min(86_400 * 7) as i64;
         Duration::seconds(seconds)
     }
 }

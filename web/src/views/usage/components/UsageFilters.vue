@@ -1,32 +1,31 @@
 <script setup lang="ts">
-import { RefreshCw, Search, Trash2 } from '@lucide/vue'
+import { RefreshCw, Search } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 
 defineProps<{
-  levelOptions: any[]
+  statusOptions: any[]
   refreshing: boolean
   loading: boolean
-  clearing: boolean
+  statusDisabled?: boolean
 }>()
 
 const search = defineModel<string>('search', { required: true })
-const level = defineModel<string>('level', { required: true })
+const status = defineModel<string>('status', { required: true })
 
 const emit = defineEmits<{
   refresh: []
-  clear: []
 }>()
 </script>
 
 <template>
-  <div class="flex flex-wrap items-center justify-between gap-3" aria-label="日志筛选">
+  <div class="flex flex-wrap items-center justify-between gap-3" aria-label="使用记录筛选">
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
       <BaseInput
         v-model="search"
-        placeholder="搜索消息、请求 ID 或路由"
+        placeholder="搜索请求 ID、端点、模型或消息"
         class="min-w-64 flex-1 sm:max-w-96"
       >
         <template #prefix>
@@ -34,7 +33,12 @@ const emit = defineEmits<{
         </template>
       </BaseInput>
 
-      <BaseSelect v-model="level" :options="levelOptions" class="w-34" />
+      <BaseSelect
+        v-model="status"
+        :options="statusOptions"
+        :disabled="statusDisabled"
+        class="w-34"
+      />
     </div>
 
     <div class="flex shrink-0 items-center gap-2">
@@ -42,18 +46,11 @@ const emit = defineEmits<{
         icon-only
         variant="ghost"
         size="md"
-        label="刷新日志"
+        label="刷新使用记录"
         :disabled="loading || refreshing"
         @click="emit('refresh')"
       >
         <RefreshCw class="size-4.5" :class="refreshing ? 'animate-spin' : undefined" />
-      </BaseButton>
-
-      <BaseButton variant="danger" :disabled="clearing" @click="emit('clear')">
-        <template #icon>
-          <Trash2 class="size-4" />
-        </template>
-        清空日志
       </BaseButton>
     </div>
   </div>

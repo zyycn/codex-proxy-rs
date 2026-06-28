@@ -95,6 +95,7 @@ const horizontalThumbLeft = shallowRef(0)
 const horizontalHovering = shallowRef(false)
 const horizontalDragging = shallowRef(false)
 const horizontalScrolled = shallowRef(false)
+const horizontalCanScrollRight = shallowRef(false)
 
 let horizontalDragStartX = 0
 let horizontalDragStartScrollLeft = 0
@@ -108,24 +109,40 @@ const horizontalThumbStyle = computed(() => ({
 const pagerItems = computed(() => getPagerItems(totalPages.value, currentPage.value))
 
 function fixedHeaderClass(column: BaseTableColumn) {
-  if (column.fixed !== 'left') {
+  if (!column.fixed) {
     return undefined
   }
 
+  const showShadow =
+    column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
+
   return [
-    'sticky left-0 z-30 bg-(--cp-bg-subtle)',
-    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]' : undefined,
+    'sticky z-30 bg-(--cp-bg-subtle)',
+    column.fixed === 'left' ? 'left-0' : 'right-0',
+    showShadow
+      ? column.fixed === 'left'
+        ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]'
+        : 'shadow-[-8px_0_14px_-14px_var(--cp-shadow-sticky)]'
+      : undefined,
   ]
 }
 
 function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
-  if (column.fixed !== 'left') {
+  if (!column.fixed) {
     return undefined
   }
 
+  const showShadow =
+    column.fixed === 'left' ? horizontalScrolled.value : horizontalCanScrollRight.value
+
   return [
-    'sticky left-0 z-20',
-    horizontalScrolled.value ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]' : undefined,
+    'sticky z-20',
+    column.fixed === 'left' ? 'left-0' : 'right-0',
+    showShadow
+      ? column.fixed === 'left'
+        ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]'
+        : 'shadow-[-8px_0_14px_-14px_var(--cp-shadow-sticky)]'
+      : undefined,
     isRowSelected(row, index)
       ? 'bg-(--cp-bg-tertiary)'
       : props.stripe && index % 2 === 1
@@ -188,6 +205,7 @@ function updateHorizontalScrollbar() {
     horizontalThumbWidth.value = 0
     horizontalThumbLeft.value = 0
     horizontalScrolled.value = false
+    horizontalCanScrollRight.value = false
     return
   }
 
@@ -198,6 +216,7 @@ function updateHorizontalScrollbar() {
   )
   horizontalThumbLeft.value = (wrap.scrollLeft / scrollRange) * maxHorizontalThumbLeft(wrap)
   horizontalScrolled.value = wrap.scrollLeft > 0
+  horizontalCanScrollRight.value = wrap.scrollLeft < scrollRange - 1
 }
 
 function handleTableScroll() {
@@ -456,7 +475,7 @@ function paginationPageClass(page: number) {
     </div>
 
     <footer
-      v-if="pagination && pagination.total > 0"
+      v-if="pagination"
       class="mt-2 flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-3 px-0 py-1"
     >
       <div

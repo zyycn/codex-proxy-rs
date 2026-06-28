@@ -8,8 +8,8 @@ use codex_proxy_rs::{
         auth::service::SqliteAdminSessionStore,
         keys::service::SqliteClientKeyStore,
         monitoring::{
-            event_store::SqliteEventLogStore,
-            events::{EventLevel, EventLog},
+            usage_record::{UsageRecord, UsageRecordLevel},
+            usage_record_store::SqliteUsageRecordStore,
         },
     },
     infra::{database::connect_sqlite, time::china_day_start},
@@ -71,23 +71,23 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_
     .await;
     let now = Utc::now();
     let today_start = china_day_start(now);
-    let today_log_at = if now - today_start > Duration::minutes(1) {
+    let today_record_at = if now - today_start > Duration::minutes(1) {
         today_start + Duration::minutes(1)
     } else {
         now - Duration::seconds(1)
     };
-    let yesterday_log_at = today_start - Duration::minutes(1);
+    let yesterday_record_at = today_start - Duration::minutes(1);
 
-    let mut first = usage_log_with_tokens(today_log_at, 10);
+    let mut first = usage_record_with_tokens(today_record_at, 10);
     first.latency_ms = Some(1_000);
     first.metadata["firstTokenMs"] = json!(200u64);
-    let mut second = usage_log_with_tokens(today_log_at, 20);
+    let mut second = usage_record_with_tokens(today_record_at, 20);
     second.latency_ms = Some(2_000);
     second.metadata["firstTokenMs"] = json!(400u64);
     store.append(&first).await.unwrap();
     store.append(&second).await.unwrap();
     store
-        .append(&usage_log_with_tokens(yesterday_log_at, 30))
+        .append(&usage_record_with_tokens(yesterday_record_at, 30))
         .await
         .unwrap();
 
@@ -114,20 +114,20 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_keep_trend_after_event_logs_are_cleared() {
+async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
     let (app, store, _pool, _dir) = dashboard_test_app(
-        "dashboard-time-buckets-survive-log-clear.sqlite",
+        "dashboard-time-buckets-survive-usage-record-clear.sqlite",
         crate::support::fingerprint::test_fingerprint(),
     )
     .await;
-    let mut log = usage_log_with_tokens(Utc::now(), 12);
-    log.latency_ms = Some(900);
-    store.append(&log).await.unwrap();
+    let mut record = usage_record_with_tokens(Utc::now(), 12);
+    record.latency_ms = Some(900);
+    store.append(&record).await.unwrap();
     store.clear().await.unwrap();
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(body["data"]["eventLogs"].as_array().unwrap().len(), 0);
+    assert_eq!(body["data"]["usageRecords"].as_array().unwrap().len(), 0);
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], 1);
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], 12);
     assert_eq!(
@@ -143,7 +143,7 @@ async fn dashboard_summary_should_keep_trend_after_event_logs_are_cleared() {
 
 #[tokio::test]
 async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tier() {
-    let cost = dashboard_summary_total_cost_for_log(
+    let cost = dashboard_summary_total_cost_for_usage_record(
         "dashboard-cost-priority.sqlite",
         "gpt-5.5",
         json!({
@@ -162,7 +162,7 @@ async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tie
 
 #[tokio::test]
 async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
-    let cost = dashboard_summary_total_cost_for_log(
+    let cost = dashboard_summary_total_cost_for_usage_record(
         "dashboard-cost-cached.sqlite",
         "gpt-5.5",
         json!({
@@ -180,7 +180,7 @@ async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
 
 #[tokio::test]
 async fn dashboard_summary_should_apply_long_context_prices() {
-    let cost = dashboard_summary_total_cost_for_log(
+    let cost = dashboard_summary_total_cost_for_usage_record(
         "dashboard-cost-long-context.sqlite",
         "gpt-5.5",
         json!({
@@ -198,7 +198,7 @@ async fn dashboard_summary_should_apply_long_context_prices() {
 
 #[tokio::test]
 async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
-    let cost = dashboard_summary_total_cost_for_log(
+    let cost = dashboard_summary_total_cost_for_usage_record(
         "dashboard-cost-codex-model.sqlite",
         "codex-auto-review",
         json!({
@@ -241,7 +241,7 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
     )
     .await;
     store
-        .append(&usage_log_with_tokens(
+        .append(&usage_record_with_tokens(
             "2026-06-18T12:34:56Z".parse().unwrap(),
             10,
         ))
@@ -251,7 +251,10 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(body["data"]["eventLogs"][0]["time"], "20:34:56");
+    assert_eq!(
+        body["data"]["usageRecords"][0]["createdAtDisplay"],
+        "2026-06-18 20:34:56"
+    );
     assert_eq!(body["data"]["accountUsage"][0]["lastUsed"], "2000-01-01");
 }
 
@@ -263,11 +266,14 @@ async fn dashboard_summary_should_return_seven_day_health_timeline() {
     )
     .await;
     store
-        .append(&usage_log_with_tokens(Utc::now(), 10))
+        .append(&usage_record_with_tokens(Utc::now(), 10))
         .await
         .unwrap();
     store
-        .append(&usage_log_with_tokens(Utc::now() - Duration::days(8), 10))
+        .append(&usage_record_with_tokens(
+            Utc::now() - Duration::days(8),
+            10,
+        ))
         .await
         .unwrap();
 
@@ -279,11 +285,15 @@ async fn dashboard_summary_should_return_seven_day_health_timeline() {
     assert_eq!(points.matches('1').count(), 1);
 }
 
-async fn dashboard_summary_total_cost_for_log(db_name: &str, model: &str, metadata: Value) -> f64 {
+async fn dashboard_summary_total_cost_for_usage_record(
+    db_name: &str,
+    model: &str,
+    metadata: Value,
+) -> f64 {
     let (app, store, _pool, _dir) =
         dashboard_test_app(db_name, crate::support::fingerprint::test_fingerprint()).await;
     store
-        .append(&usage_log(Utc::now(), model, metadata))
+        .append(&usage_record(Utc::now(), model, metadata))
         .await
         .unwrap();
 
@@ -298,7 +308,7 @@ async fn dashboard_test_app(
     fingerprint: Fingerprint,
 ) -> (
     axum::Router,
-    SqliteEventLogStore,
+    SqliteUsageRecordStore,
     SqlitePool,
     tempfile::TempDir,
 ) {
@@ -316,7 +326,7 @@ async fn dashboard_test_app(
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
@@ -325,7 +335,7 @@ async fn dashboard_test_app(
     };
     (
         codex_proxy_rs::http::router::router().with_state(state),
-        SqliteEventLogStore::new(pool.clone()),
+        SqliteUsageRecordStore::new(pool.clone()),
         pool,
         dir,
     )
@@ -394,8 +404,8 @@ fn service_status_value<'a>(body: &'a Value, label: &str) -> &'a str {
         .unwrap()
 }
 
-fn usage_log_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> EventLog {
-    usage_log(
+fn usage_record_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> UsageRecord {
+    usage_record(
         created_at,
         "gpt-5.5",
         json!({
@@ -408,12 +418,12 @@ fn usage_log_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -
     )
 }
 
-fn usage_log(created_at: chrono::DateTime<Utc>, model: &str, metadata: Value) -> EventLog {
-    let mut log = EventLog::new("v1.response", EventLevel::Info, "completed");
-    log.model = Some(model.to_string());
-    log.created_at = created_at;
-    log.metadata = metadata;
-    log
+fn usage_record(created_at: chrono::DateTime<Utc>, model: &str, metadata: Value) -> UsageRecord {
+    let mut record = UsageRecord::new("v1.response", UsageRecordLevel::Info, "completed");
+    record.model = Some(model.to_string());
+    record.created_at = created_at;
+    record.metadata = metadata;
+    record
 }
 
 fn assert_f64_eq(actual: f64, expected: f64) {

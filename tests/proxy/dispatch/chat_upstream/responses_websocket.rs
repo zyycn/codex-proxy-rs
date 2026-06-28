@@ -2116,7 +2116,7 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
         .expect("test should be able to finish upstream websocket");
     let body = response_text(response).await;
     let captured = upstream.await.unwrap();
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("resp_live_websocket_stream"));

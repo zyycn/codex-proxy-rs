@@ -204,6 +204,8 @@ fn test_responses_request(model: String) -> CodexResponsesRequest {
         variant_identity: None,
         include: None,
         client_metadata: None,
+        client_ip: None,
+        client_user_agent: None,
         use_websocket: false,
         force_http_sse: true,
         turn_state: None,

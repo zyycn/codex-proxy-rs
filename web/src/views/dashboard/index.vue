@@ -4,7 +4,7 @@ import { RefreshCw } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
-import EventLogCard from './components/EventLogCard.vue'
+import UsageRecordCard from './components/UsageRecordCard.vue'
 import MetricCard from './components/MetricCard.vue'
 import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
 import RequestTrendCard from './components/RequestTrendCard.vue'
@@ -21,7 +21,7 @@ const {
   healthTimeline,
   accountUsage,
   serviceStatuses,
-  eventLogs,
+  usageRecords,
   poolSummary,
   capacityInfo,
   rotationStrategy,
@@ -83,6 +83,6 @@ const {
 
     <RequestHealthTimelineCard :timeline="healthTimeline" class="mt-6" />
 
-    <EventLogCard :rows="eventLogs" class="mt-6" />
+    <UsageRecordCard :rows="usageRecords" class="mt-6" />
   </div>
 </template>

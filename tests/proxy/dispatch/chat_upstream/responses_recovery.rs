@@ -2119,7 +2119,7 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
     assert_eq!(body["error"]["code"], "upstream_error");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "error");
     assert_eq!(
@@ -2203,7 +2203,7 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
     assert!(!response_request_id.is_empty());
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "error");
     assert_eq!(

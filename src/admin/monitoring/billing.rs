@@ -150,14 +150,37 @@ const MODEL_PRICING_RULES: &[ModelPricingRule] = &[
     },
 ];
 
-/// 按 codex2api 的 billing 引擎口径计算美元计费。
-pub(in crate::admin) fn calculate_cost(
+/// 单次请求计费明细。
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::admin) struct CostBreakdown {
+    /// 输入成本。
+    pub input_cost: f64,
+    /// 输出成本。
+    pub output_cost: f64,
+    /// 缓存读取成本。
+    pub cache_read_cost: f64,
+    /// 总成本。
+    pub total_cost: f64,
+    /// 输入单价，美元 / 1M token。
+    pub input_price_per_mtoken: f64,
+    /// 输出单价，美元 / 1M token。
+    pub output_price_per_mtoken: f64,
+    /// 缓存读取单价，美元 / 1M token。
+    pub cache_read_price_per_mtoken: f64,
+    /// 服务档位。
+    pub service_tier: Option<String>,
+    /// 服务档位倍率。
+    pub tier_multiplier: f64,
+}
+
+/// 按 codex2api 的 billing 引擎口径计算美元计费明细。
+pub(in crate::admin) fn calculate_cost_breakdown(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
-) -> f64 {
+) -> CostBreakdown {
     let pricing = model_pricing(model);
     let is_long = input_tokens > LONG_CONTEXT_THRESHOLD;
 
@@ -202,8 +225,37 @@ pub(in crate::admin) fn calculate_cost(
     let input_cost = uncached_input_tokens as f64 / 1_000_000.0 * input_price;
     let cache_read_cost = cached_tokens as f64 / 1_000_000.0 * cache_read_price;
     let output_cost = output_tokens as f64 / 1_000_000.0 * output_price;
+    let total_cost = (input_cost + cache_read_cost + output_cost) * tier_multiplier;
 
-    (input_cost + cache_read_cost + output_cost) * tier_multiplier
+    CostBreakdown {
+        input_cost,
+        output_cost,
+        cache_read_cost,
+        total_cost,
+        input_price_per_mtoken: input_price,
+        output_price_per_mtoken: output_price,
+        cache_read_price_per_mtoken: cache_read_price,
+        service_tier: normalize_service_tier(service_tier),
+        tier_multiplier,
+    }
+}
+
+/// 按 codex2api 的 billing 引擎口径计算美元计费。
+pub(in crate::admin) fn calculate_cost(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    model: &str,
+    service_tier: Option<&str>,
+) -> f64 {
+    calculate_cost_breakdown(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        model,
+        service_tier,
+    )
+    .total_cost
 }
 
 fn model_pricing(model: &str) -> ModelPricing {

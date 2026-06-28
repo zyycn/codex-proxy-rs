@@ -8,7 +8,7 @@ export interface BaseTableColumn {
   minWidth?: number | string
   maxWidth?: number | string
   flex?: number
-  fixed?: 'left'
+  fixed?: 'left' | 'right'
   align?: 'left' | 'right' | 'center'
   ellipsis?: boolean
   emptyText?: string
