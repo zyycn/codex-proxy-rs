@@ -50,7 +50,7 @@ async fn responses_review_route_should_force_review_subagent_upstream() {
 }
 
 #[tokio::test]
-async fn responses_review_route_should_record_review_route_in_event_log() {
+async fn responses_review_route_should_record_review_route_in_usage_record() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -88,7 +88,7 @@ async fn responses_review_route_should_record_review_route_in_event_log() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     assert_eq!(event.request_id.as_deref(), Some("req_review_route_log"));
     assert_eq!(event.route.as_deref(), Some("/v1/responses/review"));
 }
@@ -211,7 +211,7 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
         upstream_body["input"][2]["encrypted_content"],
         "enc_compact"
     );
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.request_id.as_deref(), Some("req_compact_success_log"));
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
@@ -272,7 +272,7 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
     assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
     assert!(message.contains("compact quota reached"));
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
         event.request_id.as_deref(),
@@ -338,7 +338,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "invalid_request_error");
     assert_eq!(body["error"]["code"], "codex_api_error");
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
         event.request_id.as_deref(),

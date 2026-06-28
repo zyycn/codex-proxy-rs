@@ -2,27 +2,27 @@
 import { watchDebounced } from '@vueuse/core'
 import { computed, ref, type Ref } from 'vue'
 
-export function useLogFilters(totalLogs: Ref<number>) {
+export function useUsageFilters(totalRecords: Ref<number>) {
   const page = ref(1)
-  const pageSize = ref(20)
+  const pageSize = ref(10)
   const searchQuery = ref('')
-  const filterLevel = ref('')
-  let loadLogs: (() => Promise<void> | void) | undefined
+  const filterStatus = ref('')
+  let loadUsageRecords: ((scope?: 'all' | 'table') => Promise<void> | void) | undefined
 
-  const logPagination = computed(() => ({
+  const usagePagination = computed(() => ({
     page: page.value,
     pageSize: pageSize.value,
-    total: totalLogs.value,
+    total: totalRecords.value,
     pageSizes: [10, 20, 50, 100],
   }))
 
-  function bindLogLoader(loader: () => Promise<void> | void) {
-    loadLogs = loader
+  function bindUsageRecordLoader(loader: (scope?: 'all' | 'table') => Promise<void> | void) {
+    loadUsageRecords = loader
   }
 
-  function requestLoad() {
-    if (loadLogs) {
-      void loadLogs()
+  function requestLoad(scope: 'all' | 'table' = 'table') {
+    if (loadUsageRecords) {
+      void loadUsageRecords(scope)
     }
   }
 
@@ -38,10 +38,10 @@ export function useLogFilters(totalLogs: Ref<number>) {
   }
 
   watchDebounced(
-    [searchQuery, filterLevel],
+    [searchQuery, filterStatus],
     () => {
       page.value = 1
-      requestLoad()
+      requestLoad('table')
     },
     { debounce: 250 },
   )
@@ -50,9 +50,9 @@ export function useLogFilters(totalLogs: Ref<number>) {
     page,
     pageSize,
     searchQuery,
-    filterLevel,
-    logPagination,
-    bindLogLoader,
+    filterStatus,
+    usagePagination,
+    bindUsageRecordLoader,
     handlePageChange,
     handlePageSizeChange,
   }

@@ -6,9 +6,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   Cat,
+  ChartNoAxesColumn,
   KeyRound,
   LayoutDashboard,
-  List,
   LogOut,
   Moon,
   PanelLeftClose,
@@ -34,7 +34,7 @@ const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
   { label: '账号管理', icon: Users, path: '/accounts' },
   { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
-  { label: '事件日志', icon: List, path: '/logs' },
+  { label: '使用记录', icon: ChartNoAxesColumn, path: '/usage' },
   { label: '系统设置', icon: Settings, path: '/settings' },
 ]
 

@@ -1,4 +1,4 @@
-//! 事件日志模型。
+//! 使用记录模型。
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use uuid::Uuid;
 /// 事件等级。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum EventLevel {
+pub enum UsageRecordLevel {
     /// 调试。
     Debug,
     /// 信息。
@@ -19,10 +19,10 @@ pub enum EventLevel {
     Error,
 }
 
-/// 结构化事件日志。
+/// 结构化使用记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct EventLog {
+pub struct UsageRecord {
     /// 事件 ID。
     pub id: String,
     /// 请求 ID。
@@ -30,7 +30,7 @@ pub struct EventLog {
     /// 事件类别。
     pub kind: String,
     /// 事件等级。
-    pub level: EventLevel,
+    pub level: UsageRecordLevel,
     /// 账号 ID。
     pub account_id: Option<String>,
     /// HTTP 路由。
@@ -62,11 +62,15 @@ pub struct EventLog {
     pub created_at: DateTime<Utc>,
 }
 
-impl EventLog {
-    /// 构造事件日志。
-    pub fn new(kind: impl Into<String>, level: EventLevel, message: impl Into<String>) -> Self {
+impl UsageRecord {
+    /// 构造使用记录。
+    pub fn new(
+        kind: impl Into<String>,
+        level: UsageRecordLevel,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
-            id: format!("log_{}", Uuid::new_v4().simple()),
+            id: format!("usage_{}", Uuid::new_v4().simple()),
             request_id: None,
             kind: kind.into(),
             level,
@@ -89,15 +93,19 @@ impl EventLog {
 }
 
 /// 响应事件记录（供 dispatch 模块使用）。
-pub struct ResponseEventRecord<'a> {
-    pub logs: &'a crate::admin::monitoring::event_store::AdminLogService,
+pub struct ResponseUsageRecord<'a> {
+    pub usage_records: &'a crate::admin::monitoring::usage_record_store::AdminUsageRecordService,
     pub request_id: &'a str,
     pub account_id: &'a str,
     pub route: &'a str,
     pub model: &'a str,
+    pub requested_model: Option<&'a str>,
+    pub client_ip: Option<&'a str>,
+    pub client_user_agent: Option<&'a str>,
+    pub reasoning_effort: Option<&'a str>,
     pub started_at: std::time::Instant,
     pub status_code: i64,
-    pub level: EventLevel,
+    pub level: UsageRecordLevel,
     pub message: &'a str,
     pub metadata: serde_json::Value,
     pub rate_limit_headers: &'a [(String, String)],

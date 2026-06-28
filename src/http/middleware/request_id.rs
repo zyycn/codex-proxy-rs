@@ -1,6 +1,13 @@
-//! 请求 ID 中间件。
+//! 请求上下文中间件。
 
-use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
+use std::net::SocketAddr;
+
+use axum::{
+    extract::{connect_info::ConnectInfo, Request},
+    http::HeaderValue,
+    middleware::Next,
+    response::Response,
+};
 use uuid::Uuid;
 
 /// 请求 ID 头。
@@ -39,10 +46,28 @@ pub async fn attach_request_id(mut request: Request, next: Next) -> Response {
         .and_then(RequestId::from_header)
         .unwrap_or_else(RequestId::generate);
 
+    attach_real_ip_from_connection(&mut request);
     request.extensions_mut().insert(request_id.clone());
     let mut response = next.run(request).await;
     if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
     response
+}
+
+fn attach_real_ip_from_connection(request: &mut Request) {
+    if request.headers().contains_key("cf-connecting-ip")
+        || request.headers().contains_key("x-real-ip")
+        || request.headers().contains_key("x-forwarded-for")
+    {
+        return;
+    }
+
+    let Some(ConnectInfo(addr)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
+        return;
+    };
+    let Ok(value) = HeaderValue::from_str(&addr.ip().to_string()) else {
+        return;
+    };
+    request.headers_mut().insert("x-real-ip", value);
 }

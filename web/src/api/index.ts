@@ -7,8 +7,8 @@ export * from './modules/accounts'
 // API Keys 管理
 export * from './modules/api-keys'
 
-// 事件日志
-export * from './modules/logs'
+// 使用记录
+export * from './modules/usage'
 
 // Dashboard 聚合
 export * from './modules/dashboard'

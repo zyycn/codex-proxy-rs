@@ -19,6 +19,7 @@ export const useUiStore = defineStore(
   () => {
     const sidebarCollapsed = shallowRef(false)
     const themeMode = shallowRef<ThemeMode>('system')
+    const themeRevision = shallowRef(0)
     const prefersDark = usePreferredDark()
     const preferredMotion = usePreferredReducedMotion()
     const systemTheme = computed<ThemeName>(() => (prefersDark.value ? 'dark' : 'light'))
@@ -58,6 +59,7 @@ export const useUiStore = defineStore(
     function commitTheme(theme: ThemeName) {
       document.documentElement.dataset.theme = theme
       document.documentElement.style.colorScheme = theme
+      themeRevision.value += 1
     }
 
     function runThemeTransition(theme: ThemeName) {
@@ -145,6 +147,7 @@ export const useUiStore = defineStore(
     return {
       sidebarCollapsed,
       themeMode,
+      themeRevision,
       effectiveTheme,
       toggleSidebar,
       initializeTheme,

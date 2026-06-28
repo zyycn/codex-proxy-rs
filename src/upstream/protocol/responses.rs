@@ -70,6 +70,12 @@ pub struct CodexResponsesRequest {
     /// 传给上游的 client metadata。
     pub client_metadata: Option<Value>,
     #[serde(skip)]
+    /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
+    pub client_ip: Option<String>,
+    #[serde(skip)]
+    /// 客户端 User-Agent，仅用于管理端使用记录展示。
+    pub client_user_agent: Option<String>,
+    #[serde(skip)]
     /// 是否偏好 WebSocket 传输。
     pub use_websocket: bool,
     #[serde(skip)]
@@ -569,6 +575,8 @@ impl CodexResponsesRequest {
             variant_identity: None,
             include: None,
             client_metadata: None,
+            client_ip: None,
+            client_user_agent: None,
             use_websocket: false,
             force_http_sse: false,
             turn_state: None,
@@ -612,4 +620,10 @@ pub struct CodexCompactRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// 输出文本格式配置。
     pub text: Option<Value>,
+    #[serde(skip)]
+    /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
+    pub client_ip: Option<String>,
+    #[serde(skip)]
+    /// 客户端 User-Agent，仅用于管理端使用记录展示。
+    pub client_user_agent: Option<String>,
 }

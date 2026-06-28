@@ -912,6 +912,7 @@ pub async fn chat_completions(
     let Ok(mut codex_request) = translate_chat_to_codex(chat_request) else {
         return invalid_chat_completion_request_response().into_response();
     };
+    super::responses::attach_client_context(&mut codex_request, &headers);
     apply_response_model_options(&mut codex_request, &parsed_model);
     let include_reasoning = codex_request
         .reasoning

@@ -5,7 +5,7 @@ import AccountsView from '@/views/accounts/index.vue'
 import ApiKeysView from '@/views/api-keys/index.vue'
 import DashboardView from '@/views/dashboard/index.vue'
 import LoginView from '@/views/login/index.vue'
-import LogsView from '@/views/logs/index.vue'
+import UsageView from '@/views/usage/index.vue'
 import SettingsView from '@/views/settings/index.vue'
 
 export const routes: RouteRecordRaw[] = [
@@ -34,9 +34,9 @@ export const routes: RouteRecordRaw[] = [
         component: ApiKeysView,
       },
       {
-        path: 'logs',
-        name: 'logs',
-        component: LogsView,
+        path: 'usage',
+        name: 'usage',
+        component: UsageView,
       },
       {
         path: 'settings',

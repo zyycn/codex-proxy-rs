@@ -13,8 +13,9 @@ use thiserror::Error;
 
 use crate::config::types::AppConfig;
 use crate::infra::identity::generate_admin_api_key;
-use crate::upstream::accounts::pool::{
-    AccountPoolOptions, RotationStrategy, RuntimeAccountPoolService,
+use crate::upstream::accounts::{
+    pool::{AccountPoolOptions, RotationStrategy, RuntimeAccountPoolService},
+    token_refresh::{RefreshPolicy, RuntimeRefreshPolicy},
 };
 
 const ROTATION_STRATEGIES: [&str; 3] = ["least_used", "round_robin", "sticky"];
@@ -245,20 +246,23 @@ pub struct AdminApiKeyStatus {
 pub struct RuntimeSettingsService {
     current: Arc<StdRwLock<Arc<AppConfig>>>,
     pool: SqlitePool,
-    account_pool: Option<Arc<RuntimeAccountPoolService>>,
+    account_pool: Arc<RuntimeAccountPoolService>,
+    refresh_policy: RuntimeRefreshPolicy,
 }
 
 impl RuntimeSettingsService {
-    /// 构造带账号池同步的运行时设置服务。
-    pub fn with_account_pool(
+    /// 构造运行时设置服务。
+    pub fn new(
         config: AppConfig,
         pool: SqlitePool,
         account_pool: Arc<RuntimeAccountPoolService>,
+        refresh_policy: RuntimeRefreshPolicy,
     ) -> Self {
         Self {
             current: Arc::new(StdRwLock::new(Arc::new(config))),
             pool,
-            account_pool: Some(account_pool),
+            account_pool,
+            refresh_policy,
         }
     }
 
@@ -292,14 +296,16 @@ impl RuntimeSettingsService {
         SettingsService::apply_patch(&mut settings, patch)?;
         save_runtime_settings(&self.pool, &settings).await?;
         apply_admin_settings_to_config(&mut next, settings);
-        if let Some(account_pool) = &self.account_pool {
-            account_pool
-                .apply_options(
-                    account_pool_options_from_config(&next),
-                    next.auth.request_interval_ms,
-                )
-                .await;
-        }
+        self.account_pool
+            .apply_options(
+                account_pool_options_from_config(&next),
+                next.auth.request_interval_ms,
+            )
+            .await;
+        self.refresh_policy.update(RefreshPolicy {
+            refresh_margin_seconds: next.auth.refresh_margin_seconds,
+            refresh_concurrency: next.auth.refresh_concurrency,
+        });
         let next = Arc::new(next);
         *self
             .current

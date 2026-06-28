@@ -727,6 +727,8 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
                 parallel_tool_calls: None,
                 reasoning: None,
                 text: None,
+                client_ip: None,
+                client_user_agent: None,
             },
             CodexRequestContext {
                 access_token: "access-token",

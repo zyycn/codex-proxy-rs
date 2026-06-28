@@ -1,6 +1,9 @@
 //! 模型目录领域：数据类型、快照存储端口与服务。
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -579,7 +582,7 @@ pub type ModelPlanAllowlist = BTreeMap<String, Vec<String>>;
 /// 模型目录服务。
 #[derive(Clone)]
 pub struct ModelService {
-    config: ModelConfig,
+    config: Arc<RwLock<ModelConfig>>,
     snapshot_store: Option<Arc<dyn ModelSnapshotStore>>,
     upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
 }
@@ -592,26 +595,35 @@ impl ModelService {
         upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
     ) -> Self {
         Self {
-            config,
+            config: Arc::new(RwLock::new(config)),
             snapshot_store,
             upstream_client,
         }
     }
 
+    /// 更新模型服务配置。
+    pub fn update_config(&self, config: ModelConfig) {
+        *self
+            .config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
     /// 构造当前对外暴露的模型目录。
     pub async fn catalog(&self) -> ModelCatalog {
+        let config = self.config_snapshot();
         let Some(snapshot_store) = self.snapshot_store.as_ref() else {
-            return ModelCatalog::from_config(&self.config);
+            return ModelCatalog::from_config(&config);
         };
 
         match snapshot_store.list_plan_snapshots().await {
             Ok(snapshots) if !snapshots.is_empty() => {
-                ModelCatalog::from_config_and_snapshots(&self.config, &snapshots)
+                ModelCatalog::from_config_and_snapshots(&config, &snapshots)
             }
-            Ok(_) => ModelCatalog::from_config(&self.config),
+            Ok(_) => ModelCatalog::from_config(&config),
             Err(error) => {
                 tracing::warn!(error = %error, "加载模型快照失败，回退到静态目录");
-                ModelCatalog::from_config(&self.config)
+                ModelCatalog::from_config(&config)
             }
         }
     }
@@ -699,10 +711,15 @@ impl ModelService {
             .list_plan_snapshots()
             .await
             .map_err(map_load_snapshots_error)?;
-        Ok(
-            ModelCatalog::from_config_and_snapshots(&self.config, &snapshots)
-                .model_plan_allowlist(),
-        )
+        let config = self.config_snapshot();
+        Ok(ModelCatalog::from_config_and_snapshots(&config, &snapshots).model_plan_allowlist())
+    }
+
+    fn config_snapshot(&self) -> ModelConfig {
+        self.config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

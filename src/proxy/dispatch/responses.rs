@@ -23,8 +23,8 @@ use tracing;
 
 use crate::{
     admin::monitoring::{
-        event_store::AdminLogService,
-        events::{EventLevel, EventLog, ResponseEventRecord},
+        usage_record::{ResponseUsageRecord, UsageRecord, UsageRecordLevel},
+        usage_record_store::AdminUsageRecordService,
     },
     proxy::dispatch::{
         cloudflare::{
@@ -104,7 +104,7 @@ pub struct ResponseDispatchService {
     codex: Arc<CodexBackendClient>,
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
-    logs: Arc<AdminLogService>,
+    usage_records: Arc<AdminUsageRecordService>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -151,7 +151,7 @@ impl ResponseDispatchService {
         models: Arc<crate::upstream::models::ModelService>,
         codex: Arc<CodexBackendClient>,
         session_affinity: Arc<RuntimeSessionAffinityService>,
-        logs: Arc<AdminLogService>,
+        usage_records: Arc<AdminUsageRecordService>,
         installation_id: Option<String>,
         cloudflare: CloudflareRecovery,
     ) -> Self {
@@ -163,7 +163,7 @@ impl ResponseDispatchService {
             reasoning_replay: Arc::new(Mutex::new(ReasoningReplayCache::new(Duration::seconds(
                 DEFAULT_REASONING_REPLAY_TTL_SECS,
             )))),
-            logs,
+            usage_records,
             installation_id,
             cloudflare,
         }
@@ -830,7 +830,7 @@ impl ResponseDispatchService {
                 }
                 Err(error) => {
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
-                        logs: &self.logs,
+                        usage_records: &self.usage_records,
                         request_id,
                         account_id: &release_account_id,
                         route,
@@ -871,15 +871,19 @@ impl ResponseDispatchService {
                     response.usage,
                 )
                 .await;
-                record_response_event(ResponseEventRecord {
-                    logs: &self.logs,
+                record_response_event(ResponseUsageRecord {
+                    usage_records: &self.usage_records,
                     request_id,
                     account_id: &account.id,
                     route,
-                    model: requested_model,
+                    model: &request.model,
+                    requested_model: Some(requested_model),
+                    client_ip: request.client_ip.as_deref(),
+                    client_user_agent: request.client_user_agent.as_deref(),
+                    reasoning_effort: reasoning_effort_from_request(&request),
                     started_at,
                     status_code: 200,
-                    level: EventLevel::Info,
+                    level: UsageRecordLevel::Info,
                     message: "v1 responses completed",
                     metadata: json!({
                         "responseId": response_id,
@@ -959,7 +963,7 @@ impl ResponseDispatchService {
         error: &ResponseDispatchError,
     ) {
         record_response_dispatch_error_event(ResponseDispatchErrorEventRecord {
-            logs: &self.logs,
+            usage_records: &self.usage_records,
             request_id,
             account_id: details.account_id,
             route,
@@ -1215,7 +1219,7 @@ impl ResponseDispatchService {
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
                                 record_response_upstream_error_event(
                                     ResponseUpstreamErrorEventRecord {
-                                        logs: &self.logs,
+                                        usage_records: &self.usage_records,
                                         request_id,
                                         account_id: &release_account_id,
                                         route,
@@ -1326,11 +1330,12 @@ impl ResponseDispatchService {
                         self.account_pool.release(&release_account_id).await;
                         record_prefetched_response_stream_failure_event(
                             ResponseStreamFailureEventRecord {
-                                logs: &self.logs,
+                                usage_records: &self.usage_records,
                                 request_id,
                                 account_id: &release_account_id,
                                 route,
-                                model: requested_model,
+                                model: &request.model,
+                                requested_model,
                                 started_at,
                                 transport,
                                 request: &request,
@@ -1347,12 +1352,14 @@ impl ResponseDispatchService {
                         account_pool: Arc::clone(&self.account_pool),
                         session_affinity: Arc::clone(&self.session_affinity),
                         reasoning_replay: Arc::clone(&self.reasoning_replay),
-                        logs: Arc::clone(&self.logs),
+                        usage_records: Arc::clone(&self.usage_records),
                         cloudflare: self.cloudflare.clone(),
                         account_id: account.id,
                         request_id: request_id.to_string(),
                         route: route.to_string(),
-                        model: requested_model.to_string(),
+                        model: request.model.clone(),
+                        requested_model: requested_model.to_string(),
+                        client_ip: request.client_ip.clone(),
                         request,
                         tuple_schema,
                         transport,
@@ -1482,7 +1489,7 @@ impl ResponseDispatchService {
                 Err(error) => {
                     self.account_pool.release(&release_account_id).await;
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
-                        logs: &self.logs,
+                        usage_records: &self.usage_records,
                         request_id,
                         account_id: &release_account_id,
                         route,
@@ -1744,15 +1751,19 @@ impl ResponseDispatchService {
                             .record_token_usage(&account.id, &request.model, &usage)
                             .await;
                     }
-                    record_response_event(ResponseEventRecord {
-                        logs: &self.logs,
+                    record_response_event(ResponseUsageRecord {
+                        usage_records: &self.usage_records,
                         request_id,
                         account_id: &account.id,
                         route: "/v1/responses/compact",
-                        model: requested_model,
+                        model: &request.model,
+                        requested_model: Some(requested_model),
+                        client_ip: request.client_ip.as_deref(),
+                        client_user_agent: request.client_user_agent.as_deref(),
+                        reasoning_effort: reasoning_effort_from_compact_request(&request),
                         started_at,
                         status_code: 200,
-                        level: EventLevel::Info,
+                        level: UsageRecordLevel::Info,
                         message: "v1 responses compact completed",
                         metadata: json!({
                             "stream": false,
@@ -1878,7 +1889,7 @@ impl ResponseDispatchService {
         error: &ResponseDispatchError,
     ) {
         record_response_dispatch_error_event(ResponseDispatchErrorEventRecord {
-            logs: &self.logs,
+            usage_records: &self.usage_records,
             request_id,
             account_id,
             route: "/v1/responses/compact",
@@ -2029,12 +2040,14 @@ struct LiveResponseStreamContext {
     account_pool: Arc<RuntimeAccountPoolService>,
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
-    logs: Arc<AdminLogService>,
+    usage_records: Arc<AdminUsageRecordService>,
     cloudflare: CloudflareRecovery,
     account_id: String,
     request_id: String,
     route: String,
     model: String,
+    requested_model: String,
+    client_ip: Option<String>,
     request: CodexResponsesRequest,
     tuple_schema: Option<Value>,
     transport: CodexBackendTransport,
@@ -2058,6 +2071,7 @@ fn spawn_live_response_stream(
             .clone()
             .map(TupleSseEventTransformer::new);
         let mut body_bytes = Vec::new();
+        let mut first_token_ms = None;
         if !send_live_response_stream_chunk(
             &sender,
             &mut body_bytes,
@@ -2069,6 +2083,7 @@ fn spawn_live_response_stream(
             context.account_pool.release(&context.account_id).await;
             return;
         }
+        update_first_token_ms(&context, &body_bytes, &mut first_token_ms);
 
         loop {
             let next = tokio::select! {
@@ -2094,6 +2109,7 @@ fn spawn_live_response_stream(
                         context.account_pool.release(&context.account_id).await;
                         return;
                     }
+                    update_first_token_ms(&context, &body_bytes, &mut first_token_ms);
                 }
                 Err(error) => {
                     if !flush_live_response_stream_transformer(
@@ -2114,7 +2130,7 @@ fn spawn_live_response_stream(
                         context.account_pool.release(&context.account_id).await;
                         return;
                     };
-                    finalize_live_response_stream(context, body_text).await;
+                    finalize_live_response_stream(context, body_text, first_token_ms).await;
                     return;
                 }
             }
@@ -2136,7 +2152,7 @@ fn spawn_live_response_stream(
             return;
         };
 
-        finalize_live_response_stream(context, body_text).await;
+        finalize_live_response_stream(context, body_text, first_token_ms).await;
     });
 
     ResponseDispatchStream {
@@ -2145,6 +2161,40 @@ fn spawn_live_response_stream(
             cancel: Some(cancel_sender),
         }),
     }
+}
+
+fn update_first_token_ms(
+    context: &LiveResponseStreamContext,
+    body_bytes: &[u8],
+    first_token_ms: &mut Option<i64>,
+) {
+    if first_token_ms.is_none() && response_body_has_first_token(body_bytes) {
+        *first_token_ms = Some(elapsed_millis_i64(context.started_at));
+    }
+}
+
+fn response_body_has_first_token(body_bytes: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body_bytes);
+    let Some(event_end) = body.rfind("\n\n") else {
+        return false;
+    };
+    parse_sse_events(&body[..event_end + 2]).is_ok_and(|events| {
+        events.iter().any(|event| {
+            serde_json::from_str::<Value>(&event.data).is_ok_and(|value| {
+                let event_type = event
+                    .event
+                    .as_deref()
+                    .or_else(|| value.get("type").and_then(Value::as_str));
+                matches!(
+                    event_type,
+                    Some("response.output_text.delta" | "response.reasoning_summary_text.delta")
+                ) && value
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .is_some_and(|delta| !delta.is_empty())
+            })
+        })
+    })
 }
 
 async fn send_live_response_stream_chunk(
@@ -2345,7 +2395,11 @@ fn premature_close_failed_event(response_id: Option<&str>, detail: Option<&str>)
     response_failed_sse_event_with_id(response_id, "server_error", "stream_disconnected", &message)
 }
 
-async fn finalize_live_response_stream(context: LiveResponseStreamContext, body: String) {
+async fn finalize_live_response_stream(
+    context: LiveResponseStreamContext,
+    body: String,
+    first_token_ms: Option<i64>,
+) {
     let rate_limit_headers = live_response_rate_limit_headers(&context).await;
     let turn_state = live_response_turn_state(&context).await;
     let usage = match extract_sse_usage(&body) {
@@ -2383,12 +2437,13 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
             record_live_response_stream_event(
                 &context,
                 200,
-                EventLevel::Info,
+                UsageRecordLevel::Info,
                 "v1 responses stream completed",
                 serde_json::json!({
                     "stream": true,
                     "completed": true,
                     "responseId": response_id,
+                    "firstTokenMs": first_token_ms,
                     "usage": usage,
                 }),
                 &rate_limit_headers,
@@ -2411,12 +2466,14 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
                 code = ?failure.upstream_code.as_deref(),
                 "live upstream stream ended with response.failed"
             );
+            let mut metadata = stream_failure_metadata(&failure, usage);
+            insert_first_token_ms(&mut metadata, first_token_ms);
             record_live_response_stream_event(
                 &context,
                 status_code_for_stream_failure(&failure),
-                EventLevel::Error,
+                UsageRecordLevel::Error,
                 "v1 responses stream failed",
-                stream_failure_metadata(&failure, usage),
+                metadata,
                 &rate_limit_headers,
                 &body,
             )
@@ -2427,17 +2484,19 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
                 account_id = %context.account_id,
                 "live upstream stream ended without response.completed"
             );
+            let mut metadata = serde_json::json!({
+                "stream": true,
+                "failed": true,
+                "upstreamCode": "missing_completed",
+                "usage": usage,
+            });
+            insert_first_token_ms(&mut metadata, first_token_ms);
             record_live_response_stream_event(
                 &context,
                 502,
-                EventLevel::Error,
+                UsageRecordLevel::Error,
                 "v1 responses stream ended without response.completed",
-                serde_json::json!({
-                    "stream": true,
-                    "failed": true,
-                    "upstreamCode": "missing_completed",
-                    "usage": usage,
-                }),
+                metadata,
                 &rate_limit_headers,
                 &body,
             )
@@ -2445,16 +2504,18 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
         }
         Err(error) => {
             tracing::warn!(account_id = %context.account_id, error = %error, "failed to parse completed live stream");
+            let mut metadata = serde_json::json!({
+                "stream": true,
+                "sseParseError": error.to_string(),
+                "usage": usage,
+            });
+            insert_first_token_ms(&mut metadata, first_token_ms);
             record_live_response_stream_event(
                 &context,
                 502,
-                EventLevel::Warn,
+                UsageRecordLevel::Warn,
                 "v1 responses stream SSE response invalid",
-                serde_json::json!({
-                    "stream": true,
-                    "sseParseError": error.to_string(),
-                    "usage": usage,
-                }),
+                metadata,
                 &rate_limit_headers,
                 &body,
             )
@@ -2470,7 +2531,7 @@ async fn finalize_live_response_stream(context: LiveResponseStreamContext, body:
 // ====================================================================
 
 struct ResponseUpstreamErrorEventRecord<'a> {
-    logs: &'a AdminLogService,
+    usage_records: &'a AdminUsageRecordService,
     request_id: &'a str,
     account_id: &'a str,
     route: &'a str,
@@ -2482,11 +2543,12 @@ struct ResponseUpstreamErrorEventRecord<'a> {
 }
 
 struct ResponseStreamFailureEventRecord<'a> {
-    logs: &'a AdminLogService,
+    usage_records: &'a AdminUsageRecordService,
     request_id: &'a str,
     account_id: &'a str,
     route: &'a str,
     model: &'a str,
+    requested_model: &'a str,
     started_at: Instant,
     transport: CodexBackendTransport,
     request: &'a CodexResponsesRequest,
@@ -2496,7 +2558,7 @@ struct ResponseStreamFailureEventRecord<'a> {
 }
 
 struct ResponseDispatchErrorEventRecord<'a> {
-    logs: &'a AdminLogService,
+    usage_records: &'a AdminUsageRecordService,
     request_id: &'a str,
     account_id: Option<&'a str>,
     route: &'a str,
@@ -2524,9 +2586,9 @@ async fn record_response_dispatch_error_event(record: ResponseDispatchErrorEvent
     );
     enrich_response_dispatch_error_metadata(&mut metadata, record.error);
     enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = EventLog::new(
+    let mut event = UsageRecord::new(
         response_event_kind(record.route),
-        EventLevel::Error,
+        UsageRecordLevel::Error,
         "v1 responses dispatch failed",
     );
     event.request_id = Some(record.request_id.to_string());
@@ -2536,7 +2598,7 @@ async fn record_response_dispatch_error_event(record: ResponseDispatchErrorEvent
     event.status_code = Some(i64::from(record.error.http_status_code()));
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     event.metadata = metadata;
-    if let Err(error) = record.logs.record(event).await {
+    if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(
             account_id = record.account_id.unwrap_or(""),
             error = %error,
@@ -2553,9 +2615,9 @@ async fn record_response_upstream_error_event(record: ResponseUpstreamErrorEvent
         Some(backend_transport_name(record.transport)),
     );
     enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = EventLog::new(
+    let mut event = UsageRecord::new(
         "v1.response",
-        EventLevel::Error,
+        UsageRecordLevel::Error,
         "v1 responses upstream request failed",
     );
     event.request_id = Some(record.request_id.to_string());
@@ -2565,7 +2627,7 @@ async fn record_response_upstream_error_event(record: ResponseUpstreamErrorEvent
     event.status_code = Some(i64::from(upstream_error_http_status(record.error)));
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     event.metadata = metadata;
-    if let Err(error) = record.logs.record(event).await {
+    if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
     }
 }
@@ -2587,15 +2649,19 @@ async fn record_prefetched_response_stream_failure_event(
             Value::String(String::from_utf8_lossy(record.prefetched).to_string()),
         );
     }
-    record_response_event(ResponseEventRecord {
-        logs: record.logs,
+    record_response_event(ResponseUsageRecord {
+        usage_records: record.usage_records,
         request_id: record.request_id,
         account_id: record.account_id,
         route: record.route,
         model: record.model,
+        requested_model: Some(record.requested_model),
+        client_ip: record.request.client_ip.as_deref(),
+        client_user_agent: record.request.client_user_agent.as_deref(),
+        reasoning_effort: reasoning_effort_from_request(record.request),
         started_at: record.started_at,
         status_code: status_code_for_stream_failure(record.failure),
-        level: EventLevel::Error,
+        level: UsageRecordLevel::Error,
         message: "v1 responses stream failed",
         metadata,
         rate_limit_headers: record.rate_limit_headers,
@@ -2603,10 +2669,10 @@ async fn record_prefetched_response_stream_failure_event(
     .await;
 }
 
-async fn record_response_event(record: ResponseEventRecord<'_>) {
+async fn record_response_event(record: ResponseUsageRecord<'_>) {
     let mut metadata = record.metadata;
     enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = EventLog::new(
+    let mut event = UsageRecord::new(
         response_event_kind(record.route),
         record.level,
         record.message,
@@ -2617,6 +2683,14 @@ async fn record_response_event(record: ResponseEventRecord<'_>) {
     event.model = Some(record.model.to_string());
     event.status_code = Some(record.status_code);
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
+    enrich_usage_record_identity(
+        &mut metadata,
+        record.requested_model,
+        record.model,
+        record.client_ip,
+        record.client_user_agent,
+        record.reasoning_effort,
+    );
     event.metadata = metadata;
     let rate_limit_headers = record.rate_limit_headers;
     if !rate_limit_headers.is_empty() {
@@ -2627,7 +2701,7 @@ async fn record_response_event(record: ResponseEventRecord<'_>) {
             );
         }
     }
-    if let Err(error) = record.logs.record(event).await {
+    if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
     }
 }
@@ -2658,6 +2732,73 @@ fn enrich_event_route_metadata(metadata: &mut Value, route: &str) {
     object
         .entry("apiKind".to_string())
         .or_insert_with(|| Value::String(response_api_kind(route).to_string()));
+}
+
+fn enrich_usage_record_identity(
+    metadata: &mut Value,
+    requested_model: Option<&str>,
+    upstream_model: &str,
+    client_ip: Option<&str>,
+    client_user_agent: Option<&str>,
+    reasoning_effort: Option<&str>,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+
+    let upstream_model = upstream_model.trim();
+    let requested_model = requested_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(upstream_model);
+    object.insert(
+        "requestedModel".to_string(),
+        Value::String(requested_model.to_string()),
+    );
+    object.insert(
+        "upstreamModel".to_string(),
+        Value::String(upstream_model.to_string()),
+    );
+
+    if let Some(client_ip) = client_ip.map(str::trim).filter(|value| !value.is_empty()) {
+        object.insert("clientIp".to_string(), Value::String(client_ip.to_string()));
+    }
+
+    if let Some(user_agent) = client_user_agent
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "userAgent".to_string(),
+            Value::String(user_agent.to_string()),
+        );
+    }
+
+    if let Some(reasoning_effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "reasoningEffort".to_string(),
+            Value::String(reasoning_effort.to_string()),
+        );
+    }
+}
+
+fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
+    reasoning_effort_from_value(request.reasoning.as_ref())
+}
+
+fn reasoning_effort_from_compact_request(request: &CodexCompactRequest) -> Option<&str> {
+    reasoning_effort_from_value(request.reasoning.as_ref())
+}
+
+fn reasoning_effort_from_value(reasoning: Option<&Value>) -> Option<&str> {
+    reasoning?
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn ensure_stream_metadata_flag(metadata: &mut Value) {
@@ -2698,7 +2839,7 @@ fn enrich_live_response_stream_metadata(
 async fn record_live_response_stream_event(
     context: &LiveResponseStreamContext,
     status_code: i64,
-    level: EventLevel,
+    level: UsageRecordLevel,
     message: &str,
     mut metadata: Value,
     rate_limit_headers: &[(String, String)],
@@ -2707,15 +2848,23 @@ async fn record_live_response_stream_event(
     ensure_stream_metadata_flag(&mut metadata);
     enrich_event_route_metadata(&mut metadata, &context.route);
     enrich_live_response_stream_metadata(context, rate_limit_headers, &mut metadata, body);
-    let mut event = EventLog::new(response_event_kind(&context.route), level, message);
+    let mut event = UsageRecord::new(response_event_kind(&context.route), level, message);
     event.request_id = Some(context.request_id.clone());
     event.account_id = Some(context.account_id.clone());
     event.route = Some(context.route.clone());
     event.model = Some(context.model.clone());
     event.status_code = Some(status_code);
     event.latency_ms = Some(elapsed_millis_i64(context.started_at));
+    enrich_usage_record_identity(
+        &mut metadata,
+        Some(&context.requested_model),
+        &context.model,
+        context.client_ip.as_deref(),
+        context.request.client_user_agent.as_deref(),
+        reasoning_effort_from_request(&context.request),
+    );
     event.metadata = metadata;
-    if let Err(error) = context.logs.record(event).await {
+    if let Err(error) = context.usage_records.record(event).await {
         tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream event");
     }
 }
@@ -2746,6 +2895,18 @@ fn stream_failure_metadata(failure: &ResponsesSseFailure, usage: Option<TokenUsa
         "upstreamCode": failure.upstream_code,
         "usage": usage,
     })
+}
+
+fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {
+    let Some(first_token_ms) = first_token_ms else {
+        return;
+    };
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "firstTokenMs".to_string(),
+            Value::Number(first_token_ms.into()),
+        );
+    }
 }
 
 fn status_code_for_stream_failure(failure: &ResponsesSseFailure) -> i64 {

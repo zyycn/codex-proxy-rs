@@ -4,11 +4,11 @@ use std::sync::Arc as StdArc;
 
 use crate::{
     admin::monitoring::{
-        event_store::{
-            AdminLogService, SqliteEventLogStore, DEFAULT_EVENT_LOG_CAPACITY,
-            DEFAULT_EVENT_LOG_CAPTURE_BODY,
-        },
         service::AdminUsageService,
+        usage_record_store::{
+            AdminUsageRecordService, SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPACITY,
+            DEFAULT_USAGE_RECORD_CAPTURE_BODY,
+        },
         usage_store::SqliteUsageStore,
     },
     admin::{
@@ -29,7 +29,9 @@ use crate::{
         cookies::SqliteCookieStore,
         pool::RuntimeAccountPoolService,
         store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
-        token_refresh::RefreshLeaseStore as SqliteRefreshLeaseStore,
+        token_refresh::{
+            RefreshLeaseStore as SqliteRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy,
+        },
     },
     upstream::{
         fingerprint::{Fingerprint, FingerprintRepository},
@@ -55,7 +57,7 @@ pub struct BackgroundTaskStores {
     pub session_affinity: SqliteSessionAffinityStore,
     pub refresh_leases: SqliteRefreshLeaseStore,
     pub client_keys: SqliteClientKeyStore,
-    pub event_logs: SqliteEventLogStore,
+    pub usage_records: SqliteUsageRecordStore,
 }
 
 // ============================================================================
@@ -71,8 +73,9 @@ pub struct Services {
     pub admin_client_keys: StdArc<AdminClientKeyService>,
     pub admin_sessions: StdArc<AdminSessionService>,
     pub settings: StdArc<RuntimeSettingsService>,
+    pub refresh_policy: RuntimeRefreshPolicy,
     pub admin_accounts: StdArc<AdminAccountService>,
-    pub logs: StdArc<AdminLogService>,
+    pub usage_records: StdArc<AdminUsageRecordService>,
     pub usage: StdArc<AdminUsageService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub chat: StdArc<ChatDispatchService>,
@@ -84,20 +87,20 @@ pub struct Services {
     pub background_tasks: BackgroundTaskStores,
 }
 
-/// 事件日志运行选项。
+/// 使用记录运行选项。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EventLogOptions {
+pub struct UsageRecordOptions {
     pub enabled: bool,
     pub capacity: u32,
     pub capture_body: bool,
 }
 
-impl EventLogOptions {
+impl UsageRecordOptions {
     pub fn from_config(config: &AppConfig) -> Self {
         Self {
             enabled: config.logging.enabled,
-            capacity: DEFAULT_EVENT_LOG_CAPACITY,
-            capture_body: DEFAULT_EVENT_LOG_CAPTURE_BODY,
+            capacity: DEFAULT_USAGE_RECORD_CAPACITY,
+            capture_body: DEFAULT_USAGE_RECORD_CAPTURE_BODY,
         }
     }
 }
@@ -122,21 +125,21 @@ impl Services {
         fingerprint: Fingerprint,
         installation_id: Option<String>,
     ) -> Result<Self, CustomCaError> {
-        Self::try_with_installation_id_and_log_options(
+        Self::try_with_installation_id_and_usage_record_options(
             config,
             stores,
             fingerprint,
             installation_id,
-            EventLogOptions::from_config(config),
+            UsageRecordOptions::from_config(config),
         )
     }
 
-    pub fn try_with_installation_id_and_log_options(
+    pub fn try_with_installation_id_and_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
         fingerprint: Fingerprint,
         installation_id: Option<String>,
-        log_options: EventLogOptions,
+        usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
         let installation_id = installation_id.filter(|id| !id.trim().is_empty());
         let account_store_trait =
@@ -167,10 +170,15 @@ impl Services {
             account_pool_options_from_config(config),
             config.auth.request_interval_ms,
         ));
-        let settings = StdArc::new(RuntimeSettingsService::with_account_pool(
+        let refresh_policy = RuntimeRefreshPolicy::new(RefreshPolicy {
+            refresh_margin_seconds: config.auth.refresh_margin_seconds,
+            refresh_concurrency: config.auth.refresh_concurrency,
+        });
+        let settings = StdArc::new(RuntimeSettingsService::new(
             config.clone(),
             stores.accounts.pool().clone(),
             account_pool.clone(),
+            refresh_policy.clone(),
         ));
         let admin_sessions = StdArc::new(AdminSessionService::new(
             stores.admin_sessions.clone(),
@@ -193,14 +201,14 @@ impl Services {
                 config.auth.oauth_client_id.clone(),
                 config.auth.oauth_token_endpoint.clone(),
             ),
-            refresh_margin_seconds: config.auth.refresh_margin_seconds,
+            refresh_policy: refresh_policy.clone(),
             installation_id: installation_id.clone(),
         }));
-        let logs = StdArc::new(AdminLogService::new(
-            stores.event_logs.clone(),
-            log_options.enabled,
-            log_options.capacity,
-            log_options.capture_body,
+        let usage_records = StdArc::new(AdminUsageRecordService::new(
+            stores.usage_records.clone(),
+            usage_record_options.enabled,
+            usage_record_options.capacity,
+            usage_record_options.capture_body,
         ));
         let usage_store = SqliteUsageStore::new(stores.accounts.pool().clone());
         let usage = StdArc::new(AdminUsageService::new(usage_store));
@@ -225,7 +233,7 @@ impl Services {
             account_pool.clone(),
             models.clone(),
             codex.clone(),
-            logs.clone(),
+            usage_records.clone(),
             installation_id.clone(),
             cloudflare_recovery.clone(),
         ));
@@ -234,7 +242,7 @@ impl Services {
             models.clone(),
             codex.clone(),
             session_affinity.clone(),
-            logs.clone(),
+            usage_records.clone(),
             installation_id.clone(),
             cloudflare_recovery,
         ));
@@ -246,8 +254,9 @@ impl Services {
             admin_client_keys,
             admin_sessions,
             settings,
+            refresh_policy,
             admin_accounts,
-            logs,
+            usage_records,
             usage,
             account_pool,
             chat,

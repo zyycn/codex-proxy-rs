@@ -15,8 +15,10 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
-        event_store::{EventLogFilter, SqliteEventLogStore, DEFAULT_EVENT_LOG_CAPACITY},
-        events::EventLevel,
+        usage_record::UsageRecordLevel,
+        usage_record_store::{
+            SqliteUsageRecordStore, UsageRecordFilter, DEFAULT_USAGE_RECORD_CAPACITY,
+        },
     },
     config::types::AppConfig,
     http::router,
@@ -24,7 +26,7 @@ use codex_proxy_rs::{
     proxy::dispatch::session_affinity::{
         build_conversation_identity, SessionAffinityEntry, SqliteSessionAffinityStore,
     },
-    runtime::services::{BackgroundTaskStores, EventLogOptions, Services},
+    runtime::services::{BackgroundTaskStores, Services, UsageRecordOptions},
     runtime::state::AppState,
     upstream::accounts::{
         cookies::SqliteCookieStore, store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
@@ -240,19 +242,19 @@ fn test_app_state_with_pool_and_installation_id(
     pool: SqlitePool,
     installation_id: String,
 ) -> AppState {
-    test_app_state_with_pool_installation_id_and_log_options(
+    test_app_state_with_pool_installation_id_and_usage_record_options(
         config.clone(),
         pool,
         installation_id,
-        EventLogOptions::from_config(config),
+        UsageRecordOptions::from_config(config),
     )
 }
 
-fn test_app_state_with_pool_installation_id_and_log_options(
+fn test_app_state_with_pool_installation_id_and_usage_record_options(
     config: AppConfig,
     pool: SqlitePool,
     installation_id: String,
-    log_options: EventLogOptions,
+    usage_record_options: UsageRecordOptions,
 ) -> AppState {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
@@ -262,14 +264,14 @@ fn test_app_state_with_pool_installation_id_and_log_options(
         session_affinity: SqliteSessionAffinityStore::new(pool.clone()),
         refresh_leases: RefreshLeaseStore::new(pool.clone()),
         client_keys: SqliteClientKeyStore::new(pool.clone()),
-        event_logs: SqliteEventLogStore::new(pool),
+        usage_records: SqliteUsageRecordStore::new(pool),
     };
-    let services = Services::try_with_installation_id_and_log_options(
+    let services = Services::try_with_installation_id_and_usage_record_options(
         &config,
         stores,
         crate::support::fingerprint::test_fingerprint(),
         Some(installation_id),
-        log_options,
+        usage_record_options,
     )
     .expect("failed to build runtime services with configured TLS transport");
     AppState { config, services }
@@ -373,16 +375,16 @@ async fn test_app_with_account_pool_and_logging_capture_body(
     insert_account(&pool).await;
     let mut config = test_config(url, base_url);
     config.logging.enabled = true;
-    let log_options = EventLogOptions {
+    let usage_record_options = UsageRecordOptions {
         enabled: true,
-        capacity: DEFAULT_EVENT_LOG_CAPACITY,
+        capacity: DEFAULT_USAGE_RECORD_CAPACITY,
         capture_body: true,
     };
-    let state = test_app_state_with_pool_installation_id_and_log_options(
+    let state = test_app_state_with_pool_installation_id_and_usage_record_options(
         config,
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-        log_options,
+        usage_record_options,
     );
     state
         .services
@@ -1350,26 +1352,27 @@ async fn wait_for_session_affinity_turn_state(
     .flatten()
 }
 
-struct ResponseEventLog {
+struct ResponseUsageRecordSnapshot {
     level: String,
     request_id: Option<String>,
     account_id: Option<String>,
     route: Option<String>,
+    model: Option<String>,
     status_code: Option<i64>,
     response_id: Option<String>,
     metadata_json: String,
 }
 
-async fn latest_response_event_log(pool: &SqlitePool) -> ResponseEventLog {
-    latest_event_log(pool, "v1.response").await
+async fn latest_response_usage_record(pool: &SqlitePool) -> ResponseUsageRecordSnapshot {
+    latest_usage_record(pool, "v1.response").await
 }
 
-async fn latest_event_log(pool: &SqlitePool, kind: &str) -> ResponseEventLog {
-    let page = SqliteEventLogStore::new(pool.clone())
+async fn latest_usage_record(pool: &SqlitePool, kind: &str) -> ResponseUsageRecordSnapshot {
+    let page = SqliteUsageRecordStore::new(pool.clone())
         .list(
-            EventLogFilter {
+            UsageRecordFilter {
                 kind: Some(kind.to_string()),
-                ..EventLogFilter::default()
+                ..UsageRecordFilter::default()
             },
             None,
             1,
@@ -1380,20 +1383,21 @@ async fn latest_event_log(pool: &SqlitePool, kind: &str) -> ResponseEventLog {
         .items
         .into_iter()
         .next()
-        .unwrap_or_else(|| panic!("expected a {kind} event log"));
-    ResponseEventLog {
-        level: event_level_name(event.level).to_string(),
+        .unwrap_or_else(|| panic!("expected a {kind} usage record"));
+    ResponseUsageRecordSnapshot {
+        level: usage_record_level_name(event.level).to_string(),
         request_id: event.request_id,
         account_id: event.account_id,
         route: event.route,
+        model: event.model,
         status_code: event.status_code,
         response_id: event.response_id,
         metadata_json: event.metadata.to_string(),
     }
 }
 
-async fn response_event_log_count(pool: &SqlitePool) -> i64 {
-    let (count,): (i64,) = sqlx::query_as("select count(*) from event_logs where kind = ?")
+async fn response_usage_record_count(pool: &SqlitePool) -> i64 {
+    let (count,): (i64,) = sqlx::query_as("select count(*) from usage_records where kind = ?")
         .bind("v1.response")
         .fetch_one(pool)
         .await
@@ -1401,12 +1405,12 @@ async fn response_event_log_count(pool: &SqlitePool) -> i64 {
     count
 }
 
-fn event_level_name(level: EventLevel) -> &'static str {
+fn usage_record_level_name(level: UsageRecordLevel) -> &'static str {
     match level {
-        EventLevel::Debug => "debug",
-        EventLevel::Info => "info",
-        EventLevel::Warn => "warn",
-        EventLevel::Error => "error",
+        UsageRecordLevel::Debug => "debug",
+        UsageRecordLevel::Info => "info",
+        UsageRecordLevel::Warn => "warn",
+        UsageRecordLevel::Error => "error",
     }
 }
 

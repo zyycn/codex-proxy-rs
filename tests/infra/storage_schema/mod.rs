@@ -8,7 +8,7 @@ async fn sqlite_schema_should_create_current_tables() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name in ('admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'event_logs', 'model_plan_snapshots', 'session_affinities') order by name",
+        "select name from sqlite_master where type = 'table' and name in ('admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -24,13 +24,13 @@ async fn sqlite_schema_should_create_current_tables() {
             "admin_sessions",
             "admin_users",
             "client_api_keys",
-            "event_logs",
             "fingerprint_update_history",
             "fingerprints",
             "model_account_routes",
             "model_plan_snapshots",
             "runtime_settings",
             "session_affinities",
+            "usage_records",
             "usage_time_buckets",
         ]
     );
@@ -100,7 +100,7 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_event_logs_level_created', 'idx_event_logs_model_created', 'idx_event_logs_route_created', 'idx_event_logs_status_created', 'idx_event_logs_upstream_status_created', 'idx_session_affinities_active_order', 'idx_model_account_routes_account', 'idx_model_account_routes_enabled_model', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
+        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_session_affinities_active_order', 'idx_model_account_routes_account', 'idx_model_account_routes_enabled_model', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -110,14 +110,14 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
         rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
         [
             "idx_account_cookies_expires",
-            "idx_event_logs_level_created",
-            "idx_event_logs_model_created",
-            "idx_event_logs_route_created",
-            "idx_event_logs_status_created",
-            "idx_event_logs_upstream_status_created",
             "idx_model_account_routes_account",
             "idx_model_account_routes_enabled_model",
             "idx_session_affinities_active_order",
+            "idx_usage_records_level_created",
+            "idx_usage_records_model_created",
+            "idx_usage_records_route_created",
+            "idx_usage_records_status_created",
+            "idx_usage_records_upstream_status_created",
             "idx_usage_time_buckets_bucket",
             "idx_usage_time_buckets_model_bucket",
         ]
@@ -424,7 +424,7 @@ async fn sqlite_schema_should_persist_structured_event_diagnostic_columns() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('event_logs') where name in ('transport', 'attempt_index', 'upstream_status_code', 'failure_class', 'response_id', 'upstream_request_id') order by name",
+        "select name from pragma_table_info('usage_records') where name in ('transport', 'attempt_index', 'upstream_status_code', 'failure_class', 'response_id', 'upstream_request_id') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -460,14 +460,14 @@ async fn sqlite_schema_should_reject_invalid_account_status() {
 }
 
 #[tokio::test]
-async fn sqlite_schema_should_reject_invalid_event_log_level() {
+async fn sqlite_schema_should_reject_invalid_usage_record_level() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("event-level-check.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
 
     let result = sqlx::query(
-        "insert into event_logs (id, kind, level, message, metadata_json, created_at) values ('log_bad', 'request', 'fatal', 'bad', '{}', '2026-06-14T00:00:00Z')",
+        "insert into usage_records (id, kind, level, message, metadata_json, created_at) values ('usage_bad', 'request', 'fatal', 'bad', '{}', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;

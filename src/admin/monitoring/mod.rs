@@ -3,8 +3,8 @@
 pub(crate) mod billing;
 pub mod dashboard;
 pub mod diagnostics;
-pub mod event_store;
-pub mod events;
-pub mod logs;
 pub mod service;
+pub mod usage_record;
+pub mod usage_record_store;
+pub mod usage_records;
 pub mod usage_store;

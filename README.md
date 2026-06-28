@@ -12,7 +12,7 @@
   <code>/v1/responses</code> · <code>/v1/chat/completions</code> · <code>/v1/models</code> · 管理控制台
 </p>
 
-Codex Proxy RS 是一个面向 ChatGPT/Codex 账号池的 Rust 模型网关。它把上游 Codex 能力整理成 OpenAI 兼容接口，同时提供账号调度、配额感知、请求追踪、事件日志和管理控制台。
+Codex Proxy RS 是一个面向 ChatGPT/Codex 账号池的 Rust 模型网关。它把上游 Codex 能力整理成 OpenAI 兼容接口，同时提供账号调度、配额感知、使用记录和管理控制台。
 
 它不是一个臃肿的平台，也不是只做转发的薄代理。它更像一层安静但可靠的网关：把账号、模型、配额、Cookie、WebSocket、SSE 和错误恢复放在后端统一处理，让调用方只需要面对稳定、清晰的 OpenAI 风格接口。
 
@@ -26,7 +26,7 @@ Codex Proxy RS 关注这些细节：
 - 请求应该落到哪个账号，是否要保持会话亲和性
 - 上游返回的是 HTTP SSE、WebSocket 还是错误事件
 - Cookie、fingerprint、headers 和 Codex Desktop 行为是否足够接近
-- 管理端能否看清请求、用量、事件、延迟和失败原因
+- 管理端能否看清请求、用量、延迟和失败原因
 
 ## 核心能力
 
@@ -51,9 +51,9 @@ Codex Proxy RS 关注这些细节：
 
 **可观测与管理**
 
-- 管理控制台内置账号、密钥、事件日志、用量统计和系统设置
+- 管理控制台内置账号、密钥、使用记录、用量统计和系统设置
 - SQLite 持久化，账号、Cookie 与访问密钥采用统一的本地存储策略
-- 结构化事件日志，便于定位请求失败、上游状态和调度路径
+- 结构化使用记录，便于定位请求失败、上游状态和调度路径
 
 ## 快速开始
 
@@ -80,7 +80,7 @@ admin:
 
 ## 管理控制台
 
-前端位于 `web/`，用于账号管理、密钥管理、事件日志、仪表盘和系统设置。
+前端位于 `web/`，用于账号管理、密钥管理、使用记录、仪表盘和系统设置。
 
 开发模式：
 
@@ -143,7 +143,7 @@ flowchart LR
     http --> admin[admin<br/>管理端 API]
     admin --> runtime[runtime<br/>启动装配、状态和后台任务]
     runtime --> infra[infra<br/>SQLite、路径和日志]
-    proxy --> telemetry[telemetry<br/>事件日志和用量记录]
+    proxy --> telemetry[telemetry<br/>使用记录和用量统计]
     admin --> telemetry
     http --> web[web<br/>管理控制台静态资源]
 ```

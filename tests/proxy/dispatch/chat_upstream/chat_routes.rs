@@ -76,7 +76,7 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
     .await
     .unwrap();
     assert_eq!(model_usage, ("gpt-5.5".to_string(), 1, 9, 3));
-    let event = latest_event_log(&pool, "v1.chat").await;
+    let event = latest_usage_record(&pool, "v1.chat").await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.request_id.as_deref(), Some("req_chat_nonstream_log"));
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
@@ -169,7 +169,7 @@ async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
             "data: [DONE]",
         ],
     );
-    let event = latest_event_log(&pool, "v1.chat").await;
+    let event = latest_usage_record(&pool, "v1.chat").await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.request_id.as_deref(), Some("req_chat_stream_log"));
     assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
@@ -382,7 +382,7 @@ async fn chat_completions_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(body["error"]["code"], "upstream_error");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
-    let event = latest_event_log(&pool, "v1.chat").await;
+    let event = latest_usage_record(&pool, "v1.chat").await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "error");
     assert!(event

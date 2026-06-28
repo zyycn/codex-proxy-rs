@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn responses_should_use_imported_account_record_usage_cookie_and_event_log() {
+async fn responses_should_use_imported_account_record_usage_cookie_and_usage_record() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -70,7 +70,7 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_event_log
         .await
         .unwrap();
     assert_eq!(cookie_header.as_deref(), Some("cf_clearance=new"));
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "info");
     assert_eq!(
@@ -86,7 +86,60 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_event_log
 }
 
 #[tokio::test]
-async fn responses_should_skip_event_log_when_logging_disabled() {
+async fn responses_usage_record_should_store_resolved_upstream_model_after_alias_mapping() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_COMPLETED_USAGE_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_config(server.uri(), |config| {
+        config.logging.enabled = true;
+        config
+            .model_aliases
+            .insert("client-alias".to_string(), "gpt-5.5".to_string());
+    })
+    .await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_alias_usage_model")
+                .body(Body::from(
+                    json!({
+                        "model": "client-alias",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let event = latest_response_usage_record(&pool).await;
+    assert_eq!(event.request_id.as_deref(), Some("req_alias_usage_model"));
+    assert_eq!(event.model.as_deref(), Some("gpt-5.5"));
+
+    let received = server.received_requests().await.unwrap();
+    let upstream_body: Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(upstream_body["model"], "gpt-5.5");
+}
+
+#[tokio::test]
+async fn responses_should_skip_usage_record_when_logging_disabled() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -124,7 +177,7 @@ async fn responses_should_skip_event_log_when_logging_disabled() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response_event_log_count(&pool).await, 0);
+    assert_eq!(response_usage_record_count(&pool).await, 0);
 }
 
 #[tokio::test]
@@ -430,7 +483,7 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
 }
 
 #[tokio::test]
-async fn responses_stream_should_record_event_log_after_completed_stream() {
+async fn responses_stream_should_record_usage_record_after_completed_stream() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -467,7 +520,7 @@ async fn responses_stream_should_record_event_log_after_completed_stream() {
         .await
         .unwrap();
     let body = response_text(response).await;
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("resp_stream_usage"));
@@ -527,7 +580,7 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
         .await
         .unwrap();
     let body = response_text(response).await;
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("resp_stream_usage"));
@@ -544,7 +597,7 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
 }
 
 #[tokio::test]
-async fn responses_stream_should_record_event_log_after_late_disconnect() {
+async fn responses_stream_should_record_usage_record_after_late_disconnect() {
     let first_frame = r#"event: response.output_text.delta
 data: {"delta":"partial before logged disconnect"}
 
@@ -586,7 +639,7 @@ data: {"delta":"partial before logged disconnect"}
     let response = response_task.await.unwrap();
     close_upstream.send(()).unwrap();
     let body = response_text(response).await;
-    let event = latest_response_event_log(&pool).await;
+    let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("stream_disconnected"));

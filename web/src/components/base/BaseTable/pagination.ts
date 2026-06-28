@@ -12,8 +12,12 @@ export type PagerItem = number | 'ellipsis'
 const DEFAULT_PAGE_SIZES = [10, 20, 50, 100]
 
 export function getTotalPages(pagination?: BaseTablePagination) {
-  if (!pagination || pagination.total <= 0) {
+  if (!pagination) {
     return 0
+  }
+
+  if (pagination.total <= 0) {
+    return 1
   }
 
   return clamp(Math.ceil(pagination.total / pagination.pageSize), 1, Number.POSITIVE_INFINITY)

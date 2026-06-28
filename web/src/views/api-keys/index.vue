@@ -72,9 +72,9 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
     <BaseCard
       :padded="false"
-      class="mt-5 flex min-h-0 flex-1 flex-col"
+      class="mt-5 flex h-[calc(100vh-136px)] min-h-125 flex-col"
       header-class="px-5 pt-4"
-      body-class="min-h-0 flex-1 px-5 pt-3"
+      body-class="flex min-h-0 flex-1 px-5 py-3"
     >
       <template #header>
         <ApiKeyFilters
@@ -88,6 +88,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
       <template #body>
         <BaseTable
+          class="min-h-0 flex-1"
           :columns="apiKeyColumns"
           :rows="pagedKeys"
           :loading="loading"

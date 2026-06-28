@@ -4,7 +4,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 
 function shouldIgnoreRolldownLog(log: { code?: string; id?: string; loc?: { file?: string } }) {
-  const source = String(log.id ?? log.loc?.file ?? '')
+  const source = `${String(log.id ?? '')} ${String(log.loc?.file ?? '')} ${JSON.stringify(log)}`
   return log.code === 'INVALID_ANNOTATION' && source.includes('@vueuse/core')
 }
 
@@ -29,6 +29,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    chunkSizeWarningLimit: 600,
     rolldownOptions: {
       onLog(level, log, handler) {
         if (level === 'warn' && shouldIgnoreRolldownLog(log)) {
@@ -42,7 +43,11 @@ export default defineConfig({
           groups: [
             {
               name: 'echarts',
-              test: /node_modules\/echarts|node_modules\/zrender/,
+              test: /node_modules\/echarts/,
+            },
+            {
+              name: 'zrender',
+              test: /node_modules\/zrender/,
             },
           ],
         },

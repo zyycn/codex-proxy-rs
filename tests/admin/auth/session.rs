@@ -34,9 +34,10 @@ async fn admin_login_should_issue_http_only_session_cookie() {
             pool.clone(),
         ),
         client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
-        event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
-            pool.clone(),
-        ),
+        usage_records:
+            codex_proxy_rs::admin::monitoring::usage_record_store::SqliteUsageRecordStore::new(
+                pool.clone(),
+            ),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
@@ -79,18 +80,18 @@ async fn admin_login_should_issue_http_only_session_cookie() {
     assert_eq!(body["code"], 200);
     assert!(body["data"]["expiresAt"].is_string());
 
-    let logs_response = app
+    let usage_records_response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/logs")
+                .uri("/api/admin/usage/records")
                 .header("cookie", cookie.split(';').next().unwrap())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(logs_response.status(), StatusCode::OK);
+    assert_eq!(usage_records_response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -118,9 +119,10 @@ async fn admin_login_should_reject_client_api_key_as_password_or_authorization()
             pool.clone(),
         ),
         client_keys: codex_proxy_rs::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
-        event_logs: codex_proxy_rs::admin::monitoring::event_store::SqliteEventLogStore::new(
-            pool.clone(),
-        ),
+        usage_records:
+            codex_proxy_rs::admin::monitoring::usage_record_store::SqliteUsageRecordStore::new(
+                pool.clone(),
+            ),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(

@@ -1,3 +1,3 @@
 pub(crate) mod dashboard;
-pub(crate) mod events_store;
-pub(crate) mod logs_routes;
+pub(crate) mod usage_record_store;
+pub(crate) mod usage_records_routes;

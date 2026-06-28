@@ -1,16 +1,16 @@
 import { ref } from 'vue'
 
-import { getLogDetail } from '@/api'
+import { getUsageRecordDetail } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
-export function useLogDetail() {
+export function useUsageRecordDetail() {
   const showDetailModal = ref(false)
-  const selectedLog = ref<any>(null)
+  const selectedUsageRecord = ref<any>(null)
 
-  async function handleViewDetail(log: any) {
+  async function handleViewDetail(record: any) {
     try {
-      const detail = await getLogDetail({ id: log.id })
-      selectedLog.value = detail
+      const detail = await getUsageRecordDetail({ id: record.id })
+      selectedUsageRecord.value = detail
       showDetailModal.value = true
     } catch (error: any) {
       toast.error(error.message || '加载详情失败')
@@ -19,7 +19,7 @@ export function useLogDetail() {
 
   return {
     showDetailModal,
-    selectedLog,
+    selectedUsageRecord,
     handleViewDetail,
   }
 }

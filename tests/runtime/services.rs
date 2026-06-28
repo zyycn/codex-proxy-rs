@@ -3,7 +3,7 @@ use std::process::Command;
 use codex_proxy_rs::{
     admin::{
         auth::service::SqliteAdminSessionStore, keys::service::SqliteClientKeyStore,
-        monitoring::event_store::SqliteEventLogStore,
+        monitoring::usage_record_store::SqliteUsageRecordStore,
     },
     runtime::services::{BackgroundTaskStores, Services},
     upstream::{
@@ -38,7 +38,7 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
                 ),
             refresh_leases: RefreshLeaseStore::new(pool.clone()),
             client_keys: SqliteClientKeyStore::new(pool.clone()),
-            event_logs: SqliteEventLogStore::new(pool),
+            usage_records: SqliteUsageRecordStore::new(pool),
         };
 
         let Err(error) = Services::try_new(

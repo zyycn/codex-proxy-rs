@@ -84,6 +84,12 @@ pub(crate) async fn update_settings(
         .update(patch)
         .await
         .map_err(settings_service_error)?;
+    state
+        .services
+        .models
+        .update_config(crate::upstream::models::ModelConfig {
+            model_aliases: config.model_aliases.clone(),
+        });
 
     Ok(AdminResponse::new(
         StatusCode::OK,

@@ -2,9 +2,11 @@
 import { useRafFn, useResizeObserver } from '@vueuse/core'
 import type { EChartsOption } from 'echarts'
 import { init, type EChartsType } from 'echarts/core'
-import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 
 import '@/plugins/echarts'
+import { useUiStore } from '@/stores/modules/ui'
 
 const props = withDefaults(
   defineProps<{
@@ -20,6 +22,7 @@ const chartElement = useTemplateRef<HTMLElement>('chart')
 const chartOption = shallowRef<EChartsOption>(props.option)
 const chart = shallowRef<EChartsType>()
 const pendingInitElement = shallowRef<HTMLElement>()
+const { themeRevision } = storeToRefs(useUiStore())
 
 const style = computed(() => ({
   height: `${props.height}px`,
@@ -37,7 +40,7 @@ function cancelPendingInit() {
 function ensureChart(element: HTMLElement) {
   if (chart.value || !elementHasSize(element)) return
   chart.value = init(element, undefined, { renderer: 'canvas' })
-  chart.value.setOption(chartOption.value)
+  applyOption(chartOption.value)
 }
 
 function scheduleInit(element: HTMLElement) {
@@ -60,6 +63,22 @@ function resize() {
   chart.value?.resize()
 }
 
+function applyOption(option: EChartsOption) {
+  if (!chart.value) return
+  chart.value.setOption(option, true)
+}
+
+async function recreateChartAfterThemeChange() {
+  await nextTick()
+  requestAnimationFrame(() => {
+    const element = chartElement.value
+    if (!element) return
+    dispose()
+    ensureChart(element)
+    resize()
+  })
+}
+
 function dispose() {
   cancelPendingInit()
   chart.value?.dispose()
@@ -71,13 +90,22 @@ watch(
   (option) => {
     chartOption.value = option
     if (chart.value) {
-      chart.value.setOption(option, true)
+      applyOption(option)
       return
     }
     if (chartElement.value) {
       scheduleInit(chartElement.value)
     }
   },
+  { flush: 'post' },
+)
+
+watch(
+  themeRevision,
+  () => {
+    recreateChartAfterThemeChange()
+  },
+  { flush: 'post' },
 )
 
 watch(

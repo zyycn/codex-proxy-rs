@@ -4,10 +4,7 @@ use std::path::PathBuf;
 
 use tokio::task::JoinHandle;
 
-use crate::upstream::{
-    accounts::token_refresh::RefreshPolicy,
-    token_client::{default_openai_token_client, TokenClientConfig},
-};
+use crate::upstream::token_client::{default_openai_token_client, TokenClientConfig};
 
 use super::{
     cookie_cleanup::CookieCleanupTask,
@@ -77,10 +74,7 @@ impl TaskCoordinator {
                 "token_refresh",
                 TokenRefreshTask::new(
                     stores.accounts.clone(),
-                    RefreshPolicy {
-                        refresh_margin_seconds: config.auth.refresh_margin_seconds,
-                        refresh_concurrency: config.auth.refresh_concurrency,
-                    },
+                    services.refresh_policy.clone(),
                     default_openai_token_client(token_client_config(config)),
                 )
                 .with_refresh_lease_store(stores.refresh_leases.clone())

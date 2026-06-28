@@ -9,8 +9,8 @@ use thiserror::Error;
 
 use crate::{
     admin::monitoring::{
-        event_store::AdminLogService,
-        events::{EventLevel, ResponseEventRecord},
+        usage_record::{ResponseUsageRecord, UsageRecordLevel},
+        usage_record_store::AdminUsageRecordService,
     },
     proxy::dispatch::{
         cloudflare::{
@@ -51,7 +51,7 @@ pub struct ChatDispatchService {
     account_pool: Arc<RuntimeAccountPoolService>,
     models: Arc<crate::upstream::models::ModelService>,
     codex: Arc<CodexBackendClient>,
-    logs: Arc<AdminLogService>,
+    usage_records: Arc<AdminUsageRecordService>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -61,7 +61,7 @@ impl ChatDispatchService {
         account_pool: Arc<RuntimeAccountPoolService>,
         models: Arc<crate::upstream::models::ModelService>,
         codex: Arc<CodexBackendClient>,
-        logs: Arc<AdminLogService>,
+        usage_records: Arc<AdminUsageRecordService>,
         installation_id: Option<String>,
         cloudflare: CloudflareRecovery,
     ) -> Self {
@@ -69,7 +69,7 @@ impl ChatDispatchService {
             account_pool,
             models,
             codex,
-            logs,
+            usage_records,
             installation_id,
             cloudflare,
         }
@@ -379,15 +379,19 @@ impl ChatDispatchService {
                 .record_token_usage(&account_id, &request.model, usage)
                 .await;
         }
-        record_response_event(ResponseEventRecord {
-            logs: &self.logs,
+        record_response_event(ResponseUsageRecord {
+            usage_records: &self.usage_records,
             request_id,
             account_id: &account_id,
             route: "/v1/chat/completions",
-            model: requested_model,
+            model: &request.model,
+            requested_model: Some(requested_model),
+            client_ip: request.client_ip.as_deref(),
+            client_user_agent: request.client_user_agent.as_deref(),
+            reasoning_effort: reasoning_effort_from_request(&request),
             started_at,
             status_code: 200,
-            level: EventLevel::Info,
+            level: UsageRecordLevel::Info,
             message: "v1 chat completions completed",
             metadata: serde_json::json!({
                 "responseId": response_id,
@@ -411,7 +415,7 @@ impl ChatDispatchService {
         error: &ChatDispatchError,
     ) {
         record_chat_dispatch_error_event(ChatDispatchErrorEventRecord {
-            logs: &self.logs,
+            usage_records: &self.usage_records,
             request_id,
             account_id,
             route: "/v1/chat/completions",
@@ -503,7 +507,7 @@ impl ChatDispatchError {
 // ====================================================================
 
 struct ChatDispatchErrorEventRecord<'a> {
-    logs: &'a AdminLogService,
+    usage_records: &'a AdminUsageRecordService,
     request_id: &'a str,
     account_id: Option<&'a str>,
     route: &'a str,
@@ -513,7 +517,7 @@ struct ChatDispatchErrorEventRecord<'a> {
     error: &'a ChatDispatchError,
 }
 
-use crate::admin::monitoring::events::EventLog;
+use crate::admin::monitoring::usage_record::UsageRecord;
 
 async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'_>) {
     let mut metadata = serde_json::json!({
@@ -530,7 +534,7 @@ async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'
             object.insert("transport".to_string(), serde_json::json!(transport));
         }
     }
-    let mut event = EventLog::new("v1.chat", EventLevel::Error, "chat dispatch failed");
+    let mut event = UsageRecord::new("v1.chat", UsageRecordLevel::Error, "chat dispatch failed");
     event.request_id = Some(record.request_id.to_string());
     event.account_id = record.account_id.map(ToString::to_string);
     event.route = Some(record.route.to_string());
@@ -538,13 +542,13 @@ async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'
     event.status_code = Some(record.error.http_status_code() as i64);
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     event.metadata = metadata;
-    if let Err(error) = record.logs.record(event).await {
+    if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(error = %error, "failed to record chat dispatch error event");
     }
 }
 
-async fn record_response_event(record: ResponseEventRecord<'_>) {
-    let mut event = EventLog::new("v1.chat", record.level, record.message);
+async fn record_response_event(record: ResponseUsageRecord<'_>) {
+    let mut event = UsageRecord::new("v1.chat", record.level, record.message);
     event.request_id = Some(record.request_id.to_string());
     event.account_id = Some(record.account_id.to_string());
     event.route = Some(record.route.to_string());
@@ -559,6 +563,14 @@ async fn record_response_event(record: ResponseEventRecord<'_>) {
         object
             .entry("apiKind".to_string())
             .or_insert_with(|| serde_json::json!("chat"));
+        enrich_usage_record_identity(
+            object,
+            record.requested_model,
+            record.model,
+            record.client_ip,
+            record.client_user_agent,
+            record.reasoning_effort,
+        );
     }
     let rate_limit_headers = record.rate_limit_headers;
     if !rate_limit_headers.is_empty() {
@@ -569,9 +581,68 @@ async fn record_response_event(record: ResponseEventRecord<'_>) {
             );
         }
     }
-    if let Err(error) = record.logs.record(event).await {
+    if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
     }
+}
+
+fn enrich_usage_record_identity(
+    object: &mut serde_json::Map<String, Value>,
+    requested_model: Option<&str>,
+    upstream_model: &str,
+    client_ip: Option<&str>,
+    client_user_agent: Option<&str>,
+    reasoning_effort: Option<&str>,
+) {
+    let upstream_model = upstream_model.trim();
+    let requested_model = requested_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(upstream_model);
+    object.insert(
+        "requestedModel".to_string(),
+        Value::String(requested_model.to_string()),
+    );
+    object.insert(
+        "upstreamModel".to_string(),
+        Value::String(upstream_model.to_string()),
+    );
+
+    if let Some(client_ip) = client_ip.map(str::trim).filter(|value| !value.is_empty()) {
+        object.insert("clientIp".to_string(), Value::String(client_ip.to_string()));
+    }
+
+    if let Some(user_agent) = client_user_agent
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "userAgent".to_string(),
+            Value::String(user_agent.to_string()),
+        );
+    }
+
+    if let Some(reasoning_effort) = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "reasoningEffort".to_string(),
+            Value::String(reasoning_effort.to_string()),
+        );
+    }
+}
+
+fn reasoning_effort_from_request(
+    request: &crate::upstream::protocol::responses::CodexResponsesRequest,
+) -> Option<&str> {
+    request
+        .reasoning
+        .as_ref()?
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn enrich_chat_error_metadata(

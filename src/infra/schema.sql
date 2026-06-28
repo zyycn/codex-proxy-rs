@@ -249,9 +249,9 @@ create index if not exists idx_fingerprint_update_history_created_id
 on fingerprint_update_history(created_at desc, id desc);
 
 -- ============================================
--- Event Logs
+-- Usage Records
 -- ============================================
-create table if not exists event_logs (
+create table if not exists usage_records (
   id text primary key,
   request_id text,
   kind text not null,
@@ -272,19 +272,19 @@ create table if not exists event_logs (
   created_at text not null
 );
 
-create index if not exists idx_event_logs_created_id on event_logs(created_at desc, id desc);
-create index if not exists idx_event_logs_kind_created on event_logs(kind, created_at desc);
-create index if not exists idx_event_logs_request_id on event_logs(request_id);
-create index if not exists idx_event_logs_account on event_logs(account_id, created_at desc) where account_id is not null;
-create index if not exists idx_event_logs_transport on event_logs(transport, created_at desc) where transport is not null;
-create index if not exists idx_event_logs_failure_class on event_logs(failure_class, created_at desc) where failure_class is not null;
-create index if not exists idx_event_logs_response_id on event_logs(response_id) where response_id is not null;
-create index if not exists idx_event_logs_upstream_request_id on event_logs(upstream_request_id) where upstream_request_id is not null;
-create index if not exists idx_event_logs_level_created on event_logs(level, created_at desc);
-create index if not exists idx_event_logs_route_created on event_logs(route, created_at desc) where route is not null;
-create index if not exists idx_event_logs_model_created on event_logs(model, created_at desc) where model is not null;
-create index if not exists idx_event_logs_status_created on event_logs(status_code, created_at desc) where status_code is not null;
-create index if not exists idx_event_logs_upstream_status_created on event_logs(upstream_status_code, created_at desc) where upstream_status_code is not null;
+create index if not exists idx_usage_records_created_id on usage_records(created_at desc, id desc);
+create index if not exists idx_usage_records_kind_created on usage_records(kind, created_at desc);
+create index if not exists idx_usage_records_request_id on usage_records(request_id);
+create index if not exists idx_usage_records_account on usage_records(account_id, created_at desc) where account_id is not null;
+create index if not exists idx_usage_records_transport on usage_records(transport, created_at desc) where transport is not null;
+create index if not exists idx_usage_records_failure_class on usage_records(failure_class, created_at desc) where failure_class is not null;
+create index if not exists idx_usage_records_response_id on usage_records(response_id) where response_id is not null;
+create index if not exists idx_usage_records_upstream_request_id on usage_records(upstream_request_id) where upstream_request_id is not null;
+create index if not exists idx_usage_records_level_created on usage_records(level, created_at desc);
+create index if not exists idx_usage_records_route_created on usage_records(route, created_at desc) where route is not null;
+create index if not exists idx_usage_records_model_created on usage_records(model, created_at desc) where model is not null;
+create index if not exists idx_usage_records_status_created on usage_records(status_code, created_at desc) where status_code is not null;
+create index if not exists idx_usage_records_upstream_status_created on usage_records(upstream_status_code, created_at desc) where upstream_status_code is not null;
 
 -- ============================================
 -- Model Plan Snapshots

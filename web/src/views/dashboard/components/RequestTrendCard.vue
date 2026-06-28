@@ -24,7 +24,7 @@ const tabs = [
   { label: '错误', value: '错误' },
 ]
 const activeTab = ref('用量')
-const { effectiveTheme } = storeToRefs(useUiStore())
+const { themeRevision } = storeToRefs(useUiStore())
 
 const hasSamples = computed(() =>
   props.points.some(
@@ -85,7 +85,7 @@ const chartOption = computed<EChartsOption>(() => {
 })
 
 function themeColor(name: string, fallback: string) {
-  effectiveTheme.value
+  themeRevision.value
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 }
 
@@ -224,7 +224,6 @@ function formatLatency(ms: number): string {
       <BaseSegmented
         v-model="activeTab"
         :options="tabs"
-        :disabled="loading"
         class="w-full max-w-61.5 sm:w-61.5"
         @update:model-value="emit('trendChange', $event)"
       />

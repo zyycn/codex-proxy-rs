@@ -148,7 +148,7 @@ function planTypeClass(planType?: string) {
 
     <BaseCard
       :padded="false"
-      class="mt-4 flex min-h-0 flex-1 flex-col"
+      class="mt-4 flex h-[calc(100vh-248px)] min-h-125 flex-col"
       header-class="px-4 pt-4 pb-2 md:px-5"
       body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
     >

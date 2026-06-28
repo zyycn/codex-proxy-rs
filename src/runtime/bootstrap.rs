@@ -22,9 +22,12 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let (app, task_coordinator) = build_application(config).await?;
 
-    let serve_result = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
+    let serve_result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
 
     task_coordinator.shutdown().await;
     serve_result?;
@@ -51,7 +54,9 @@ async fn build_application(
             pool.clone(),
         ),
         client_keys: crate::admin::keys::service::SqliteClientKeyStore::new(pool.clone()),
-        event_logs: crate::admin::monitoring::event_store::SqliteEventLogStore::new(pool),
+        usage_records: crate::admin::monitoring::usage_record_store::SqliteUsageRecordStore::new(
+            pool,
+        ),
     };
 
     let default_admin_password = config.admin.default_password.clone();
