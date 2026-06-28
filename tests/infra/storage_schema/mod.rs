@@ -44,7 +44,7 @@ async fn sqlite_schema_should_persist_runtime_settings_columns() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('runtime_settings') where name in ('id', 'model_aliases_json', 'refresh_margin_seconds', 'refresh_concurrency', 'max_concurrent_per_account', 'request_interval_ms', 'rotation_strategy', 'updated_at') order by name",
+        "select name from pragma_table_info('runtime_settings') where name in ('id', 'model_aliases_json', 'refresh_margin_seconds', 'refresh_concurrency', 'max_concurrent_per_account', 'request_interval_ms', 'rotation_strategy', 'admin_api_key', 'updated_at') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -53,6 +53,7 @@ async fn sqlite_schema_should_persist_runtime_settings_columns() {
     assert_eq!(
         rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
         [
+            "admin_api_key",
             "id",
             "max_concurrent_per_account",
             "model_aliases_json",

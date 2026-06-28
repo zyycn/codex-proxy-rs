@@ -67,6 +67,175 @@ async fn admin_settings_should_return_runtime_fields() {
 }
 
 #[tokio::test]
+async fn admin_settings_admin_api_key_status_should_be_empty_by_default() {
+    let (app, _dir) = admin_settings_test_app("admin-settings-admin-key-empty.sqlite").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/settings/admin-api-key")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_empty")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["exists"], false);
+    assert!(body["data"]["maskedKey"].is_null());
+}
+
+#[tokio::test]
+async fn admin_settings_admin_api_key_should_regenerate_and_return_masked_status() {
+    let (app, _dir) = admin_settings_test_app("admin-settings-admin-key-regenerate.sqlite").await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/settings/admin-api-key/regenerate")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_regenerate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let key = body["data"]["key"].as_str().unwrap();
+    assert!(key.starts_with("admin-"));
+    assert_eq!(key.len(), 70);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/settings/admin-api-key")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["exists"], true);
+    assert_eq!(
+        body["data"]["maskedKey"],
+        format!("{}...{}", &key[..10], &key[key.len() - 4..])
+    );
+}
+
+#[tokio::test]
+async fn admin_settings_should_accept_valid_admin_api_key_header() {
+    let (app, _dir) = admin_settings_test_app("admin-settings-admin-key-auth.sqlite").await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/settings/admin-api-key/regenerate")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_auth_create")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let key = body["data"]["key"].as_str().unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/settings")
+                .header("x-api-key", key)
+                .header("x-request-id", "req_settings_admin_key_auth")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["refreshMarginSeconds"], 240);
+}
+
+#[tokio::test]
+async fn admin_settings_should_reject_invalid_admin_api_key_header() {
+    let (app, _dir) = admin_settings_test_app("admin-settings-admin-key-invalid.sqlite").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/settings")
+                .header("x-api-key", "admin-invalid")
+                .header("x-request-id", "req_settings_admin_key_invalid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response_json(response).await["code"], 40103);
+}
+
+#[tokio::test]
+async fn admin_settings_admin_api_key_should_delete_and_revoke_access() {
+    let (app, _dir) = admin_settings_test_app("admin-settings-admin-key-delete.sqlite").await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/settings/admin-api-key/regenerate")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_delete_create")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let key = body["data"]["key"].as_str().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/admin/settings/admin-api-key")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_settings_admin_key_delete")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/settings")
+                .header("x-api-key", key)
+                .header("x-request-id", "req_settings_admin_key_revoked")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response_json(response).await["code"], 40103);
+}
+
+#[tokio::test]
 async fn admin_settings_update_should_require_admin_session_cookie() {
     let (app, _dir) = admin_settings_test_app("admin-settings-update-auth.sqlite").await;
     let response = app

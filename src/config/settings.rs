@@ -8,9 +8,11 @@ use std::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::config::types::AppConfig;
+use crate::infra::identity::generate_admin_api_key;
 use crate::upstream::accounts::pool::{
     AccountPoolOptions, RotationStrategy, RuntimeAccountPoolService,
 };
@@ -228,6 +230,16 @@ fn invalid_field(field: &str, message: impl Into<String>) -> SettingsServiceErro
     }
 }
 
+/// 管理员 API Key 状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminApiKeyStatus {
+    /// 是否已经生成。
+    pub exists: bool,
+    /// 脱敏后的密钥。
+    pub masked_key: Option<String>,
+}
+
 /// 运行时设置服务。
 #[derive(Clone)]
 pub struct RuntimeSettingsService {
@@ -294,6 +306,60 @@ impl RuntimeSettingsService {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = next.clone();
         Ok(next)
+    }
+
+    /// 返回管理员 API Key 状态。
+    pub async fn admin_api_key_status(&self) -> Result<AdminApiKeyStatus, RuntimeSettingsError> {
+        admin_api_key_status(&self.pool).await
+    }
+
+    /// 重新生成管理员 API Key，完整值只在本次返回。
+    pub async fn regenerate_admin_api_key(&self) -> Result<String, RuntimeSettingsError> {
+        let settings = admin_settings_from_config(&self.current());
+        insert_runtime_settings_if_missing(&self.pool, &settings).await?;
+
+        let key = generate_admin_api_key();
+        sqlx::query(
+            r"
+update runtime_settings
+set admin_api_key = ?, updated_at = ?
+where id = ?",
+        )
+        .bind(&key)
+        .bind(Utc::now().to_rfc3339())
+        .bind(RUNTIME_SETTINGS_ID)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(key)
+    }
+
+    /// 删除管理员 API Key。
+    pub async fn delete_admin_api_key(&self) -> Result<(), RuntimeSettingsError> {
+        sqlx::query(
+            r"
+update runtime_settings
+set admin_api_key = null, updated_at = ?
+where id = ?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(RUNTIME_SETTINGS_ID)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 校验管理员 API Key。
+    pub async fn verify_admin_api_key(&self, key: &str) -> Result<bool, RuntimeSettingsError> {
+        if key.is_empty() {
+            return Ok(false);
+        }
+
+        let stored = load_admin_api_key(&self.pool).await?;
+        Ok(stored
+            .as_deref()
+            .filter(|stored_key| !stored_key.is_empty())
+            .is_some_and(|stored_key| key.as_bytes().ct_eq(stored_key.as_bytes()).into()))
     }
 }
 
@@ -456,6 +522,38 @@ where id = ?",
     let mut settings = runtime_settings_from_row(&row)?;
     settings.model_account_routes = load_model_account_routes(pool).await?;
     Ok(settings)
+}
+
+async fn admin_api_key_status(
+    pool: &SqlitePool,
+) -> Result<AdminApiKeyStatus, RuntimeSettingsError> {
+    let key = load_admin_api_key(pool).await?;
+    let masked_key = key
+        .as_deref()
+        .filter(|key| !key.is_empty())
+        .map(mask_api_key);
+    Ok(AdminApiKeyStatus {
+        exists: masked_key.is_some(),
+        masked_key,
+    })
+}
+
+async fn load_admin_api_key(pool: &SqlitePool) -> Result<Option<String>, RuntimeSettingsError> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "select admin_api_key from runtime_settings where id = ?",
+    )
+    .bind(RUNTIME_SETTINGS_ID)
+    .fetch_optional(pool)
+    .await?
+    .flatten())
+}
+
+fn mask_api_key(key: &str) -> String {
+    if key.len() > 14 {
+        format!("{}...{}", &key[..10], &key[key.len() - 4..])
+    } else {
+        key.to_string()
+    }
 }
 
 fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSettingsError> {

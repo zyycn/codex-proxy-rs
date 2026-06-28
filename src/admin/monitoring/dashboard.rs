@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::{
     admin::{
-        auth::session::require_admin_session,
+        auth::session::require_admin_auth,
         monitoring::{
             billing,
             diagnostics::{
@@ -236,7 +236,7 @@ pub(crate) async fn dashboard_summary(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
 
     let accounts = state
         .services
@@ -296,7 +296,7 @@ pub(crate) async fn dashboard_trend(
     headers: HeaderMap,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     let time_buckets = dashboard_time_buckets(&state, Utc::now()).await;
 
     Ok(AdminResponse::new(

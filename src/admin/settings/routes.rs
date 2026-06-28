@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::{
-    admin::auth::session::require_admin_session,
+    admin::auth::session::require_admin_auth,
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     config::{
         settings::{AdminSettingsPatch, RuntimeSettingsError, SettingsServiceError},
@@ -61,7 +61,7 @@ pub(crate) async fn settings(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     let config = state.services.settings.current();
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -75,7 +75,7 @@ pub(crate) async fn update_settings(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
 
     let patch = parse_settings_patch(&body)?;
     let config = state
@@ -88,6 +88,63 @@ pub(crate) async fn update_settings(
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AdminSettingsData::from_config(&config)),
+    ))
+}
+
+/// `GET /api/admin/settings/admin-api-key`
+pub(crate) async fn admin_api_key_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let status = state
+        .services
+        .settings
+        .admin_api_key_status()
+        .await
+        .map_err(settings_service_error)?;
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(status),
+    ))
+}
+
+/// `POST /api/admin/settings/admin-api-key/regenerate`
+pub(crate) async fn regenerate_admin_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let key = state
+        .services
+        .settings
+        .regenerate_admin_api_key()
+        .await
+        .map_err(settings_service_error)?;
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({ "key": key })),
+    ))
+}
+
+/// `DELETE /api/admin/settings/admin-api-key`
+pub(crate) async fn delete_admin_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    state
+        .services
+        .settings
+        .delete_admin_api_key()
+        .await
+        .map_err(settings_service_error)?;
+
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({ "message": "Admin API key deleted" })),
     ))
 }
 

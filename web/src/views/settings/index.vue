@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useClipboard } from '@vueuse/core'
 import { sortBy } from 'es-toolkit'
-import { Gauge, GitBranch, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
+import { Copy, Gauge, GitBranch, KeyRound, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
 
-import { getSettings, updateSettings } from '@/api'
+import {
+  deleteAdminApiKey,
+  getAdminApiKeyStatus,
+  getSettings,
+  regenerateAdminApiKey,
+  updateSettings,
+} from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -30,6 +38,12 @@ interface SettingsForm {
 const loading = ref(true)
 const saving = ref(false)
 const aliasError = ref('')
+const adminKeyLoading = ref(true)
+const adminKeyRegenerating = ref(false)
+const adminKeyDeleting = ref(false)
+const showDeleteAdminKeyModal = ref(false)
+const generatedAdminApiKey = ref('')
+const { copy } = useClipboard()
 
 const form = reactive<SettingsForm>({
   modelAliases: {},
@@ -41,6 +55,10 @@ const form = reactive<SettingsForm>({
 })
 
 const aliasRows = ref<AliasRow[]>([])
+const adminApiKeyStatus = reactive({
+  exists: false,
+  maskedKey: null as string | null,
+})
 
 const rotationOptions: Array<{
   label: string
@@ -123,6 +141,15 @@ function applySettings(data: any) {
   aliasError.value = ''
 }
 
+function applyAdminApiKeyStatus(data: any) {
+  adminApiKeyStatus.exists = Boolean(data?.exists)
+  adminApiKeyStatus.maskedKey = data?.maskedKey || null
+}
+
+function maskAdminApiKey(key: string) {
+  return key.length > 14 ? `${key.slice(0, 10)}...${key.slice(-4)}` : key
+}
+
 function addAliasRow() {
   aliasRows.value = [...aliasRows.value, { alias: '', target: '' }]
   aliasError.value = ''
@@ -143,11 +170,15 @@ function removeAliasRow(index: number) {
 async function loadSettings() {
   try {
     loading.value = true
-    applySettings(await getSettings())
+    adminKeyLoading.value = true
+    const [settings, adminKeyStatus] = await Promise.all([getSettings(), getAdminApiKeyStatus()])
+    applySettings(settings)
+    applyAdminApiKeyStatus(adminKeyStatus)
   } catch (error: any) {
     toast.error(error.message || '加载失败')
   } finally {
     loading.value = false
+    adminKeyLoading.value = false
   }
 }
 
@@ -179,6 +210,54 @@ async function handleSave() {
   }
 }
 
+async function handleRegenerateAdminApiKey() {
+  if (adminKeyRegenerating.value || adminKeyDeleting.value) return
+
+  try {
+    adminKeyRegenerating.value = true
+    const wasEnabled = adminApiKeyStatus.exists
+    const data = await regenerateAdminApiKey()
+    generatedAdminApiKey.value = data.key
+    applyAdminApiKeyStatus({
+      exists: true,
+      maskedKey: maskAdminApiKey(data.key),
+    })
+    toast.success(wasEnabled ? '管理员 API Key 已更新' : '管理员 API Key 已生成')
+  } catch (error: any) {
+    toast.error(error.message || '生成失败')
+  } finally {
+    adminKeyRegenerating.value = false
+  }
+}
+
+async function handleDeleteAdminApiKey() {
+  if (adminKeyDeleting.value || adminKeyRegenerating.value) return
+
+  try {
+    adminKeyDeleting.value = true
+    await deleteAdminApiKey()
+    applyAdminApiKeyStatus({ exists: false, maskedKey: null })
+    generatedAdminApiKey.value = ''
+    showDeleteAdminKeyModal.value = false
+    toast.success('管理员 API Key 已删除')
+  } catch (error: any) {
+    toast.error(error.message || '删除失败')
+  } finally {
+    adminKeyDeleting.value = false
+  }
+}
+
+async function copyAdminApiKey() {
+  if (!generatedAdminApiKey.value) return
+
+  try {
+    await copy(generatedAdminApiKey.value)
+    toast.success('已复制')
+  } catch (error: any) {
+    toast.error(error.message || '复制失败')
+  }
+}
+
 onMounted(loadSettings)
 </script>
 
@@ -205,6 +284,84 @@ onMounted(loadSettings)
     </header>
 
     <div class="mt-5 grid max-w-6xl gap-5">
+      <BaseCard
+        :padded="false"
+        title="管理员 API Key"
+        description="用于外部系统集成的全局 API Key，拥有完整管理员权限。"
+        header-class="px-5 pt-4"
+        body-class="px-5 py-5"
+      >
+        <template #actions>
+          <div class="flex flex-wrap items-center gap-2">
+            <BaseButton
+              variant="default"
+              :loading="adminKeyRegenerating"
+              :disabled="adminKeyLoading || adminKeyDeleting"
+              @click="handleRegenerateAdminApiKey"
+            >
+              <template #icon>
+                <KeyRound class="size-4" />
+              </template>
+              {{ adminApiKeyStatus.exists ? '重新生成' : '生成' }}
+            </BaseButton>
+            <BaseButton
+              variant="danger"
+              :disabled="adminKeyLoading || adminKeyRegenerating || !adminApiKeyStatus.exists"
+              @click="showDeleteAdminKeyModal = true"
+            >
+              <template #icon>
+                <Trash2 class="size-4" />
+              </template>
+              删除
+            </BaseButton>
+          </div>
+        </template>
+
+        <div class="grid gap-4">
+          <div
+            class="flex min-h-16 items-center justify-between gap-4 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              <span
+                class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) text-(--cp-normal) shadow-(--cp-shadow-control)"
+              >
+                <KeyRound class="size-4" />
+              </span>
+              <div class="min-w-0">
+                <p class="m-0 text-[13px] leading-[1.15] font-[720] text-(--cp-text-primary)">
+                  {{ adminApiKeyStatus.exists ? '已启用' : '未生成' }}
+                </p>
+                <p
+                  class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+                >
+                  {{
+                    adminKeyLoading
+                      ? '加载中...'
+                      : adminApiKeyStatus.maskedKey || '外部系统暂时无法通过 API Key 调用管理接口'
+                  }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="generatedAdminApiKey" class="grid gap-2">
+            <p class="m-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
+              完整 Key 仅显示一次，请立即保存。
+            </p>
+            <div class="flex min-w-0 items-center gap-2">
+              <code
+                class="min-w-0 flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] leading-normal font-[650] break-all text-(--cp-text-primary)"
+              >
+                {{ generatedAdminApiKey }}
+              </code>
+              <BaseButton icon-only size="md" title="复制" @click="copyAdminApiKey">
+                <Copy class="size-4" />
+              </BaseButton>
+            </div>
+          </div>
+        </div>
+      </BaseCard>
+
       <BaseCard
         :padded="false"
         title="运行参数"
@@ -362,6 +519,19 @@ onMounted(loadSettings)
           </button>
         </div>
       </BaseCard>
+
+      <BaseConfirmModal
+        v-model="showDeleteAdminKeyModal"
+        title="删除管理员 API Key"
+        description="删除后外部系统将无法继续使用该 Key 调用管理接口。"
+        variant="danger"
+        confirm-text="确认删除"
+        :loading="adminKeyDeleting"
+        width="480px"
+        @confirm="handleDeleteAdminApiKey"
+      >
+        <p class="m-0">确定要删除当前管理员 API Key 吗？此操作会立即生效。</p>
+      </BaseConfirmModal>
     </div>
   </div>
 </template>
