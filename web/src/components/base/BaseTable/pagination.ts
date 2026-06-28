@@ -1,3 +1,5 @@
+import { clamp, range } from 'es-toolkit'
+
 export interface BaseTablePagination {
   page: number
   pageSize: number
@@ -14,7 +16,7 @@ export function getTotalPages(pagination?: BaseTablePagination) {
     return 0
   }
 
-  return Math.max(1, Math.ceil(pagination.total / pagination.pageSize))
+  return clamp(Math.ceil(pagination.total / pagination.pageSize), 1, Number.POSITIVE_INFINITY)
 }
 
 export function getCurrentPage(pagination: BaseTablePagination | undefined, totalPages: number) {
@@ -22,7 +24,7 @@ export function getCurrentPage(pagination: BaseTablePagination | undefined, tota
     return 0
   }
 
-  return Math.min(Math.max(pagination.page, 1), totalPages)
+  return clamp(pagination.page, 1, totalPages)
 }
 
 export function getPageSizeOptions(pagination?: BaseTablePagination) {
@@ -36,7 +38,7 @@ export function getPageSizeOptions(pagination?: BaseTablePagination) {
 
 export function getPagerItems(total: number, current: number): PagerItem[] {
   if (total <= 7) {
-    return Array.from({ length: total }, (_, index) => index + 1)
+    return range(1, total + 1)
   }
 
   const pages = new Set<number>([1, total, current, current - 1, current + 1])

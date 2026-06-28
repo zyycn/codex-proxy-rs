@@ -7,12 +7,25 @@
     <title>Codex Proxy RS</title>
     <script>
       ;(() => {
-        const state = JSON.parse(localStorage.getItem('codex-proxy-rs-ui') || '{}')
-        const mode = state.themeMode || 'system'
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        const theme = mode === 'dark' || (mode === 'system' && prefersDark) ? 'dark' : 'light'
-        document.documentElement.dataset.theme = theme
-        document.documentElement.style.colorScheme = theme
+        const root = document.documentElement
+        let mode = 'system'
+
+        try {
+          const storedMode = JSON.parse(localStorage.getItem('codex-proxy-rs-ui') || '{}').themeMode
+          if (storedMode === 'light' || storedMode === 'dark') {
+            mode = storedMode
+          }
+        } catch {}
+
+        const theme =
+          mode === 'system'
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : mode
+
+        root.dataset.theme = theme
+        root.style.colorScheme = theme
       })()
     </script>
   </head>

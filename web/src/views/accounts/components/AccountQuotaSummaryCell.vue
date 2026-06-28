@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -8,7 +9,7 @@ const props = defineProps<{
 const quotaWindows = computed(() => props.account.quota.windows as any[])
 
 function quotaWindowPercent(window?: any) {
-  return Math.max(0, Math.min(window?.usedPercent ?? 0, 100))
+  return clamp(window?.usedPercent ?? 0, 0, 100)
 }
 
 function quotaWindowBarStyle(window?: any) {

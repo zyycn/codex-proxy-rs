@@ -77,6 +77,12 @@ pub(crate) struct AccountIdQuery {
     id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountExportQuery {
+    ids: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AccountTestRequest {
@@ -486,6 +492,27 @@ pub(crate) async fn create_account(
         Ok(account) => Ok(AdminResponse::new(
             StatusCode::OK,
             AdminEnvelope::ok(AdminAccountData::from(account)),
+        )),
+        Err(error) => Err(account_error(&error)),
+    }
+}
+
+/// `GET /api/admin/accounts/export`
+pub(crate) async fn export_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AccountExportQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_session(&state, &headers).await?;
+    match state
+        .services
+        .admin_accounts
+        .export(account_export_ids(query.ids.as_deref()))
+        .await
+    {
+        Ok(result) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(result),
         )),
         Err(error) => Err(account_error(&error)),
     }
@@ -1399,6 +1426,16 @@ fn account_error(error: &AdminAccountError) -> AdminError {
 
 fn account_not_found() -> AdminError {
     AdminError::new(StatusCode::NOT_FOUND, 40401, "Account not found")
+}
+
+fn account_export_ids(value: Option<&str>) -> Vec<String> {
+    value
+        .into_iter()
+        .flat_map(|ids| ids.split(','))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn account_status_str(status: crate::upstream::accounts::model::AccountStatus) -> &'static str {

@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
+import { clamp } from 'es-toolkit'
 
 import { getAccountModels, testAccountConnectionStream } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
@@ -129,7 +130,11 @@ export function useAccountConnectionTest() {
   function finishConnectionTest(status: 'success' | 'error') {
     connectionTestStatus.value = status
     connectionTestFinishedAt.value = formatDateTime()
-    connectionTestDurationMs.value = Math.max(0, Date.now() - connectionTestStartedAtMs)
+    connectionTestDurationMs.value = clamp(
+      Date.now() - connectionTestStartedAtMs,
+      0,
+      Number.POSITIVE_INFINITY,
+    )
   }
 
   function handleConnectionTestEvent(event: any) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
@@ -24,7 +25,7 @@ const scheduleStats = computed(() => {
 const usedPercent = computed(() => {
   const cap = props.capacity
   if (!cap || cap.totalSlots === 0) return 0
-  return Math.min(100, Math.round((cap.usedSlots / cap.totalSlots) * 100))
+  return clamp(Math.round((cap.usedSlots / cap.totalSlots) * 100), 0, 100)
 })
 
 const usedRatio = computed(() => {

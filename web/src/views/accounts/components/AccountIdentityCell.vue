@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { sumBy } from 'es-toolkit'
 import { computed } from 'vue'
 
 const props = withDefaults(
@@ -50,7 +51,7 @@ const avatarClass = computed(() => {
     'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
   ]
   const key = String(props.account.id || props.account.email || displayTitle.value)
-  const hash = [...key].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  const hash = sumBy([...key], (char) => char.charCodeAt(0))
   return palettes[hash % palettes.length]
 })
 </script>

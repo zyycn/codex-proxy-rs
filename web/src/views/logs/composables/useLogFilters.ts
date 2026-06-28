@@ -1,12 +1,12 @@
 // @env browser
-import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { watchDebounced } from '@vueuse/core'
+import { computed, ref, type Ref } from 'vue'
 
 export function useLogFilters(totalLogs: Ref<number>) {
   const page = ref(1)
   const pageSize = ref(20)
   const searchQuery = ref('')
   const filterLevel = ref('')
-  let searchTimer: number | undefined
   let loadLogs: (() => Promise<void> | void) | undefined
 
   const logPagination = computed(() => ({
@@ -37,19 +37,14 @@ export function useLogFilters(totalLogs: Ref<number>) {
     requestLoad()
   }
 
-  watch([searchQuery, filterLevel], () => {
-    page.value = 1
-    if (searchTimer) {
-      window.clearTimeout(searchTimer)
-    }
-    searchTimer = window.setTimeout(requestLoad, 250)
-  })
-
-  onBeforeUnmount(() => {
-    if (searchTimer) {
-      window.clearTimeout(searchTimer)
-    }
-  })
+  watchDebounced(
+    [searchQuery, filterLevel],
+    () => {
+      page.value = 1
+      requestLoad()
+    },
+    { debounce: 250 },
+  )
 
   return {
     page,

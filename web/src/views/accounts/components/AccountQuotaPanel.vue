@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
+import { clamp } from 'es-toolkit'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -17,7 +18,7 @@ function quotaWindows(group: string) {
 }
 
 function quotaWindowPercent(window?: any) {
-  return Math.max(0, Math.min(window?.usedPercent ?? 0, 100))
+  return clamp(window?.usedPercent ?? 0, 0, 100)
 }
 
 function quotaWindowBarWidth(window?: any) {

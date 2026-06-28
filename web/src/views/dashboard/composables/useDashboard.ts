@@ -1,4 +1,6 @@
-import { onMounted, onUnmounted, ref } from 'vue'
+import { useIntervalFn } from '@vueuse/core'
+import { clamp } from 'es-toolkit'
+import { onMounted, ref } from 'vue'
 
 import {
   Activity,
@@ -30,7 +32,13 @@ export function useDashboard(): any {
   const refreshing = ref(false)
   const trendLoading = ref(false)
   const lastRefreshedAt = ref('')
-  const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
+  const { resume: startAutoRefresh } = useIntervalFn(
+    () => {
+      void loadDashboardData()
+    },
+    30000,
+    { immediate: false },
+  )
 
   async function loadDashboardData() {
     try {
@@ -288,7 +296,7 @@ export function useDashboard(): any {
 
   function quotaUsedPercent(value: number | null | undefined): number {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 0
-    return Math.max(0, Math.min(100, Math.round(value)))
+    return clamp(Math.round(value), 0, 100)
   }
 
   function quotaTone(percent: number) {
@@ -390,27 +398,9 @@ export function useDashboard(): any {
     return `${ms}ms`
   }
 
-  function startAutoRefresh() {
-    stopAutoRefresh()
-    autoRefreshTimer.value = setInterval(() => {
-      loadDashboardData()
-    }, 30000)
-  }
-
-  function stopAutoRefresh() {
-    if (autoRefreshTimer.value) {
-      clearInterval(autoRefreshTimer.value)
-      autoRefreshTimer.value = null
-    }
-  }
-
   onMounted(() => {
-    loadDashboardData()
+    void loadDashboardData()
     startAutoRefresh()
-  })
-
-  onUnmounted(() => {
-    stopAutoRefresh()
   })
 
   return {

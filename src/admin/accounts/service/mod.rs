@@ -1,6 +1,7 @@
 //! 管理端账号业务服务。
 
 mod cookies;
+mod exporting;
 mod importing;
 mod lifecycle;
 pub(crate) mod oauth;
@@ -22,7 +23,8 @@ use crate::{
 
 pub use types::{
     AdminAccountError, AdminAccountMetadata, AdminAccountMetadataUpdate, BatchDeleteAccounts,
-    ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput, UpdatedAccountStatus,
+    ExportedAccounts, ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
+    UpdatedAccountStatus,
 };
 
 #[derive(Clone)]

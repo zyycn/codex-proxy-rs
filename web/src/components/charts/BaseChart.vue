@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRafFn, useResizeObserver } from '@vueuse/core'
 import type { EChartsOption } from 'echarts'
 import { init, type EChartsType } from 'echarts/core'
 import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
@@ -18,8 +19,7 @@ const props = withDefaults(
 const chartElement = useTemplateRef<HTMLElement>('chart')
 const chartOption = shallowRef<EChartsOption>(props.option)
 const chart = shallowRef<EChartsType>()
-const observer = shallowRef<ResizeObserver>()
-const animationFrame = shallowRef<number>()
+const pendingInitElement = shallowRef<HTMLElement>()
 
 const style = computed(() => ({
   height: `${props.height}px`,
@@ -30,10 +30,8 @@ function elementHasSize(element: HTMLElement) {
 }
 
 function cancelPendingInit() {
-  if (animationFrame.value !== undefined) {
-    cancelAnimationFrame(animationFrame.value)
-    animationFrame.value = undefined
-  }
+  pendingInitElement.value = undefined
+  pausePendingInit()
 }
 
 function ensureChart(element: HTMLElement) {
@@ -43,12 +41,20 @@ function ensureChart(element: HTMLElement) {
 }
 
 function scheduleInit(element: HTMLElement) {
-  cancelPendingInit()
-  animationFrame.value = requestAnimationFrame(() => {
-    animationFrame.value = undefined
-    ensureChart(element)
-  })
+  pendingInitElement.value = element
+  resumePendingInit()
 }
+
+const { pause: pausePendingInit, resume: resumePendingInit } = useRafFn(
+  () => {
+    const element = pendingInitElement.value
+    pendingInitElement.value = undefined
+    if (element) {
+      ensureChart(element)
+    }
+  },
+  { immediate: false, once: true },
+)
 
 function resize() {
   chart.value?.resize()
@@ -56,9 +62,7 @@ function resize() {
 
 function dispose() {
   cancelPendingInit()
-  observer.value?.disconnect()
   chart.value?.dispose()
-  observer.value = undefined
   chart.value = undefined
 }
 
@@ -81,18 +85,21 @@ watch(
   (element) => {
     dispose()
     if (!element) return
-    observer.value = new ResizeObserver(() => {
-      if (chart.value) {
-        resize()
-        return
-      }
-      ensureChart(element)
-    })
-    observer.value.observe(element)
     scheduleInit(element)
   },
   { immediate: true },
 )
+
+useResizeObserver(chartElement, () => {
+  const element = chartElement.value
+  if (!element) return
+
+  if (chart.value) {
+    resize()
+    return
+  }
+  ensureChart(element)
+})
 
 onBeforeUnmount(dispose)
 </script>

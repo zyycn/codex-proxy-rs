@@ -1,3 +1,4 @@
+import { usePreferredDark, usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, shallowRef, watch } from 'vue'
 
@@ -18,33 +19,31 @@ export const useUiStore = defineStore(
   () => {
     const sidebarCollapsed = shallowRef(false)
     const themeMode = shallowRef<ThemeMode>('system')
-    const systemTheme = shallowRef<ThemeName>(preferredTheme())
+    const prefersDark = usePreferredDark()
+    const preferredMotion = usePreferredReducedMotion()
+    const systemTheme = computed<ThemeName>(() => (prefersDark.value ? 'dark' : 'light'))
 
     const effectiveTheme = computed<ThemeName>(() =>
       themeMode.value === 'system' ? systemTheme.value : themeMode.value,
     )
 
-    let mediaQuery: MediaQueryList | undefined
-    let listeningTheme = false
     let themeApplied = false
-    let themeTransitionTimer: number | undefined
     let themeTransitionOrigin: ThemeTransitionOrigin | undefined
     let themeTransitionRequested = false
+    const { start: startFallbackTransitionTimer, stop: stopFallbackTransitionTimer } = useTimeoutFn(
+      () => {
+        document.documentElement.classList.remove('theme-fallback-transition')
+      },
+      180,
+      { immediate: false },
+    )
 
     function toggleSidebar() {
       sidebarCollapsed.value = !sidebarCollapsed.value
     }
 
-    function preferredTheme(): ThemeName {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-    }
-
     function applyTheme(theme: ThemeName) {
-      if (
-        !themeApplied ||
-        !themeTransitionRequested ||
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      ) {
+      if (!themeApplied || !themeTransitionRequested || preferredMotion.value === 'reduce') {
         commitTheme(theme)
         themeApplied = true
         themeTransitionRequested = false
@@ -116,24 +115,14 @@ export const useUiStore = defineStore(
     }
 
     function runFallbackThemeTransition(theme: ThemeName) {
-      window.clearTimeout(themeTransitionTimer)
+      stopFallbackTransitionTimer()
       document.documentElement.classList.add('theme-fallback-transition')
       commitTheme(theme)
-      themeTransitionTimer = window.setTimeout(() => {
-        document.documentElement.classList.remove('theme-fallback-transition')
-      }, 180)
+      startFallbackTransitionTimer()
     }
 
     function initializeTheme() {
-      mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      systemTheme.value = mediaQuery.matches ? 'dark' : 'light'
-
-      if (listeningTheme) return
-
-      mediaQuery.addEventListener('change', (event) => {
-        systemTheme.value = event.matches ? 'dark' : 'light'
-      })
-      listeningTheme = true
+      applyTheme(effectiveTheme.value)
     }
 
     function setThemeMode(mode: ThemeMode) {

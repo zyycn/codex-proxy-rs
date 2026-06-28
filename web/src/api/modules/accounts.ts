@@ -16,6 +16,14 @@ export function importAccounts(data: any) {
   })
 }
 
+export function exportAccounts(params?: any) {
+  return request({
+    url: '/api/admin/accounts/export',
+    method: 'GET',
+    params,
+  })
+}
+
 export function authorizeAccountOAuth(data?: any) {
   return request({
     url: '/api/admin/accounts/oauth/authorize',

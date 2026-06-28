@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef } from 'vue'
+import { useClipboard, useFileDialog } from '@vueuse/core'
+import { computed, ref } from 'vue'
 import { Copy, KeyRound, Upload } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -7,7 +8,6 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { toast } from '@/components/base/BaseToast'
-import { copyText } from '@/utils/clipboard'
 
 const props = withDefaults(
   defineProps<{
@@ -22,14 +22,19 @@ const props = withDefaults(
 
 const open = defineModel<boolean>({ default: false })
 const form = defineModel<any>('form', { required: true })
+const { copy } = useClipboard()
 
 const emit = defineEmits<{
   create: []
   generateOauth: []
 }>()
 
-const fileInput = useTemplateRef<HTMLInputElement>('fileInput')
 const fileError = ref('')
+const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
+  accept: 'application/json,.json',
+  multiple: false,
+  reset: true,
+})
 
 const modeOptions = [
   { label: 'OAuth 授权', value: 'oauth' },
@@ -94,30 +99,30 @@ const description = computed(() => {
   return '导入 Codex Proxy RS 账号 JSON，已存在账号会更新。'
 })
 
-async function handleFileChange(event: Event) {
+async function loadImportFile(files: FileList | null) {
   fileError.value = ''
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+  const file = files?.[0]
   if (!file) return
 
   try {
     importText.value = await file.text()
   } catch {
     fileError.value = '文件读取失败'
-  } finally {
-    input.value = ''
   }
 }
 
+onImportFileChange((files) => {
+  void loadImportFile(files)
+})
+
 async function copyOAuthAuthUrl() {
   if (!oauthAuthUrl.value) return
-  const copied = await copyText(oauthAuthUrl.value)
-  if (copied) {
+  try {
+    await copy(oauthAuthUrl.value)
     toast.success('授权链接已复制')
-    return
+  } catch {
+    toast.error('复制失败')
   }
-
-  toast.error('复制失败')
 }
 </script>
 
@@ -221,17 +226,10 @@ async function copyOAuthAuthUrl() {
           <label class="block text-[13px] font-medium text-(--cp-text-secondary)">
             JSON 内容 <span class="text-(--cp-danger)">*</span>
           </label>
-          <BaseButton variant="default" size="sm" :disabled="saving" @click="fileInput?.click()">
+          <BaseButton variant="default" size="sm" :disabled="saving" @click="openImportFile()">
             <Upload class="size-3.5" />
             上传文件
           </BaseButton>
-          <input
-            ref="fileInput"
-            class="hidden"
-            type="file"
-            accept="application/json,.json"
-            @change="handleFileChange"
-          />
         </div>
         <textarea
           v-model="importText"

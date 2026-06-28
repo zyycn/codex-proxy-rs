@@ -1,3 +1,4 @@
+import { clamp } from 'es-toolkit'
 import { onMounted, ref, type Ref } from 'vue'
 
 import { clearLogs, getLogs } from '@/api'
@@ -31,7 +32,11 @@ export function useLogsTable(options: {
       options.page.value = result.page.page ?? options.page.value
 
       if (logs.value.length === 0 && options.totalLogs.value > 0 && options.page.value > 1) {
-        options.page.value = Math.max(1, result.page.totalPages ?? options.page.value - 1)
+        options.page.value = clamp(
+          result.page.totalPages ?? options.page.value - 1,
+          1,
+          Number.POSITIVE_INFINITY,
+        )
         await loadLogs()
       }
     } catch (error: any) {
