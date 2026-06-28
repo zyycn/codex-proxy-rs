@@ -7,7 +7,7 @@ async fn fingerprint_update_task_should_start_background_checker() {
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let repo = FingerprintRepository::new(pool);
+    let repo = FingerprintRepository::new(pool.clone());
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
@@ -45,7 +45,7 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let repo = FingerprintRepository::new(pool);
+    let repo = FingerprintRepository::new(pool.clone());
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
@@ -99,7 +99,7 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
-    let repo = FingerprintRepository::new(pool);
+    let repo = FingerprintRepository::new(pool.clone());
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
@@ -113,9 +113,12 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
 
     wait_for_appcast_requests(&server, 1).await;
     handle.shutdown().await;
-    let latest_history = repo.latest().await.expect("latest history should load");
+    let history_count: i64 = sqlx::query_scalar("select count(*) from fingerprint_update_history")
+        .fetch_one(&pool)
+        .await
+        .expect("fingerprint history count should load");
 
-    assert!(latest_history.is_none());
+    assert_eq!(history_count, 0);
 }
 
 #[tokio::test]

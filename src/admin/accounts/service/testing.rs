@@ -16,21 +16,21 @@ use crate::upstream::{
 
 use super::{types::AdminAccountError, AdminAccountService};
 
-pub type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
+pub(super) type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountTestModel {
+pub struct AccountModelOption {
     pub id: String,
     pub label: String,
 }
 
 impl AdminAccountService {
-    pub async fn test_connection_models(
+    pub async fn account_models(
         &self,
         account_id: &str,
         request_id: &str,
-    ) -> Result<Vec<AccountTestModel>, AdminAccountError> {
+    ) -> Result<Vec<AccountModelOption>, AdminAccountError> {
         let account = self
             .store
             .get(account_id)
@@ -50,8 +50,8 @@ impl AdminAccountService {
             .fetch_models(&request)
             .await
             .map_err(|error| AdminAccountError::FetchModels(error.to_string()))?
-            .into_iter()
-            .filter_map(account_test_model)
+            .iter()
+            .filter_map(account_model_option)
             .collect::<Vec<_>>();
         if models.is_empty() {
             return Err(AdminAccountError::NoModels);
@@ -145,9 +145,9 @@ impl AdminAccountService {
     }
 }
 
-fn account_test_model(
-    entry: crate::upstream::models::BackendModelEntry,
-) -> Option<AccountTestModel> {
+fn account_model_option(
+    entry: &crate::upstream::models::BackendModelEntry,
+) -> Option<AccountModelOption> {
     let id = first_non_empty([
         entry.slug.as_deref(),
         entry.id.as_deref(),
@@ -162,7 +162,7 @@ fn account_test_model(
     ])
     .unwrap_or(&id)
     .to_string();
-    Some(AccountTestModel { id, label })
+    Some(AccountModelOption { id, label })
 }
 
 fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {

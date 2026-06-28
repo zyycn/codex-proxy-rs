@@ -1,9 +1,5 @@
-use std::{
-    collections::BTreeMap,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, time::Duration};
 
-use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -27,34 +23,6 @@ pub struct TokenUsage {
     pub image_output_tokens: u64,
     /// 主模型总 token 数，不包含图片工具 token。
     pub total_tokens: u64,
-}
-
-impl TokenUsage {
-    /// 构造仅包含主模型 token 的用量快照。
-    pub fn new(input_tokens: u64, output_tokens: u64, cached_tokens: u64) -> Self {
-        Self {
-            input_tokens,
-            output_tokens,
-            cached_tokens,
-            reasoning_tokens: 0,
-            image_input_tokens: 0,
-            image_output_tokens: 0,
-            total_tokens: input_tokens + output_tokens,
-        }
-    }
-
-    /// 将两份用量按字段累加。
-    pub fn merged(self, other: Self) -> Self {
-        Self {
-            input_tokens: self.input_tokens + other.input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            cached_tokens: self.cached_tokens + other.cached_tokens,
-            reasoning_tokens: self.reasoning_tokens + other.reasoning_tokens,
-            image_input_tokens: self.image_input_tokens + other.image_input_tokens,
-            image_output_tokens: self.image_output_tokens + other.image_output_tokens,
-            total_tokens: self.total_tokens + other.total_tokens,
-        }
-    }
 }
 
 /// 从单个 JSON 响应体中提取用量。
@@ -198,20 +166,6 @@ pub struct RateLimitWindow {
     pub reset_at: Option<i64>,
 }
 
-impl RateLimitWindow {
-    /// 以秒返回限流窗口大小。
-    pub fn limit_window_seconds(self) -> Option<u64> {
-        self.window_minutes
-            .and_then(|minutes| minutes.checked_mul(60))
-    }
-
-    /// 将重置时间戳转换为 UTC 时间。
-    pub fn reset_at_datetime(self) -> Option<DateTime<Utc>> {
-        let reset_at = self.reset_at?;
-        DateTime::<Utc>::from_timestamp(reset_at, 0)
-    }
-}
-
 /// 复合限流信息，通常用于 code review 配额。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RateLimitDetails {
@@ -234,24 +188,6 @@ pub struct ParsedRateLimits {
     pub secondary: Option<RateLimitWindow>,
     /// code review 限流窗口。
     pub code_review: Option<RateLimitDetails>,
-}
-
-impl ParsedRateLimits {
-    /// 返回主窗口的 UTC 重置时间。
-    pub fn primary_reset_at(self) -> Option<DateTime<Utc>> {
-        self.primary.and_then(RateLimitWindow::reset_at_datetime)
-    }
-
-    /// 返回主窗口的秒级窗口长度。
-    pub fn primary_limit_window_seconds(self) -> Option<u64> {
-        self.primary.and_then(RateLimitWindow::limit_window_seconds)
-    }
-
-    /// 返回主窗口是否已经触顶。
-    pub fn primary_limit_reached(self) -> bool {
-        self.primary
-            .is_some_and(|window| window.used_percent >= 100.0)
-    }
 }
 
 /// 从响应头对中解析限流信息。
@@ -412,22 +348,6 @@ pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(Strin
     headers
 }
 
-/// 为退避秒数增加抖动，避免同一时间窗口内集中重试。
-pub fn cooldown_with_jitter(seconds: u64, factor_bps: u16) -> Duration {
-    let factor_bps = u64::from(factor_bps);
-    let variance = seconds.saturating_mul(factor_bps) / 10_000;
-    if variance == 0 {
-        return Duration::seconds(seconds.min(i64::MAX as u64) as i64);
-    }
-    let lower = seconds.saturating_sub(variance);
-    let span = variance.saturating_mul(2).saturating_add(1);
-    let offset = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| u64::from(duration.subsec_nanos()) % span)
-        .unwrap_or(variance);
-    Duration::seconds(lower.saturating_add(offset).min(i64::MAX as u64) as i64)
-}
-
 fn number_field(value: &Value, field: &str) -> Option<u64> {
     value.get(field)?.as_u64()
 }
@@ -510,10 +430,12 @@ fn unit_token(input: &str) -> Option<&str> {
 }
 
 fn positive_seconds_ceil(seconds: f64) -> Option<u64> {
-    if !seconds.is_finite() || seconds <= 0.0 || seconds > u64::MAX as f64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
         return None;
     }
-    Some(seconds.ceil() as u64)
+    Duration::try_from_secs_f64(seconds.ceil())
+        .ok()
+        .map(|duration| duration.as_secs())
 }
 
 fn push_window_headers(

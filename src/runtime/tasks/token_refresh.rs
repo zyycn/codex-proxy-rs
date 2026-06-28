@@ -35,19 +35,6 @@ where
         }
     }
 
-    /// 使用自定义间隔构造后台任务。
-    pub fn with_interval_secs(
-        store: SqliteAccountStore,
-        policy: RefreshPolicy,
-        client: C,
-        interval_secs: u64,
-    ) -> Self {
-        Self {
-            service: RuntimeTokenRefreshService::new(store, policy, client),
-            interval_secs,
-        }
-    }
-
     /// 使用刷新租约存储保护账号刷新。
     pub fn with_refresh_lease_store(mut self, refresh_leases: RefreshLeaseStore) -> Self {
         self.service = self.service.with_refresh_lease_store(refresh_leases);

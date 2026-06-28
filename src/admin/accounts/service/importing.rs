@@ -1,74 +1,21 @@
 use chrono::Utc;
 use secrecy::SecretString;
 
-use super::{types::*, AdminAccountService};
+use super::{
+    types::{
+        import_quota_plan_type, import_status_from_usage_error, import_usage_plan_type,
+        import_usage_string, AdminAccountError, ImportSupplementalAccountInfo,
+        ImportSupplementalNeeds, ImportedAccountState, ImportedAccounts, ResolvedImportTokens,
+    },
+    AdminAccountService,
+};
 
 impl AdminAccountService {
-    pub async fn export(
-        &self,
-        ids: Vec<String>,
-    ) -> Result<Vec<AdminAccountMetadata>, AdminAccountError> {
-        if ids.is_empty() {
-            let mut all = Vec::new();
-            let mut cursor = None;
-            loop {
-                let page = self
-                    .store
-                    .list_metadata(cursor, 200)
-                    .await
-                    .map_err(|_| AdminAccountError::Export)?;
-                all.extend(page.items.into_iter().map(AdminAccountMetadata::from));
-                if page.next_cursor.is_none() {
-                    break;
-                }
-                cursor = page.next_cursor;
-            }
-            Ok(all)
-        } else {
-            let mut accounts = Vec::with_capacity(ids.len());
-            for id in ids {
-                if let Ok(Some(stored)) = self.store.get(&id).await {
-                    accounts.push(stored_to_admin_metadata(stored));
-                }
-            }
-            Ok(accounts)
-        }
-    }
-    pub async fn export_with_tokens(
-        &self,
-        ids: Vec<String>,
-    ) -> Result<Vec<crate::upstream::accounts::store::StoredAccount>, AdminAccountError> {
-        if ids.is_empty() {
-            let mut all = Vec::new();
-            let mut cursor = None;
-            loop {
-                let page = self
-                    .store
-                    .list(cursor, 200)
-                    .await
-                    .map_err(|_| AdminAccountError::Export)?;
-                all.extend(page.items);
-                if page.next_cursor.is_none() {
-                    break;
-                }
-                cursor = page.next_cursor;
-            }
-            Ok(all)
-        } else {
-            let mut accounts = Vec::with_capacity(ids.len());
-            for id in ids {
-                if let Ok(Some(stored)) = self.store.get(&id).await {
-                    accounts.push(stored);
-                }
-            }
-            Ok(accounts)
-        }
-    }
     pub async fn import(
         &self,
         data: serde_json::Value,
     ) -> Result<ImportedAccounts, AdminAccountError> {
-        let parsed = crate::upstream::accounts::import_export::parse_account_import_payload(&data)
+        let parsed = crate::upstream::accounts::importing::parse_account_import_payload(&data)
             .map_err(|_| AdminAccountError::NoImportableAccounts)?;
         let source_format = parsed.source.as_str();
         let entries = parsed.entries;
@@ -96,8 +43,8 @@ impl AdminAccountService {
     }
     async fn import_entry(
         &self,
-        entry: crate::upstream::accounts::import_export::AccountImportEntry,
-        source: crate::upstream::accounts::import_export::AccountImportSource,
+        entry: crate::upstream::accounts::importing::AccountImportEntry,
+        source: crate::upstream::accounts::importing::AccountImportSource,
     ) -> Result<ImportedAccountState, AdminAccountError> {
         let Some(resolved_tokens) = self
             .resolve_import_tokens(entry.token, entry.refresh_token)
@@ -105,7 +52,7 @@ impl AdminAccountService {
         else {
             return Ok(ImportedAccountState::Skipped);
         };
-        let label = crate::upstream::accounts::import_export::normalize_label(entry.label);
+        let label = crate::upstream::accounts::importing::normalize_label(entry.label);
         if label
             .as_ref()
             .is_some_and(|label| label.chars().count() > 64)
@@ -116,13 +63,13 @@ impl AdminAccountService {
         let access_token_expires_at = entry
             .access_token_expires_at
             .as_deref()
-            .map(crate::upstream::accounts::import_export::parse_account_import_datetime)
+            .map(crate::upstream::accounts::importing::parse_account_import_datetime)
             .transpose()
             .map_err(|_| AdminAccountError::InvalidAccessTokenExpiresAt)?;
         let quota_fetched_at = entry
             .quota_fetched_at
             .as_deref()
-            .map(crate::upstream::accounts::import_export::parse_account_import_datetime)
+            .map(crate::upstream::accounts::importing::parse_account_import_datetime)
             .transpose()
             .map_err(|_| AdminAccountError::InvalidAccessTokenExpiresAt)?;
         let mut quota_json = entry
@@ -131,16 +78,15 @@ impl AdminAccountService {
             .map(serde_json::Value::to_string);
         let mut quota_fetched_at = quota_fetched_at;
         let quota_verify_required = entry.quota_verify_required.unwrap_or(false);
-        let parsed_status = crate::upstream::accounts::import_export::parse_account_import_status(
+        let parsed_status = crate::upstream::accounts::importing::parse_account_import_status(
             entry.status.as_deref(),
         )
         .map_err(|error| AdminAccountError::InvalidStatus(error.to_string()))?;
-        let mut status =
-            crate::upstream::accounts::import_export::normalized_imported_account_status(
-                parsed_status,
-                source,
-                &resolved_tokens.access_token,
-            );
+        let mut status = crate::upstream::accounts::importing::normalized_imported_account_status(
+            parsed_status,
+            source,
+            &resolved_tokens.access_token,
+        );
         let access_token_expires_at = resolved_tokens
             .claims
             .as_ref()
@@ -151,26 +97,24 @@ impl AdminAccountService {
         let claims = resolved_tokens.claims.as_ref();
         let mut plan_type = claims
             .and_then(|claims| claims.plan_type.clone())
-            .or_else(|| {
-                crate::upstream::accounts::import_export::normalize_nonempty(entry.plan_type)
-            });
+            .or_else(|| crate::upstream::accounts::importing::normalize_nonempty(entry.plan_type));
         if plan_type.is_none() {
             plan_type = entry.cached_quota.as_ref().and_then(import_quota_plan_type);
         }
         let email = claims.and_then(|claims| claims.email.clone()).or_else(|| {
-            crate::upstream::accounts::import_export::normalize_nonempty(entry.email.clone())
+            crate::upstream::accounts::importing::normalize_nonempty(entry.email.clone())
         });
         let chatgpt_account_id = claims
             .and_then(|claims| claims.account_id.as_deref())
             .or_else(|| {
-                crate::upstream::accounts::import_export::normalize_nonempty_str(
+                crate::upstream::accounts::importing::normalize_nonempty_str(
                     entry.account_id.as_deref(),
                 )
             });
         let chatgpt_user_id = claims
             .and_then(|claims| claims.user_id.as_deref())
             .or_else(|| {
-                crate::upstream::accounts::import_export::normalize_nonempty_str(
+                crate::upstream::accounts::importing::normalize_nonempty_str(
                     entry.user_id.as_deref(),
                 )
             });
@@ -333,9 +277,11 @@ impl AdminAccountService {
         refresh_token: Option<String>,
     ) -> Result<Option<ResolvedImportTokens>, AdminAccountError> {
         let mut refresh_token =
-            crate::upstream::accounts::import_export::normalize_nonempty(refresh_token);
-        let Some(access_token) = crate::upstream::accounts::import_export::normalize_nonempty(
-            token.map(crate::upstream::accounts::import_export::normalize_bearer_token),
+            crate::upstream::accounts::importing::normalize_nonempty(refresh_token);
+        let Some(access_token) = crate::upstream::accounts::importing::normalize_nonempty(
+            token
+                .as_deref()
+                .map(crate::upstream::accounts::importing::normalize_bearer_token),
         ) else {
             let Some(existing_refresh_token) = refresh_token else {
                 return Ok(None);
@@ -345,9 +291,9 @@ impl AdminAccountService {
                 .refresh(&existing_refresh_token)
                 .await
                 .map_err(AdminAccountError::RefreshTokenExchange)?;
-            let access_token = crate::upstream::accounts::import_export::normalize_nonempty(Some(
-                crate::upstream::accounts::import_export::normalize_bearer_token(
-                    refreshed.access_token,
+            let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
+                crate::upstream::accounts::importing::normalize_bearer_token(
+                    &refreshed.access_token,
                 ),
             ))
             .ok_or(AdminAccountError::TokenRequired)?;
@@ -387,10 +333,8 @@ impl AdminAccountService {
             .refresh(&existing_refresh_token)
             .await
             .map_err(AdminAccountError::RefreshTokenExchange)?;
-        let access_token = crate::upstream::accounts::import_export::normalize_nonempty(Some(
-            crate::upstream::accounts::import_export::normalize_bearer_token(
-                refreshed.access_token,
-            ),
+        let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
+            crate::upstream::accounts::importing::normalize_bearer_token(&refreshed.access_token),
         ))
         .ok_or(AdminAccountError::TokenRequired)?;
         refresh_token = refreshed.refresh_token.or(Some(existing_refresh_token));
@@ -411,7 +355,7 @@ impl AdminAccountService {
         account_id: Option<&str>,
         user_id: Option<&str>,
     ) -> Result<String, AdminAccountError> {
-        let provided_id = crate::upstream::accounts::import_export::normalize_nonempty_str(id)
+        let provided_id = crate::upstream::accounts::importing::normalize_nonempty_str(id)
             .map(ToString::to_string);
         if let Some(id) = provided_id.as_deref() {
             match self.store.get(id).await {
@@ -422,9 +366,8 @@ impl AdminAccountService {
         }
 
         let chatgpt_account_id =
-            crate::upstream::accounts::import_export::normalize_nonempty_str(account_id);
-        let chatgpt_user_id =
-            crate::upstream::accounts::import_export::normalize_nonempty_str(user_id);
+            crate::upstream::accounts::importing::normalize_nonempty_str(account_id);
+        let chatgpt_user_id = crate::upstream::accounts::importing::normalize_nonempty_str(user_id);
         if let Some(chatgpt_account_id) = chatgpt_account_id {
             if let Some(existing) = self
                 .store
@@ -436,8 +379,7 @@ impl AdminAccountService {
             }
         }
 
-        Ok(provided_id.unwrap_or_else(|| {
-            crate::upstream::accounts::import_export::normalized_account_id(None)
-        }))
+        Ok(provided_id
+            .unwrap_or_else(|| crate::upstream::accounts::importing::normalized_account_id(None)))
     }
 }

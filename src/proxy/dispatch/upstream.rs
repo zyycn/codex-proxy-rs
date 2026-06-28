@@ -35,33 +35,35 @@ pub(crate) enum QuotaVerificationDecision {
     MaxAttemptsReached,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "quota verification is the boundary where account, transport, and retry state meet"
-)]
+pub(crate) struct QuotaVerificationContext<'a> {
+    pub account_pool: &'a RuntimeAccountPoolService,
+    pub codex: &'a CodexBackendClient,
+    pub cloudflare: &'a CloudflareRecovery,
+    pub installation_id: Option<&'a str>,
+    pub request_id: &'a str,
+    pub excluded_account_ids: &'a mut Vec<String>,
+    pub verify_attempts: &'a mut usize,
+}
+
 pub(crate) async fn verify_acquired_quota_if_required(
-    account_pool: &RuntimeAccountPoolService,
-    codex: &CodexBackendClient,
-    cloudflare: &CloudflareRecovery,
-    installation_id: Option<&str>,
-    request_id: &str,
+    context: QuotaVerificationContext<'_>,
     acquired: AcquiredAccount,
-    excluded_account_ids: &mut Vec<String>,
-    verify_attempts: &mut usize,
 ) -> QuotaVerificationDecision {
     if !acquired.account.quota_verify_required {
         return QuotaVerificationDecision::Ready(Box::new(acquired));
     }
 
     let account_id = acquired.account.id.clone();
-    let cookie_header = cloudflare
+    let cookie_header = context
+        .cloudflare
         .cookie_header_for_request(&account_id, "/codex/usage")
         .await;
-    let usage = codex
+    let usage = context
+        .codex
         .fetch_usage(CodexRequestContext {
             access_token: &acquired.account.access_token,
             account_id: acquired.account.account_id.as_deref(),
-            request_id,
+            request_id: context.request_id,
             turn_state: None,
             turn_metadata: None,
             beta_features: None,
@@ -70,7 +72,7 @@ pub(crate) async fn verify_acquired_quota_if_required(
             codex_window_id: None,
             parent_thread_id: None,
             cookie_header: cookie_header.as_deref(),
-            installation_id,
+            installation_id: context.installation_id,
             session_id: None,
         })
         .await;
@@ -88,12 +90,15 @@ pub(crate) async fn verify_acquired_quota_if_required(
     };
 
     let quota = quota_from_usage(&raw);
-    account_pool.apply_quota_snapshot(&account_id, &quota).await;
+    context
+        .account_pool
+        .apply_quota_snapshot(&account_id, &quota)
+        .await;
     if quota_snapshot_limit_reached(&quota) {
-        account_pool.release(&account_id).await;
-        excluded_account_ids.push(account_id);
-        *verify_attempts += 1;
-        if *verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS {
+        context.account_pool.release(&account_id).await;
+        context.excluded_account_ids.push(account_id);
+        *context.verify_attempts += 1;
+        if *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS {
             return QuotaVerificationDecision::MaxAttemptsReached;
         }
         return QuotaVerificationDecision::RetryWithAnotherAccount;

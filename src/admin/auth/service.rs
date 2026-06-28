@@ -7,51 +7,6 @@ use uuid::Uuid;
 
 use crate::infra::identity::{hash_admin_password, verify_admin_password};
 
-// ---------------------------------------------------------------------------
-// 领域类型
-// ---------------------------------------------------------------------------
-
-/// 管理员会话。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminSession {
-    /// 会话 ID。
-    pub id: String,
-    /// 过期时间。
-    pub expires_at: DateTime<Utc>,
-}
-
-impl AdminSession {
-    /// 判断会话在给定时间是否已经过期。
-    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
-        now >= self.expires_at
-    }
-}
-
-/// 根据 TTL 计算会话过期时间。
-pub fn session_expiry(now: DateTime<Utc>, ttl_minutes: i64) -> DateTime<Utc> {
-    now + Duration::minutes(ttl_minutes.max(0))
-}
-
-/// 管理员认证服务。
-#[derive(Debug, Clone)]
-pub struct AdminAuthService {
-    default_username: String,
-}
-
-impl AdminAuthService {
-    /// 构造管理员认证服务。
-    pub fn new(default_username: impl Into<String>) -> Self {
-        Self {
-            default_username: default_username.into(),
-        }
-    }
-
-    /// 判断用户名是否匹配配置中的管理员用户名。
-    pub fn username_matches(&self, username: &str) -> bool {
-        self.default_username == username
-    }
-}
-
 /// 管理员登录成功后的会话。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminLoginSession {
@@ -91,7 +46,6 @@ pub enum AdminSessionError {
 #[derive(Clone)]
 pub struct AdminSessionService {
     store: SqliteAdminSessionStore,
-    auth: AdminAuthService,
     default_username: String,
     session_ttl_minutes: u64,
 }
@@ -105,7 +59,6 @@ impl AdminSessionService {
     ) -> Self {
         Self {
             store,
-            auth: AdminAuthService::new(default_username.clone()),
             default_username,
             session_ttl_minutes,
         }
@@ -139,7 +92,7 @@ impl AdminSessionService {
         password: &str,
     ) -> Result<Option<AdminLoginSession>, AdminSessionError> {
         let username = username.unwrap_or(&self.default_username);
-        if !self.auth.username_matches(username) {
+        if username != self.default_username.as_str() {
             return Ok(None);
         }
         let Some(admin) = self
@@ -207,11 +160,6 @@ impl SqliteAdminSessionStore {
     /// 构造存储。
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
-    }
-
-    /// 返回底层连接池。
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 
     /// 如果还没有管理员用户，则创建默认管理员。

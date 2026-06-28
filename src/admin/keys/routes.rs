@@ -1,10 +1,10 @@
-//! 管理端 v1 接口访问 Key 处理器（列表、创建、生命周期、导出）。
+//! 管理端 v1 接口访问 Key 处理器（列表、创建、生命周期）。
 
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension, Json,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,7 +15,6 @@ use crate::{
         AdminClientKeyError, AdminCreatedClientApiKey, AdminStoredClientApiKey,
     },
     admin::response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
-    http::middleware::request_id::RequestId,
     infra::{
         json::{clamp_limit, Page},
         time::{china_relative_time_str, china_rfc3339_str},
@@ -23,93 +22,61 @@ use crate::{
     runtime::state::AppState,
 };
 
-// ---- Query types ----
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiKeysQuery {
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKeyExportQuery {
-    pub ids: Option<String>,
+pub(crate) struct ApiKeysQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateApiKeyRequest {
-    pub name: String,
+pub(crate) struct CreateApiKeyRequest {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchDeleteClientApiKeysRequest {
-    pub ids: Vec<String>,
-}
-
-// ---- Response types ----
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClientApiKeyData {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub prefix: String,
-    pub key: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub created_at_display: String,
-    pub last_used_at: Option<String>,
-    pub last_used_at_display: String,
+pub(crate) struct BatchDeleteClientApiKeysRequest {
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreatedClientApiKeyData {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub prefix: String,
-    pub key: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub created_at_display: String,
-    pub last_used_at: Option<String>,
-    pub last_used_at_display: String,
+struct ClientApiKeyData {
+    id: String,
+    name: String,
+    label: Option<String>,
+    prefix: String,
+    key: String,
+    enabled: bool,
+    created_at: String,
+    created_at_display: String,
+    last_used_at: Option<String>,
+    last_used_at_display: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchDeleteClientApiKeysData {
-    pub deleted: u32,
-    pub not_found: Vec<String>,
+struct CreatedClientApiKeyData {
+    id: String,
+    name: String,
+    label: Option<String>,
+    prefix: String,
+    key: String,
+    enabled: bool,
+    created_at: String,
+    created_at_display: String,
+    last_used_at: Option<String>,
+    last_used_at_display: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClientApiKeyExportData {
-    pub source_format: &'static str,
-    pub rotation_required: bool,
-    pub api_keys: Vec<ClientApiKeyExportEntry>,
+struct BatchDeleteClientApiKeysData {
+    deleted: u32,
+    not_found: Vec<String>,
 }
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClientApiKeyExportEntry {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub prefix: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub last_used_at: Option<String>,
-}
-
-// ---- Conversions ----
 
 impl From<AdminStoredClientApiKey> for ClientApiKeyData {
     fn from(k: AdminStoredClientApiKey) -> Self {
@@ -123,20 +90,6 @@ impl From<AdminStoredClientApiKey> for ClientApiKeyData {
             created_at_display: china_relative_time_str(Some(&k.created_at)),
             created_at: china_rfc3339_str(&k.created_at),
             last_used_at_display: china_relative_time_str(k.last_used_at.as_deref()),
-            last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
-        }
-    }
-}
-
-impl From<AdminStoredClientApiKey> for ClientApiKeyExportEntry {
-    fn from(k: AdminStoredClientApiKey) -> Self {
-        Self {
-            id: k.id,
-            name: k.name,
-            label: k.label,
-            prefix: k.prefix,
-            enabled: k.enabled,
-            created_at: china_rfc3339_str(&k.created_at),
             last_used_at: k.last_used_at.as_deref().map(china_rfc3339_str),
         }
     }
@@ -159,33 +112,20 @@ impl From<AdminCreatedClientApiKey> for CreatedClientApiKeyData {
     }
 }
 
-fn client_key_error(error: AdminClientKeyError, request_id: String) -> AdminError {
+fn client_key_error(error: &AdminClientKeyError) -> AdminError {
     match error {
         AdminClientKeyError::InvalidStatus(_)
         | AdminClientKeyError::EmptyName
         | AdminClientKeyError::EmptyIds
-        | AdminClientKeyError::LabelTooLong => AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            error.to_string(),
-            request_id,
-        ),
-        _ => AdminError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            50001,
-            error.to_string(),
-            request_id,
-        ),
+        | AdminClientKeyError::LabelTooLong => {
+            AdminError::new(StatusCode::BAD_REQUEST, 40001, error.to_string())
+        }
+        _ => AdminError::new(StatusCode::INTERNAL_SERVER_ERROR, 50001, error.to_string()),
     }
 }
 
-fn client_key_not_found(request_id: String) -> AdminError {
-    AdminError::new(
-        StatusCode::NOT_FOUND,
-        40401,
-        "Client API key not found",
-        request_id,
-    )
+fn client_key_not_found() -> AdminError {
+    AdminError::new(StatusCode::NOT_FOUND, 40401, "Client API key not found")
 }
 
 struct ParsedClientApiKeyUpdate {
@@ -194,33 +134,28 @@ struct ParsedClientApiKeyUpdate {
     status: Option<String>,
 }
 
-fn parse_client_api_key_update(
-    payload: Value,
-    request_id: &str,
-) -> Result<ParsedClientApiKeyUpdate, AdminError> {
+fn parse_client_api_key_update(payload: &Value) -> Result<ParsedClientApiKeyUpdate, AdminError> {
     let object = payload.as_object().ok_or_else(|| {
         AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             "Client API key update request must be an object",
-            request_id,
         )
     })?;
-    let id = required_string_field(object, "id", request_id)?;
+    let id = required_string_field(object, "id")?;
     let label = object
         .get("label")
-        .map(|value| optional_string_field(value, "label", request_id))
+        .map(|value| optional_string_field(value, "label"))
         .transpose()?;
     let status = object
         .get("status")
-        .map(|value| required_string_value(value, "status", request_id))
+        .map(|value| required_string_value(value, "status"))
         .transpose()?;
     if label.is_none() && status.is_none() {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             "Client API key update request must include label or status",
-            request_id,
         ));
     }
     Ok(ParsedClientApiKeyUpdate { id, label, status })
@@ -229,24 +164,18 @@ fn parse_client_api_key_update(
 fn required_string_field(
     object: &serde_json::Map<String, Value>,
     field: &'static str,
-    request_id: &str,
 ) -> Result<String, AdminError> {
     let Some(value) = object.get(field) else {
         return Err(AdminError::new(
             StatusCode::BAD_REQUEST,
             40001,
             format!("{field} is required"),
-            request_id,
         ));
     };
-    required_string_value(value, field, request_id)
+    required_string_value(value, field)
 }
 
-fn required_string_value(
-    value: &Value,
-    field: &'static str,
-    request_id: &str,
-) -> Result<String, AdminError> {
+fn required_string_value(value: &Value, field: &'static str) -> Result<String, AdminError> {
     value
         .as_str()
         .map(str::trim)
@@ -257,16 +186,11 @@ fn required_string_value(
                 StatusCode::BAD_REQUEST,
                 40001,
                 format!("{field} must be a non-empty string"),
-                request_id,
             )
         })
 }
 
-fn optional_string_field(
-    value: &Value,
-    field: &'static str,
-    request_id: &str,
-) -> Result<Option<String>, AdminError> {
+fn optional_string_field(value: &Value, field: &'static str) -> Result<Option<String>, AdminError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -279,22 +203,17 @@ fn optional_string_field(
                 StatusCode::BAD_REQUEST,
                 40001,
                 format!("{field} must be a string or null"),
-                request_id,
             )
         })
 }
 
-// ---- Handlers ----
-
 /// `GET /api/admin/keys`
-pub async fn api_keys(
+pub(crate) async fn api_keys(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Query(query): Query<ApiKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     let limit = clamp_limit(query.limit.unwrap_or(50));
     match state
         .services
@@ -309,42 +228,38 @@ pub async fn api_keys(
             };
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminPageEnvelope::ok(page, limit, request_id),
+                AdminPageEnvelope::ok(page, limit),
             ))
         }
-        Err(error) => Err(client_key_error(error, request_id)),
+        Err(error) => Err(client_key_error(&error)),
     }
 }
 
 /// `POST /api/admin/keys`
-pub async fn create_api_key(
+pub(crate) async fn create_api_key(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state.services.admin_client_keys.create(&payload.name).await {
         Ok(created) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(CreatedClientApiKeyData::from(created), request_id),
+            AdminEnvelope::ok(CreatedClientApiKeyData::from(created)),
         )),
-        Err(error) => Err(client_key_error(error, request_id)),
+        Err(error) => Err(client_key_error(&error)),
     }
 }
 
 /// `POST /api/admin/keys/update`
-pub async fn update_api_key(
+pub(crate) async fn update_api_key(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
 
-    let update = parse_client_api_key_update(payload, &request_id)?;
+    let update = parse_client_api_key_update(&payload)?;
     if let Some(label) = update.label {
         match state
             .services
@@ -353,8 +268,8 @@ pub async fn update_api_key(
             .await
         {
             Ok(Some(_)) => {}
-            Ok(None) => return Err(client_key_not_found(request_id)),
-            Err(error) => return Err(client_key_error(error, request_id)),
+            Ok(None) => return Err(client_key_not_found()),
+            Err(error) => return Err(client_key_error(&error)),
         }
     }
     if let Some(status) = update.status {
@@ -364,31 +279,29 @@ pub async fn update_api_key(
             .update_status(&update.id, &status)
             .await
         {
-            Ok(Some(_)) => {}
-            Ok(None) => return Err(client_key_not_found(request_id)),
-            Err(error) => return Err(client_key_error(error, request_id)),
+            Ok(true) => {}
+            Ok(false) => return Err(client_key_not_found()),
+            Err(error) => return Err(client_key_error(&error)),
         }
     }
 
     match state.services.admin_client_keys.get(&update.id).await {
         Ok(Some(key)) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(ClientApiKeyData::from(key), request_id),
+            AdminEnvelope::ok(ClientApiKeyData::from(key)),
         )),
-        Ok(None) => Err(client_key_not_found(request_id)),
-        Err(error) => Err(client_key_error(error, request_id)),
+        Ok(None) => Err(client_key_not_found()),
+        Err(error) => Err(client_key_error(&error)),
     }
 }
 
 /// `POST /api/admin/keys/delete`
-pub async fn batch_delete_api_keys(
+pub(crate) async fn batch_delete_api_keys(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Json(payload): Json<BatchDeleteClientApiKeysRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     match state
         .services
         .admin_client_keys
@@ -397,50 +310,11 @@ pub async fn batch_delete_api_keys(
     {
         Ok(deleted) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                BatchDeleteClientApiKeysData {
-                    deleted: deleted.deleted,
-                    not_found: deleted.not_found,
-                },
-                request_id,
-            ),
+            AdminEnvelope::ok(BatchDeleteClientApiKeysData {
+                deleted: deleted.deleted,
+                not_found: deleted.not_found,
+            }),
         )),
-        Err(error) => Err(client_key_error(error, request_id)),
-    }
-}
-
-/// `GET /api/admin/keys/export`
-pub async fn export_api_keys(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    Query(query): Query<ApiKeyExportQuery>,
-) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
-    let ids = query
-        .ids
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToString::to_string)
-        .collect();
-    match state.services.admin_client_keys.export(ids).await {
-        Ok(keys) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(
-                ClientApiKeyExportData {
-                    source_format: "rustLocalClientApiKeys",
-                    rotation_required: true,
-                    api_keys: keys
-                        .into_iter()
-                        .map(ClientApiKeyExportEntry::from)
-                        .collect(),
-                },
-                request_id,
-            ),
-        )),
-        Err(error) => Err(client_key_error(error, request_id)),
+        Err(error) => Err(client_key_error(&error)),
     }
 }

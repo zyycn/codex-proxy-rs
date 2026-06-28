@@ -158,66 +158,6 @@ fn codex_websocket_audit_artifact_should_record_transport_opening_and_payload() 
 }
 
 #[test]
-fn codex_websocket_parity_diff_should_report_header_payload_and_error_differences() {
-    let current = codex_proxy_rs::upstream::protocol::websocket::WebSocketAuditArtifact {
-        transport_mode: "websocket_preferred".to_string(),
-        fallback_allowed: true,
-        opening: Some(OpeningAuditSnapshot {
-            request_line: "GET /codex/responses HTTP/1.1".to_string(),
-            header_order: vec!["Host".to_string(), "Connection".to_string()],
-            headers: vec![OpeningAuditHeader {
-                name: "Sec-WebSocket-Extensions".to_string(),
-                value: "permessage-deflate; client_max_window_bits".to_string(),
-            }],
-        }),
-        payload: Some(PayloadAuditSnapshot {
-            top_level_keys: vec!["type".to_string(), "model".to_string()],
-            body: json!({"type": "response.create"}),
-        }),
-        error: Some(WebSocketAuditErrorSnapshot {
-            classification: "opening_failed".to_string(),
-            message: "connection refused".to_string(),
-        }),
-    };
-    let reference = codex_proxy_rs::upstream::protocol::websocket::WebSocketAuditArtifact {
-        transport_mode: "websocket_required".to_string(),
-        fallback_allowed: false,
-        opening: Some(OpeningAuditSnapshot {
-            request_line: "GET /codex/responses?source=audit HTTP/1.1".to_string(),
-            header_order: vec!["Host".to_string(), "Authorization".to_string()],
-            headers: vec![OpeningAuditHeader {
-                name: "Sec-WebSocket-Extensions".to_string(),
-                value: "identity".to_string(),
-            }],
-        }),
-        payload: Some(PayloadAuditSnapshot {
-            top_level_keys: vec!["type".to_string(), "previous_response_id".to_string()],
-            body: json!({"type": "response.create"}),
-        }),
-        error: Some(WebSocketAuditErrorSnapshot {
-            classification: "timeout".to_string(),
-            message: "timed out".to_string(),
-        }),
-    };
-
-    let diff = websocket_parity_diff(&current, &reference);
-
-    assert!(diff.differences.iter().any(|difference| {
-        difference.path == "opening.header_order"
-            && difference.current == json!(["Host", "Connection"])
-            && difference.reference == json!(["Host", "Authorization"])
-    }));
-    assert!(diff
-        .differences
-        .iter()
-        .any(|difference| difference.path == "payload.top_level_keys"));
-    assert!(diff
-        .differences
-        .iter()
-        .any(|difference| difference.path == "transport_mode"));
-}
-
-#[test]
 fn codex_websocket_event_to_sse_frame_should_encode_public_events_only() {
     let event = json!({
         "type": "response.completed",

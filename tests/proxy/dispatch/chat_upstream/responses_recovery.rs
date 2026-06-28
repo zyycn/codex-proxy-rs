@@ -486,7 +486,7 @@ async fn responses_should_return_cloudflare_challenge_error_when_403_fallback_is
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_chat", "cf_clearance=old")
+        .capture_set_cookie("acct_chat", "cf_clearance=old; Domain=.chatgpt.com; Path=/")
         .await
         .unwrap();
     let response = app
@@ -562,11 +562,17 @@ async fn responses_should_cool_down_cloudflare_403_and_fallback() {
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_primary", "cf_clearance=old")
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=old; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     cookie_store
-        .set_cookie_header("acct_secondary", "cf_clearance=keep")
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=keep; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     let response = app
@@ -648,11 +654,17 @@ async fn responses_should_clear_cookies_after_cloudflare_path_block_404_and_fall
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_primary", "cf_clearance=old")
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=old; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     cookie_store
-        .set_cookie_header("acct_secondary", "cf_clearance=keep")
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=keep; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     let response = app
@@ -717,7 +729,7 @@ async fn responses_should_disable_account_after_three_cloudflare_path_block_404s
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_chat", "cf_clearance=old")
+        .capture_set_cookie("acct_chat", "cf_clearance=old; Domain=.chatgpt.com; Path=/")
         .await
         .unwrap();
     for _ in 0..3 {
@@ -1599,11 +1611,17 @@ async fn responses_stream_should_cool_down_cloudflare_403_and_fallback() {
     let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_primary", "cf_clearance=old")
+        .capture_set_cookie(
+            "acct_primary",
+            "cf_clearance=old; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     cookie_store
-        .set_cookie_header("acct_secondary", "cf_clearance=keep")
+        .capture_set_cookie(
+            "acct_secondary",
+            "cf_clearance=keep; Domain=.chatgpt.com; Path=/",
+        )
         .await
         .unwrap();
     let response = app
@@ -1682,7 +1700,7 @@ async fn responses_stream_should_return_cloudflare_path_block_error_when_404_fal
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(server.uri()).await;
     let cookie_store = SqliteCookieStore::new(pool.clone());
     cookie_store
-        .set_cookie_header("acct_chat", "cf_clearance=old")
+        .capture_set_cookie("acct_chat", "cf_clearance=old; Domain=.chatgpt.com; Path=/")
         .await
         .unwrap();
     let response = app

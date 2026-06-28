@@ -1,27 +1,39 @@
 use codex_proxy_rs::infra::database::connect_sqlite;
 
 #[tokio::test]
-async fn sqlite_schema_creates_current_runtime_tables_without_migration_table() {
+async fn sqlite_schema_should_create_current_tables() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("test.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
 
-    let row: (i64,) = sqlx::query_as(
-        "select count(*) from sqlite_master where type = 'table' and name in ('accounts', 'client_api_keys', 'runtime_settings', 'event_logs', 'model_plan_snapshots', 'account_model_usage', 'usage_time_buckets', 'model_account_routes')",
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from sqlite_master where type = 'table' and name in ('admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'event_logs', 'model_plan_snapshots', 'session_affinities') order by name",
     )
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(row.0, 8);
-
-    let migration_table: Option<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name = 'schema_migrations'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-    assert_eq!(migration_table, None);
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        [
+            "account_cookies",
+            "account_model_usage",
+            "account_refresh_leases",
+            "account_usage",
+            "accounts",
+            "admin_sessions",
+            "admin_users",
+            "client_api_keys",
+            "event_logs",
+            "fingerprint_update_history",
+            "fingerprints",
+            "model_account_routes",
+            "model_plan_snapshots",
+            "runtime_settings",
+            "session_affinities",
+            "usage_time_buckets",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -217,15 +229,8 @@ async fn sqlite_schema_should_persist_plain_account_cookie_value_column() {
     .fetch_optional(&pool)
     .await
     .unwrap();
-    let cipher_column: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_cookies') where name = 'value_cipher'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
 
     assert_eq!(value_column, Some(("value".to_string(),)));
-    assert_eq!(cipher_column, None);
 }
 
 #[tokio::test]

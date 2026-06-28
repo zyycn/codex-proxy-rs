@@ -6,7 +6,6 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{proxy::auth::authorize_client_api_key, runtime::state::AppState};
@@ -14,26 +13,6 @@ use crate::{proxy::auth::authorize_client_api_key, runtime::state::AppState};
 use super::errors::{missing_client_api_key_response, model_not_found_response};
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
-
-// ====================================================================
-// OpenAI 模型类型
-// ====================================================================
-
-/// OpenAI 模型对象。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OpenAiModel {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub owned_by: String,
-}
-
-/// OpenAI 模型列表。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OpenAiModelList {
-    pub object: String,
-    pub data: Vec<OpenAiModel>,
-}
 
 // ====================================================================
 // HTTP 处理器

@@ -442,8 +442,7 @@ impl ChatCompletionStreamTranslator {
         let call_id = self
             .function_call_items
             .get(event_id)
-            .map(|info| info.call_id.as_str())
-            .unwrap_or(event_id)
+            .map_or(event_id, |info| info.call_id.as_str())
             .to_string();
         Some((call_id, delta.to_string()))
     }
@@ -456,8 +455,7 @@ impl ChatCompletionStreamTranslator {
         let call_id = self
             .function_call_items
             .get(event_id)
-            .map(|info| info.call_id.as_str())
-            .unwrap_or(event_id)
+            .map_or(event_id, |info| info.call_id.as_str())
             .to_string();
         let arguments = value
             .get("arguments")
@@ -840,11 +838,9 @@ pub fn chat_completion_from_codex_sse(
         return Err(ChatStreamTranslationError::Upstream(failure));
     }
 
-    if completed_response.is_none() {
+    let Some(response) = completed_response else {
         return Ok(None);
-    }
-
-    let response = completed_response.unwrap();
+    };
     let output_text_value = if output_text.is_empty() {
         output_text_from_response(&response)
     } else {
@@ -913,11 +909,8 @@ pub async fn chat_completions(
     let parsed_model = catalog.parse_model_name(&model);
     let display_model = ModelCatalog::build_display_model_name(&parsed_model);
     let stream = chat_request.stream;
-    let mut codex_request = match translate_chat_to_codex(chat_request) {
-        Ok(request) => request,
-        Err(_) => {
-            return invalid_chat_completion_request_response().into_response();
-        }
+    let Ok(mut codex_request) = translate_chat_to_codex(chat_request) else {
+        return invalid_chat_completion_request_response().into_response();
     };
     apply_response_model_options(&mut codex_request, &parsed_model);
     let include_reasoning = codex_request
@@ -946,7 +939,7 @@ pub async fn chat_completions(
                 include_reasoning,
                 tuple_schema,
             ),
-            Err(error) => response_dispatch_chat_stream_error_response(error),
+            Err(error) => response_dispatch_chat_stream_error_response(&error),
         };
     }
 
@@ -957,7 +950,7 @@ pub async fn chat_completions(
         .await
     {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
-        Err(error) => chat_dispatch_error_response(error),
+        Err(error) => chat_dispatch_error_response(&error),
     }
 }
 
@@ -991,8 +984,8 @@ fn live_chat_event_stream_response(
     )
 }
 
-fn response_dispatch_chat_stream_error_response(error: ResponseDispatchError) -> Response {
-    let message = chat_stream_dispatch_error_message(&error);
+fn response_dispatch_chat_stream_error_response(error: &ResponseDispatchError) -> Response {
+    let message = chat_stream_dispatch_error_message(error);
     chat_stream_error_response(&message)
 }
 
@@ -1024,20 +1017,22 @@ fn output_text_from_response(response: &Value) -> String {
     response
         .get("output_text")
         .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| {
-            response
-                .get("output")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(output_text_from_item)
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                })
-                .unwrap_or_default()
-        })
+        .map_or_else(
+            || {
+                response
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(output_text_from_item)
+                            .collect::<Vec<_>>()
+                            .join("\n\n")
+                    })
+                    .unwrap_or_default()
+            },
+            ToString::to_string,
+        )
 }
 
 fn output_text_from_item(item: &Value) -> Option<String> {
@@ -1077,8 +1072,7 @@ fn tool_call_from_done_event(
         .and_then(Value::as_str)?;
     let info = function_call_items.get(event_id);
     let call_id = info
-        .map(|info| info.call_id.as_str())
-        .unwrap_or(event_id)
+        .map_or(event_id, |info| info.call_id.as_str())
         .to_string();
     if !finished_call_ids.insert(call_id.clone()) {
         return None;
@@ -1093,7 +1087,7 @@ fn tool_call_from_done_event(
         .get("arguments")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    Some(openai_tool_call(call_id, name, arguments))
+    Some(openai_tool_call(&call_id, name, arguments))
 }
 
 fn tool_call_from_output_item(
@@ -1125,10 +1119,10 @@ fn tool_call_from_output_item(
         .get("arguments")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    Some(openai_tool_call(call_id.to_string(), name, arguments))
+    Some(openai_tool_call(call_id, name, arguments))
 }
 
-fn openai_tool_call(call_id: String, name: &str, arguments: &str) -> Value {
+fn openai_tool_call(call_id: &str, name: &str, arguments: &str) -> Value {
     json!({
         "id": call_id,
         "type": "function",

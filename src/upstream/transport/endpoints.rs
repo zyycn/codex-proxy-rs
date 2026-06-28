@@ -42,15 +42,6 @@ pub fn usage_endpoint_urls(base_url: &str) -> Vec<String> {
         .collect()
 }
 
-/// 返回 usage 主请求路径。
-pub fn primary_usage_request_path(base_url: &str) -> String {
-    let endpoint_path = usage_endpoint_paths(base_url)
-        .into_iter()
-        .next()
-        .unwrap_or(CODEX_USAGE_API_PATH);
-    endpoint_request_path(base_url, endpoint_path)
-}
-
 fn usage_endpoint_paths(base_url: &str) -> Vec<&'static str> {
     if has_backend_api_base_path(base_url) {
         vec![WHAM_USAGE_PATH, CODEX_USAGE_PATH]

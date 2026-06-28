@@ -9,8 +9,7 @@ use uuid::Uuid;
 
 const INSTALLATION_ID_FILE_NAME: &str = "installation_id";
 
-/// 返回本地数据目录。
-pub fn data_dir() -> PathBuf {
+fn data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("codex-proxy-rs")
@@ -24,13 +23,11 @@ pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// 返回真实 Codex Desktop installation ID 文件路径。
-pub fn codex_desktop_installation_id_path() -> Option<PathBuf> {
+fn codex_desktop_installation_id_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".codex").join(INSTALLATION_ID_FILE_NAME))
 }
 
-/// 返回本应用数据目录中的 installation ID 文件路径。
-pub fn data_installation_id_path(data_dir: &Path) -> PathBuf {
+fn data_installation_id_path(data_dir: &Path) -> PathBuf {
     data_dir.join(INSTALLATION_ID_FILE_NAME)
 }
 
@@ -44,10 +41,7 @@ pub fn load_or_create_installation_id(data_dir: Option<&Path>) -> io::Result<Str
     load_or_create_installation_id_from_paths(codex_path.as_deref(), data_path.as_deref())
 }
 
-/// 从显式文件路径按读取优先级读取或生成 installation ID。
-///
-/// 此函数用于测试和调用方已经完成路径解析的场景。
-pub fn load_or_create_installation_id_from_paths(
+fn load_or_create_installation_id_from_paths(
     codex_desktop_path: Option<&Path>,
     data_path: Option<&Path>,
 ) -> io::Result<String> {

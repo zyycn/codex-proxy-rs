@@ -106,7 +106,7 @@ pub struct Account {
     pub last_used_at: Option<String>,
 }
 
-/// 账号用量增量（来自 usage.rs）。
+/// 账号用量增量。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccountUsageDelta {
     /// 请求数增量。
@@ -131,25 +131,6 @@ pub struct AccountUsageDelta {
     pub image_requests: u64,
     /// 图片工具失败请求数增量。
     pub image_request_failures: u64,
-}
-
-impl AccountUsageDelta {
-    /// 合并两个用量增量。
-    pub fn merged(self, other: Self) -> Self {
-        Self {
-            requests: self.requests + other.requests,
-            input_tokens: self.input_tokens + other.input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            cached_tokens: self.cached_tokens + other.cached_tokens,
-            reasoning_tokens: self.reasoning_tokens + other.reasoning_tokens,
-            total_tokens: self.total_tokens + other.total_tokens,
-            empty_responses: self.empty_responses + other.empty_responses,
-            image_input_tokens: self.image_input_tokens + other.image_input_tokens,
-            image_output_tokens: self.image_output_tokens + other.image_output_tokens,
-            image_requests: self.image_requests + other.image_requests,
-            image_request_failures: self.image_request_failures + other.image_request_failures,
-        }
-    }
 }
 
 /// 账号模型维度用量增量。

@@ -1,5 +1,5 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::Body,
     http::{Request, StatusCode},
 };
 use chrono::{Duration, Utc};
@@ -28,6 +28,8 @@ use codex_proxy_rs::{
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
+
+use crate::support::{admin::seed_admin_session, http::response_json};
 
 #[tokio::test]
 async fn dashboard_summary_should_render_fingerprint_updated_at_as_beijing_time() {
@@ -346,29 +348,6 @@ async fn dashboard_summary(app: axum::Router) -> Value {
     response_json(response).await
 }
 
-async fn seed_admin_session(pool: &SqlitePool, session_id: &str) {
-    sqlx::query(
-        "insert into admin_users (id, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
-    )
-    .bind("admin_1")
-    .bind("hash")
-    .bind("2026-06-18T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into admin_sessions (id, user_id, expires_at, created_at) values (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind("admin_1")
-    .bind("2999-01-01T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
 async fn seed_usage_summary(pool: &SqlitePool, input_tokens: u64, output_tokens: u64) {
     seed_usage_summary_with_last_used(pool, input_tokens, output_tokens, "2026-06-18T00:00:00Z")
         .await;
@@ -403,11 +382,6 @@ async fn seed_usage_summary_with_last_used(
     .execute(pool)
     .await
     .unwrap();
-}
-
-async fn response_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn service_status_value<'a>(body: &'a Value, label: &str) -> &'a str {

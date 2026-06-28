@@ -54,8 +54,6 @@ impl From<StoredAccountMetadata> for AdminAccountMetadata {
 pub enum AdminAccountError {
     #[error("failed to list accounts")]
     List,
-    #[error("failed to export accounts")]
-    Export,
     #[error("failed to import accounts")]
     Import,
     #[error("failed to inspect account")]
@@ -70,26 +68,14 @@ pub enum AdminAccountError {
     UpdateStatus,
     #[error("failed to delete account")]
     Delete,
-    #[error("failed to load cookies")]
-    LoadCookies,
-    #[error("failed to store cookies")]
-    StoreCookies,
-    #[error("failed to delete cookies")]
-    DeleteCookies,
     #[error("failed to update claims")]
     UpdateClaims,
-    #[error("failed to reset usage")]
-    ResetUsage,
     #[error("failed to sync account pool")]
     SyncAccountPool,
-    #[error("failed to get quota warnings")]
-    QuotaWarnings,
     #[error("failed to store quota")]
     StoreQuota,
     #[error("failed to fetch quota: {0}")]
     FetchQuota(String),
-    #[error("health check failed")]
-    HealthCheck,
     #[error("failed to fetch models: {0}")]
     FetchModels(String),
     #[error("no available models returned")]
@@ -154,12 +140,6 @@ impl AdminAccountMetadataUpdate {
 #[derive(Debug, Clone)]
 pub struct BatchDeleteAccounts {
     pub deleted: u32,
-    pub not_found: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BatchUpdateAccountStatus {
-    pub updated: u32,
     pub not_found: Vec<String>,
 }
 
@@ -259,9 +239,7 @@ pub(super) fn import_usage_string(usage: &serde_json::Value, key: &str) -> Optio
     usage
         .get(key)
         .and_then(serde_json::Value::as_str)
-        .and_then(|value| {
-            crate::upstream::accounts::import_export::normalize_nonempty_str(Some(value))
-        })
+        .and_then(|value| crate::upstream::accounts::importing::normalize_nonempty_str(Some(value)))
         .map(ToString::to_string)
 }
 
@@ -286,11 +264,6 @@ pub(super) fn import_status_from_usage_error(error: &CodexClientError) -> Option
 }
 
 pub(super) fn parse_account_status(status: &str) -> Result<AcctStatus, AdminAccountError> {
-    crate::upstream::accounts::import_export::parse_account_status(status)
-        .map_err(|_| AdminAccountError::InvalidStatus(status.trim().to_ascii_lowercase()))
-}
-
-pub(super) fn parse_batch_account_status(status: &str) -> Result<AcctStatus, AdminAccountError> {
-    crate::upstream::accounts::import_export::parse_batch_account_status(status)
+    crate::upstream::accounts::importing::parse_account_status(status)
         .map_err(|_| AdminAccountError::InvalidStatus(status.trim().to_ascii_lowercase()))
 }

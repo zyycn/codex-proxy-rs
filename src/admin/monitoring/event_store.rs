@@ -1,19 +1,14 @@
 //! 事件日志存储实现（SQLite）。
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
-use crate::admin::monitoring::events::{
-    EventLevel, EventLog, EventLogStore, EventLogStoreError, EventLogStoreResult,
-};
+use crate::admin::monitoring::events::{EventLevel, EventLog};
 use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
 use crate::infra::time::china_quarter_hour_start;
 
-/// 默认启用事件日志，便于管理端诊断请求链路。
-pub const DEFAULT_EVENT_LOG_ENABLED: bool = true;
 /// 默认保留最新事件日志数量。
 pub const DEFAULT_EVENT_LOG_CAPACITY: u32 = 2_000;
 /// 默认不保存请求/响应体，避免把用户内容写入诊断日志。
@@ -175,32 +170,12 @@ impl SqliteEventLogStore {
         row.map(|row| event_from_row(&row)).transpose()
     }
 
-    /// 统计事件日志数量。
-    pub async fn count(&self) -> SqliteEventLogStoreResult<u64> {
-        let count: (i64,) = sqlx::query_as("select count(*) from event_logs")
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(count.0.max(0) as u64)
-    }
-
     /// 清空事件日志。
     pub async fn clear(&self) -> SqliteEventLogStoreResult<u64> {
         let result = sqlx::query("delete from event_logs")
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
-    }
-}
-
-#[async_trait]
-impl EventLogStore for SqliteEventLogStore {
-    async fn append(&self, event: &EventLog) -> EventLogStoreResult<()> {
-        append_event(&self.pool, event).await.map_err(|error| {
-            EventLogStoreError::OperationFailed {
-                message: error.to_string(),
-            }
-        })?;
-        Ok(())
     }
 }
 
@@ -444,7 +419,7 @@ async fn count_events(
     let mut builder = QueryBuilder::<Sqlite>::new("select count(*) from event_logs");
     push_filter(&mut builder, filter, None)?;
     let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
-    Ok(total.max(0) as u64)
+    Ok(total.max(0).cast_unsigned())
 }
 
 fn push_filter(
@@ -631,30 +606,6 @@ impl From<AdminLogFilter> for EventLogFilter {
     }
 }
 
-/// 日志状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminLogState {
-    /// 是否启用。
-    pub enabled: bool,
-    /// 内存容量。
-    pub capacity: u32,
-    /// 是否捕获请求体。
-    pub capture_body: bool,
-    /// 已存储数量。
-    pub stored_count: u64,
-}
-
-/// 日志状态更新。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdminLogStateUpdate {
-    /// 是否启用。
-    pub enabled: Option<bool>,
-    /// 日志容量。
-    pub capacity: Option<u32>,
-    /// 是否捕获请求体。
-    pub capture_body: Option<bool>,
-}
-
 /// 清空日志结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminClearLogs {
@@ -671,9 +622,6 @@ pub enum AdminLogError {
     /// 读取失败。
     #[error("failed to get event log")]
     Get,
-    /// 计数失败。
-    #[error("failed to count event logs")]
-    Count,
     /// 清空失败。
     #[error("failed to clear event logs")]
     Clear,
@@ -683,9 +631,6 @@ pub enum AdminLogError {
     /// 裁剪失败。
     #[error("failed to trim event logs")]
     Trim,
-    /// 日志容量非法。
-    #[error("log capacity must be greater than zero")]
-    InvalidCapacity,
 }
 
 /// 管理端日志服务。
@@ -751,50 +696,6 @@ impl AdminLogService {
         self.store.get(id).await.map_err(|_| AdminLogError::Get)
     }
 
-    /// 读取日志状态。
-    pub async fn state(&self) -> Result<AdminLogState, AdminLogError> {
-        let settings = *self.settings.read().await;
-        Ok(AdminLogState {
-            enabled: settings.enabled,
-            capacity: settings.capacity,
-            capture_body: settings.capture_body,
-            stored_count: self.store.count().await.map_err(|_| AdminLogError::Count)?,
-        })
-    }
-
-    /// 更新日志状态。
-    pub async fn update_state(
-        &self,
-        update: AdminLogStateUpdate,
-    ) -> Result<AdminLogState, AdminLogError> {
-        if matches!(update.capacity, Some(0)) {
-            return Err(AdminLogError::InvalidCapacity);
-        }
-
-        let trim_capacity = {
-            let mut settings = self.settings.write().await;
-            if let Some(enabled) = update.enabled {
-                settings.enabled = enabled;
-            }
-            if let Some(capacity) = update.capacity {
-                settings.capacity = capacity;
-            }
-            if let Some(capture_body) = update.capture_body {
-                settings.capture_body = capture_body;
-            }
-            update.capacity
-        };
-
-        if let Some(capacity) = trim_capacity {
-            self.store
-                .trim_to_capacity(capacity)
-                .await
-                .map_err(|_| AdminLogError::Trim)?;
-        }
-
-        self.state().await
-    }
-
     /// 清空日志。
     pub async fn clear(&self) -> Result<AdminClearLogs, AdminLogError> {
         self.store
@@ -807,8 +708,7 @@ impl AdminLogService {
     /// 记录事件日志。
     pub async fn record(&self, mut event: EventLog) -> Result<(), AdminLogError> {
         let settings = *self.settings.read().await;
-        let policy = crate::admin::monitoring::events::EventLogService::new(settings.enabled);
-        if !policy.should_record(&event) {
+        if !settings.enabled && event.level != EventLevel::Error {
             return Ok(());
         }
         apply_capture_body_policy(&mut event, settings.capture_body);

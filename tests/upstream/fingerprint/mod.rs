@@ -1,16 +1,5 @@
 use codex_proxy_rs::infra::database::connect_sqlite;
-use codex_proxy_rs::upstream::fingerprint::{
-    parse_update_manifest, FingerprintRepository, FingerprintUpdater, UpdateChecker,
-};
-
-#[test]
-fn update_manifest_should_extract_version_and_build_number() {
-    let update = parse_update_manifest(r#"{"version":"26.700.111","build_number":"5002"}"#)
-        .expect("manifest should parse");
-
-    assert_eq!(update.app_version, "26.700.111");
-    assert_eq!(update.build_number, "5002");
-}
+use codex_proxy_rs::upstream::fingerprint::{FingerprintRepository, UpdateChecker};
 
 #[tokio::test]
 async fn fingerprint_repository_should_update_current_record() {
@@ -46,44 +35,6 @@ async fn fingerprint_repository_should_update_current_record() {
     assert_eq!(stored.app_version, "26.800.2");
     assert_eq!(stored.build_number, "6002");
     assert_eq!(stored.chromium_version, "147");
-}
-
-#[tokio::test]
-async fn fingerprint_updater_should_fetch_manifest_and_persist_history() {
-    let server = wiremock::MockServer::start().await;
-    wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path("/desktop/update.json"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
-            r#"{"version":"26.700.111","build_number":"5002"}"#,
-            "application/json",
-        ))
-        .mount(&server)
-        .await;
-
-    let dir = tempfile::tempdir().expect("temp dir");
-    let db = dir.path().join("fingerprints.sqlite");
-    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
-        .await
-        .expect("sqlite pool");
-    let repo = FingerprintRepository::new(pool);
-    repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
-        .await
-        .expect("seed current fingerprint");
-    let updater = FingerprintUpdater::new(
-        reqwest::Client::new(),
-        repo.clone(),
-        format!("{}/desktop/update.json", server.uri()),
-    );
-
-    updater.poll_once().await.expect("poll once");
-
-    let latest = repo
-        .latest()
-        .await
-        .expect("latest row")
-        .expect("stored history");
-    assert_eq!(latest.app_version, "26.700.111");
-    assert_eq!(latest.build_number, "5002");
 }
 
 #[tokio::test]

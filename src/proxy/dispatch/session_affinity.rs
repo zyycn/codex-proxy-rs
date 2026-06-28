@@ -15,12 +15,6 @@ use crate::upstream::protocol::responses::CodexResponsesRequest;
 // 亲和性核心类型
 // ====================================================================
 
-/// 会话亲和性键。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionAffinityKey {
-    pub conversation_id: String,
-}
-
 /// 会话亲和性条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionAffinityEntry {
@@ -399,10 +393,6 @@ pub type SqliteSessionAffinityStoreResult<T> = Result<T, SqliteSessionAffinitySt
 impl SqliteSessionAffinityStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 
     pub async fn upsert(

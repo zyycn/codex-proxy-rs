@@ -364,11 +364,6 @@ impl RefreshLeaseStore {
         Self { pool }
     }
 
-    /// 返回底层连接池。
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     /// 尝试获取账号刷新租约。
     pub async fn try_acquire(
         &self,
@@ -378,7 +373,7 @@ impl RefreshLeaseStore {
         now: DateTime<Utc>,
     ) -> RefreshLeaseStoreResult<bool> {
         let result = sqlx::query(
-            r#"
+            r"
 insert into account_refresh_leases (account_id, owner, expires_at, updated_at)
 values (?, ?, ?, ?)
 on conflict(account_id) do update set
@@ -387,7 +382,7 @@ on conflict(account_id) do update set
   updated_at = excluded.updated_at
 where account_refresh_leases.expires_at <= ?
   or account_refresh_leases.owner = ?
-"#,
+",
         )
         .bind(account_id)
         .bind(owner)

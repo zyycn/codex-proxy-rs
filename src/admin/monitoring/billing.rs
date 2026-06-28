@@ -151,7 +151,7 @@ const MODEL_PRICING_RULES: &[ModelPricingRule] = &[
 ];
 
 /// 按 codex2api 的 billing 引擎口径计算美元计费。
-pub(crate) fn calculate_cost(
+pub(in crate::admin) fn calculate_cost(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
@@ -240,71 +240,62 @@ fn normalize_billing_model_name(model: &str) -> String {
 
 fn normalize_codex_billing_model(model: &str) -> Option<&'static str> {
     let compact = model.replace([' ', '_'], "-").to_ascii_lowercase();
-    match () {
-        _ if compact.contains("gpt-5.5-pro")
-            || compact.contains("gpt5-5-pro")
-            || compact.contains("gpt5.5-pro") =>
-        {
-            Some("gpt-5.5-pro")
-        }
-        _ if compact.contains("gpt-5.5")
-            || compact.contains("gpt5-5")
-            || compact.contains("gpt5.5") =>
-        {
-            Some("gpt-5.5")
-        }
-        _ if compact.contains("gpt-5.4-mini")
-            || compact.contains("gpt5-4-mini")
-            || compact.contains("gpt5.4-mini") =>
-        {
-            Some("gpt-5.4-mini")
-        }
-        _ if compact.contains("gpt-5.4-nano")
-            || compact.contains("gpt5-4-nano")
-            || compact.contains("gpt5.4-nano") =>
-        {
-            Some("gpt-5.4-nano")
-        }
-        _ if compact.contains("gpt-5.4-pro")
-            || compact.contains("gpt5-4-pro")
-            || compact.contains("gpt5.4-pro") =>
-        {
-            Some("gpt-5.4-pro")
-        }
-        _ if compact.contains("gpt-5.4")
-            || compact.contains("gpt5-4")
-            || compact.contains("gpt5.4") =>
-        {
-            Some("gpt-5.4")
-        }
-        _ if compact.contains("gpt-5.2")
-            || compact.contains("gpt5-2")
-            || compact.contains("gpt5.2") =>
-        {
-            Some("gpt-5.2")
-        }
-        _ if compact.contains("gpt-5.3-codex-spark")
-            || compact.contains("gpt5-3-codex-spark")
-            || compact.contains("gpt5.3-codex-spark") =>
-        {
-            Some("gpt-5.3-codex-spark")
-        }
-        _ if compact.contains("gpt-5.3-codex")
-            || compact.contains("gpt5-3-codex")
-            || compact.contains("gpt5.3-codex") =>
-        {
-            Some("gpt-5.3-codex")
-        }
-        _ if compact.contains("gpt-5.3")
-            || compact.contains("gpt5-3")
-            || compact.contains("gpt5.3") =>
-        {
-            Some("gpt-5.3-codex")
-        }
-        _ if compact.contains("codex-auto-review") => Some("gpt-5.4"),
-        _ if compact.contains("codex") => Some("gpt-5.3-codex"),
-        _ if compact.contains("gpt-5") || compact.contains("gpt5") => Some("gpt-5.4"),
-        _ => None,
+    if compact.contains("gpt-5.5-pro")
+        || compact.contains("gpt5-5-pro")
+        || compact.contains("gpt5.5-pro")
+    {
+        Some("gpt-5.5-pro")
+    } else if compact.contains("gpt-5.5")
+        || compact.contains("gpt5-5")
+        || compact.contains("gpt5.5")
+    {
+        Some("gpt-5.5")
+    } else if compact.contains("gpt-5.4-mini")
+        || compact.contains("gpt5-4-mini")
+        || compact.contains("gpt5.4-mini")
+    {
+        Some("gpt-5.4-mini")
+    } else if compact.contains("gpt-5.4-nano")
+        || compact.contains("gpt5-4-nano")
+        || compact.contains("gpt5.4-nano")
+    {
+        Some("gpt-5.4-nano")
+    } else if compact.contains("gpt-5.4-pro")
+        || compact.contains("gpt5-4-pro")
+        || compact.contains("gpt5.4-pro")
+    {
+        Some("gpt-5.4-pro")
+    } else if compact.contains("gpt-5.4")
+        || compact.contains("gpt5-4")
+        || compact.contains("gpt5.4")
+    {
+        Some("gpt-5.4")
+    } else if compact.contains("gpt-5.2")
+        || compact.contains("gpt5-2")
+        || compact.contains("gpt5.2")
+    {
+        Some("gpt-5.2")
+    } else if compact.contains("gpt-5.3-codex-spark")
+        || compact.contains("gpt5-3-codex-spark")
+        || compact.contains("gpt5.3-codex-spark")
+    {
+        Some("gpt-5.3-codex-spark")
+    } else if compact.contains("gpt-5.3-codex")
+        || compact.contains("gpt5-3-codex")
+        || compact.contains("gpt5.3-codex")
+        || compact.contains("gpt-5.3")
+        || compact.contains("gpt5-3")
+        || compact.contains("gpt5.3")
+    {
+        Some("gpt-5.3-codex")
+    } else if compact.contains("codex-auto-review") {
+        Some("gpt-5.4")
+    } else if compact.contains("codex") {
+        Some("gpt-5.3-codex")
+    } else if compact.contains("gpt-5") || compact.contains("gpt5") {
+        Some("gpt-5.4")
+    } else {
+        None
     }
 }
 
@@ -327,30 +318,30 @@ fn model_matches_rule(model: &str, rule: &str) -> bool {
 }
 
 fn claude_family_pricing(model: &str) -> Option<ModelPricing> {
-    match () {
-        _ if model.contains("opus") => {
-            if model.contains("4.7")
-                || model.contains("4-7")
-                || model.contains("4.6")
-                || model.contains("4-6")
-                || model.contains("4.5")
-                || model.contains("4-5")
-            {
-                Some(ModelPricing::new(5.0, 25.0))
-            } else {
-                Some(ModelPricing::new(15.0, 75.0))
-            }
+    if model.contains("opus") {
+        if model.contains("4.7")
+            || model.contains("4-7")
+            || model.contains("4.6")
+            || model.contains("4-6")
+            || model.contains("4.5")
+            || model.contains("4-5")
+        {
+            Some(ModelPricing::new(5.0, 25.0))
+        } else {
+            Some(ModelPricing::new(15.0, 75.0))
         }
-        _ if model.contains("sonnet") => Some(ModelPricing::new(3.0, 15.0)),
-        _ if model.contains("haiku") => {
-            if model.contains("3-5") || model.contains("3.5") {
-                Some(ModelPricing::new(1.0, 5.0))
-            } else {
-                Some(ModelPricing::new(0.25, 1.25))
-            }
+    } else if model.contains("sonnet") {
+        Some(ModelPricing::new(3.0, 15.0))
+    } else if model.contains("haiku") {
+        if model.contains("3-5") || model.contains("3.5") {
+            Some(ModelPricing::new(1.0, 5.0))
+        } else {
+            Some(ModelPricing::new(0.25, 1.25))
         }
-        _ if model.contains("claude") => Some(ModelPricing::new(3.0, 15.0)),
-        _ => None,
+    } else if model.contains("claude") {
+        Some(ModelPricing::new(3.0, 15.0))
+    } else {
+        None
     }
 }
 

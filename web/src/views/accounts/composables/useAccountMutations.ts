@@ -146,7 +146,7 @@ export function useAccountMutations(options: {
         .filter(Boolean)
         .map((refreshToken) => ({ refreshToken }))
 
-      return accounts.length ? { sourceFormat: 'native', accounts } : null
+      return accounts.length ? { sourceFormat: 'cpr', accounts } : null
     }
 
     const text = createForm.value.importText.trim()
@@ -159,7 +159,7 @@ export function useAccountMutations(options: {
       throw new Error('JSON 格式不正确')
     }
 
-    const sourceFormat = createForm.value.mode === 'sub2api' ? 'sub2api' : 'native'
+    const sourceFormat = createForm.value.mode === 'sub2api' ? 'sub2api' : 'cpr'
     if (Array.isArray(parsed)) {
       return { sourceFormat, accounts: parsed }
     }

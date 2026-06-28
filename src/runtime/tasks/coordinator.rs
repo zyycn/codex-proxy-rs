@@ -30,17 +30,12 @@ pub struct TaskCoordinator {
 
 impl TaskCoordinator {
     /// 注册一个后台任务句柄。
-    pub fn push(&mut self, name: &'static str, handle: SchedulerHandle) {
+    pub(crate) fn push(&mut self, name: &'static str, handle: SchedulerHandle) {
         self.handles.push((name, handle));
     }
 
-    /// 返回已注册任务名称。
-    pub fn task_names(&self) -> Vec<&'static str> {
-        self.handles.iter().map(|(name, _)| *name).collect()
-    }
-
     /// 启动所有后台任务。
-    pub fn start(
+    pub(crate) fn start(
         config: &crate::runtime::state::RuntimeConfig,
         services: &crate::runtime::services::Services,
     ) -> Self {
@@ -69,9 +64,13 @@ impl TaskCoordinator {
         );
         coordinator.push(
             "model_refresh",
-            ModelRefreshTask::new(services.models.clone(), services.accounts.clone())
-                .with_installation_id(services.installation_id.clone())
-                .start(),
+            ModelRefreshTask::new(
+                services.models.clone(),
+                services.accounts.clone(),
+                services.account_pool.clone(),
+            )
+            .with_installation_id(services.installation_id.clone())
+            .start(),
         );
         if config.auth.refresh_enabled {
             coordinator.push(
@@ -146,12 +145,12 @@ pub enum SchedulerHandle {
 
 impl SchedulerHandle {
     /// 使用关闭 channel 构造句柄。
-    pub fn new(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Self {
+    pub(crate) fn new(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Self {
         Self::Channel(shutdown_tx)
     }
 
     /// 使用 `JoinHandle` 构造句柄。
-    pub fn from_join_handle(handle: JoinHandle<()>) -> Self {
+    pub(crate) fn from_join_handle(handle: JoinHandle<()>) -> Self {
         Self::JoinHandle(handle)
     }
 

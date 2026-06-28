@@ -1,4 +1,5 @@
 use super::*;
+use axum::body::to_bytes;
 use codex_proxy_rs::upstream::protocol::sse::{encode_sse_event, parse_sse_events};
 use wiremock::{
     matchers::{method, path},
@@ -34,7 +35,7 @@ fn test_events(body: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
-async fn account_test_models_should_return_upstream_models_only() {
+async fn account_models_should_return_upstream_models_only() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/codex/models"))
@@ -53,7 +54,7 @@ async fn account_test_models_should_return_upstream_models_only() {
         .mount(&server)
         .await;
     let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
-        "admin-account-test-models.sqlite",
+        "admin-account-models.sqlite",
         91,
         format!("{}/backend-api", server.uri()),
     )
@@ -66,7 +67,7 @@ async fn account_test_models_should_return_upstream_models_only() {
                 .method("GET")
                 .uri("/api/admin/accounts/models?id=acct_test")
                 .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_account_test_models")
+                .header("x-request-id", "req_account_models")
                 .body(Body::empty())
                 .unwrap(),
         )

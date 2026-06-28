@@ -125,15 +125,14 @@ async fn token_refresh_task_should_skip_duplicate_in_flight_refresh() {
         let task = task.clone();
         tokio::spawn(async move { task.refresh_due_accounts_once_at(now).await })
     };
-    let second = match timeout(StdDuration::from_millis(100), second).await {
-        Ok(result) => result.expect("second scan should join"),
-        Err(_) => {
-            refresher.release.notify_waiters();
-            let _ = first.await;
-            panic!("second scan should skip instead of waiting on duplicate refresh");
-        }
-    }
-    .expect("second scan should succeed");
+    let Ok(result) = timeout(StdDuration::from_millis(100), second).await else {
+        refresher.release.notify_waiters();
+        let _ = first.await;
+        panic!("second scan should skip instead of waiting on duplicate refresh");
+    };
+    let second = result
+        .expect("second scan should join")
+        .expect("second scan should succeed");
 
     refresher.release.notify_waiters();
     let first = first

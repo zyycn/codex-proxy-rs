@@ -54,20 +54,6 @@ impl SqliteCookieStore {
         Self { pool }
     }
 
-    /// 返回底层连接池。
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// 检查账号是否存在。
-    pub async fn account_exists(&self, account_id: &str) -> SqliteCookieStoreResult<bool> {
-        let row = sqlx::query("select 1 from accounts where id = ?")
-            .bind(account_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.is_some())
-    }
-
     /// 捕获上游 `Set-Cookie` 响应头中允许持久化的 Cookie。
     pub async fn capture_set_cookie(
         &self,
@@ -81,20 +67,6 @@ impl SqliteCookieStore {
             return Ok(());
         }
         self.upsert_cookie(account_id, parsed).await
-    }
-
-    /// 将 Cookie 请求头写入账号 Cookie 存储。
-    pub async fn set_cookie_header(
-        &self,
-        account_id: &str,
-        raw: &str,
-    ) -> SqliteCookieStoreResult<usize> {
-        let parsed = parse_cookie_header(raw);
-        let count = parsed.len();
-        for cookie in parsed {
-            self.upsert_cookie(account_id, cookie).await?;
-        }
-        Ok(count)
     }
 
     /// 为请求域名读取账号 Cookie 请求头。
@@ -267,27 +239,6 @@ fn max_age_expires_at(seconds: i64) -> String {
     (now + Duration::seconds(seconds.min(i32::MAX as i64))).to_rfc3339()
 }
 
-fn parse_cookie_header(raw: &str) -> Vec<ParsedCookie> {
-    raw.split(';')
-        .map(str::trim)
-        .filter_map(|part| {
-            let (name, value) = part.split_once('=')?;
-            let name = name.trim();
-            let value = value.trim();
-            if name.is_empty() || value.is_empty() {
-                return None;
-            }
-            Some(ParsedCookie {
-                domain: DEFAULT_COOKIE_DOMAIN.to_string(),
-                name: name.to_string(),
-                value: value.to_string(),
-                path: "/".to_string(),
-                expires_at: None,
-            })
-        })
-        .collect()
-}
-
 fn domain_matches(request_domain: &str, cookie_domain: &str) -> bool {
     request_domain == cookie_domain
         || request_domain
@@ -386,8 +337,7 @@ impl CloudflarePathBlockTracker {
         let count = counts
             .get(account_id)
             .filter(|state| now.signed_duration_since(state.last_at) <= PATH_BLOCK_STALE_AFTER)
-            .map(|state| state.count.saturating_add(1))
-            .unwrap_or(1);
+            .map_or(1, |state| state.count.saturating_add(1));
         counts.insert(
             account_id.to_string(),
             PathBlockState {
@@ -442,8 +392,7 @@ impl CloudflareChallengeCooldownTracker {
         let challenge_count = states
             .get(account_id)
             .filter(|state| now.signed_duration_since(state.updated_at) <= CHALLENGE_STALE_AFTER)
-            .map(|state| state.challenge_count.saturating_add(1))
-            .unwrap_or(1);
+            .map_or(1, |state| state.challenge_count.saturating_add(1));
         states.insert(
             account_id.to_string(),
             ChallengeCooldownState {

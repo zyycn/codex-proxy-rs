@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use codex_proxy_rs::config::types::{
-    AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, QuotaConfig,
-    QuotaWarningThresholds, ServerConfig, TlsConfig, WebSocketPoolConfig,
+    AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
+    LoggingConfig, QuotaConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
 };
 
-pub fn test_config(database_url: String) -> AppConfig {
+pub(crate) fn test_config(database_url: String) -> AppConfig {
     AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
@@ -29,19 +29,15 @@ pub fn test_config(database_url: String) -> AppConfig {
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
-            warning_thresholds: QuotaWarningThresholds {
-                primary: vec![80, 90],
-                secondary: vec![80, 90],
-            },
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
             force_http11: false,
         },
         ws_pool: WebSocketPoolConfig::default(),
-        fingerprint: Default::default(),
+        fingerprint: FingerprintConfig::default(),
         admin: AdminConfig {
-            session_ttl_minutes: 60,
+            session_ttl_minutes: 1440,
             session_cleanup_interval_secs: 3600,
             default_username: "admin".to_string(),
             default_password: "admin".to_string(),

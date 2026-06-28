@@ -2,7 +2,6 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Serialize;
-use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // 分页
@@ -70,26 +69,4 @@ pub fn total_pages(total: u64, page_size: u32) -> u32 {
     let page_size = u64::from(clamp_limit(page_size));
     let pages = total.div_ceil(page_size);
     pages.min(u64::from(u32::MAX)) as u32
-}
-
-// ---------------------------------------------------------------------------
-// JSON 值提取
-// ---------------------------------------------------------------------------
-
-/// 从多个路径中提取第一个非空字符串。
-pub fn first_string(value: &Value, paths: &[&[&str]]) -> Option<String> {
-    paths.iter().find_map(|path| string_at(value, path))
-}
-
-/// 从指定路径提取字符串。
-pub fn string_at(value: &Value, path: &[&str]) -> Option<String> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    current
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }

@@ -1,10 +1,10 @@
-use codex_proxy_rs::upstream::fingerprint::Fingerprint;
+use codex_proxy_rs::{config::types::FingerprintConfig, upstream::fingerprint::Fingerprint};
 
-pub fn test_fingerprint() -> Fingerprint {
-    Fingerprint::default_codex_desktop()
+pub(crate) fn test_fingerprint() -> Fingerprint {
+    Fingerprint::from_config(&FingerprintConfig::default())
 }
 
-pub fn test_fingerprint_with_updated_at(updated_at: Option<&str>) -> Fingerprint {
+pub(crate) fn test_fingerprint_with_updated_at(updated_at: Option<&str>) -> Fingerprint {
     let mut fingerprint = test_fingerprint();
     fingerprint.updated_at = updated_at.map(ToString::to_string);
     fingerprint

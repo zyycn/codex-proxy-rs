@@ -1,7 +1,7 @@
-pub mod accounts;
-pub mod fingerprint;
-pub mod fingerprint_integration;
-pub mod models;
-pub mod protocol;
-pub mod token_client;
-pub mod transport;
+pub(crate) mod accounts;
+pub(crate) mod fingerprint;
+pub(crate) mod fingerprint_integration;
+pub(crate) mod models;
+pub(crate) mod protocol;
+pub(crate) mod token_client;
+pub(crate) mod transport;

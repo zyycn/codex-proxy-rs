@@ -11,7 +11,7 @@ fn account_pool_should_skip_accounts_with_cached_quota_limit() {
         AccountStatus::Active,
     ));
 
-    assert_eq!(pool.acquire("gpt-5.5").unwrap().id, "usable");
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "usable");
 }
 
 #[test]
@@ -25,10 +25,10 @@ fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
     pool.mark_quota_limited_until("limited", now + Duration::seconds(30));
 
     assert!(pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .is_none());
     assert_eq!(
-        pool.acquire_with(AccountAcquireRequest::new(
+        pool.acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
             now + Duration::seconds(31)
         ))
@@ -52,7 +52,7 @@ fn account_pool_should_not_shorten_existing_quota_cooldown() {
     pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
 
     assert!(pool
-        .acquire_with(AccountAcquireRequest::new(
+        .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
             now + Duration::seconds(90)
         ))
@@ -69,7 +69,7 @@ fn account_pool_should_not_replace_known_window_length_with_cooldown_seconds() {
 
     pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new(
+        .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
             now + Duration::seconds(61),
         ))
@@ -92,7 +92,7 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
     pool.insert(account);
 
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert!(!acquired.account.quota_limit_reached);
@@ -119,7 +119,7 @@ fn account_pool_should_skip_accounts_in_cloudflare_cooldown() {
     ));
 
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert_eq!(acquired.account.id, "usable");
@@ -139,7 +139,7 @@ fn least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled()
     pool.insert(limited);
     pool.insert(usable);
 
-    let acquired = pool.acquire("gpt-5.5").unwrap();
+    let acquired = acquire_account(&mut pool, "gpt-5.5").unwrap();
 
     assert_eq!(acquired.id, "usable");
 }
@@ -159,7 +159,7 @@ fn least_used_should_prefer_earlier_rate_limit_window_reset() {
     pool.insert(soon);
 
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert_eq!(acquired.account.id, "soon");
@@ -180,7 +180,7 @@ fn sync_rate_limit_window_should_reset_window_counters_when_drift_crosses_thresh
 
     pool.sync_rate_limit_window("acct_a", now + Duration::seconds(121), Some(60));
     let acquired = pool
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", now))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
     assert_eq!(acquired.account.window_request_count, 1);

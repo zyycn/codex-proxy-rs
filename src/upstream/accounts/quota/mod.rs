@@ -1,15 +1,12 @@
 //! 配额检查策略。
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 const MONTH_WINDOW_MINUTES: u64 = 43_200;
 const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
-
-/// 判断配额百分比是否达到阈值。
-pub fn quota_reached(used_percent: f64, threshold: f64) -> bool {
-    used_percent >= threshold
-}
 
 /// 判断配额快照是否已经触顶。
 pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
@@ -125,7 +122,8 @@ fn window_from_rate_limit(window: Option<&Value>) -> Value {
         .get("limit_window_seconds")
         .and_then(number_value)
         .filter(|seconds| *seconds > 0.0)
-        .map(|seconds| (seconds / 60.0).round() as u64);
+        .and_then(|seconds| Duration::try_from_secs_f64((seconds / 60.0).round()).ok())
+        .map(|duration| duration.as_secs());
     json!({
         "used_percent": used_percent,
         "remaining_percent": remaining_percent(used_percent),

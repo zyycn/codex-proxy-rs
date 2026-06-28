@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
 
-pub fn test_account(id: &str, status: AccountStatus) -> Account {
+pub(crate) fn test_account(id: &str, status: AccountStatus) -> Account {
     Account {
         id: id.to_string(),
         email: None,

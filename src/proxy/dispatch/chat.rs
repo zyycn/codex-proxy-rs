@@ -26,7 +26,8 @@ use crate::{
         },
         upstream::{
             create_response_with_account, verify_acquired_quota_if_required,
-            QuotaVerificationDecision, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+            QuotaVerificationContext, QuotaVerificationDecision,
+            QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
     proxy::openai::chat::ChatStreamTranslationError,
@@ -149,7 +150,7 @@ impl ChatDispatchService {
         let (account_id, response) = loop {
             let acquire_request = AccountAcquireRequest::new(&request.model, Utc::now())
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
-            let acquired = match self.account_pool.acquire_with(acquire_request).await {
+            let acquired = match self.account_pool.acquire_with(&acquire_request).await {
                 Some(acquired) => acquired,
                 None if quota_exhausted_count > 0 => {
                     return_dispatch_error!(ChatDispatchError::QuotaExhausted {
@@ -203,14 +204,16 @@ impl ChatDispatchService {
                 None => return_dispatch_error!(ChatDispatchError::NoActiveAccount),
             };
             let acquired = match verify_acquired_quota_if_required(
-                self.account_pool.as_ref(),
-                self.codex.as_ref(),
-                &self.cloudflare,
-                self.installation_id.as_deref(),
-                request_id,
+                QuotaVerificationContext {
+                    account_pool: self.account_pool.as_ref(),
+                    codex: self.codex.as_ref(),
+                    cloudflare: &self.cloudflare,
+                    installation_id: self.installation_id.as_deref(),
+                    request_id,
+                    excluded_account_ids: &mut excluded_account_ids,
+                    verify_attempts: &mut quota_verify_attempts,
+                },
                 acquired,
-                &mut excluded_account_ids,
-                &mut quota_verify_attempts,
             )
             .await
             {

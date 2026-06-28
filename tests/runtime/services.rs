@@ -11,7 +11,7 @@ use codex_proxy_rs::{
             cookies::SqliteCookieStore, store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
         },
         fingerprint::FingerprintRepository,
-        transport::CODEX_CA_CERT_ENV,
+        transport::tls::CODEX_CA_CERT_ENV,
     },
 };
 
@@ -41,13 +41,12 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
             event_logs: SqliteEventLogStore::new(pool),
         };
 
-        let error = match Services::try_new(
+        let Err(error) = Services::try_new(
             &config,
             stores,
             crate::support::fingerprint::test_fingerprint(),
-        ) {
-            Ok(_) => panic!("invalid custom CA should fail service transport construction"),
-            Err(error) => error,
+        ) else {
+            panic!("invalid custom CA should fail service transport construction");
         };
         assert!(error
             .to_string()

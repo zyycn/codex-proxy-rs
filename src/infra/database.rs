@@ -2,8 +2,7 @@
 
 use std::{fs, path::Path, str::FromStr, time::Duration};
 
-use sqlx::sqlite::SqliteConnectOptions;
-pub use sqlx::SqlitePool;
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 
 /// 连接 SQLite 并初始化 schema。
 pub async fn connect_sqlite(database_url: &str) -> Result<SqlitePool, sqlx::Error> {

@@ -8,14 +8,6 @@ export function getAccounts(params?: any) {
   })
 }
 
-export function createAccount(data: any) {
-  return request({
-    url: '/api/admin/accounts',
-    method: 'POST',
-    data,
-  })
-}
-
 export function importAccounts(data: any) {
   return request({
     url: '/api/admin/accounts/import',
@@ -72,14 +64,6 @@ export function getAccountQuota(params: any) {
   })
 }
 
-export function testAccountConnection(data: any) {
-  return request({
-    url: '/api/admin/accounts/health-check',
-    method: 'POST',
-    data,
-  })
-}
-
 export async function testAccountConnectionStream(data: any, onEvent: any, signal?: AbortSignal) {
   const { id, ...payload } = data
   const baseURL = import.meta.env.DEV ? '/dev' : ''
@@ -116,7 +100,7 @@ export async function testAccountConnectionStream(data: any, onEvent: any, signa
   consumeAccountTestFrames(buffer, onEvent)
 }
 
-export function getAccountTestModels(data: any) {
+export function getAccountModels(data: any) {
   return request({
     url: '/api/admin/accounts/models',
     method: 'GET',

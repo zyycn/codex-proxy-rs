@@ -1,2 +1,2 @@
-pub mod trace_middleware;
-pub mod web_assets;
+pub(crate) mod trace_middleware;
+pub(crate) mod web_assets;

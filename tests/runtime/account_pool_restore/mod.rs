@@ -29,12 +29,15 @@ async fn runtime_account_pool_should_restore_capacity_and_clear_runtime_state() 
         .expect("account pool should restore");
     let capacity = service.capacity_summary_now().await;
     let acquired = service
-        .acquire_with(AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
         .await
         .expect("active account should be acquired");
     let used_capacity = service.capacity_summary_now().await;
-    service.clear().await;
-    let cleared_capacity = service.capacity_summary_now().await;
+    let restored_again = service
+        .restore_from_repository()
+        .await
+        .expect("account pool should restore again");
+    let restored_capacity = service.capacity_summary_now().await;
 
     assert_eq!(restored, 1);
     assert_eq!(capacity.total_slots, 2);
@@ -42,7 +45,9 @@ async fn runtime_account_pool_should_restore_capacity_and_clear_runtime_state() 
     assert_eq!(acquired.account.id, "acct_pool");
     assert_eq!(used_capacity.used_slots, 1);
     assert_eq!(used_capacity.available_slots, 1);
-    assert_eq!(cleared_capacity.total_slots, 0);
+    assert_eq!(restored_again, 1);
+    assert_eq!(restored_capacity.used_slots, 0);
+    assert_eq!(restored_capacity.available_slots, 2);
 }
 
 async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {

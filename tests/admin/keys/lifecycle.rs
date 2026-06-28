@@ -57,7 +57,6 @@ async fn admin_client_keys_label_should_update_clear_and_validate_label() {
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
-// Ignored: duplicate of admin::keys::service::lifecycle test that passes
 #[tokio::test]
 async fn admin_client_keys_batch_delete_should_remove_found_keys_and_report_missing_ids() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-delete.sqlite").await;

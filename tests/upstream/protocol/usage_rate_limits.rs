@@ -92,8 +92,8 @@ fn extract_usage_should_read_image_generation_tokens_separately() {
 }
 
 #[test]
-fn extract_usage_should_merge_openai_usage_shape() {
-    let first = extract_usage(&json!({
+fn extract_usage_should_read_openai_usage_shape() {
+    let usage = extract_usage(&json!({
         "usage": {
             "prompt_tokens": 8,
             "completion_tokens": 4,
@@ -103,26 +103,17 @@ fn extract_usage_should_merge_openai_usage_shape() {
         }
     }))
     .expect("usage should exist");
-    let second = TokenUsage {
-        input_tokens: 1,
-        output_tokens: 2,
-        cached_tokens: 0,
-        reasoning_tokens: 0,
-        image_input_tokens: 0,
-        image_output_tokens: 0,
-        total_tokens: 3,
-    };
 
     assert_eq!(
-        first.merged(second),
+        usage,
         TokenUsage {
-            input_tokens: 9,
-            output_tokens: 6,
+            input_tokens: 8,
+            output_tokens: 4,
             cached_tokens: 2,
             reasoning_tokens: 0,
             image_input_tokens: 0,
             image_output_tokens: 0,
-            total_tokens: 15,
+            total_tokens: 12,
         }
     );
 }
@@ -314,7 +305,8 @@ fn parse_rate_limits_event_should_extract_internal_websocket_rate_limits() {
 
     let parsed = parse_rate_limits_event(&event).expect("event should parse");
 
-    assert_eq!(parsed.primary.expect("primary window").used_percent, 99.5);
+    let used_percent = parsed.primary.expect("primary window").used_percent;
+    assert!((used_percent - 99.5).abs() < f64::EPSILON);
     assert_eq!(
         parsed.secondary.expect("secondary window").reset_at,
         Some(1_894_056_000)
@@ -358,13 +350,6 @@ fn rate_limit_quota_should_preserve_existing_monthly_and_credits_when_passive_da
     assert_eq!(quota["snapshots"][0]["primary"]["remaining_percent"], 75);
     assert_eq!(quota["monthly_limit"]["used_percent"], 52);
     assert_eq!(quota["credits"]["balance"], 12);
-}
-
-#[test]
-fn cooldown_with_jitter_should_return_positive_duration_within_expected_range() {
-    let duration = cooldown_with_jitter(60, 2_000);
-
-    assert!((48..=72).contains(&duration.num_seconds()));
 }
 
 #[tokio::test]

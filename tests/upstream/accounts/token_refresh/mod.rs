@@ -8,7 +8,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
@@ -174,11 +173,6 @@ impl TokenRefresher for RefreshTokenRotatingRefresher {
 }
 
 fn test_jwt(exp: i64) -> String {
-    let header = json!({"alg": "none", "typ": "JWT"});
     let payload = json!({ "exp": exp });
-    format!("{}.{}.", jwt_part(&header), jwt_part(&payload))
-}
-
-fn jwt_part(value: &serde_json::Value) -> String {
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).expect("json should encode"))
+    crate::support::jwt::unsigned_jwt(&payload)
 }

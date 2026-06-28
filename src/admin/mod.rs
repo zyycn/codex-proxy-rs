@@ -6,8 +6,6 @@ pub mod accounts;
 pub mod auth;
 /// v1 接口访问 Key 处理器。
 pub mod keys;
-/// 模型处理器。
-pub mod models;
 /// 管理面日志、用量与诊断统计。
 pub mod monitoring;
 /// 响应封装。

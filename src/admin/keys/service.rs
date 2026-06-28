@@ -149,16 +149,12 @@ impl AdminClientKeyService {
         &self,
         key_id: &str,
         status: &str,
-    ) -> Result<Option<UpdatedClientApiKeyStatus>, AdminClientKeyError> {
+    ) -> Result<bool, AdminClientKeyError> {
         let enabled = parse_client_key_status(status)?;
-        match self.store.set_enabled(key_id, enabled).await {
-            Ok(true) => Ok(Some(UpdatedClientApiKeyStatus {
-                id: key_id.to_string(),
-                enabled,
-            })),
-            Ok(false) => Ok(None),
-            Err(_) => Err(AdminClientKeyError::UpdateStatus),
-        }
+        self.store
+            .set_enabled(key_id, enabled)
+            .await
+            .map_err(|_| AdminClientKeyError::UpdateStatus)
     }
 
     /// 批量删除客户端 API Key。
@@ -179,38 +175,6 @@ impl AdminClientKeyService {
             }
         }
         Ok(BatchDeleteClientApiKeys { deleted, not_found })
-    }
-
-    /// 导出客户端 API Key 元数据。
-    pub async fn export(
-        &self,
-        ids: Vec<String>,
-    ) -> Result<Vec<AdminStoredClientApiKey>, AdminClientKeyError> {
-        if ids.is_empty() {
-            let mut all_keys = Vec::new();
-            let mut cursor = None;
-            loop {
-                let page = self
-                    .store
-                    .list(cursor, 200)
-                    .await
-                    .map_err(|_| AdminClientKeyError::Export)?;
-                all_keys.extend(page.items.into_iter().map(AdminStoredClientApiKey::from));
-                if page.next_cursor.is_none() {
-                    return Ok(all_keys);
-                }
-                cursor = page.next_cursor;
-            }
-        }
-        let mut keys = Vec::with_capacity(ids.len());
-        for id in ids {
-            match self.store.get(&id).await {
-                Ok(Some(key)) => keys.push(AdminStoredClientApiKey::from(key)),
-                Ok(None) => {}
-                Err(_) => return Err(AdminClientKeyError::Export),
-            }
-        }
-        Ok(keys)
     }
 }
 
@@ -240,13 +204,6 @@ pub struct AdminCreatedClientApiKey {
     pub last_used_at: Option<String>,
 }
 
-/// 客户端 API Key 状态更新结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdatedClientApiKeyStatus {
-    pub id: String,
-    pub enabled: bool,
-}
-
 /// 客户端 API Key 批量删除结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchDeleteClientApiKeys {
@@ -259,8 +216,6 @@ pub struct BatchDeleteClientApiKeys {
 pub enum AdminClientKeyError {
     #[error("failed to list client API keys")]
     List,
-    #[error("failed to export client API keys")]
-    Export,
     #[error("failed to create client API key")]
     Create,
     #[error("failed to delete client API key")]
@@ -455,8 +410,8 @@ impl SqliteClientKeyStore {
         let items = rows
             .into_iter()
             .take(take_count)
-            .map(|row| self.key_from_row(&row))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|row| Self::key_from_row(&row))
+            .collect::<Vec<_>>();
         let next_cursor = if has_next {
             items
                 .last()
@@ -480,7 +435,7 @@ impl SqliteClientKeyStore {
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(|row| self.key_from_row(&row)).transpose()
+        Ok(row.map(|row| Self::key_from_row(&row)))
     }
 
     /// 更新客户端 API Key 启用状态。
@@ -526,11 +481,8 @@ impl SqliteClientKeyStore {
         Ok(result.rows_affected() > 0)
     }
 
-    fn key_from_row(
-        &self,
-        row: &sqlx::sqlite::SqliteRow,
-    ) -> Result<StoredClientApiKey, SqliteClientKeyStoreError> {
-        Ok(StoredClientApiKey {
+    fn key_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredClientApiKey {
+        StoredClientApiKey {
             id: row.get("id"),
             name: row.get("name"),
             label: row.get("label"),
@@ -539,7 +491,7 @@ impl SqliteClientKeyStore {
             enabled: row.get::<i64, _>("enabled") != 0,
             created_at: row.get("created_at"),
             last_used_at: row.get("last_used_at"),
-        })
+        }
     }
 }
 
@@ -548,7 +500,7 @@ impl ClientKeyStore for SqliteClientKeyStore {
     async fn verify_and_touch(&self, plaintext: &str) -> ClientKeyStoreResult<bool> {
         verify_and_touch(&self.pool, plaintext)
             .await
-            .map_err(map_client_key_store_error)
+            .map_err(|error| map_client_key_store_error(&error))
     }
 }
 
@@ -574,7 +526,7 @@ async fn verify_and_touch(
     Ok(false)
 }
 
-fn map_client_key_store_error(error: SqliteClientKeyStoreError) -> ClientKeyStoreError {
+fn map_client_key_store_error(error: &SqliteClientKeyStoreError) -> ClientKeyStoreError {
     ClientKeyStoreError::OperationFailed {
         message: error.to_string(),
     }

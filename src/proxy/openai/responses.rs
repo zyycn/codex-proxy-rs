@@ -40,14 +40,6 @@ const OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 // 协议类型
 // ====================================================================
 
-/// OpenAI 请求声明的响应格式类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponseFormat {
-    Text,
-    JsonObject,
-    JsonSchema,
-}
-
 /// Responses API 请求体。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OpenAiResponsesRequest {
@@ -242,7 +234,7 @@ fn sanitize_responses_input(input: Value) -> Vec<Value> {
     match input {
         Value::Array(items) => sanitize_codex_input_items(items),
         Value::Null => Vec::new(),
-        Value::String(text) => vec![responses_input_text_message(text)],
+        Value::String(text) => vec![responses_input_text_message(&text)],
         value => vec![value],
     }
 }
@@ -252,7 +244,7 @@ fn sanitize_codex_input_items(input: Vec<Value>) -> Vec<Value> {
         .into_iter()
         .filter_map(|item| {
             if let Value::String(text) = item {
-                return Some(responses_input_text_message(text));
+                return Some(responses_input_text_message(&text));
             }
             let Value::Object(object) = item else {
                 return Some(item);
@@ -266,7 +258,7 @@ fn sanitize_codex_input_items(input: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-fn responses_input_text_message(text: String) -> Value {
+fn responses_input_text_message(text: &str) -> Value {
     json!({
         "type": "message",
         "role": "user",
@@ -476,8 +468,10 @@ pub fn response_failed_sse_event_with_id(
     });
     let response_id = response_id
         .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()));
+        .map_or_else(
+            || format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
+            ToString::to_string,
+        );
     let data = json!({
         "type": "response.failed",
         "response": {
@@ -576,7 +570,7 @@ async fn handle_responses(
             .await
         {
             Ok(stream) => live_event_stream_response(stream),
-            Err(error) => response_dispatch_stream_error_response(error),
+            Err(error) => response_dispatch_stream_error_response(&error),
         };
     }
 
@@ -724,8 +718,8 @@ fn live_event_stream_response(stream: ResponseDispatchStream) -> Response {
     sse_event_stream_response(Body::from_stream(stream.body), SseResponseOptions::BASIC)
 }
 
-fn response_dispatch_stream_error_response(error: ResponseDispatchError) -> Response {
-    event_stream_response(responses_stream_dispatch_failed_sse_event(&error))
+fn response_dispatch_stream_error_response(error: &ResponseDispatchError) -> Response {
+    event_stream_response(responses_stream_dispatch_failed_sse_event(error))
 }
 
 fn ensure_done_sse_frame(body: &mut String) {

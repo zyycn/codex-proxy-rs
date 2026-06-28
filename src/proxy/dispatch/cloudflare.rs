@@ -25,8 +25,8 @@ pub struct CloudflareRecovery {
 impl CloudflareRecovery {
     pub fn new(cookie_store: SqliteCookieStore) -> Self {
         Self {
-            path_block_tracker: Default::default(),
-            challenge_tracker: Default::default(),
+            path_block_tracker: CloudflarePathBlockTracker::default(),
+            challenge_tracker: CloudflareChallengeCooldownTracker::default(),
             cookie_store,
         }
     }
@@ -104,7 +104,7 @@ impl CloudflareRecovery {
     fn clear_challenge_cookies_after_cooldown(&self, account_id: &str, delay_seconds: i64) {
         let cookie_store = self.cookie_store.clone();
         let account_id = account_id.to_string();
-        let delay = StdDuration::from_secs(delay_seconds.max(0) as u64);
+        let delay = StdDuration::from_secs(delay_seconds.max(0).cast_unsigned());
 
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;

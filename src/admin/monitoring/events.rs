@@ -1,10 +1,8 @@
-//! 事件日志模型、端口与策略服务。
+//! 事件日志模型。
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use thiserror::Error;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 /// 事件等级。
@@ -84,48 +82,9 @@ impl EventLog {
             upstream_request_id: None,
             latency_ms: None,
             message: message.into(),
-            metadata: Value::Object(Default::default()),
+            metadata: Value::Object(Map::default()),
             created_at: Utc::now(),
         }
-    }
-}
-
-/// 事件日志存储错误。
-#[derive(Debug, Error)]
-pub enum EventLogStoreError {
-    /// 底层存储失败。
-    #[error("event log store operation failed: {message}")]
-    OperationFailed {
-        /// 错误说明。
-        message: String,
-    },
-}
-
-/// 事件日志存储结果。
-pub type EventLogStoreResult<T> = Result<T, EventLogStoreError>;
-
-/// 事件日志存储端口。
-#[async_trait]
-pub trait EventLogStore: Send + Sync + 'static {
-    /// 写入事件日志。
-    async fn append(&self, event: &EventLog) -> EventLogStoreResult<()>;
-}
-
-/// 事件日志服务。
-#[derive(Debug, Clone)]
-pub struct EventLogService {
-    enabled: bool,
-}
-
-impl EventLogService {
-    /// 构造事件日志服务。
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled }
-    }
-
-    /// 判断事件是否应该记录。
-    pub fn should_record(&self, event: &EventLog) -> bool {
-        self.enabled || event.level == EventLevel::Error
     }
 }
 

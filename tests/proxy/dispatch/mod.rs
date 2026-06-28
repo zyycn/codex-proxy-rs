@@ -1,3 +1,3 @@
-pub mod chat_upstream;
-pub mod session_affinity;
-pub mod session_affinity_integration;
+pub(crate) mod chat_upstream;
+pub(crate) mod session_affinity;
+pub(crate) mod session_affinity_integration;

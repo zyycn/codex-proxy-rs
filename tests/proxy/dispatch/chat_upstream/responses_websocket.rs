@@ -168,7 +168,7 @@ async fn responses_websocket_should_reuse_connection_for_recorded_conversation()
                             websocket.close(None).await.unwrap();
                             break (true, first_payload, second_payload);
                         }
-                        Some(_) => continue,
+                        Some(_) => {}
                         None => {
                             let second_payload = accept_successful_websocket_response(
                                 &listener,
@@ -295,7 +295,7 @@ async fn responses_websocket_should_retry_fresh_connection_when_reused_connectio
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [{
                     "role": "user",
@@ -313,7 +313,7 @@ async fn responses_websocket_should_retry_fresh_connection_when_reused_connectio
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "previous_response_id": "resp_stale_reuse_first"
@@ -381,7 +381,7 @@ async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled()
                             websocket.close(None).await.unwrap();
                             break (true, first_payload, second_payload);
                         }
-                        Some(_) => continue,
+                        Some(_) => {}
                         None => {
                             let second_payload = accept_successful_websocket_response(
                                 &listener,
@@ -634,7 +634,7 @@ async fn responses_websocket_should_implicitly_resume_full_history_with_reasonin
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -648,7 +648,7 @@ async fn responses_websocket_should_implicitly_resume_full_history_with_reasonin
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -732,7 +732,7 @@ async fn responses_websocket_should_strip_implicit_banned_affinity_when_switchin
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -751,7 +751,7 @@ async fn responses_websocket_should_strip_implicit_banned_affinity_when_switchin
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -814,7 +814,7 @@ async fn responses_websocket_should_not_implicitly_resume_unmatched_function_cal
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "use the lookup tool",
                 "stream": false,
@@ -828,7 +828,7 @@ async fn responses_websocket_should_not_implicitly_resume_unmatched_function_cal
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "use the lookup tool",
                 "stream": false,
@@ -882,7 +882,7 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
     let first_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -895,7 +895,7 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
 
     let db = dir.path().join("openai-record-affinity.sqlite");
     let restored_state = test_app_state_with_pool_and_installation_id(
-        test_config(format!("sqlite://{}", db.display()), server_base_url),
+        &test_config(format!("sqlite://{}", db.display()), server_base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     );
@@ -922,7 +922,7 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
     let second_response = restored_app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -1007,7 +1007,7 @@ async fn responses_websocket_pool_should_be_evicted_after_admin_account_status_c
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "prompt_cache_key": "status-cycle"
@@ -1026,7 +1026,7 @@ async fn responses_websocket_pool_should_be_evicted_after_admin_account_status_c
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "previous_response_id": "resp_pool_status_first"
@@ -1073,7 +1073,7 @@ async fn responses_websocket_should_not_implicitly_resume_self_contained_functio
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "use the lookup tool",
                 "stream": false,
@@ -1087,7 +1087,7 @@ async fn responses_websocket_should_not_implicitly_resume_self_contained_functio
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "use the lookup tool",
                 "stream": false,
@@ -1145,7 +1145,7 @@ async fn responses_websocket_should_not_implicitly_resume_across_codex_windows()
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "prompt_cache_key": "shared-variant-session",
@@ -1161,7 +1161,7 @@ async fn responses_websocket_should_not_implicitly_resume_across_codex_windows()
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "prompt_cache_key": "shared-variant-session",
@@ -1219,7 +1219,7 @@ async fn responses_websocket_should_evict_reasoning_replay_after_invalid_encrypt
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -1233,7 +1233,7 @@ async fn responses_websocket_should_evict_reasoning_replay_after_invalid_encrypt
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -1302,7 +1302,7 @@ async fn responses_websocket_should_restore_full_history_when_implicit_resume_pr
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -1316,7 +1316,7 @@ async fn responses_websocket_should_restore_full_history_when_implicit_resume_pr
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "stream": false,
@@ -1365,7 +1365,7 @@ async fn responses_websocket_should_route_previous_response_id_to_recorded_accou
         .clone()
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
                 "input": [{
@@ -1396,7 +1396,7 @@ async fn responses_websocket_should_route_previous_response_id_to_recorded_accou
     let second_response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "previous_response_id": "resp_affinity_first"
@@ -1448,7 +1448,7 @@ async fn responses_websocket_non_stream_previous_response_not_found_should_strip
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": false,
@@ -1490,7 +1490,7 @@ async fn responses_websocket_stream_previous_response_not_found_should_strip_his
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,
@@ -1532,7 +1532,7 @@ async fn responses_websocket_non_stream_unanswered_function_call_should_strip_hi
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": false,
@@ -1575,7 +1575,7 @@ async fn responses_websocket_previous_response_id_should_retry_fallback_account_
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "previous_response_id": "resp_prev"
@@ -1624,7 +1624,7 @@ async fn responses_websocket_non_stream_previous_response_id_should_retry_fallba
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": false,
@@ -1676,7 +1676,7 @@ async fn responses_websocket_without_history_should_mark_expired_after_fallback_
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,
@@ -1739,7 +1739,7 @@ async fn responses_websocket_without_history_should_return_rate_limit_stream_err
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,
@@ -1815,7 +1815,7 @@ async fn responses_websocket_response_failed_quota_should_retry_fallback_account
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": false,
@@ -1857,7 +1857,7 @@ async fn responses_websocket_without_history_should_return_quota_stream_error_wh
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,
@@ -1907,7 +1907,7 @@ async fn responses_websocket_without_history_should_return_model_unsupported_str
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,
@@ -1957,7 +1957,7 @@ async fn responses_websocket_with_history_should_return_path_block_stream_error_
     let response = app
         .oneshot(responses_json_request(
             &api_key,
-            json!({
+            &json!({
                 "model": "gpt-5.5",
                 "input": [],
                 "stream": true,

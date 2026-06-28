@@ -7,5 +7,4 @@ pub mod event_store;
 pub mod events;
 pub mod logs;
 pub mod service;
-pub mod usage;
 pub mod usage_store;

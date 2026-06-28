@@ -4,9 +4,8 @@ use codex_proxy_rs::proxy::openai::responses::{
 };
 use codex_proxy_rs::upstream::models::ParsedModelName;
 use codex_proxy_rs::upstream::protocol::events::{
-    cooldown_with_jitter, extract_sse_usage, extract_usage, parse_rate_limit_headers,
-    parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow,
-    TokenUsage,
+    extract_sse_usage, extract_usage, parse_rate_limit_headers, parse_rate_limits_event,
+    rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow, TokenUsage,
 };
 use codex_proxy_rs::upstream::protocol::responses::{
     apply_response_model_options, http_sse_fallback_allowed, response_from_codex_sse,
@@ -33,8 +32,7 @@ use codex_proxy_rs::upstream::protocol::websocket::{
     websocket_message_output_item_event_invalid_required_fields, websocket_metadata_turn_state,
     websocket_output_item_event_invalid_item_type_tag,
     websocket_output_item_event_invalid_metadata, websocket_output_item_event_missing_item,
-    websocket_output_item_event_non_object_item, websocket_parity_diff,
-    websocket_payload_audit_snapshot,
+    websocket_output_item_event_non_object_item, websocket_payload_audit_snapshot,
     websocket_reasoning_output_item_event_invalid_required_fields,
     websocket_reasoning_summary_part_added_missing_summary_index,
     websocket_response_completed_missing_response, websocket_response_completed_parse_error,
@@ -43,22 +41,13 @@ use codex_proxy_rs::upstream::protocol::websocket::{
     websocket_tool_search_call_output_item_event_invalid_required_fields,
     websocket_tool_search_output_item_event_invalid_required_fields,
     websocket_web_search_call_output_item_event_invalid_required_fields, OpeningAuditHeader,
-    OpeningAuditSnapshot, PayloadAuditSnapshot, WebSocketAuditErrorSnapshot,
-    WebSocketErrorClassificationProfile,
+    OpeningAuditSnapshot, WebSocketErrorClassificationProfile,
 };
 use serde_json::json;
+
+use crate::support::assertions::assert_substrings_appear_in_order;
 
 mod codex_websocket;
 mod openai_chat;
 mod openai_responses;
 mod usage_rate_limits;
-
-fn assert_substrings_appear_in_order(haystack: &str, needles: &[&str]) {
-    let mut cursor = 0;
-    for needle in needles {
-        let Some(offset) = haystack[cursor..].find(needle) else {
-            panic!("expected substring {needle:?} after byte {cursor} in:\n{haystack}");
-        };
-        cursor += offset + needle.len();
-    }
-}

@@ -1,6 +1,5 @@
 use super::*;
 
-// Ignored: duplicate of admin::keys::service::authorization test that passes
 #[tokio::test]
 async fn admin_client_keys_route_should_create_list_and_authorize_v1_requests() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-create.sqlite").await;
@@ -71,7 +70,6 @@ async fn admin_client_keys_route_should_create_list_and_authorize_v1_requests() 
     assert_eq!(models_response.status(), StatusCode::OK);
 }
 
-// Ignored: duplicate of admin::keys::service::authorization test that passes
 #[tokio::test]
 async fn admin_client_keys_status_should_disable_and_enable_authorization() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-status.sqlite").await;
@@ -141,7 +139,6 @@ async fn admin_client_keys_status_should_disable_and_enable_authorization() {
     assert_eq!(accepted.status(), StatusCode::OK);
 }
 
-// Ignored: duplicate of admin::keys::service::authorization test that passes
 #[tokio::test]
 async fn admin_client_keys_delete_should_remove_authorization() {
     let (app, _dir) = admin_client_key_test_app("admin-client-key-delete.sqlite").await;

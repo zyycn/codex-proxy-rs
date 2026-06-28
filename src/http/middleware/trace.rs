@@ -14,9 +14,6 @@ use tracing::{info, warn, Span};
 
 use crate::http::middleware::request_id::RequestId;
 
-/// 默认 tracing 事件名。
-pub const TRACE_LAYER_NAME: &str = "http";
-
 /// HTTP tracing layer type.
 pub type HttpTraceLayer = TraceLayer<
     SharedClassifier<ServerErrorsAsFailures>,
@@ -65,6 +62,10 @@ fn on_http_response(response: &Response<Body>, latency: Duration, _span: &Span) 
     );
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tower-http OnFailure callbacks receive the failure class by value"
+)]
 fn on_http_failure(failure_class: ServerErrorsFailureClass, latency: Duration, _span: &Span) {
     warn!(
         failure = %failure_class,

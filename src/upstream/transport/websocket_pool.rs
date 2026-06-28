@@ -11,7 +11,7 @@ use tokio::{net::TcpStream, sync::Mutex, time::timeout};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 const DEFAULT_MAX_PER_ACCOUNT: usize = 8;
-const DEFAULT_MAX_AGE: Duration = Duration::from_secs(55 * 60);
+const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(5);
@@ -111,46 +111,6 @@ impl CodexWebSocketPool {
         };
         pool.spawn_maintenance_task();
         pool
-    }
-
-    /// 使用默认配置构造连接池。
-    pub fn with_default_max_age() -> Self {
-        Self::with_config(CodexWebSocketPoolConfig::default())
-    }
-
-    /// 使用最大存活时间与账号容量限制构造连接池。
-    pub fn with_limits(max_age: Duration, max_per_account: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(WebSocketPoolState::default())),
-            config: CodexWebSocketPoolConfig {
-                max_age,
-                max_per_account: max_per_account.max(1),
-                maintenance_interval: None,
-                ping_interval: None,
-                liveness_timeout: None,
-                ..CodexWebSocketPoolConfig::default()
-            },
-        }
-    }
-
-    /// 返回单账号最大连接数。
-    pub fn max_per_account(&self) -> usize {
-        self.config.max_per_account
-    }
-
-    /// 返回连接最大存活时长。
-    pub fn max_age(&self) -> Duration {
-        self.config.max_age
-    }
-
-    /// 判断当前账号是否还能打开新连接。
-    pub fn permits_new_connection(&self, current_connections: usize) -> bool {
-        current_connections < self.config.max_per_account
-    }
-
-    /// 判断连接是否已达到回收年龄。
-    pub fn should_recycle(&self, age: Duration) -> bool {
-        age >= self.config.max_age
     }
 
     pub(crate) async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {
@@ -268,11 +228,6 @@ impl CodexWebSocketPool {
                 .collect::<Vec<_>>()
         };
         close_pooled_connections(idle_connections).await;
-    }
-
-    /// 维护 idle 连接：关闭过期/失活连接，并按需 ping 探活。
-    pub async fn gc_sweep(&self) {
-        self.maintain_idle_connections().await;
     }
 
     /// 维护 idle 连接：关闭过期/失活连接，并按需 ping 探活。
@@ -520,7 +475,7 @@ async fn probe_idle_connection(
         return Some(connection);
     }
     match timeout(ping_timeout, connection.websocket.next()).await {
-        Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) | Err(_) => {
+        Ok(Some(Ok(Message::Close(_)) | Err(_)) | None) | Err(_) => {
             close_pooled_connection(connection).await;
             None
         }

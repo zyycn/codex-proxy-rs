@@ -158,7 +158,7 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
 #[tokio::test]
 async fn account_repository_should_accumulate_usage_counters() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 7).await;
-    let repo = SqliteAccountStore::new(pool);
+    let repo = SqliteAccountStore::new(pool.clone());
     seed_new_account(&repo, "acct_a").await;
 
     AccountStore::record_usage_delta(
@@ -194,15 +194,26 @@ async fn account_repository_should_accumulate_usage_counters() {
     .await
     .unwrap();
 
-    let usage = repo.get_usage("acct_a").await.unwrap().unwrap();
-    assert_eq!(usage.request_count, 2);
-    assert_eq!(usage.input_tokens, 18);
-    assert_eq!(usage.output_tokens, 6);
-    assert_eq!(usage.cached_tokens, 4);
-    assert_eq!(usage.reasoning_tokens, 3);
-    assert_eq!(usage.total_tokens, 24);
-    assert_eq!(usage.empty_response_count, 1);
-    assert!(usage.last_used_at.is_some());
+    let usage: (i64, i64, i64, i64, i64, i64, i64, Option<String>) = sqlx::query_as(
+        r"
+        select request_count, input_tokens, output_tokens, cached_tokens,
+               reasoning_tokens, total_tokens, empty_response_count, last_used_at
+        from account_usage
+        where account_id = ?
+        ",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(usage.0, 2);
+    assert_eq!(usage.1, 18);
+    assert_eq!(usage.2, 6);
+    assert_eq!(usage.3, 4);
+    assert_eq!(usage.4, 3);
+    assert_eq!(usage.5, 24);
+    assert_eq!(usage.6, 1);
+    assert!(usage.7.is_some());
 }
 
 #[tokio::test]

@@ -62,8 +62,8 @@ pub fn openai_error_response(
     )
 }
 
-pub fn chat_dispatch_error_response(error: ChatDispatchError) -> Response {
-    let error = chat_dispatch_openai_error(&error);
+pub fn chat_dispatch_error_response(error: &ChatDispatchError) -> Response {
+    let error = chat_dispatch_openai_error(error);
     openai_error_response(error.status, &error.message, error.error_type, error.code)
         .into_response()
 }
@@ -82,7 +82,7 @@ pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Respon
         ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
             responses_no_available_accounts_response().into_response()
         }
-        error => response_dispatch_openai_error_response(error),
+        error => response_dispatch_openai_error_response(&error),
     }
 }
 
@@ -140,8 +140,8 @@ fn responses_error_response(status: StatusCode, message: &str) -> (StatusCode, J
     )
 }
 
-fn response_dispatch_openai_error_response(error: ResponseDispatchError) -> Response {
-    let error = response_dispatch_openai_error(&error);
+fn response_dispatch_openai_error_response(error: &ResponseDispatchError) -> Response {
+    let error = response_dispatch_openai_error(error);
     openai_error_response(error.status, &error.message, error.error_type, error.code)
         .into_response()
 }

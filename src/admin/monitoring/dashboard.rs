@@ -6,7 +6,6 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Extension,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,7 +25,6 @@ use crate::{
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
-    http::middleware::request_id::RequestId,
     infra::time::{
         china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour, china_hour_start,
         china_quarter_hour_start, china_relative_time, china_time,
@@ -41,13 +39,13 @@ const HEALTH_TIMELINE_SLOTS: i64 = 7 * 24 * 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTrendQuery {
-    pub kind: Option<DashboardTrendKind>,
+pub(crate) struct DashboardTrendQuery {
+    kind: Option<DashboardTrendKind>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum DashboardTrendKind {
+enum DashboardTrendKind {
     #[default]
     Usage,
     Latency,
@@ -56,143 +54,143 @@ pub enum DashboardTrendKind {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardSummaryData {
-    pub cards: DashboardCardsData,
-    pub trend: DashboardTrendData,
-    pub health_timeline: DashboardHealthTimelineData,
-    pub account_usage: Vec<DashboardAccountUsageData>,
-    pub service_statuses: Vec<DashboardServiceStatusData>,
-    pub event_logs: Vec<DashboardEventLogData>,
-    pub pool_summary: AccountPoolDiagnostics,
-    pub capacity_info: AccountCapacityDiagnostics,
-    pub rotation_strategy: Option<String>,
+struct DashboardSummaryData {
+    cards: DashboardCardsData,
+    trend: DashboardTrendData,
+    health_timeline: DashboardHealthTimelineData,
+    account_usage: Vec<DashboardAccountUsageData>,
+    service_statuses: Vec<DashboardServiceStatusData>,
+    event_logs: Vec<DashboardEventLogData>,
+    pool_summary: AccountPoolDiagnostics,
+    capacity_info: AccountCapacityDiagnostics,
+    rotation_strategy: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardHealthTimelineData {
-    pub title: String,
-    pub description: String,
-    pub range_display: String,
-    pub reliability_display: String,
-    pub oldest_label: String,
-    pub newest_label: String,
-    pub points: String,
+struct DashboardHealthTimelineData {
+    title: String,
+    description: String,
+    range_display: String,
+    reliability_display: String,
+    oldest_label: String,
+    newest_label: String,
+    points: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardCardsData {
-    pub accounts: DashboardAccountsCardData,
-    pub traffic: DashboardTrafficCardData,
-    pub tokens: DashboardTokenCardData,
-    pub cache: DashboardCacheCardData,
+struct DashboardCardsData {
+    accounts: DashboardAccountsCardData,
+    traffic: DashboardTrafficCardData,
+    tokens: DashboardTokenCardData,
+    cache: DashboardCacheCardData,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardAccountsCardData {
-    pub total: u64,
-    pub enabled: u64,
-    pub abnormal: u64,
+struct DashboardAccountsCardData {
+    total: u64,
+    enabled: u64,
+    abnormal: u64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTrafficCardData {
-    pub today_requests: u64,
-    pub yesterday_requests: u64,
-    pub total_requests: u64,
-    pub rpm: u64,
-    pub tpm: u64,
+struct DashboardTrafficCardData {
+    today_requests: u64,
+    yesterday_requests: u64,
+    total_requests: u64,
+    rpm: u64,
+    tpm: u64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTokenCardData {
-    pub today_tokens: u64,
-    pub yesterday_tokens: u64,
-    pub total_tokens: u64,
-    pub today_cost_usd: Option<f64>,
-    pub total_cost_usd: Option<f64>,
+struct DashboardTokenCardData {
+    today_tokens: u64,
+    yesterday_tokens: u64,
+    total_tokens: u64,
+    today_cost_usd: Option<f64>,
+    total_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardCacheCardData {
-    pub today_hit_rate: Option<f64>,
-    pub yesterday_hit_rate: Option<f64>,
-    pub total_hit_rate: Option<f64>,
-    pub total_cached_tokens: u64,
-    pub first_token_latency_ms: Option<u64>,
-    pub completion_latency_ms: Option<u64>,
+struct DashboardCacheCardData {
+    today_hit_rate: Option<f64>,
+    yesterday_hit_rate: Option<f64>,
+    total_hit_rate: Option<f64>,
+    total_cached_tokens: u64,
+    first_token_latency_ms: Option<u64>,
+    completion_latency_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTrendData {
-    pub kind: DashboardTrendKind,
-    pub points: Vec<DashboardTrendPointData>,
-    pub summary: Vec<DashboardTrendSummaryData>,
+struct DashboardTrendData {
+    kind: DashboardTrendKind,
+    points: Vec<DashboardTrendPointData>,
+    summary: Vec<DashboardTrendSummaryData>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTrendPointData {
-    pub time: String,
-    pub requests: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cached_tokens: u64,
-    pub tokens: u64,
-    pub errors: u64,
-    pub latency: u64,
-    pub max_latency: u64,
-    pub min_latency: u64,
-    pub success_rate: f64,
+struct DashboardTrendPointData {
+    time: String,
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    tokens: u64,
+    errors: u64,
+    latency: u64,
+    max_latency: u64,
+    min_latency: u64,
+    success_rate: f64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardTrendSummaryData {
-    pub label: String,
-    pub value: u64,
-    pub ratio: Option<f64>,
+struct DashboardTrendSummaryData {
+    label: String,
+    value: u64,
+    ratio: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardAccountUsageData {
-    pub name: String,
-    pub email: String,
-    pub plan: String,
-    pub requests: u64,
-    pub tokens: u64,
-    pub quota_used_percent: Option<f64>,
-    pub last_used: String,
-    pub status: String,
+struct DashboardAccountUsageData {
+    name: String,
+    email: String,
+    plan: String,
+    requests: u64,
+    tokens: u64,
+    quota_used_percent: Option<f64>,
+    last_used: String,
+    status: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardEventLogData {
-    pub id: String,
-    pub time: String,
-    pub level: EventLevel,
-    pub request_id: Option<String>,
-    pub route: Option<String>,
-    pub model: Option<String>,
-    pub status_code: Option<i64>,
-    pub latency_ms: Option<i64>,
+struct DashboardEventLogData {
+    id: String,
+    time: String,
+    level: EventLevel,
+    request_id: Option<String>,
+    route: Option<String>,
+    model: Option<String>,
+    status_code: Option<i64>,
+    latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardServiceStatusData {
-    pub label: String,
-    pub value: String,
-    pub detail: String,
-    pub tone: String,
+struct DashboardServiceStatusData {
+    label: String,
+    value: String,
+    detail: String,
+    tone: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -234,13 +232,11 @@ impl UsageWindow {
 }
 
 /// `GET /api/admin/dashboard/summary`
-pub async fn dashboard_summary(
+pub(crate) async fn dashboard_summary(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
 
     let accounts = state
         .services
@@ -280,44 +276,35 @@ pub async fn dashboard_summary(
 
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(
-            DashboardSummaryData {
-                cards: dashboard_cards(&accounts, &summary, &time_buckets),
-                trend,
-                health_timeline: dashboard_health_timeline_data(&time_buckets),
-                account_usage: account_usage_data(
-                    &accounts,
-                    &usage_records,
-                    &quota_used_by_account,
-                ),
-                service_statuses: service_status_data(&state),
-                event_logs: dashboard_logs,
-                pool_summary,
-                capacity_info: AccountCapacityDiagnostics::from(capacity),
-                rotation_strategy: Some(settings.auth.rotation_strategy.clone()),
-            },
-            request_id,
-        ),
+        AdminEnvelope::ok(DashboardSummaryData {
+            cards: dashboard_cards(&accounts, &summary, &time_buckets),
+            trend,
+            health_timeline: dashboard_health_timeline_data(&time_buckets),
+            account_usage: account_usage_data(&accounts, &usage_records, &quota_used_by_account),
+            service_statuses: service_status_data(&state),
+            event_logs: dashboard_logs,
+            pool_summary,
+            capacity_info: AccountCapacityDiagnostics::from(capacity),
+            rotation_strategy: Some(settings.auth.rotation_strategy.clone()),
+        }),
     ))
 }
 
 /// `GET /api/admin/dashboard/trend?kind=usage|latency|errors`
-pub async fn dashboard_trend(
+pub(crate) async fn dashboard_trend(
     State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
-    require_admin_session(&state, &headers, &request_id).await?;
+    require_admin_session(&state, &headers).await?;
     let time_buckets = dashboard_time_buckets(&state, Utc::now()).await;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(
-            dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default()),
-            request_id,
-        ),
+        AdminEnvelope::ok(dashboard_trend_data(
+            &time_buckets,
+            query.kind.unwrap_or_default(),
+        )),
     ))
 }
 

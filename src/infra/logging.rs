@@ -73,8 +73,8 @@ pub fn build_file_appender(config: &RotationConfig) -> Result<ChinaDailyFileAppe
 }
 
 /// 初始化 tracing。
-pub fn init_tracing(config: RotationConfig) -> Result<LogGuard, LogError> {
-    let appender = build_file_appender(&config)?;
+pub fn init_tracing(config: &RotationConfig) -> Result<LogGuard, LogError> {
+    let appender = build_file_appender(config)?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
