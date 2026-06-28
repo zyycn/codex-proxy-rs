@@ -31,7 +31,7 @@ const {
 </script>
 
 <template>
-  <div class="w-full pb-6">
+  <div class="w-full">
     <header class="flex min-h-17 items-start justify-between gap-4">
       <div>
         <h1 class="mt-0 text-[34px] leading-[1.15] font-extrabold mb-0 text-(--cp-text-primary)">

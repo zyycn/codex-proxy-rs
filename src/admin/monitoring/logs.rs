@@ -13,7 +13,7 @@ use crate::{
         events::{EventLevel, EventLog},
     },
     admin::{
-        auth::session::require_admin_session,
+        auth::session::require_admin_auth,
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     },
     infra::{
@@ -72,7 +72,7 @@ pub(crate) async fn logs(
     headers: HeaderMap,
     Query(query): Query<LogsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
     let page = query.page;
     let use_numbered_page = page.is_some() || query.page_size.is_some();
@@ -123,7 +123,7 @@ pub(crate) async fn log_detail(
     headers: HeaderMap,
     Query(query): Query<LogDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state.services.logs.get(&query.id).await {
         Ok(Some(log)) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -143,7 +143,7 @@ pub(crate) async fn clear_logs(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state.services.logs.clear().await {
         Ok(cleared) => Ok(AdminResponse::new(
             StatusCode::OK,

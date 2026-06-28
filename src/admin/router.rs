@@ -19,7 +19,10 @@ use super::{
         dashboard::{dashboard_summary, dashboard_trend},
         logs::{clear_logs, log_detail, logs},
     },
-    settings::routes::{settings, update_settings},
+    settings::routes::{
+        admin_api_key_status, delete_admin_api_key, regenerate_admin_api_key, settings,
+        update_settings,
+    },
 };
 
 /// 构造管理端路由。
@@ -29,6 +32,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/auth/status", get(session_status))
         .route("/api/admin/logout", post(logout))
         .route("/api/admin/settings", get(settings).post(update_settings))
+        .route(
+            "/api/admin/settings/admin-api-key",
+            get(admin_api_key_status).delete(delete_admin_api_key),
+        )
+        .route(
+            "/api/admin/settings/admin-api-key/regenerate",
+            post(regenerate_admin_api_key),
+        )
         .route("/api/admin/dashboard/summary", get(dashboard_summary))
         .route("/api/admin/dashboard/trend", get(dashboard_trend))
         .route("/api/admin/accounts", get(accounts).post(create_account))

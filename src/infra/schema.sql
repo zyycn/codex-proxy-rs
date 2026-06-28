@@ -50,6 +50,7 @@ create table if not exists runtime_settings (
   max_concurrent_per_account integer not null check (max_concurrent_per_account > 0),
   request_interval_ms integer not null check (request_interval_ms >= 0),
   rotation_strategy text not null check (rotation_strategy in ('least_used', 'round_robin', 'sticky')),
+  admin_api_key text,
   updated_at text not null
 );
 

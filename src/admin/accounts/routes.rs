@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    admin::auth::session::require_admin_session,
+    admin::auth::session::require_admin_auth,
     admin::response::{
         AdminEnvelope, AdminError, AdminResponse, CursorPageMeta, NumberedPageMeta, PageMeta,
     },
@@ -419,7 +419,7 @@ pub(crate) async fn accounts(
     headers: HeaderMap,
     Query(params): Query<AccountsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
     let stats = account_list_stats(&state).await;
@@ -482,7 +482,7 @@ pub(crate) async fn create_account(
     headers: HeaderMap,
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -503,7 +503,7 @@ pub(crate) async fn export_accounts(
     headers: HeaderMap,
     Query(query): Query<AccountExportQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -525,7 +525,7 @@ pub(crate) async fn refresh_account(
     Json(payload): Json<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
     let account_id = payload.id;
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -547,7 +547,7 @@ pub(crate) async fn account_quota(
     Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     let account_id = query.id;
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -579,7 +579,7 @@ pub(crate) async fn import_accounts(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state.services.admin_accounts.import(payload).await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -598,7 +598,7 @@ pub(crate) async fn oauth_authorize_account(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state.services.admin_accounts.oauth_authorize().await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -619,7 +619,7 @@ pub(crate) async fn oauth_exchange_account(
     headers: HeaderMap,
     Json(payload): Json<AccountOAuthExchangeRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -652,7 +652,7 @@ pub(crate) async fn test_account_connection(
 ) -> Result<Response, AdminError> {
     let account_id = query.id;
     let payload = parse_account_test_request(&body)?;
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
 
     let model = payload
         .model_id
@@ -693,7 +693,7 @@ pub(crate) async fn account_models(
 ) -> Result<impl IntoResponse, AdminError> {
     let request_id = request_id.as_str().to_string();
     let account_id = query.id;
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -722,7 +722,7 @@ pub(crate) async fn batch_delete_accounts(
     headers: HeaderMap,
     Json(payload): Json<BatchDeleteAccountsRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -746,7 +746,7 @@ pub(crate) async fn update_account(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
 
     let ParsedAccountUpdate { id, update } = parse_account_update(&payload)?;
 

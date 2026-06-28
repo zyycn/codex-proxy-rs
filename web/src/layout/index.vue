@@ -28,8 +28,10 @@ watch(
   <div class="flex h-screen overflow-hidden bg-(--cp-bg-page)">
     <AppSidebar :collapsed="sidebarCollapsed" @toggle="toggleSidebar" />
     <main class="h-screen min-w-0 flex-1 overflow-hidden">
-      <BaseScrollbar ref="pageScrollbarRef" view-class="flex h-full min-w-0 flex-col p-6">
-        <RouterView />
+      <BaseScrollbar ref="pageScrollbarRef" view-class="flex min-h-full min-w-0 flex-col p-6">
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" class="min-h-0 flex-1" />
+        </RouterView>
       </BaseScrollbar>
     </main>
   </div>

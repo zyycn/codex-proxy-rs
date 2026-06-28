@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    admin::auth::session::require_admin_session,
+    admin::auth::session::require_admin_auth,
     admin::keys::service::{
         AdminClientKeyError, AdminCreatedClientApiKey, AdminStoredClientApiKey,
     },
@@ -213,7 +213,7 @@ pub(crate) async fn api_keys(
     headers: HeaderMap,
     Query(query): Query<ApiKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(query.limit.unwrap_or(50));
     match state
         .services
@@ -241,7 +241,7 @@ pub(crate) async fn create_api_key(
     headers: HeaderMap,
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state.services.admin_client_keys.create(&payload.name).await {
         Ok(created) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -257,7 +257,7 @@ pub(crate) async fn update_api_key(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
 
     let update = parse_client_api_key_update(&payload)?;
     if let Some(label) = update.label {
@@ -301,7 +301,7 @@ pub(crate) async fn batch_delete_api_keys(
     headers: HeaderMap,
     Json(payload): Json<BatchDeleteClientApiKeysRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_session(&state, &headers).await?;
+    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_client_keys

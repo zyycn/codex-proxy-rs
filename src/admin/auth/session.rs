@@ -165,10 +165,39 @@ pub(crate) async fn require_admin_session(
     }
 }
 
+/// 要求请求携带有效管理员凭证：会话 Cookie 或管理员 API Key。
+pub(crate) async fn require_admin_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), AdminError> {
+    if let Some(api_key) = admin_api_key_header(headers) {
+        return match state.services.settings.verify_admin_api_key(&api_key).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(AdminError::new(
+                StatusCode::UNAUTHORIZED,
+                40103,
+                "Invalid admin API key",
+            )),
+            Err(_) => Err(AdminError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                50001,
+                "Failed to validate admin API key",
+            )),
+        };
+    }
+
+    require_admin_session(state, headers).await
+}
+
 fn admin_session_cookie(headers: &HeaderMap) -> Option<String> {
     let cookie = headers.get("cookie")?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
         (name == ADMIN_SESSION_COOKIE).then(|| value.to_string())
     })
+}
+
+fn admin_api_key_header(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get("x-api-key")?.to_str().ok()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }

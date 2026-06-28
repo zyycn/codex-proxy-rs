@@ -1,4 +1,4 @@
-//! 身份认证相关原语：管理员密码哈希与客户端 API Key 生成。
+//! 身份认证相关原语：管理员密码哈希与 API Key 生成。
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -65,4 +65,11 @@ pub fn generate_client_api_key() -> GeneratedClientApiKey {
     let key = format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes));
     let prefix = key.chars().take(12).collect::<String>();
     GeneratedClientApiKey { key, prefix }
+}
+
+/// 生成新的管理员 API Key。
+pub fn generate_admin_api_key() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    format!("admin-{}", hex::encode(bytes))
 }

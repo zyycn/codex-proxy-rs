@@ -139,7 +139,7 @@ const quotaToneClasses: Record<string, string> = {
       class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
     >
       <section
-        class="min-w-0 w-full pb-6 shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:h-100.5 xl:pb-0 xl:shadow-none"
+        class="min-w-0 w-full shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:h-100.5 xl:pb-0 xl:shadow-none"
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
