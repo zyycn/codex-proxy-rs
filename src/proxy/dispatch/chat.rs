@@ -384,7 +384,7 @@ impl ChatDispatchService {
             request_id,
             account_id: &account_id,
             route: "/v1/chat/completions",
-            model: &request.model,
+            model: &display_model,
             requested_model: Some(requested_model),
             client_ip: request.client_ip.as_deref(),
             client_user_agent: request.client_user_agent.as_deref(),

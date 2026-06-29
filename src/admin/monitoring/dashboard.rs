@@ -265,11 +265,7 @@ pub(crate) async fn dashboard_summary(
     let settings = state.services.settings.current();
     let recent_usage_records = recent_events.into_iter().take(10).collect::<Vec<_>>();
     let account_emails = account_email_map(&state, &recent_usage_records).await?;
-    let dashboard_usage_records = usage_record_items(
-        recent_usage_records,
-        &account_emails,
-        &settings.model_aliases,
-    );
+    let dashboard_usage_records = usage_record_items(recent_usage_records, &account_emails);
 
     Ok(AdminResponse::new(
         StatusCode::OK,

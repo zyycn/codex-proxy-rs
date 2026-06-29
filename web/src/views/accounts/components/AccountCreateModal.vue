@@ -16,10 +16,14 @@ const props = withDefaults(
   defineProps<{
     saving?: boolean
     oauthLoading?: boolean
+    reauthorizing?: boolean
+    account?: any
   }>(),
   {
     saving: false,
     oauthLoading: false,
+    reauthorizing: false,
+    account: null,
   },
 )
 
@@ -49,6 +53,7 @@ const modeOptions = [
 const mode = computed({
   get: () => form.value.mode,
   set: (value: string) => {
+    if (props.reauthorizing && value !== 'oauth') return
     form.value = { ...form.value, mode: value }
     fileError.value = ''
   },
@@ -78,6 +83,23 @@ const oauthCallback = computed({
 
 const oauthAuthUrl = computed(() => form.value.oauthAuthUrl || '')
 
+const accountName = computed(() => {
+  return props.account?.email || props.account?.accountId || props.account?.id || '该账号'
+})
+
+const modalTitle = computed(() => (props.reauthorizing ? '重新授权账号' : '添加账号'))
+
+const oauthPanelTitle = computed(() =>
+  props.reauthorizing ? accountName.value : '使用 OpenAI OAuth 完成账号接入',
+)
+
+const oauthPanelDescription = computed(() => {
+  if (props.reauthorizing) {
+    return '生成新的授权链接，完成后粘贴回调地址更新账号凭据。'
+  }
+  return '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入。'
+})
+
 const canSubmit = computed(() => {
   if (props.saving || props.oauthLoading) return false
   if (mode.value === 'oauth') {
@@ -90,6 +112,9 @@ const canSubmit = computed(() => {
 })
 
 const description = computed(() => {
+  if (props.reauthorizing) {
+    return '完成授权后粘贴回调地址，系统会更新账号凭据。'
+  }
   if (mode.value === 'rt') {
     return '一行一个 Refresh Token，导入时会自动换取访问令牌并补全账号信息。'
   }
@@ -132,14 +157,14 @@ async function copyOAuthAuthUrl() {
 <template>
   <BaseModal
     v-model="open"
-    title="添加账号"
+    :title="modalTitle"
     :description="description"
     variant="info"
     width="620px"
     :close-disabled="saving"
   >
     <div class="flex flex-col gap-4">
-      <BaseSegmented v-model="mode" :options="modeOptions" class="w-full" />
+      <BaseSegmented v-if="!reauthorizing" v-model="mode" :options="modeOptions" class="w-full" />
 
       <BaseForm v-if="mode === 'rt'">
         <BaseFormItem label="Refresh Token" required>
@@ -162,10 +187,10 @@ async function copyOAuthAuthUrl() {
             </div>
             <div class="min-w-0 flex-1">
               <p class="m-0 text-[13px] font-[720] text-(--cp-text-primary)">
-                使用 OpenAI OAuth 完成账号接入
+                {{ oauthPanelTitle }}
               </p>
               <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-(--cp-text-secondary)">
-                复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入。
+                {{ oauthPanelDescription }}
               </p>
             </div>
           </div>
@@ -178,7 +203,7 @@ async function copyOAuthAuthUrl() {
             :disabled="saving"
             @click="emit('generateOauth')"
           >
-            生成授权链接
+            {{ reauthorizing ? '重新生成授权链接' : '生成授权链接' }}
           </BaseButton>
         </div>
 
@@ -249,7 +274,7 @@ async function copyOAuthAuthUrl() {
         :disabled="!canSubmit"
         @click="emit('create')"
       >
-        {{ mode === 'oauth' ? '完成授权导入' : '导入' }}
+        {{ reauthorizing ? '完成重新授权' : mode === 'oauth' ? '完成授权导入' : '导入' }}
       </BaseButton>
     </template>
   </BaseModal>

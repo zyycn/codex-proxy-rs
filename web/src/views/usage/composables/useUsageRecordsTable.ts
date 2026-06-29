@@ -1,7 +1,14 @@
 import { clamp } from 'es-toolkit'
-import { onMounted, ref, type Ref } from 'vue'
+import { onMounted, ref, watch, type Ref } from 'vue'
 
-import { getUsageRecordInsights, getUsageRecordSummary, getUsageRecords } from '@/api'
+import {
+  getUsageRecordEndpointDistribution,
+  getUsageRecordLatencyTrend,
+  getUsageRecordModelDistribution,
+  getUsageRecordSummary,
+  getUsageRecordTokenTrend,
+  getUsageRecords,
+} from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { withMinimumDuration } from '@/utils/async'
 
@@ -19,6 +26,10 @@ export function useUsageRecordsTable(options: {
   const summary = ref(emptySummary())
   const insights = ref(emptyInsights())
   const refreshingList = ref(false)
+  const modelDistributionSource = ref('requested')
+  const endpointDistributionSource = ref('inbound')
+  let modelDistributionRequestId = 0
+  let endpointDistributionRequestId = 0
   const filterParams = () => ({
     level: options.filterStatus.value || undefined,
     search: options.searchQuery.value || undefined,
@@ -41,22 +52,18 @@ export function useUsageRecordsTable(options: {
         pageSize: options.pageSize.value,
         ...tableParams,
       })
-      const [result, nextSummary, nextInsights] =
+      const analyticsPromise =
         scope === 'all'
-          ? await Promise.all([
-              resultPromise,
-              getUsageRecordSummary(globalParams),
-              getUsageRecordInsights(globalParams),
-            ])
-          : await Promise.all([
-              resultPromise,
-              Promise.resolve(summary.value),
-              Promise.resolve(insights.value),
-            ])
+          ? loadUsageAnalytics(globalParams)
+          : Promise.resolve({
+              summary: summary.value,
+              insights: insights.value,
+            })
+      const [result, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
 
       records.value = result.items
-      summary.value = nextSummary
-      insights.value = nextInsights
+      summary.value = nextAnalytics.summary
+      insights.value = nextAnalytics.insights
       options.pageSize.value = result.page.pageSize ?? options.pageSize.value
       options.totalRecords.value = result.page.total ?? result.items.length
       options.page.value = result.page.page ?? options.page.value
@@ -79,6 +86,68 @@ export function useUsageRecordsTable(options: {
     }
   }
 
+  async function loadUsageAnalytics(globalParams = options.timeRangeParams.value) {
+    const [nextSummary, modelDistribution, endpointDistribution, tokenTrend, latencyTrend] =
+      await Promise.all([
+        getUsageRecordSummary(globalParams),
+        getUsageRecordModelDistribution({
+          ...globalParams,
+          source: modelDistributionSource.value,
+        }),
+        getUsageRecordEndpointDistribution({
+          ...globalParams,
+          source: endpointDistributionSource.value,
+        }),
+        getUsageRecordTokenTrend(globalParams),
+        getUsageRecordLatencyTrend(globalParams),
+      ])
+
+    return {
+      summary: nextSummary,
+      insights: {
+        ...emptyInsights(),
+        modelDistribution,
+        endpointDistribution,
+        tokenTrend,
+        latencyTrend,
+      },
+    }
+  }
+
+  async function loadModelDistribution() {
+    const requestId = ++modelDistributionRequestId
+    try {
+      const modelDistribution = await getUsageRecordModelDistribution({
+        ...options.timeRangeParams.value,
+        source: modelDistributionSource.value,
+      })
+      if (requestId !== modelDistributionRequestId) return
+      insights.value = {
+        ...insights.value,
+        modelDistribution,
+      }
+    } catch (error: any) {
+      toast.error(error.message || '加载失败')
+    }
+  }
+
+  async function loadEndpointDistribution() {
+    const requestId = ++endpointDistributionRequestId
+    try {
+      const endpointDistribution = await getUsageRecordEndpointDistribution({
+        ...options.timeRangeParams.value,
+        source: endpointDistributionSource.value,
+      })
+      if (requestId !== endpointDistributionRequestId) return
+      insights.value = {
+        ...insights.value,
+        endpointDistribution,
+      }
+    } catch (error: any) {
+      toast.error(error.message || '加载失败')
+    }
+  }
+
   async function refreshUsageRecords() {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
@@ -93,6 +162,14 @@ export function useUsageRecordsTable(options: {
     loadUsageRecords()
   })
 
+  watch(modelDistributionSource, () => {
+    void loadModelDistribution()
+  })
+
+  watch(endpointDistributionSource, () => {
+    void loadEndpointDistribution()
+  })
+
   return {
     loading,
     analyticsLoading,
@@ -100,6 +177,8 @@ export function useUsageRecordsTable(options: {
     summary,
     insights,
     refreshingList,
+    modelDistributionSource,
+    endpointDistributionSource,
     loadUsageRecords,
     refreshUsageRecords,
   }
@@ -119,13 +198,9 @@ function emptySummary() {
 
 function emptyInsights() {
   return {
-    models: [],
-    upstreamModels: [],
-    modelMappings: [],
-    endpoints: [],
-    upstreamEndpoints: [],
-    endpointPaths: [],
-    types: [],
-    trend: [],
+    modelDistribution: [],
+    endpointDistribution: [],
+    tokenTrend: [],
+    latencyTrend: [],
   }
 }

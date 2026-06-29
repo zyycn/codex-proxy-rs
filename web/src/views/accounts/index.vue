@@ -75,12 +75,15 @@ const {
   savingAccount,
   batchDeleting,
   exportingAccounts,
+  reauthorizingAccount,
   createForm,
   editForm,
   editStatusModel,
   loadAccounts,
   handleCreate,
   handleAuthorizeOAuth,
+  openCreateAccount,
+  openReauthorizeAccount,
   openEditAccount,
   handleSaveAccount,
   requestDeleteAccount,
@@ -186,7 +189,7 @@ function planTypeClass(planType?: string) {
               <Download class="size-4" />
               {{ selectedIds.size > 0 ? '导出选中' : '导出' }}
             </BaseButton>
-            <BaseButton variant="primary" @click="showCreateModal = true">
+            <BaseButton variant="primary" @click="openCreateAccount">
               <Plus class="size-4" />
               添加账号
             </BaseButton>
@@ -269,6 +272,7 @@ function planTypeClass(planType?: string) {
               :updating-status="updatingStatusAccountIds.has(row.id)"
               @delete="requestDeleteAccount"
               @edit="openEditAccount"
+              @reauthorize="openReauthorizeAccount"
               @refresh="handleRefresh"
               @test="openConnectionTest"
               @toggle-schedule="handleToggleSchedule"
@@ -309,7 +313,9 @@ function planTypeClass(planType?: string) {
     <AccountCreateModal
       v-model="showCreateModal"
       v-model:form="createForm"
+      :account="reauthorizingAccount"
       :oauth-loading="authorizingOAuth"
+      :reauthorizing="Boolean(reauthorizingAccount)"
       :saving="creatingAccount"
       @create="handleCreate"
       @generate-oauth="handleAuthorizeOAuth"

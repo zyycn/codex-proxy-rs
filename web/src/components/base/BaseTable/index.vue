@@ -2,7 +2,7 @@
 import { useEventListener, useResizeObserver } from '@vueuse/core'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
-import { computed, nextTick, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { computed, nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
@@ -72,6 +72,7 @@ const totalPages = computed(() => getTotalPages(props.pagination))
 const currentPage = computed(() => getCurrentPage(props.pagination, totalPages.value))
 const pageSizeOptions = computed(() => getPageSizeOptions(props.pagination))
 const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
+const hasRows = computed(() => props.rows.length > 0)
 
 const pageSizeModel = computed({
   get: () => String(props.pagination?.pageSize ?? ''),
@@ -193,19 +194,24 @@ function scrollWrap() {
   return bodyScrollbarRef.value?.wrapRef ?? null
 }
 
+function resetHorizontalScrollbar() {
+  horizontalThumbWidth.value = 0
+  horizontalThumbLeft.value = 0
+  horizontalScrolled.value = false
+  horizontalCanScrollRight.value = false
+}
+
 function updateHorizontalScrollbar() {
   const wrap = scrollWrap()
-  if (!wrap) {
+  if (!wrap || !hasRows.value) {
+    resetHorizontalScrollbar()
     return
   }
 
   const scrollRange = maxScrollLeft(wrap)
   const trackWidth = horizontalTrackWidth(wrap)
   if (scrollRange <= 0 || trackWidth <= 0) {
-    horizontalThumbWidth.value = 0
-    horizontalThumbLeft.value = 0
-    horizontalScrolled.value = false
-    horizontalCanScrollRight.value = false
+    resetHorizontalScrollbar()
     return
   }
 
@@ -298,6 +304,13 @@ useResizeObserver(
     ),
   updateHorizontalScrollbar,
 )
+watch(
+  () => [props.rows.length, props.minWidth],
+  async () => {
+    await nextTick()
+    updateHorizontalScrollbar()
+  },
+)
 useEventListener(document, 'pointermove', handleHorizontalThumbPointerMove)
 useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
 
@@ -388,9 +401,9 @@ function paginationPageClass(page: number) {
         </div>
 
         <BaseScrollbar
+          v-if="hasRows"
           ref="bodyScrollbar"
           class="min-h-0 flex-1"
-          :force-visible="horizontalHovering"
           :max-height="maxHeight"
           @scroll="handleTableScroll"
         >
@@ -409,14 +422,6 @@ function paginationPageClass(page: number) {
             </colgroup>
 
             <tbody>
-              <tr v-if="!loading && rows.length === 0" role="row">
-                <td :colspan="computedColumns.length" class="h-72 p-0" role="cell">
-                  <div class="grid h-full min-h-72 place-items-center">
-                    <BaseEmpty :title="emptyText" plain class="w-full max-w-80" />
-                  </div>
-                </td>
-              </tr>
-
               <template v-for="(row, index) in rows" :key="getRowKey(row, index)">
                 <tr :class="rowClass(row, index)" role="row">
                   <td
@@ -457,6 +462,10 @@ function paginationPageClass(page: number) {
             </tbody>
           </table>
         </BaseScrollbar>
+
+        <div v-else class="grid min-h-0 flex-1 place-items-center overflow-hidden px-4">
+          <BaseEmpty v-if="!loading" :title="emptyText" plain class="w-full max-w-80" />
+        </div>
       </div>
 
       <div

@@ -18,8 +18,9 @@ use super::{
     monitoring::{
         dashboard::{dashboard_summary, dashboard_trend},
         usage_records::{
-            clear_usage_records, usage_record_detail, usage_records, usage_records_insights,
-            usage_records_summary,
+            clear_usage_records, usage_record_detail, usage_records,
+            usage_records_endpoint_distribution, usage_records_latency_trend,
+            usage_records_model_distribution, usage_records_summary, usage_records_token_trend,
         },
     },
     settings::routes::{
@@ -68,8 +69,20 @@ pub fn router() -> Router<AppState> {
             get(usage_records_summary),
         )
         .route(
-            "/api/admin/usage/records/insights",
-            get(usage_records_insights),
+            "/api/admin/usage/records/insights/models",
+            get(usage_records_model_distribution),
+        )
+        .route(
+            "/api/admin/usage/records/insights/endpoints",
+            get(usage_records_endpoint_distribution),
+        )
+        .route(
+            "/api/admin/usage/records/insights/token-trend",
+            get(usage_records_token_trend),
+        )
+        .route(
+            "/api/admin/usage/records/insights/latency-trend",
+            get(usage_records_latency_trend),
         )
         .route("/api/admin/usage/records/delete", post(clear_usage_records))
         .route("/api/admin/usage/records/detail", get(usage_record_detail))

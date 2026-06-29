@@ -42,14 +42,14 @@ const filteredRows = computed(() => {
     variant="dashboard"
     title="使用记录"
     description="最近 10 条网关请求"
-    class="h-87.5 w-full"
+    class="h-[468px] w-full"
   >
     <template #actions>
       <BaseSegmented v-model="activeFilter" :options="filters" class="w-38" />
     </template>
 
     <template #body>
-      <div class="mt-4.25 flex h-60 w-full overflow-hidden">
+      <div class="mt-4.25 flex h-[364px] w-full overflow-hidden">
         <BaseTable
           class="min-w-0 flex-1"
           :columns="dashboardUsageRecordColumns"

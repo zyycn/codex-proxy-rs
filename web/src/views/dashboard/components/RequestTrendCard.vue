@@ -233,14 +233,14 @@ function formatLatency(ms: number): string {
       <div
         class="mt-4.75 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] lg:gap-7.5"
       >
-        <div class="relative h-67 w-full overflow-hidden rounded-[10px] bg-(--cp-bg-subtle)">
+        <div class="relative h-67 w-full overflow-hidden">
           <BaseChart v-if="hasSamples" :option="chartOption" :height="268" />
           <BaseEmpty
             v-if="!hasSamples"
             compact
             title="暂无趋势数据"
             description="最近 24 小时还没有可用于绘制趋势的请求日志。"
-            class="h-full place-content-center bg-(--cp-bg-subtle)"
+            class="h-full place-content-center bg-transparent"
           />
         </div>
 
