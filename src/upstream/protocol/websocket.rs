@@ -61,15 +61,6 @@ pub struct WebSocketAuditErrorSnapshot {
     pub message: String,
 }
 
-/// WebSocket 错误帧分类模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WebSocketErrorClassificationProfile {
-    /// 单次 WebSocket 请求。
-    OneShot,
-    /// 连接池复用请求。
-    Pooled,
-}
-
 /// 从 WebSocket 错误帧推导出的上游错误分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClassifiedWebSocketError {
@@ -873,10 +864,7 @@ pub fn is_terminal_websocket_event(event: &str) -> bool {
 }
 
 /// 将 WebSocket 错误帧映射为上游 HTTP 状态分类。
-pub fn classify_websocket_error_frame(
-    raw: &str,
-    profile: WebSocketErrorClassificationProfile,
-) -> Option<ClassifiedWebSocketError> {
+pub fn classify_websocket_error_frame(raw: &str) -> Option<ClassifiedWebSocketError> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let event_type = value.get("type").and_then(Value::as_str)?;
     if event_type != "error" && event_type != "response.failed" {
@@ -898,14 +886,11 @@ pub fn classify_websocket_error_frame(
     }
 
     if let Some(code) = code {
-        if let Some(status_code) = rotatable_error_status_code(&code, profile) {
+        if let Some(status_code) = rotatable_error_status_code(&code) {
             return Some(ClassifiedWebSocketError { status_code });
         }
     }
 
-    if event_type == "response.failed" {
-        return Some(ClassifiedWebSocketError { status_code: 503 });
-    }
     None
 }
 
@@ -927,34 +912,13 @@ fn explicit_error_status_code(value: &Value) -> Option<u16> {
         .and_then(|status| u16::try_from(status).ok())
 }
 
-fn rotatable_error_status_code(
-    code: &str,
-    profile: WebSocketErrorClassificationProfile,
-) -> Option<u16> {
+fn rotatable_error_status_code(code: &str) -> Option<u16> {
     match code {
         "usage_limit_reached" | "rate_limit_exceeded" | "rate_limit_reached" => Some(429),
-        "quota_exhausted" | "quota_exceeded" | "insufficient_quota" | "payment_required" => {
-            Some(402)
-        }
-        "usage_not_included" => Some(429),
+        "quota_exhausted" | "payment_required" => Some(402),
         "unauthorized" | "token_invalid" | "token_expired" | "account_deactivated" => Some(401),
-        "forbidden" | "account_banned" | "banned" | "invalid_plan" | "banned_unknown_charge" => {
-            Some(403)
-        }
-        "context_length_exceeded" | "invalid_prompt" | "cyber_policy" | "invalid_request" => {
-            Some(400)
-        }
-        "previous_response_not_found"
-        | "invalid_encrypted_content"
-        | "no_tool_output_found_for_function_call" => Some(400),
-        "server_is_overloaded" | "slow_down" | "temporarily_unavailable" => Some(503),
-        "over_capacity" | "server_error" | "upstream_error" => Some(502),
-        "rate_limited" => Some(429),
-        "websocket_connection_limit_reached"
-            if profile == WebSocketErrorClassificationProfile::Pooled =>
-        {
-            Some(503)
-        }
+        "forbidden" | "account_banned" | "banned" => Some(403),
+        "previous_response_not_found" => Some(400),
         _ => None,
     }
 }

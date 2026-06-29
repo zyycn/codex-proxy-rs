@@ -198,7 +198,9 @@ const quotaToneClasses: Record<string, string> = {
           总请求排序
         </p>
 
-        <div class="mt-5 grid w-full gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-1.5">
+        <div
+          class="mt-5 flex w-full flex-col gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-1.5"
+        >
           <BaseEmpty
             v-if="accounts.length === 0"
             compact
@@ -208,10 +210,9 @@ const quotaToneClasses: Record<string, string> = {
           />
           <template v-else>
             <article
-              v-for="(account, index) in accounts"
+              v-for="account in accounts"
               :key="account.name"
-              class="grid w-full grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] px-3.5 py-3.5 hover:bg-(--cp-bg-subtle) xl:h-19.5 xl:grid-cols-[34px_minmax(0,1.28fr)_minmax(132px,0.86fr)] xl:items-center xl:gap-x-3 xl:py-0"
-              :class="index % 2 ? 'bg-(--cp-bg-surface)' : 'bg-(--cp-bg-subtle)'"
+              class="grid w-full shrink-0 grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] bg-(--cp-bg-subtle) px-3.5 py-3.5 hover:bg-(--cp-bg-muted) xl:h-19.5 xl:grid-cols-[34px_minmax(0,1.28fr)_minmax(132px,0.86fr)] xl:items-center xl:gap-x-3 xl:py-0"
             >
               <span
                 class="inline-flex size-8.5 items-center justify-center rounded-full"

@@ -340,6 +340,46 @@ async fn websocket_execute_response_create_request_should_surface_response_faile
 }
 
 #[tokio::test]
+async fn websocket_execute_response_create_request_should_pass_through_unmapped_response_failed() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_model_refusal",
+                        "status": "failed",
+                        "error": {
+                            "code": "model_refusal",
+                            "message": "The model refused the request"
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let prepared = prepared_websocket_request(&format!("http://{addr}"));
+
+    let response = execute_response_create_request(&prepared)
+        .await
+        .expect("unmapped response.failed should remain a terminal SSE frame");
+    server.await.unwrap();
+
+    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("\"id\":\"resp_model_refusal\""));
+    assert!(response.body.contains("\"code\":\"model_refusal\""));
+}
+
+#[tokio::test]
 async fn websocket_execute_response_create_request_should_preserve_opening_error_status_body_and_retry_after(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -807,7 +847,7 @@ async fn websocket_execute_response_create_request_should_ignore_completed_witho
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_ignore_success_status_error_until_close()
+async fn websocket_execute_response_create_request_should_pass_through_unclassified_error_terminal()
 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -821,7 +861,8 @@ async fn websocket_execute_response_create_request_should_ignore_success_status_
                     "type": "error",
                     "status": 200,
                     "error": {
-                        "message": "non-terminal informational frame"
+                        "code": "invalid_request",
+                        "message": "No tool output found for function call call_missing"
                     }
                 })
                 .to_string()
@@ -848,15 +889,14 @@ async fn websocket_execute_response_create_request_should_ignore_success_status_
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    let response = execute_response_create_request(&prepared)
         .await
-        .expect_err("unclassified success-status error frame should not finish the stream");
+        .expect("unclassified error frame should pass through as terminal SSE");
     server.await.unwrap();
 
-    assert!(matches!(
-        error,
-        CodexWebSocketExchangeError::ClosedBeforeTerminal
-    ));
+    assert!(response.body.contains("event: error"));
+    assert!(response.body.contains("invalid_request"));
+    assert!(response.body.contains("No tool output found"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1069,6 +1109,77 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
         error,
         CodexClientError::WebSocket(CodexWebSocketExchangeError::ClosedBeforeTerminal)
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn codex_backend_client_stream_should_wait_for_terminal_after_active_websocket_gap() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "partial"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_after_active_gap", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "be brief",
+            Vec::new(),
+        );
+    request.previous_response_id = Some("resp_previous".to_string());
+    request.force_http_sse = false;
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+
+    let mut response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_stream_active_gap", Some("chatgpt-account")),
+        )
+        .await
+        .expect("websocket stream should open");
+    let first = response
+        .body
+        .next()
+        .await
+        .expect("stream should yield partial frame")
+        .expect("partial frame should be valid");
+    assert!(std::str::from_utf8(&first).unwrap().contains("partial"));
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    let terminal = response
+        .body
+        .next()
+        .await
+        .expect("stream should yield terminal frame after active gap")
+        .expect("terminal frame should be valid");
+    server.await.unwrap();
+
+    assert!(std::str::from_utf8(&terminal)
+        .unwrap()
+        .contains("resp_after_active_gap"));
 }
 
 #[tokio::test]

@@ -1080,3 +1080,72 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
     assert!(second.body.contains("resp_pool_after_error"));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn codex_backend_client_should_reuse_pooled_websocket_after_unmapped_response_failed() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _first_message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_pool_model_refusal",
+                        "status": "failed",
+                        "error": {
+                            "code": "model_refusal",
+                            "message": "The model refused the request"
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let _second_message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_pool_after_unmapped_failed", 5, 2).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(pool);
+    let request = pooled_websocket_request("conversation-pool-unmapped-failed");
+
+    let first = backend
+        .create_response(
+            &request,
+            request_context("req_pool_unmapped_failed", Some("chatgpt-account")),
+        )
+        .await
+        .expect("unmapped response.failed should be returned as terminal SSE");
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_pool_after_unmapped_failed", Some("chatgpt-account")),
+        )
+        .await
+        .expect("terminal failed websocket should be reusable");
+    server.await.unwrap();
+
+    assert!(first.body.contains("resp_pool_model_refusal"));
+    assert!(second.body.contains("resp_pool_after_unmapped_failed"));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+}

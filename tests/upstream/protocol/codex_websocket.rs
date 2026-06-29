@@ -221,31 +221,24 @@ fn codex_websocket_error_frame_should_classify_rotatable_codes() {
     })
     .to_string();
 
-    let error =
-        classify_websocket_error_frame(&frame, WebSocketErrorClassificationProfile::OneShot)
-            .expect("rate limit frame should classify");
+    let error = classify_websocket_error_frame(&frame).expect("rate limit frame should classify");
 
     assert_eq!(error.status_code, 429);
 }
 
 #[test]
-fn codex_websocket_error_frame_should_classify_upstream_error_special_codes() {
+fn codex_websocket_error_frame_should_classify_ts_aligned_upstream_error_codes() {
     let cases = [
         ("quota_exhausted", 402),
+        ("payment_required", 402),
+        ("unauthorized", 401),
+        ("token_invalid", 401),
         ("token_expired", 401),
+        ("account_deactivated", 401),
+        ("forbidden", 403),
         ("account_banned", 403),
-        ("invalid_plan", 403),
-        ("banned_unknown_charge", 403),
+        ("banned", 403),
         ("previous_response_not_found", 400),
-        ("invalid_encrypted_content", 400),
-        ("no_tool_output_found_for_function_call", 400),
-        ("server_is_overloaded", 503),
-        ("temporarily_unavailable", 503),
-        ("over_capacity", 502),
-        ("server_error", 502),
-        ("upstream_error", 502),
-        ("rate_limited", 429),
-        ("usage_not_included", 429),
     ];
 
     for (code, expected_status) in cases {
@@ -260,11 +253,52 @@ fn codex_websocket_error_frame_should_classify_upstream_error_special_codes() {
         })
         .to_string();
 
-        let error =
-            classify_websocket_error_frame(&frame, WebSocketErrorClassificationProfile::OneShot)
-                .expect("special upstream code should classify");
+        let error = classify_websocket_error_frame(&frame)
+            .expect("TS-aligned upstream code should classify");
 
         assert_eq!(error.status_code, expected_status, "code: {code}");
+    }
+}
+
+#[test]
+fn codex_websocket_error_frame_should_ignore_legacy_extension_codes() {
+    let cases = [
+        "quota_exceeded",
+        "insufficient_quota",
+        "usage_not_included",
+        "invalid_plan",
+        "banned_unknown_charge",
+        "context_length_exceeded",
+        "invalid_prompt",
+        "cyber_policy",
+        "invalid_request",
+        "invalid_encrypted_content",
+        "no_tool_output_found_for_function_call",
+        "server_is_overloaded",
+        "slow_down",
+        "temporarily_unavailable",
+        "over_capacity",
+        "server_error",
+        "upstream_error",
+        "rate_limited",
+    ];
+
+    for code in cases {
+        let frame = json!({
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "code": code,
+                    "message": "not part of the TS WebSocket rotation allowlist"
+                }
+            }
+        })
+        .to_string();
+
+        assert!(
+            classify_websocket_error_frame(&frame).is_none(),
+            "code should pass through: {code}"
+        );
     }
 }
 
@@ -279,9 +313,7 @@ fn codex_websocket_error_frame_should_honor_explicit_error_status() {
     })
     .to_string();
 
-    let error =
-        classify_websocket_error_frame(&frame, WebSocketErrorClassificationProfile::OneShot)
-            .expect("explicit status should classify");
+    let error = classify_websocket_error_frame(&frame).expect("explicit status should classify");
 
     assert_eq!(error.status_code, 403);
 }
@@ -304,16 +336,26 @@ fn codex_websocket_error_frame_should_ignore_success_status_and_unmapped_error()
     })
     .to_string();
 
-    assert!(classify_websocket_error_frame(
-        &success_status,
-        WebSocketErrorClassificationProfile::OneShot
-    )
-    .is_none());
-    assert!(classify_websocket_error_frame(
-        &unmapped_error,
-        WebSocketErrorClassificationProfile::OneShot
-    )
-    .is_none());
+    assert!(classify_websocket_error_frame(&success_status).is_none());
+    assert!(classify_websocket_error_frame(&unmapped_error).is_none());
+}
+
+#[test]
+fn codex_websocket_error_frame_should_ignore_unmapped_response_failed() {
+    let frame = json!({
+        "type": "response.failed",
+        "response": {
+            "error": {
+                "code": "model_refusal",
+                "message": "The model refused the request"
+            }
+        }
+    })
+    .to_string();
+
+    let classified = classify_websocket_error_frame(&frame);
+
+    assert!(classified.is_none());
 }
 
 #[test]

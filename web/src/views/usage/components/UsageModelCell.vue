@@ -23,7 +23,7 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
       class="flex min-w-0 items-center gap-1.25 text-(--cp-text-secondary)"
     >
       <CornerDownRight class="size-3.25 shrink-0 text-(--cp-info)" stroke-width="2.4" />
-      <code class="block truncate font-mono text-[11px] leading-none font-[700]">
+      <code class="block truncate font-mono text-[11px] leading-none font-bold">
         {{ modelDisplay.secondary }}
       </code>
     </div>

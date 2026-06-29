@@ -34,7 +34,6 @@ use crate::upstream::protocol::websocket::{
     websocket_incomplete_response_reason, websocket_metadata_turn_state,
     websocket_response_completed_parse_error, websocket_response_create_payload_text,
     OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
-    WebSocketErrorClassificationProfile,
 };
 
 use super::websocket_pool::{
@@ -679,17 +678,18 @@ async fn first_reused_stream_text(
     websocket: &mut CodexWsStream,
 ) -> Result<String, CodexWebSocketExchangeError> {
     loop {
-        let message = match next_websocket_message(websocket).await {
-            Ok(Some(message)) => message,
-            Ok(None) => {
-                return Err(
-                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
-                        message: "websocket closed".to_string(),
-                    },
-                );
-            }
-            Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
-        };
+        let message =
+            match next_websocket_message(websocket, Some(WEBSOCKET_RECEIVE_IDLE_TIMEOUT)).await {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    return Err(
+                        CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+                            message: "websocket closed".to_string(),
+                        },
+                    );
+                }
+                Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
+            };
         match message {
             Message::Text(text) => return Ok(text.to_string()),
             Message::Close(_) => {
@@ -738,7 +738,12 @@ async fn collect_websocket_response(
     let mut first_token_ms = None;
 
     loop {
-        let message = match next_websocket_message(&mut websocket).await {
+        let message = match next_websocket_message(
+            &mut websocket,
+            receive_timeout_before_first_response_frame(saw_response_frame),
+        )
+        .await
+        {
             Ok(message) => message,
             Err(error) if reused_connection && !saw_response_frame => {
                 return Err(reused_connection_died_before_first_frame(&error));
@@ -762,9 +767,7 @@ async fn collect_websocket_response(
             _ => continue,
         };
         let raw = text.to_string();
-        if let Some(classified) =
-            classify_websocket_error_frame(&raw, WebSocketErrorClassificationProfile::OneShot)
-        {
+        if let Some(classified) = classify_websocket_error_frame(&raw) {
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
             return Err(CodexWebSocketExchangeError::Upstream {
@@ -789,9 +792,6 @@ async fn collect_websocket_response(
             continue;
         }
         let event = websocket_event_type(&raw);
-        if event.as_deref() == Some("error") {
-            continue;
-        }
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
             body.push_str(&frame);
             saw_response_frame = true;
@@ -915,11 +915,17 @@ async fn forward_websocket_response_stream(
 ) {
     let mut pool_return = pool_return;
     let mut prefetched_text = prefetched_text;
+    let mut saw_response_frame = false;
     loop {
         let raw = if let Some(text) = prefetched_text.take() {
             text
         } else {
-            let message = match next_websocket_message(&mut websocket).await {
+            let message = match next_websocket_message(
+                &mut websocket,
+                receive_timeout_before_first_response_frame(saw_response_frame),
+            )
+            .await
+            {
                 Ok(message) => message,
                 Err(error) => {
                     discard_stream_websocket(websocket, pool_return).await;
@@ -947,9 +953,7 @@ async fn forward_websocket_response_stream(
                 _ => continue,
             }
         };
-        if let Some(classified) =
-            classify_websocket_error_frame(&raw, WebSocketErrorClassificationProfile::OneShot)
-        {
+        if let Some(classified) = classify_websocket_error_frame(&raw) {
             discard_stream_websocket(websocket, pool_return).await;
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
@@ -986,9 +990,6 @@ async fn forward_websocket_response_stream(
             continue;
         }
         let event = websocket_event_type(&raw);
-        if event.as_deref() == Some("error") {
-            continue;
-        }
         let Some(frame) = websocket_event_to_sse_frame(&raw) else {
             continue;
         };
@@ -997,6 +998,7 @@ async fn forward_websocket_response_stream(
             discard_stream_websocket(websocket, pool_return).await;
             return;
         }
+        saw_response_frame = true;
         if terminal {
             finish_stream_websocket(websocket, metadata, pool_return.take()).await;
             return;
@@ -1007,13 +1009,26 @@ async fn forward_websocket_response_stream(
     let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal));
 }
 
+fn receive_timeout_before_first_response_frame(saw_response_frame: bool) -> Option<Duration> {
+    if saw_response_frame {
+        None
+    } else {
+        Some(WEBSOCKET_RECEIVE_IDLE_TIMEOUT)
+    }
+}
+
 async fn next_websocket_message(
     websocket: &mut CodexWsStream,
+    receive_timeout: Option<Duration>,
 ) -> Result<Option<Message>, CodexWebSocketExchangeError> {
-    match timeout(WEBSOCKET_RECEIVE_IDLE_TIMEOUT, websocket.next()).await {
+    let Some(receive_timeout) = receive_timeout else {
+        return websocket.next().await.transpose().map_err(Into::into);
+    };
+
+    match timeout(receive_timeout, websocket.next()).await {
         Ok(message) => message.transpose().map_err(Into::into),
         Err(_) => Err(CodexWebSocketExchangeError::ReceiveIdleTimeout {
-            timeout: WEBSOCKET_RECEIVE_IDLE_TIMEOUT,
+            timeout: receive_timeout,
         }),
     }
 }
