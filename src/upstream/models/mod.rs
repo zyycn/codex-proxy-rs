@@ -347,6 +347,19 @@ impl ModelCatalog {
         self.models.clone()
     }
 
+    /// 返回指定订阅计划可用的模型列表。
+    pub fn models_for_plan(&self, plan_type: &str) -> Vec<CodexModelInfo> {
+        self.models
+            .iter()
+            .filter(|model| {
+                self.model_plan_index
+                    .get(&model.id)
+                    .is_some_and(|plans| plans.iter().any(|plan| plan == plan_type))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// 按模型 ID 查询模型信息。
     pub fn model_info(&self, model_id: &str) -> Option<CodexModelInfo> {
         self.models

@@ -8,7 +8,7 @@ use axum::{
         HeaderMap, StatusCode,
     },
     response::{IntoResponse, Response},
-    Extension, Json,
+    Json,
 };
 use std::collections::HashMap;
 
@@ -27,7 +27,6 @@ use crate::{
         },
         monitoring::{billing, service::AdminUsageRecord},
     },
-    http::middleware::request_id::RequestId,
     infra::{
         json::{clamp_limit, clamp_page, total_pages, Page},
         time::{china_datetime, china_relative_time, china_rfc3339},
@@ -706,16 +705,14 @@ pub(crate) async fn test_account_connection(
 pub(crate) async fn account_models(
     State(state): State<AppState>,
     Query(query): Query<AccountIdQuery>,
-    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.as_str().to_string();
     let account_id = query.id;
     require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
-        .account_models(&account_id, &request_id)
+        .account_models(&account_id)
         .await
     {
         Ok(models) => Ok(AdminResponse::new(

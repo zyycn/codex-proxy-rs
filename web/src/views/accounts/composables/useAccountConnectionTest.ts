@@ -194,7 +194,7 @@ export function useAccountConnectionTest() {
       }))
       connectionTestSelectedModel.value = connectionTestModelOptions.value[0]?.value || ''
       if (!connectionTestSelectedModel.value) {
-        connectionTestError.value = '上游没有返回可测试模型'
+        connectionTestError.value = '没有可测试模型'
       }
     } catch (error: any) {
       connectionTestError.value = error.message || '加载测试模型失败'
@@ -208,7 +208,7 @@ export function useAccountConnectionTest() {
   async function handleTestConnection(account = testingAccount.value) {
     if (!account?.id) return
     if (!connectionTestSelectedModel.value) {
-      connectionTestError.value = '请先选择上游返回的测试模型'
+      connectionTestError.value = '请先选择测试模型'
       return
     }
     if (testingConnectionIds.value.has(account.id)) return

@@ -105,6 +105,8 @@ fn model_catalog_should_merge_backend_snapshots_and_build_plan_allowlist() {
         catalog.model_plan_allowlist().get("gpt-6").unwrap(),
         &vec!["plus".to_string()]
     );
+    assert_eq!(catalog.models_for_plan("plus")[0].id, "gpt-6");
+    assert!(catalog.models_for_plan("team").is_empty());
 }
 
 #[tokio::test]
