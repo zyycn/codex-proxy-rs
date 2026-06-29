@@ -37,6 +37,10 @@ async fn models_route_should_reject_unknown_client_api_key() {
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    services
+        .initialize_hot_path_state()
+        .await
+        .expect("hot path state should initialize");
     let state = AppState {
         config,
         services: (*services).clone(),
@@ -77,6 +81,10 @@ async fn models_route_should_accept_stored_client_api_key() {
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    services
+        .initialize_hot_path_state()
+        .await
+        .expect("hot path state should initialize");
     let state = AppState {
         config,
         services: (*services).clone(),

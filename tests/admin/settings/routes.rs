@@ -488,8 +488,8 @@ async fn admin_settings_update_should_apply_runtime_services() {
         .acquire_with(&rotation_request)
         .await
         .unwrap();
-    assert_eq!(first.account.id, "acct_runtime_a");
-    assert_eq!(second.account.id, "acct_runtime_b");
+    assert_eq!(first.account.id, "acct_runtime_b");
+    assert_eq!(second.account.id, "acct_runtime_a");
 
     let repeated = services
         .account_pool

@@ -237,7 +237,7 @@ mod responses_recovery;
 mod responses_websocket;
 mod usage_logging;
 
-fn test_app_state_with_pool_and_installation_id(
+async fn test_app_state_with_pool_and_installation_id(
     config: &AppConfig,
     pool: SqlitePool,
     installation_id: String,
@@ -248,9 +248,10 @@ fn test_app_state_with_pool_and_installation_id(
         installation_id,
         UsageRecordOptions::from_config(config),
     )
+    .await
 }
 
-fn test_app_state_with_pool_installation_id_and_usage_record_options(
+async fn test_app_state_with_pool_installation_id_and_usage_record_options(
     config: AppConfig,
     pool: SqlitePool,
     installation_id: String,
@@ -274,6 +275,10 @@ fn test_app_state_with_pool_installation_id_and_usage_record_options(
         usage_record_options,
     )
     .expect("failed to build runtime services with configured TLS transport");
+    services
+        .initialize_hot_path_state()
+        .await
+        .expect("hot path state should initialize");
     AppState { config, services }
 }
 
@@ -295,7 +300,8 @@ async fn test_app_with_account_and_installation_id(
         &test_config(url, base_url),
         pool,
         installation_id,
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -322,7 +328,8 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
         &test_config(url, base_url),
         pool,
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -354,7 +361,8 @@ async fn test_app_with_account_pool_and_disabled_logging(
         &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -385,7 +393,8 @@ async fn test_app_with_account_pool_and_logging_capture_body(
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
         usage_record_options,
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -411,7 +420,8 @@ async fn test_app_with_account_pool_config(
         &config,
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -434,7 +444,8 @@ async fn test_app_with_restored_pool_then_disabled_account(
         &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -481,7 +492,8 @@ async fn test_app_with_two_accounts_and_affinity(
         &test_config(url, base_url),
         pool,
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -544,7 +556,8 @@ async fn test_app_with_two_accounts_and_affinity_status(
         &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool
@@ -580,7 +593,8 @@ async fn test_app_with_two_accounts(
         &test_config(url, base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     state
         .services
         .account_pool

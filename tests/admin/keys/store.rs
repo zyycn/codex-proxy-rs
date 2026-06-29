@@ -1,5 +1,5 @@
 use codex_proxy_rs::{
-    admin::keys::service::{ClientKeyStore, SqliteClientKeyStore},
+    admin::keys::service::{ClientKeyStore, RuntimeClientKeyStore, SqliteClientKeyStore},
     infra::database::connect_sqlite,
 };
 
@@ -18,22 +18,44 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
         .unwrap();
     assert_eq!(key.0, created.key);
 
-    assert!(store.verify_and_touch(&created.key).await.unwrap());
-
     let first_page = store.list(None, 10).await.unwrap();
     assert_eq!(first_page.items.len(), 1);
     assert_eq!(first_page.items[0].name, "cursor");
     assert_eq!(first_page.items[0].key, created.key);
-    assert!(first_page.items[0].last_used_at.is_some());
+    assert!(first_page.items[0].last_used_at.is_none());
 
     assert!(store.set_enabled(&created.id, false).await.unwrap());
-    assert!(!store.verify_and_touch(&created.key).await.unwrap());
-
     assert!(store.set_enabled(&created.id, true).await.unwrap());
-    assert!(store.verify_and_touch(&created.key).await.unwrap());
-
     assert!(store.delete(&created.id).await.unwrap());
-    assert!(!store.verify_and_touch(&created.key).await.unwrap());
+}
+
+#[tokio::test]
+async fn runtime_client_key_store_should_verify_from_memory_and_defer_last_used_flush() {
+    let (store, _dir) = client_key_store("client-keys-runtime.sqlite").await;
+    let created = store.create("runtime").await.unwrap();
+    let runtime = RuntimeClientKeyStore::new(store.clone());
+    runtime.reload_from_store().await.unwrap();
+
+    assert!(runtime.verify_and_touch(&created.key).await.unwrap());
+
+    let before_flush = store.get(&created.id).await.unwrap().unwrap();
+    assert!(before_flush.last_used_at.is_none());
+
+    runtime.flush_pending_last_used().await;
+
+    let after_flush = store.get(&created.id).await.unwrap().unwrap();
+    assert!(after_flush.last_used_at.is_some());
+}
+
+#[tokio::test]
+async fn runtime_client_key_store_should_not_accept_disabled_keys_after_reload() {
+    let (store, _dir) = client_key_store("client-keys-runtime-disabled.sqlite").await;
+    let created = store.create("runtime-disabled").await.unwrap();
+    assert!(store.set_enabled(&created.id, false).await.unwrap());
+    let runtime = RuntimeClientKeyStore::new(store);
+    runtime.reload_from_store().await.unwrap();
+
+    assert!(!runtime.verify_and_touch(&created.key).await.unwrap());
 }
 
 #[tokio::test]
