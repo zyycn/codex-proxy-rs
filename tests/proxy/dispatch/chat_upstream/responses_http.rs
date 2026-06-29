@@ -253,6 +253,7 @@ async fn responses_non_stream_should_record_websocket_transport_metadata() {
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["transport"], "websocket");
+    assert_eq!(metadata["websocketPool"]["kind"], "new");
 }
 
 #[tokio::test]

@@ -380,6 +380,18 @@ impl ChatDispatchService {
                 .record_token_usage(&account_id, &request.model, usage)
                 .await;
         }
+        let mut metadata = serde_json::json!({
+            "responseId": response_id,
+            "stream": false,
+            "transport": backend_transport_name(response.transport),
+            "firstTokenMs": response.first_token_ms,
+            "usage": response.usage,
+        });
+        if let (Some(object), Some(decision)) =
+            (metadata.as_object_mut(), response.websocket_pool_decision)
+        {
+            object.insert("websocketPool".to_string(), decision.metadata_value());
+        }
         record_response_event(ResponseUsageRecord {
             usage_records: &self.usage_records,
             request_id,
@@ -394,13 +406,7 @@ impl ChatDispatchService {
             status_code: 200,
             level: UsageRecordLevel::Info,
             message: "v1 chat completions completed",
-            metadata: serde_json::json!({
-                "responseId": response_id,
-                "stream": false,
-                "transport": backend_transport_name(response.transport),
-                "firstTokenMs": response.first_token_ms,
-                "usage": response.usage,
-            }),
+            metadata,
             rate_limit_headers: &response.rate_limit_headers,
         })
         .await;

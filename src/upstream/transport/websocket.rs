@@ -39,7 +39,7 @@ use crate::upstream::protocol::websocket::{
 
 use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey, CodexWsStream,
-    PooledWebSocketConnection, WebSocketPoolAcquire,
+    PooledWebSocketConnection, WebSocketPoolAcquire, WebSocketPoolDecision,
 };
 use uuid::Uuid;
 
@@ -115,6 +115,8 @@ pub struct CodexWebSocketExchange {
     pub handshake_status: u16,
     /// 首个有效上游 WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
+    /// WebSocket 连接池决策。
+    pub pool_decision: Option<WebSocketPoolDecision>,
 }
 
 /// Responses WebSocket live SSE exchange result.
@@ -133,6 +135,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// 打开握手响应状态码。
     pub handshake_status: u16,
+    /// WebSocket 连接池决策。
+    pub pool_decision: Option<WebSocketPoolDecision>,
 }
 
 /// Responses WebSocket live SSE byte stream.
@@ -442,8 +446,17 @@ pub(crate) async fn execute_response_create_request_with_pool(
             match result {
                 Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                     ..
-                }) => execute_fresh_response_create_request(request, started_at).await,
-                other => other,
+                }) => {
+                    let mut exchange =
+                        execute_fresh_response_create_request(request, started_at).await?;
+                    exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
+                    Ok(exchange)
+                }
+                Ok(mut exchange) => {
+                    exchange.pool_decision = Some(WebSocketPoolDecision::reuse());
+                    Ok(exchange)
+                }
+                Err(error) => Err(error),
             }
         }
         WebSocketPoolAcquire::FreshReserved => {
@@ -457,10 +470,15 @@ pub(crate) async fn execute_response_create_request_with_pool(
             if result.is_err() {
                 pool.discard(&key).await;
             }
-            result
+            result.map(|mut exchange| {
+                exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                exchange
+            })
         }
-        WebSocketPoolAcquire::Bypass => {
-            execute_fresh_response_create_request(request, started_at).await
+        WebSocketPoolAcquire::Bypass(reason) => {
+            let mut exchange = execute_fresh_response_create_request(request, started_at).await?;
+            exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
+            Ok(exchange)
         }
     }
 }
@@ -485,8 +503,17 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             match result {
                 Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                     ..
-                }) => execute_fresh_response_create_request_stream(request).await,
-                other => other,
+                }) => {
+                    let mut exchange =
+                        execute_fresh_response_create_request_stream(request).await?;
+                    exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
+                    Ok(exchange)
+                }
+                Ok(mut exchange) => {
+                    exchange.pool_decision = Some(WebSocketPoolDecision::reuse());
+                    Ok(exchange)
+                }
+                Err(error) => Err(error),
             }
         }
         WebSocketPoolAcquire::FreshReserved => {
@@ -499,9 +526,16 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             if result.is_err() {
                 pool.discard(&key).await;
             }
-            result
+            result.map(|mut exchange| {
+                exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                exchange
+            })
         }
-        WebSocketPoolAcquire::Bypass => execute_fresh_response_create_request_stream(request).await,
+        WebSocketPoolAcquire::Bypass(reason) => {
+            let mut exchange = execute_fresh_response_create_request_stream(request).await?;
+            exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
+            Ok(exchange)
+        }
     }
 }
 
@@ -776,6 +810,7 @@ async fn collect_websocket_response(
                 rate_limit_headers: metadata.rate_limit_headers.clone(),
                 handshake_status: metadata.handshake_status,
                 first_token_ms,
+                pool_decision: None,
             };
             return Ok((exchange, websocket, metadata));
         }
@@ -865,6 +900,7 @@ fn stream_websocket_response(
         rate_limit_header_updates,
         turn_state_update,
         handshake_status: response_metadata.handshake_status,
+        pool_decision: None,
     }
 }
 

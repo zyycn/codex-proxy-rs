@@ -29,6 +29,8 @@ const thumbTop = shallowRef(0)
 const horizontalThumbWidth = shallowRef(0)
 const horizontalThumbLeft = shallowRef(0)
 const visible = shallowRef(false)
+const verticalTrackHovering = shallowRef(false)
+const horizontalTrackHovering = shallowRef(false)
 const dragging = shallowRef(false)
 const horizontalDragging = shallowRef(false)
 
@@ -36,13 +38,18 @@ let dragStartY = 0
 let dragStartScrollTop = 0
 let horizontalDragStartX = 0
 let horizontalDragStartScrollLeft = 0
-const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollbar, 900, {
+const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollbar, 1600, {
   immediate: false,
 })
 
 const canScrollY = computed(() => thumbHeight.value > 0)
 const canScrollX = computed(() => horizontalThumbWidth.value > 0)
-const scrollbarVisible = computed(() => dragging.value || horizontalDragging.value || visible.value)
+const verticalScrollbarVisible = computed(
+  () => dragging.value || verticalTrackHovering.value || visible.value,
+)
+const horizontalScrollbarVisible = computed(
+  () => horizontalDragging.value || horizontalTrackHovering.value || visible.value,
+)
 const thumbStyle = computed(() => ({
   height: `${thumbHeight.value}px`,
   transform: `translateY(${thumbTop.value}px)`,
@@ -100,22 +107,38 @@ function clearHideTimer() {
 
 function scheduleHideScrollbar() {
   clearHideTimer()
-  if (dragging.value || horizontalDragging.value) {
-    return
-  }
-
   startHideTimer()
 }
 
 function hideScrollbar() {
   clearHideTimer()
-  if (!dragging.value && !horizontalDragging.value) {
-    visible.value = false
-  }
+  visible.value = false
 }
 
 function activateScrollbar() {
   showScrollbar()
+  scheduleHideScrollbar()
+}
+
+type ScrollbarAxis = 'vertical' | 'horizontal'
+
+function setTrackHovering(axis: ScrollbarAxis, hovering: boolean) {
+  if (axis === 'vertical') {
+    verticalTrackHovering.value = hovering
+    return
+  }
+
+  horizontalTrackHovering.value = hovering
+}
+
+function handleTrackMouseEnter(axis: ScrollbarAxis) {
+  setTrackHovering(axis, true)
+  showScrollbar()
+  scheduleHideScrollbar()
+}
+
+function handleTrackMouseLeave(axis: ScrollbarAxis) {
+  setTrackHovering(axis, false)
   scheduleHideScrollbar()
 }
 
@@ -343,6 +366,7 @@ defineExpose({
     :class="rootClasses"
     :style="{ maxHeight }"
     @mouseenter="activateScrollbar"
+    @mousemove="activateScrollbar"
     @mouseleave="hideScrollbar"
   >
     <div ref="wrap" :class="wrapClasses">
@@ -353,9 +377,10 @@ defineExpose({
 
     <div
       v-show="canScrollY"
-      class="absolute top-1 right-1 z-10 w-1.5 rounded-full transition-opacity duration-200"
-      :class="[verticalTrackClass, scrollbarVisible ? 'opacity-100' : 'opacity-0']"
-      @mouseenter="activateScrollbar"
+      class="absolute top-1 right-1 z-40 w-1.5 rounded-full transition-opacity duration-200"
+      :class="[verticalTrackClass, verticalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
+      @mouseenter="handleTrackMouseEnter('vertical')"
+      @mouseleave="handleTrackMouseLeave('vertical')"
       @pointerdown="handleTrackPointerDown"
     >
       <div
@@ -368,9 +393,10 @@ defineExpose({
 
     <div
       v-show="canScrollX"
-      class="absolute bottom-1 left-1 z-10 h-1.5 rounded-full transition-opacity duration-200"
-      :class="[horizontalTrackClass, scrollbarVisible ? 'opacity-100' : 'opacity-0']"
-      @mouseenter="activateScrollbar"
+      class="absolute bottom-1 left-1 z-40 h-1.5 rounded-full transition-opacity duration-200"
+      :class="[horizontalTrackClass, horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
+      @mouseenter="handleTrackMouseEnter('horizontal')"
+      @mouseleave="handleTrackMouseLeave('horizontal')"
       @pointerdown="handleHorizontalTrackPointerDown"
     >
       <div

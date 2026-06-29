@@ -25,5 +25,7 @@ pub use self::{
         build_codex_base_headers, build_codex_headers, build_ordered_codex_base_headers,
         build_ordered_codex_headers, order_headers,
     },
-    websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey},
+    websocket_pool::{
+        CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
+    },
 };
