@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { useEventListener, useResizeObserver } from '@vueuse/core'
+import { useResizeObserver } from '@vueuse/core'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
-import { clamp } from 'es-toolkit'
 import { computed, nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
@@ -91,21 +90,8 @@ const pageSizeModel = computed({
 const headerWrapRef = useTemplateRef<HTMLDivElement>('headerWrap')
 const bodyScrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('bodyScrollbar')
 const tableViewRef = useTemplateRef<HTMLTableElement>('tableView')
-const horizontalThumbWidth = shallowRef(0)
-const horizontalThumbLeft = shallowRef(0)
-const horizontalHovering = shallowRef(false)
-const horizontalDragging = shallowRef(false)
 const horizontalScrolled = shallowRef(false)
 const horizontalCanScrollRight = shallowRef(false)
-
-let horizontalDragStartX = 0
-let horizontalDragStartScrollLeft = 0
-
-const canScrollX = computed(() => horizontalThumbWidth.value > 0)
-const horizontalThumbStyle = computed(() => ({
-  width: `${horizontalThumbWidth.value}px`,
-  transform: `translateX(${horizontalThumbLeft.value}px)`,
-}))
 
 const pagerItems = computed(() => getPagerItems(totalPages.value, currentPage.value))
 
@@ -178,16 +164,8 @@ function rowClass(row: TableRow, index: number) {
   ]
 }
 
-function horizontalTrackWidth(wrap: HTMLElement) {
-  return clamp(wrap.clientWidth - 8, 0, Number.POSITIVE_INFINITY)
-}
-
 function maxScrollLeft(wrap: HTMLElement) {
-  return clamp(wrap.scrollWidth - wrap.clientWidth, 0, Number.POSITIVE_INFINITY)
-}
-
-function maxHorizontalThumbLeft(wrap: HTMLElement) {
-  return clamp(horizontalTrackWidth(wrap) - horizontalThumbWidth.value, 0, Number.POSITIVE_INFINITY)
+  return Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
 }
 
 function scrollWrap() {
@@ -195,8 +173,6 @@ function scrollWrap() {
 }
 
 function resetHorizontalScrollbar() {
-  horizontalThumbWidth.value = 0
-  horizontalThumbLeft.value = 0
   horizontalScrolled.value = false
   horizontalCanScrollRight.value = false
 }
@@ -209,18 +185,11 @@ function updateHorizontalScrollbar() {
   }
 
   const scrollRange = maxScrollLeft(wrap)
-  const trackWidth = horizontalTrackWidth(wrap)
-  if (scrollRange <= 0 || trackWidth <= 0) {
+  if (scrollRange <= 0) {
     resetHorizontalScrollbar()
     return
   }
 
-  horizontalThumbWidth.value = clamp(
-    trackWidth * (wrap.clientWidth / wrap.scrollWidth),
-    32,
-    trackWidth,
-  )
-  horizontalThumbLeft.value = (wrap.scrollLeft / scrollRange) * maxHorizontalThumbLeft(wrap)
   horizontalScrolled.value = wrap.scrollLeft > 0
   horizontalCanScrollRight.value = wrap.scrollLeft < scrollRange - 1
 }
@@ -231,65 +200,6 @@ function handleTableScroll() {
     headerWrapRef.value.scrollLeft = wrap.scrollLeft
   }
   updateHorizontalScrollbar()
-}
-
-function handleHorizontalTrackPointerDown(event: PointerEvent) {
-  if (event.target !== event.currentTarget) {
-    return
-  }
-
-  const wrap = scrollWrap()
-  if (!wrap) {
-    return
-  }
-
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const nextThumbLeft = event.clientX - rect.left - horizontalThumbWidth.value / 2
-  const scrollRange = maxScrollLeft(wrap)
-  const thumbRange = maxHorizontalThumbLeft(wrap)
-  wrap.scrollLeft =
-    thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
-}
-
-function handleHorizontalThumbPointerDown(event: PointerEvent) {
-  const wrap = scrollWrap()
-  if (!wrap) {
-    return
-  }
-
-  event.preventDefault()
-  horizontalDragging.value = true
-  horizontalDragStartX = event.clientX
-  horizontalDragStartScrollLeft = wrap.scrollLeft
-}
-
-function handleHorizontalThumbPointerMove(event: PointerEvent) {
-  if (!horizontalDragging.value) {
-    return
-  }
-
-  const wrap = scrollWrap()
-  if (!wrap) {
-    return
-  }
-
-  const thumbRange = maxHorizontalThumbLeft(wrap)
-  if (thumbRange <= 0) {
-    return
-  }
-
-  const scrollRange = maxScrollLeft(wrap)
-  wrap.scrollLeft =
-    horizontalDragStartScrollLeft +
-    ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
-}
-
-function handleHorizontalThumbPointerUp() {
-  if (!horizontalDragging.value) {
-    return
-  }
-
-  horizontalDragging.value = false
 }
 
 onMounted(async () => {
@@ -311,8 +221,6 @@ watch(
     updateHorizontalScrollbar()
   },
 )
-useEventListener(document, 'pointermove', handleHorizontalThumbPointerMove)
-useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
 
 function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
@@ -352,11 +260,7 @@ function paginationPageClass(page: number) {
 </script>
 
 <template>
-  <div
-    class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden"
-    @mouseenter="horizontalHovering = true"
-    @mouseleave="horizontalHovering = false"
-  >
+  <div class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
     <div v-loading="loading" class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3">
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
         <div ref="headerWrap" class="max-w-full overflow-hidden">
@@ -404,6 +308,7 @@ function paginationPageClass(page: number) {
           v-if="hasRows"
           ref="bodyScrollbar"
           class="min-h-0 flex-1"
+          horizontal
           :max-height="maxHeight"
           @scroll="handleTableScroll"
         >
@@ -466,20 +371,6 @@ function paginationPageClass(page: number) {
         <div v-else class="grid min-h-0 flex-1 place-items-center overflow-hidden px-4">
           <BaseEmpty v-if="!loading" :title="emptyText" plain class="w-full max-w-80" />
         </div>
-      </div>
-
-      <div
-        v-show="canScrollX"
-        class="absolute right-1 bottom-1 left-1 z-30 h-1.5 rounded-full transition-opacity duration-200"
-        :class="horizontalHovering || horizontalDragging ? 'opacity-100' : 'opacity-0'"
-        @pointerdown="handleHorizontalTrackPointerDown"
-      >
-        <div
-          class="h-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
-          :class="horizontalDragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
-          :style="horizontalThumbStyle"
-          @pointerdown="handleHorizontalThumbPointerDown"
-        />
       </div>
     </div>
 

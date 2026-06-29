@@ -554,7 +554,25 @@ pub(crate) async fn account_quota(
         .account_quota(&account_id)
         .await
     {
-        Ok(data) => Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data))),
+        Ok(data) => {
+            let quota = data.get("quota").cloned().unwrap_or(Value::Null);
+            let raw = data.get("raw").cloned().unwrap_or(Value::Null);
+            let quota_json = quota.to_string();
+            let quota_data = quota_data(&quota_json, Some(Utc::now()));
+            let plan_type = quota
+                .get("plan_type")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            Ok(AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(serde_json::json!({
+                    "quota": quota,
+                    "raw": raw,
+                    "quotaData": quota_data,
+                    "planType": plan_type,
+                })),
+            ))
+        }
         Err(AdminAccountError::NotFound) => Err(account_not_found()),
         Err(AdminAccountError::Inactive(status)) => Err(AdminError::new(
             StatusCode::CONFLICT,
@@ -1082,13 +1100,18 @@ fn push_quota_window(
         .get("window_minutes")
         .and_then(Value::as_u64)
         .and_then(|minutes| minutes.checked_mul(60));
-    if used_percent.is_none() && reset_at.is_none() && window_seconds.is_none() {
+    let label_prefix = label_prefix
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if reset_at.is_none()
+        && window_seconds.is_none()
+        && (used_percent.is_none() || label_prefix.is_none())
+    {
         return;
     }
     let base_label = quota_window_label_display(window_seconds);
     let label_display = label_prefix
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("{} · {}", value.trim(), base_label))
+        .map(|value| format!("{value} · {base_label}"))
         .unwrap_or(base_label);
 
     windows.push(AdminAccountQuotaWindowData {

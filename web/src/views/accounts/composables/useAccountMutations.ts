@@ -394,8 +394,18 @@ export function useAccountMutations(options: {
     refreshingQuotaAccountIds.value = new Set(refreshingQuotaAccountIds.value).add(accountId)
     try {
       await withMinimumDuration(async () => {
-        await getAccountQuota({ id: accountId })
-        await loadAccounts()
+        const result = await getAccountQuota({ id: accountId })
+        if (result?.quotaData) {
+          accounts.value = accounts.value.map((account) =>
+            account.id === accountId
+              ? {
+                  ...account,
+                  quota: result.quotaData,
+                  planType: result.planType ?? account.planType,
+                }
+              : account,
+          )
+        }
       })
     } catch (error) {
       console.error('Failed to refresh account quota:', error)

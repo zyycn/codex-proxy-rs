@@ -38,7 +38,6 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
 const tokenDetails = computed(() => usageTokenDetails(props.record))
 const costDetails = computed(() => usageCostDetails(props.record))
 
-const scrollViewClass = 'grid gap-3 pr-3'
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
 const fieldLabelClass = 'text-[11px] leading-none font-bold text-(--cp-text-muted)'
@@ -217,162 +216,161 @@ function themeColor(name: string, fallback: string) {
     description="查看单次网关请求的模型、链路、Token、费用与上游响应。"
     variant="info"
     width="960px"
+    scrollable
+    body-max-height="min(76vh,820px)"
+    body-view-class="grid gap-3"
   >
-    <div v-if="record" class="flex max-h-[min(76vh,820px)] flex-col overflow-hidden">
-      <BaseScrollbar :view-class="scrollViewClass" max-height="min(76vh,820px)">
-        <section :class="panelClass">
-          <div class="min-w-0">
-            <span :class="fieldLabelClass">账号</span>
-            <p
-              class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
-              :title="displayValue(accountDisplay)"
-            >
-              {{ displayValue(accountDisplay) }}
-            </p>
-          </div>
-
-          <dl
-            class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
+    <template v-if="record">
+      <section :class="panelClass">
+        <div class="min-w-0">
+          <span :class="fieldLabelClass">账号</span>
+          <p
+            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
+            :title="displayValue(accountDisplay)"
           >
-            <div class="min-w-0">
-              <dt :class="fieldLabelClass">结果</dt>
-              <dd class="mt-1.5 mb-0">
-                <UsageLevelBadge :level="record.level" />
-              </dd>
-            </div>
-            <div class="min-w-0">
-              <dt :class="fieldLabelClass">状态码</dt>
-              <dd class="mt-1.5 mb-0">
-                <UsageStatusCodeBadge :status-code="record.statusCode" />
-              </dd>
-            </div>
+            {{ displayValue(accountDisplay) }}
+          </p>
+        </div>
 
-            <div
-              v-for="item in overviewItems"
-              :key="item.label"
-              class="min-w-0"
-              :class="item.wide ? 'col-span-2 lg:col-span-2' : undefined"
-            >
-              <dt :class="fieldLabelClass">{{ item.label }}</dt>
-              <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                {{ displayValue(item.value) }}
-              </dd>
-            </div>
-          </dl>
-        </section>
-
-        <section class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <div class="flex min-h-0 flex-col gap-3">
-            <section :class="panelClass">
-              <h3 :class="panelTitleClass">{{ modelRouteGroup.title }}</h3>
-              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-                <div v-for="item in modelRouteGroup.items" :key="item.label" class="min-w-0">
-                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
-                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                    {{ displayValue(item.value) }}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            <section :class="[panelClass, 'flex min-h-0 flex-1 flex-col']">
-              <h3 :class="panelTitleClass">Token</h3>
-              <div
-                class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
-              >
-                <div class="relative mx-auto w-38 sm:mx-0">
-                  <BaseChart :option="tokenDonutOption" :height="152" />
-                  <div
-                    class="pointer-events-none absolute inset-0 flex items-center justify-center"
-                  >
-                    <div class="grid text-center">
-                      <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                        总计
-                      </span>
-                      <strong
-                        class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
-                      >
-                        {{ tokenDetails.totalTokensDisplay }}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-
-                <dl class="grid grid-cols-2 gap-x-4 gap-y-3">
-                  <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
-                    <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
-                      <i
-                        class="size-1.75 shrink-0 rounded-full"
-                        :style="{ backgroundColor: item.color }"
-                      />
-                      <span class="truncate">{{ item.label }}</span>
-                    </dt>
-                    <dd
-                      :class="[fieldValueBaseClass, 'font-mono tabular-nums']"
-                      :title="displayValue(item.display)"
-                    >
-                      {{ displayValue(item.display) }}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </section>
-          </div>
-
-          <div class="flex min-h-0 flex-col gap-3">
-            <section :class="[panelClass, 'flex-1']">
-              <h3 :class="panelTitleClass">{{ clientUpstreamGroup.title }}</h3>
-              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-                <div v-for="item in clientUpstreamGroup.items" :key="item.label" class="min-w-0">
-                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
-                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                    {{ displayValue(item.value) }}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            <section :class="panelClass">
-              <h3 :class="panelTitleClass">费用</h3>
-              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-                <div v-for="item in costItems" :key="item.label" class="min-w-0">
-                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
-                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
-                    {{ displayValue(item.value) }}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-          </div>
-        </section>
-
-        <section
-          v-if="requestText || responseText"
-          class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
+        <dl
+          class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
         >
-          <div v-if="requestText" :class="[panelClass, 'min-h-0']">
-            <h3 class="mb-3" :class="panelTitleClass">请求内容</h3>
-            <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
-              <pre :class="codeBlockClass">{{ requestText }}</pre>
-            </BaseScrollbar>
+          <div class="min-w-0">
+            <dt :class="fieldLabelClass">结果</dt>
+            <dd class="mt-1.5 mb-0">
+              <UsageLevelBadge :level="record.level" />
+            </dd>
+          </div>
+          <div class="min-w-0">
+            <dt :class="fieldLabelClass">状态码</dt>
+            <dd class="mt-1.5 mb-0">
+              <UsageStatusCodeBadge :status-code="record.statusCode" />
+            </dd>
           </div>
 
-          <div v-if="responseText" :class="[panelClass, 'min-h-0']">
-            <h3 class="mb-3" :class="panelTitleClass">响应内容</h3>
-            <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
-              <pre :class="codeBlockClass">{{ responseText }}</pre>
-            </BaseScrollbar>
+          <div
+            v-for="item in overviewItems"
+            :key="item.label"
+            class="min-w-0"
+            :class="item.wide ? 'col-span-2 lg:col-span-2' : undefined"
+          >
+            <dt :class="fieldLabelClass">{{ item.label }}</dt>
+            <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+              {{ displayValue(item.value) }}
+            </dd>
           </div>
-        </section>
+        </dl>
+      </section>
 
-        <section v-if="record.metadata" :class="[panelClass, 'min-h-0']">
-          <h3 class="mb-3" :class="panelTitleClass">元数据</h3>
-          <BaseScrollbar max-height="min(32vh, 340px)" :view-class="codeBlockViewClass">
-            <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
+      <section class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div class="flex min-h-0 flex-col gap-3">
+          <section :class="panelClass">
+            <h3 :class="panelTitleClass">{{ modelRouteGroup.title }}</h3>
+            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+              <div v-for="item in modelRouteGroup.items" :key="item.label" class="min-w-0">
+                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                  {{ displayValue(item.value) }}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section :class="[panelClass, 'flex min-h-0 flex-1 flex-col']">
+            <h3 :class="panelTitleClass">Token</h3>
+            <div
+              class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
+            >
+              <div class="relative mx-auto w-38 sm:mx-0">
+                <BaseChart :option="tokenDonutOption" :height="152" />
+                <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <div class="grid text-center">
+                    <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
+                      总计
+                    </span>
+                    <strong
+                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
+                    >
+                      {{ tokenDetails.totalTokensDisplay }}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <dl class="grid grid-cols-2 gap-x-4 gap-y-3">
+                <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
+                  <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
+                    <i
+                      class="size-1.75 shrink-0 rounded-full"
+                      :style="{ backgroundColor: item.color }"
+                    />
+                    <span class="truncate">{{ item.label }}</span>
+                  </dt>
+                  <dd
+                    :class="[fieldValueBaseClass, 'font-mono tabular-nums']"
+                    :title="displayValue(item.display)"
+                  >
+                    {{ displayValue(item.display) }}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </section>
+        </div>
+
+        <div class="flex min-h-0 flex-col gap-3">
+          <section :class="[panelClass, 'flex-1']">
+            <h3 :class="panelTitleClass">{{ clientUpstreamGroup.title }}</h3>
+            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+              <div v-for="item in clientUpstreamGroup.items" :key="item.label" class="min-w-0">
+                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                  {{ displayValue(item.value) }}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section :class="panelClass">
+            <h3 :class="panelTitleClass">费用</h3>
+            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+              <div v-for="item in costItems" :key="item.label" class="min-w-0">
+                <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                  {{ displayValue(item.value) }}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+      </section>
+
+      <section
+        v-if="requestText || responseText"
+        class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
+      >
+        <div v-if="requestText" :class="[panelClass, 'min-h-0']">
+          <h3 class="mb-3" :class="panelTitleClass">请求内容</h3>
+          <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
+            <pre :class="codeBlockClass">{{ requestText }}</pre>
           </BaseScrollbar>
-        </section>
-      </BaseScrollbar>
-    </div>
+        </div>
+
+        <div v-if="responseText" :class="[panelClass, 'min-h-0']">
+          <h3 class="mb-3" :class="panelTitleClass">响应内容</h3>
+          <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
+            <pre :class="codeBlockClass">{{ responseText }}</pre>
+          </BaseScrollbar>
+        </div>
+      </section>
+
+      <section v-if="record.metadata" :class="[panelClass, 'min-h-0']">
+        <h3 class="mb-3" :class="panelTitleClass">元数据</h3>
+        <BaseScrollbar max-height="min(32vh, 340px)" :view-class="codeBlockViewClass">
+          <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
+        </BaseScrollbar>
+      </section>
+    </template>
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">关闭</BaseButton>

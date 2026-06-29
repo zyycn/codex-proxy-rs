@@ -7,6 +7,7 @@ use std::{
 };
 
 use futures::{SinkExt, StreamExt};
+use serde_json::{json, Value};
 use tokio::{net::TcpStream, sync::Mutex, time::timeout};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
@@ -118,15 +119,15 @@ impl CodexWebSocketPool {
         let acquire = {
             let mut state = self.inner.lock().await;
             if !self.config.enabled || state.shutting_down {
-                return WebSocketPoolAcquire::Bypass;
+                return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
             }
             match state.slots.get(key) {
                 Some(WebSocketPoolSlot::Busy | WebSocketPoolSlot::Checking) => {
-                    return WebSocketPoolAcquire::Bypass;
+                    return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                 }
                 Some(WebSocketPoolSlot::Idle(_)) => {
                     let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(key) else {
-                        return WebSocketPoolAcquire::Bypass;
+                        return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                     };
                     if connection.created_at.elapsed() < self.config.max_age {
                         state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
@@ -140,7 +141,7 @@ impl CodexWebSocketPool {
             if self.config.max_per_account == 0
                 || account_slot_count(&state.slots, key.account_id()) >= self.config.max_per_account
             {
-                WebSocketPoolAcquire::Bypass
+                WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
             } else {
                 state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
                 WebSocketPoolAcquire::FreshReserved
@@ -406,7 +407,101 @@ enum WebSocketPoolSlot {
 pub(crate) enum WebSocketPoolAcquire {
     Reused(Box<PooledWebSocketConnection>),
     FreshReserved,
+    Bypass(WebSocketPoolBypassReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebSocketPoolBypassReason {
+    Disabled,
+    Busy,
+    Cap,
+}
+
+impl WebSocketPoolBypassReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Busy => "busy",
+            Self::Cap => "cap",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSocketPoolDecision {
+    kind: WebSocketPoolDecisionKind,
+    reason: Option<WebSocketPoolBypassReason>,
+}
+
+impl WebSocketPoolDecision {
+    pub fn new() -> Self {
+        Self {
+            kind: WebSocketPoolDecisionKind::New,
+            reason: None,
+        }
+    }
+
+    pub fn reuse() -> Self {
+        Self {
+            kind: WebSocketPoolDecisionKind::Reuse,
+            reason: None,
+        }
+    }
+
+    pub fn bypass(reason: WebSocketPoolBypassReason) -> Self {
+        Self {
+            kind: WebSocketPoolDecisionKind::Bypass,
+            reason: Some(reason),
+        }
+    }
+
+    pub fn retry_after_stale_reuse() -> Self {
+        Self {
+            kind: WebSocketPoolDecisionKind::RetryAfterStaleReuse,
+            reason: None,
+        }
+    }
+
+    pub fn kind(self) -> &'static str {
+        self.kind.as_str()
+    }
+
+    pub fn reason(self) -> Option<&'static str> {
+        self.reason.map(WebSocketPoolBypassReason::as_str)
+    }
+
+    pub fn metadata_value(self) -> Value {
+        let mut value = json!({ "kind": self.kind() });
+        if let (Some(object), Some(reason)) = (value.as_object_mut(), self.reason()) {
+            object.insert("reason".to_string(), Value::String(reason.to_string()));
+        }
+        value
+    }
+}
+
+impl Default for WebSocketPoolDecision {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSocketPoolDecisionKind {
+    New,
+    Reuse,
     Bypass,
+    RetryAfterStaleReuse,
+}
+
+impl WebSocketPoolDecisionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Reuse => "reuse",
+            Self::Bypass => "bypass",
+            Self::RetryAfterStaleReuse => "retry_after_stale_reuse",
+        }
+    }
 }
 
 fn account_slot_count(

@@ -45,7 +45,7 @@ use super::websocket::{
     write_websocket_audit_artifact_from_env, CodexWebSocketConnection, CodexWebSocketExchangeError,
     CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketTurnStateUpdate,
 };
-use super::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolKey};
+use super::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -245,6 +245,8 @@ pub struct CodexBackendResponse {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 首个有效上游 SSE/WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
+    /// WebSocket 连接池决策。
+    pub websocket_pool_decision: Option<WebSocketPoolDecision>,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -290,6 +292,8 @@ pub struct CodexBackendStreamingResponse {
     pub rate_limit_header_updates: Option<CodexRateLimitHeaderUpdates>,
     /// live stream 期间捕获的 turn-state 更新。
     pub turn_state_update: Option<CodexTurnStateUpdate>,
+    /// WebSocket 连接池决策。
+    pub websocket_pool_decision: Option<WebSocketPoolDecision>,
 }
 
 /// Codex compact 端点响应。
@@ -390,6 +394,7 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
             first_token_ms,
+            websocket_pool_decision: None,
         })
     }
 
@@ -432,6 +437,7 @@ impl CodexBackendClient {
             rate_limit_headers,
             rate_limit_header_updates: None,
             turn_state_update: None,
+            websocket_pool_decision: None,
         })
     }
 
@@ -567,6 +573,11 @@ impl CodexBackendClient {
             _ => execute_response_create_request_with_pool(&prepared, None, started_at).await,
         }
         .map_err(websocket_exchange_error_to_client_error)?;
+        log_websocket_pool_decision(
+            context.request_id,
+            pool_account_id.or(context.account_id),
+            exchange.pool_decision,
+        );
 
         Ok(CodexBackendResponse {
             body: exchange.body,
@@ -576,6 +587,7 @@ impl CodexBackendClient {
             set_cookie_headers: exchange.set_cookie_headers,
             rate_limit_headers: exchange.rate_limit_headers,
             first_token_ms: exchange.first_token_ms,
+            websocket_pool_decision: exchange.pool_decision,
         })
     }
 
@@ -610,6 +622,11 @@ impl CodexBackendClient {
             _ => execute_response_create_request_stream_with_pool(&prepared, None).await,
         }
         .map_err(websocket_exchange_error_to_client_error)?;
+        log_websocket_pool_decision(
+            context.request_id,
+            pool_account_id.or(context.account_id),
+            exchange.pool_decision,
+        );
 
         Ok(CodexBackendStreamingResponse {
             body: Box::pin(
@@ -623,6 +640,7 @@ impl CodexBackendClient {
             rate_limit_headers: exchange.rate_limit_headers,
             rate_limit_header_updates: Some(exchange.rate_limit_header_updates),
             turn_state_update: Some(exchange.turn_state_update),
+            websocket_pool_decision: exchange.pool_decision,
         })
     }
 
@@ -921,6 +939,35 @@ fn turn_state(response: &ReqwestResponse) -> Option<String> {
 fn update_first_token_ms(started_at: Instant, body_bytes: &[u8], first_token_ms: &mut Option<i64>) {
     if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
         *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
+    }
+}
+
+fn log_websocket_pool_decision(
+    request_id: &str,
+    account_id: Option<&str>,
+    decision: Option<WebSocketPoolDecision>,
+) {
+    let Some(decision) = decision else {
+        return;
+    };
+    let rid_short = request_id.chars().take(8).collect::<String>();
+    if let Some(reason) = decision.reason() {
+        tracing::info!(
+            request_id = %request_id,
+            rid = %rid_short,
+            account_id = account_id.unwrap_or_default(),
+            ws_pool = decision.kind(),
+            ws_pool_reason = reason,
+            "websocket pool decision"
+        );
+    } else {
+        tracing::info!(
+            request_id = %request_id,
+            rid = %rid_short,
+            account_id = account_id.unwrap_or_default(),
+            ws_pool = decision.kind(),
+            "websocket pool decision"
+        );
     }
 }
 

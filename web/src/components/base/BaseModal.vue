@@ -3,6 +3,7 @@ import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseButton from './BaseButton.vue'
+import BaseScrollbar from './BaseScrollbar.vue'
 
 type ModalVariant = 'default' | 'info' | 'warning' | 'danger' | 'success'
 
@@ -12,6 +13,9 @@ const props = defineProps<{
   width?: string | number
   variant?: ModalVariant
   closeDisabled?: boolean
+  scrollable?: boolean
+  bodyMaxHeight?: string
+  bodyViewClass?: string
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -22,6 +26,11 @@ const modalStyle = computed(() => ({
   width: typeof props.width === 'number' ? `${props.width}px` : (props.width ?? undefined),
   maxWidth: '100%',
 }))
+const bodyClass = computed(() => [
+  'p-7',
+  props.description || variant.value !== 'default' ? 'pt-5' : 'pt-6',
+])
+const scrollViewClass = computed(() => ['pr-4', props.bodyViewClass].filter(Boolean).join(' '))
 
 const iconMap = {
   default: Info,
@@ -103,8 +112,16 @@ function closeModal() {
               <X :size="16" />
             </BaseButton>
           </header>
-          <div class="p-7" :class="description || variant !== 'default' ? 'pt-5' : 'pt-6'">
-            <slot />
+          <div :class="bodyClass">
+            <BaseScrollbar
+              v-if="scrollable"
+              class="-mr-4"
+              :max-height="bodyMaxHeight"
+              :view-class="scrollViewClass"
+            >
+              <slot />
+            </BaseScrollbar>
+            <slot v-else />
           </div>
           <footer class="flex justify-end gap-3 px-7 pb-7">
             <slot name="footer">

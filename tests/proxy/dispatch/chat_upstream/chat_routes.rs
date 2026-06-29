@@ -202,6 +202,7 @@ async fn chat_completions_with_user_should_use_and_reuse_websocket() {
         .as_str()
         .is_some_and(|key| key.starts_with("cp_")));
     assert_eq!(metadata["transport"], "websocket");
+    assert_eq!(metadata["websocketPool"]["kind"], "reuse");
     assert!(
         metadata["firstTokenMs"]
             .as_i64()

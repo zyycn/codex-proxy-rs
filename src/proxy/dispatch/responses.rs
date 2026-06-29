@@ -75,7 +75,7 @@ use crate::{
             backend_transport_for_response_request, is_banned_auth_signal,
             is_banned_upstream_error, CodexBackendClient, CodexBackendResponse,
             CodexBackendSseStream, CodexBackendTransport, CodexClientError,
-            CodexRateLimitHeaderUpdates, CodexTurnStateUpdate,
+            CodexRateLimitHeaderUpdates, CodexTurnStateUpdate, WebSocketPoolDecision,
         },
     },
 };
@@ -876,6 +876,14 @@ impl ResponseDispatchService {
                     response.usage,
                 )
                 .await;
+                let mut metadata = json!({
+                    "responseId": response_id,
+                    "stream": false,
+                    "transport": backend_transport_name(response.transport),
+                    "firstTokenMs": response.first_token_ms,
+                    "usage": response.usage,
+                });
+                insert_websocket_pool_decision(&mut metadata, response.websocket_pool_decision);
                 record_response_event(ResponseUsageRecord {
                     usage_records: &self.usage_records,
                     request_id,
@@ -890,13 +898,7 @@ impl ResponseDispatchService {
                     status_code: 200,
                     level: UsageRecordLevel::Info,
                     message: "v1 responses completed",
-                    metadata: json!({
-                        "responseId": response_id,
-                        "stream": false,
-                        "transport": backend_transport_name(response.transport),
-                        "firstTokenMs": response.first_token_ms,
-                        "usage": response.usage,
-                    }),
+                    metadata,
                     rate_limit_headers: &response.rate_limit_headers,
                 })
                 .await;
@@ -1201,6 +1203,7 @@ impl ResponseDispatchService {
                     let rate_limit_headers = response.rate_limit_headers;
                     let rate_limit_header_updates = response.rate_limit_header_updates;
                     let turn_state_update = response.turn_state_update;
+                    let websocket_pool_decision = response.websocket_pool_decision;
                     let turn_state = response.turn_state;
                     self.cloudflare
                         .capture_set_cookie_headers(&release_account_id, &set_cookie_headers)
@@ -1375,6 +1378,7 @@ impl ResponseDispatchService {
                         rate_limit_headers,
                         rate_limit_header_updates,
                         turn_state_update,
+                        websocket_pool_decision,
                         turn_state,
                         started_at,
                     };
@@ -2066,6 +2070,7 @@ struct LiveResponseStreamContext {
     rate_limit_headers: Vec<(String, String)>,
     rate_limit_header_updates: Option<CodexRateLimitHeaderUpdates>,
     turn_state_update: Option<CodexTurnStateUpdate>,
+    websocket_pool_decision: Option<WebSocketPoolDecision>,
     turn_state: Option<String>,
     started_at: Instant,
 }
@@ -2829,6 +2834,11 @@ fn enrich_live_response_stream_metadata(
             .entry("rateLimitHeaders".to_string())
             .or_insert_with(|| serde_json::json!(rate_limit_headers));
     }
+    if let Some(decision) = context.websocket_pool_decision {
+        object
+            .entry("websocketPool".to_string())
+            .or_insert_with(|| decision.metadata_value());
+    }
     object
         .entry("requestBody".to_string())
         .or_insert_with(|| serde_json::json!(context.request));
@@ -2907,6 +2917,15 @@ fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {
             "firstTokenMs".to_string(),
             Value::Number(first_token_ms.into()),
         );
+    }
+}
+
+fn insert_websocket_pool_decision(metadata: &mut Value, decision: Option<WebSocketPoolDecision>) {
+    let Some(decision) = decision else {
+        return;
+    };
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("websocketPool".to_string(), decision.metadata_value());
     }
 }
 

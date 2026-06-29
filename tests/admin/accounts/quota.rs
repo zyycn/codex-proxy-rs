@@ -77,4 +77,14 @@ async fn admin_account_quota_should_send_usage_cookie() {
         (response.status(), cookie_header),
         (StatusCode::OK, Some("cf_clearance=admin-quota"))
     );
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["planType"], "plus");
+    assert_eq!(
+        body["data"]["quotaData"]["windows"][0]["labelDisplay"],
+        "5小时限额"
+    );
+    assert_eq!(
+        body["data"]["quotaData"]["windows"][0]["group"],
+        "shortTerm"
+    );
 }

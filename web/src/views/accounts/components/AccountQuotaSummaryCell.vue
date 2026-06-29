@@ -42,7 +42,7 @@ function quotaWindowBarClass(window?: any) {
     <div
       v-for="window in quotaWindows"
       :key="window.key"
-      class="min-w-0 border-b border-slate-200/70 pb-2 last:border-b-0 last:pb-0"
+      class="min-w-0 pb-2 last:border-b-0 last:pb-0"
     >
       <div
         class="mb-1.5 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]"

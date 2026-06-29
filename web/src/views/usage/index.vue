@@ -127,7 +127,7 @@ watch(timeRange, () => {
       :padded="false"
       class="mt-5 flex flex-col"
       header-class="px-5 pt-4"
-      body-class="flex h-[520px] min-h-0 px-5 pt-3 pb-4"
+      body-class="flex flex-col px-5 pt-3 pb-4"
     >
       <template #header>
         <div class="grid gap-3">
@@ -157,7 +157,7 @@ watch(timeRange, () => {
 
       <template #body>
         <BaseTable
-          class="min-h-0 flex-1"
+          class="min-h-[520px] flex-1"
           :columns="usageRecordColumns"
           :rows="records"
           :loading="loading"

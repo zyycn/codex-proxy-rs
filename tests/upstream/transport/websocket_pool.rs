@@ -69,6 +69,8 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
 
     assert!(first.body.contains("resp_pool_first"));
     assert!(second.body.contains("resp_pool_second"));
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "reuse");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
@@ -232,6 +234,16 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
 
     assert!(second.body.contains("resp_busy_second"));
     assert!(third.body.contains("resp_busy_third"));
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "bypass");
+    assert_eq!(
+        second.websocket_pool_decision.unwrap().reason(),
+        Some("busy")
+    );
+    assert_eq!(third.websocket_pool_decision.unwrap().kind(), "bypass");
+    assert_eq!(
+        third.websocket_pool_decision.unwrap().reason(),
+        Some("busy")
+    );
 }
 
 #[tokio::test]
@@ -293,6 +305,14 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
     assert!(first.body.contains("resp_cap_first"));
     assert!(second.body.contains("resp_cap_second"));
     assert!(third.body.contains("resp_cap_third"));
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "bypass");
+    assert_eq!(
+        second.websocket_pool_decision.unwrap().reason(),
+        Some("cap")
+    );
+    assert_eq!(third.websocket_pool_decision.unwrap().kind(), "bypass");
+    assert_eq!(third.websocket_pool_decision.unwrap().reason(), Some("cap"));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 3);
 }
 

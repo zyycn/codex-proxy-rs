@@ -98,6 +98,19 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
                         "window_minutes": 300,
                         "limit_reached": false
                     }
+                }, {
+                    "source": "core",
+                    "limit_name": null,
+                    "metered_feature": null,
+                    "allowed": true,
+                    "limit_reached": false,
+                    "blocked": false,
+                    "primary": {
+                        "used_percent": 0,
+                        "remaining_percent": 100,
+                        "limit_reached": false
+                    },
+                    "secondary": null
                 }],
                 "monthly_limit": {
                     "key": "spend-control-monthly",
@@ -168,6 +181,7 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     let body = response_json(response).await;
     let item = &body["data"]["items"][0];
     assert_eq!(item["usage"]["requestCount"], 41);
+    assert_eq!(item["quota"]["windows"].as_array().unwrap().len(), 3);
     assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
     assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
     assert_eq!(item["quota"]["windows"][1]["labelDisplay"], "5小时限额");
