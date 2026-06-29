@@ -1,6 +1,6 @@
 //! 使用记录 HTTP 处理器。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use axum::{
     extract::{Query, State},
@@ -17,7 +17,8 @@ use crate::{
         usage_record::{UsageRecord, UsageRecordLevel},
         usage_record_store::{
             AdminUsageRecordError, AdminUsageRecordFilter, UsageRecordBreakdown,
-            UsageRecordInsights, UsageRecordSummary, UsageRecordTrendPoint,
+            UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
+            UsageRecordTrendPoint,
         },
     },
     admin::{
@@ -54,6 +55,14 @@ pub(crate) struct UsageRecordsQuery {
     search: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageRecordDistributionQuery {
+    #[serde(flatten)]
+    records: UsageRecordsQuery,
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,19 +153,6 @@ struct UsageRecordSummaryData {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct UsageRecordInsightsData {
-    models: Vec<UsageRecordBreakdownData>,
-    upstream_models: Vec<UsageRecordBreakdownData>,
-    model_mappings: Vec<UsageRecordBreakdownData>,
-    endpoints: Vec<UsageRecordBreakdownData>,
-    upstream_endpoints: Vec<UsageRecordBreakdownData>,
-    endpoint_paths: Vec<UsageRecordBreakdownData>,
-    types: Vec<UsageRecordBreakdownData>,
-    trend: Vec<UsageRecordTrendPointData>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct UsageRecordBreakdownData {
     name: String,
     request_count: u64,
@@ -213,9 +209,8 @@ pub(crate) async fn usage_records(
         {
             Ok(page) => {
                 let account_emails = account_email_map(&state, &page.items).await?;
-                let model_aliases = state.services.settings.current().model_aliases.clone();
                 let page = NumberedPage {
-                    items: usage_record_items(page.items, &account_emails, &model_aliases),
+                    items: usage_record_items(page.items, &account_emails),
                     total: page.total,
                     page: page.page,
                     page_size: page.page_size,
@@ -237,9 +232,8 @@ pub(crate) async fn usage_records(
     {
         Ok(page) => {
             let account_emails = account_email_map(&state, &page.items).await?;
-            let model_aliases = state.services.settings.current().model_aliases.clone();
             let page = Page {
-                items: usage_record_items(page.items, &account_emails, &model_aliases),
+                items: usage_record_items(page.items, &account_emails),
                 next_cursor: page.next_cursor,
             };
             Ok(AdminResponse::new(
@@ -268,18 +262,101 @@ pub(crate) async fn usage_records_summary(
     }
 }
 
-/// `GET /api/admin/usage/records/insights`
-pub(crate) async fn usage_records_insights(
+/// `GET /api/admin/usage/records/insights/models`
+pub(crate) async fn usage_records_model_distribution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<UsageRecordDistributionQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let source = model_source_from_query(query.source)?;
+    let filter = filter_from_query(query.records)?;
+    match state
+        .services
+        .usage_records
+        .model_distribution(filter, source)
+        .await
+    {
+        Ok(items) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                items
+                    .into_iter()
+                    .map(UsageRecordBreakdownData::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )),
+        Err(error) => Err(log_error(&error)),
+    }
+}
+
+/// `GET /api/admin/usage/records/insights/endpoints`
+pub(crate) async fn usage_records_endpoint_distribution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<UsageRecordDistributionQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let source = endpoint_source_from_query(query.source)?;
+    let filter = filter_from_query(query.records)?;
+    match state
+        .services
+        .usage_records
+        .endpoint_distribution(filter, source)
+        .await
+    {
+        Ok(items) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                items
+                    .into_iter()
+                    .map(UsageRecordBreakdownData::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )),
+        Err(error) => Err(log_error(&error)),
+    }
+}
+
+/// `GET /api/admin/usage/records/insights/token-trend`
+pub(crate) async fn usage_records_token_trend(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     require_admin_auth(&state, &headers).await?;
     let filter = filter_from_query(query)?;
-    match state.services.usage_records.insights(filter).await {
-        Ok(insights) => Ok(AdminResponse::new(
+    match state.services.usage_records.token_trend(filter).await {
+        Ok(points) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(UsageRecordInsightsData::from(insights)),
+            AdminEnvelope::ok(
+                points
+                    .into_iter()
+                    .map(UsageRecordTrendPointData::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )),
+        Err(error) => Err(log_error(&error)),
+    }
+}
+
+/// `GET /api/admin/usage/records/insights/latency-trend`
+pub(crate) async fn usage_records_latency_trend(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<UsageRecordsQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let filter = filter_from_query(query)?;
+    match state.services.usage_records.latency_trend(filter).await {
+        Ok(points) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(
+                points
+                    .into_iter()
+                    .map(UsageRecordTrendPointData::from)
+                    .collect::<Vec<_>>(),
+            ),
         )),
         Err(error) => Err(log_error(&error)),
     }
@@ -295,10 +372,9 @@ pub(crate) async fn usage_record_detail(
     match state.services.usage_records.get(&query.id).await {
         Ok(Some(log)) => {
             let account_emails = account_email_map(&state, std::slice::from_ref(&log)).await?;
-            let model_aliases = state.services.settings.current().model_aliases.clone();
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminEnvelope::ok(usage_record_data(log, &account_emails, &model_aliases)),
+                AdminEnvelope::ok(usage_record_data(log, &account_emails)),
             ))
         }
         Ok(None) => Err(AdminError::new(
@@ -347,6 +423,34 @@ fn filter_from_query(query: UsageRecordsQuery) -> Result<AdminUsageRecordFilter,
         start_time: optional_datetime(query.start_time)?,
         end_time: optional_datetime(query.end_time)?,
     })
+}
+
+fn model_source_from_query(value: Option<String>) -> Result<UsageRecordModelSource, AdminError> {
+    match non_empty(value).as_deref().unwrap_or("requested") {
+        "requested" => Ok(UsageRecordModelSource::Requested),
+        "upstream" => Ok(UsageRecordModelSource::Upstream),
+        "mapping" => Ok(UsageRecordModelSource::Mapping),
+        _ => Err(AdminError::new(
+            StatusCode::BAD_REQUEST,
+            40003,
+            "Invalid model distribution source",
+        )),
+    }
+}
+
+fn endpoint_source_from_query(
+    value: Option<String>,
+) -> Result<UsageRecordEndpointSource, AdminError> {
+    match non_empty(value).as_deref().unwrap_or("inbound") {
+        "inbound" => Ok(UsageRecordEndpointSource::Inbound),
+        "upstream" => Ok(UsageRecordEndpointSource::Upstream),
+        "path" => Ok(UsageRecordEndpointSource::Path),
+        _ => Err(AdminError::new(
+            StatusCode::BAD_REQUEST,
+            40004,
+            "Invalid endpoint distribution source",
+        )),
+    }
 }
 
 fn optional_datetime(
@@ -440,25 +544,24 @@ pub(crate) async fn account_email_map(
 pub(crate) fn usage_record_items(
     items: Vec<UsageRecord>,
     account_emails: &HashMap<String, String>,
-    model_aliases: &BTreeMap<String, String>,
 ) -> Vec<UsageRecordData> {
     items
         .into_iter()
-        .map(|record| usage_record_data(record, account_emails, model_aliases))
+        .map(|record| usage_record_data(record, account_emails))
         .collect()
 }
 
 fn usage_record_data(
     record: UsageRecord,
     account_emails: &HashMap<String, String>,
-    model_aliases: &BTreeMap<String, String>,
 ) -> UsageRecordData {
     let account_email = record
         .account_id
         .as_deref()
         .and_then(|account_id| account_emails.get(account_id))
-        .cloned();
-    let (requested_model, upstream_model) = usage_record_models(&record, model_aliases);
+        .cloned()
+        .or_else(|| metadata_string(&record.metadata, &["accountEmail", "account_email"]));
+    let (requested_model, upstream_model) = usage_record_models(&record);
     let client_ip = metadata_string(&record.metadata, &["clientIp", "ipAddress", "ip_address"]);
     let user_agent = metadata_string(&record.metadata, &["userAgent", "user_agent"]);
     let reasoning_effort =
@@ -494,30 +597,17 @@ fn usage_record_data(
     }
 }
 
-fn usage_record_models(
-    record: &UsageRecord,
-    model_aliases: &BTreeMap<String, String>,
-) -> (Option<String>, Option<String>) {
+fn usage_record_models(record: &UsageRecord) -> (Option<String>, Option<String>) {
     let stored_model = record
         .model
         .as_deref()
         .map(str::trim)
         .filter(|model| !model.is_empty());
-    let alias_target = stored_model
-        .and_then(|model| model_aliases.get(model))
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|model| !model.is_empty());
-
     let requested_model = metadata_string(&record.metadata, &["requestedModel"])
-        .or_else(|| alias_target.and_then(|_| stored_model.map(ToString::to_string)));
+        .or_else(|| stored_model.map(ToString::to_string));
     let upstream_model = metadata_string(&record.metadata, &["upstreamModel"])
-        .or_else(|| alias_target.map(ToString::to_string))
-        .or_else(|| {
-            requested_model
-                .as_ref()
-                .and_then(|_| stored_model.map(ToString::to_string))
-        });
+        .or_else(|| requested_model.clone())
+        .or_else(|| stored_model.map(ToString::to_string));
 
     (requested_model, upstream_model)
 }
@@ -736,53 +826,6 @@ impl From<UsageRecordSummary> for UsageRecordSummaryData {
             total_tokens: summary.total_tokens,
             average_latency_ms: summary.average_latency_ms,
             average_latency_ms_display: format_duration_ms_f64(summary.average_latency_ms),
-        }
-    }
-}
-
-impl From<UsageRecordInsights> for UsageRecordInsightsData {
-    fn from(insights: UsageRecordInsights) -> Self {
-        Self {
-            models: insights
-                .models
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            upstream_models: insights
-                .upstream_models
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            model_mappings: insights
-                .model_mappings
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            endpoints: insights
-                .endpoints
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            upstream_endpoints: insights
-                .upstream_endpoints
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            endpoint_paths: insights
-                .endpoint_paths
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            types: insights
-                .types
-                .into_iter()
-                .map(UsageRecordBreakdownData::from)
-                .collect(),
-            trend: insights
-                .trend
-                .into_iter()
-                .map(UsageRecordTrendPointData::from)
-                .collect(),
         }
     }
 }

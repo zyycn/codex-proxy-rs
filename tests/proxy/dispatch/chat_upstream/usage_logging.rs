@@ -132,6 +132,9 @@ async fn responses_usage_record_should_store_resolved_upstream_model_after_alias
     let event = latest_response_usage_record(&pool).await;
     assert_eq!(event.request_id.as_deref(), Some("req_alias_usage_model"));
     assert_eq!(event.model.as_deref(), Some("gpt-5.5"));
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(metadata["requestedModel"], "client-alias");
+    assert_eq!(metadata["upstreamModel"], "gpt-5.5");
 
     let received = server.received_requests().await.unwrap();
     let upstream_body: Value = serde_json::from_slice(&received[0].body).unwrap();
@@ -537,6 +540,20 @@ async fn responses_stream_should_record_usage_record_after_completed_stream() {
     assert_eq!(metadata["responseId"], "resp_stream_usage");
     assert_eq!(metadata["usage"]["inputTokens"], 3);
     assert_eq!(metadata["usage"]["outputTokens"], 5);
+    assert!(
+        metadata["firstTokenMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0),
+        "stream usage metadata should include first token latency: {metadata:?}",
+    );
+    let first_token_bucket: (i64, i64) = sqlx::query_as(
+        "select first_token_latency_sum, first_token_latency_count from usage_time_buckets limit 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(first_token_bucket.0 > 0);
+    assert_eq!(first_token_bucket.1, 1);
     assert_rate_limit_header(&metadata, "retry-after", "7");
     assert_rate_limit_header(&metadata, "x-ratelimit-limit-requests", "99");
     assert!(metadata.get("requestBody").is_none());
@@ -702,6 +719,10 @@ async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(authorizations.len(), 3, "requests: {authorizations:?}");
     assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
+    let event = latest_response_usage_record(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(metadata["accountEmail"], "user@example.com");
 }
 
 #[tokio::test]

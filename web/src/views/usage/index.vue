@@ -75,6 +75,8 @@ const {
   summary,
   insights,
   refreshingList,
+  modelDistributionSource,
+  endpointDistributionSource,
   loadUsageRecords,
   refreshUsageRecords,
 } = useUsageRecordsTable({
@@ -114,13 +116,18 @@ watch(timeRange, () => {
     </header>
 
     <UsageSummaryCards :summary="summary" />
-    <UsageInsightsGrid :insights="insights" :loading="analyticsLoading" />
+    <UsageInsightsGrid
+      v-model:model-source="modelDistributionSource"
+      v-model:endpoint-source="endpointDistributionSource"
+      :insights="insights"
+      :loading="analyticsLoading"
+    />
 
     <BaseCard
       :padded="false"
-      class="mt-5 flex min-h-155 flex-col"
+      class="mt-5 flex flex-col"
       header-class="px-5 pt-4"
-      body-class="flex min-h-[520px] flex-1 px-5 pt-3 pb-4"
+      body-class="flex h-[520px] min-h-0 px-5 pt-3 pb-4"
     >
       <template #header>
         <div class="grid gap-3">

@@ -2,7 +2,7 @@ export const usageRecordColumns = [
   {
     key: 'accountEmail',
     label: '账号',
-    width: '220px',
+    width: '240px',
     fixed: 'left' as const,
     ellipsis: false,
   },
@@ -22,7 +22,7 @@ export const usageRecordColumns = [
   {
     key: 'route',
     label: '端点',
-    width: '136px',
+    width: '172px',
     ellipsis: false,
     cellClass: 'font-mono text-[12px] font-[650]',
   },
@@ -36,7 +36,7 @@ export const usageRecordColumns = [
   {
     key: 'tokenDetails',
     label: 'TOKEN',
-    width: '146px',
+    width: '184px',
     align: 'right' as const,
     ellipsis: false,
   },

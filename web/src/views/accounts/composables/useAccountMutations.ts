@@ -33,9 +33,10 @@ export function useAccountMutations(options: {
     highUsage: 0,
     attention: 0,
   })
-  const showCreateModal = ref(false)
+  const createModalOpen = ref(false)
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
+  const reauthorizingAccount = ref<any>(null)
   const editingAccount = ref<any>(null)
   const editingScheduleStatus = ref('active')
   const pendingDeleteAccount = ref<any>(null)
@@ -61,6 +62,16 @@ export function useAccountMutations(options: {
   const editForm = ref({
     label: '',
     status: 'active',
+  })
+
+  const showCreateModal = computed({
+    get: () => createModalOpen.value,
+    set: (value: boolean) => {
+      createModalOpen.value = value
+      if (!value) {
+        reauthorizingAccount.value = null
+      }
+    },
   })
 
   const showEditModal = computed({
@@ -205,12 +216,15 @@ export function useAccountMutations(options: {
 
       creatingAccount.value = true
       const result = await exchangeAccountOAuth(payload)
+      const successText = oauthSuccessText(result)
       showCreateModal.value = false
       resetCreateForm()
       await loadAccounts()
-      toast.success(importSuccessText(result))
+      toast.success(successText)
     } catch (error: any) {
-      toast.error(error.message || 'OAuth 授权导入失败')
+      toast.error(
+        error.message || (reauthorizingAccount.value ? '重新授权失败' : 'OAuth 授权导入失败'),
+      )
     } finally {
       creatingAccount.value = false
     }
@@ -234,6 +248,26 @@ export function useAccountMutations(options: {
       return `导入完成，写入 ${imported} 个，跳过 ${skipped} 个`
     }
     return `导入完成，写入 ${imported} 个`
+  }
+
+  function oauthSuccessText(result: any) {
+    if (reauthorizingAccount.value) {
+      return '账号重新授权成功'
+    }
+    return importSuccessText(result)
+  }
+
+  function openCreateAccount() {
+    reauthorizingAccount.value = null
+    resetCreateForm()
+    showCreateModal.value = true
+  }
+
+  function openReauthorizeAccount(account: any) {
+    reauthorizingAccount.value = account
+    resetCreateForm()
+    showCreateModal.value = true
+    void handleAuthorizeOAuth()
   }
 
   function openEditAccount(account: any) {
@@ -410,6 +444,7 @@ export function useAccountMutations(options: {
     showDeleteModal,
     showSingleDeleteModal,
     showEditModal,
+    reauthorizingAccount,
     editingAccount,
     pendingDeleteAccount,
     refreshingAccountIds,
@@ -428,6 +463,8 @@ export function useAccountMutations(options: {
     handleCreate,
     handleAuthorizeOAuth,
     handleExchangeOAuth,
+    openCreateAccount,
+    openReauthorizeAccount,
     openEditAccount,
     handleSaveAccount,
     requestDeleteAccount,

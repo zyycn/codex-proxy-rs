@@ -62,26 +62,24 @@ function errorRateText(summary: any) {
     <article
       v-for="item in items"
       :key="item.key"
-      class="flex min-h-23 items-start gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-4 py-3 shadow-(--cp-shadow-card)"
+      class="grid min-h-23 grid-cols-[36px_minmax(0,1fr)] items-stretch gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-4 py-3 shadow-(--cp-shadow-card)"
     >
       <span
-        class="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-input-radius-base)"
+        class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-input-radius-base)"
         :class="item.tone"
       >
         <component :is="item.icon" class="size-4.5" />
       </span>
-      <div class="min-w-0">
+      <div class="flex min-w-0 flex-col justify-between py-0.5">
         <span class="block text-[12px] leading-none font-bold text-(--cp-text-muted)">
           {{ item.label }}
         </span>
         <strong
-          class="mt-2 block truncate text-[22px] leading-none font-[800] text-(--cp-text-primary)"
+          class="block truncate text-[22px] leading-none font-extrabold text-(--cp-text-primary)"
         >
           {{ item.value() }}
         </strong>
-        <span
-          class="mt-1.5 block truncate text-[12px] leading-none font-[650] text-(--cp-text-secondary)"
-        >
+        <span class="block truncate text-[12px] leading-none font-[650] text-(--cp-text-secondary)">
           {{ item.detail() }}
         </span>
       </div>

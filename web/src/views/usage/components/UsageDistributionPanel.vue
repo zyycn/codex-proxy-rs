@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CornerDownRight } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -29,18 +30,13 @@ const totalMetric = computed(() =>
 
 const tableGridClass = computed(() =>
   props.showCostColumn === false
-    ? 'grid-cols-[128px_64px_76px_76px_76px]'
-    : 'grid-cols-[148px_64px_76px_76px_76px_76px]',
+    ? 'grid-cols-[minmax(128px,1fr)_repeat(4,minmax(66px,0.75fr))]'
+    : 'grid-cols-[minmax(128px,1fr)_repeat(5,minmax(64px,0.75fr))]',
 )
 
 const tableWidthClass = computed(() =>
-  props.showCostColumn === false ? 'min-w-[420px] w-full' : 'min-w-[516px] w-full',
+  props.showCostColumn === false ? 'min-w-[414px] w-full' : 'min-w-[492px] w-full',
 )
-
-const tableMaxHeight = computed(() => {
-  const rowCount = Math.min(sortedItems.value.length, 4)
-  return `${32 + rowCount * 46}px`
-})
 
 const hasData = computed(() =>
   sortedItems.value.some(
@@ -81,12 +77,6 @@ function metricValue(item: any) {
   return Number(item.totalTokens || 0)
 }
 
-function markerStyle(index: number) {
-  return {
-    backgroundColor: `var(${chartColors.value[index % chartColors.value.length]})`,
-  }
-}
-
 function formatCompactUsage(value: number) {
   const number = Number(value || 0)
   if (number >= 1_000_000_000) return `${trimFixed(number / 1_000_000_000, 1)}B`
@@ -109,6 +99,16 @@ function formatCompactCost(value: number) {
 function trimFixed(value: number, digits: number) {
   return value.toFixed(digits).replace(/\.?0+$/, '')
 }
+
+function distributionNameParts(name: unknown) {
+  const text = typeof name === 'string' && name.trim() ? name.trim() : '未知'
+  const [primary, secondary] = text.split(' -> ', 2).map((part) => part.trim())
+  return {
+    primary: primary || text,
+    secondary: secondary || '',
+    full: text,
+  }
+}
 </script>
 
 <template>
@@ -124,7 +124,7 @@ function trimFixed(value: number, digits: number) {
         v-if="sourceOptions?.length"
         v-model="source"
         :options="sourceOptions"
-        class="w-42"
+        class="w-56"
       />
     </template>
 
@@ -141,7 +141,7 @@ function trimFixed(value: number, digits: number) {
           <div class="absolute size-17 rounded-full bg-(--cp-bg-surface) lg:size-21" />
           <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div class="grid text-center">
-              <span class="text-[11px] font-bold text-(--cp-text-muted)"> Token </span>
+              <span class="text-[11px] font-bold text-(--cp-text-muted)">Token</span>
               <strong
                 class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary) lg:text-[18px]"
                 :title="formatUsageMetric(totalMetric)"
@@ -153,59 +153,79 @@ function trimFixed(value: number, digits: number) {
         </div>
 
         <div class="min-h-0 min-w-0 overflow-hidden">
-          <BaseScrollbar horizontal :max-height="tableMaxHeight" view-class="pb-2 pr-3">
+          <BaseScrollbar horizontal view-class="pb-2">
             <div class="flex min-h-0 flex-col" :class="tableWidthClass">
               <div
                 class="grid shrink-0 gap-2 px-3 pb-2 text-[12px] font-bold text-(--cp-text-muted)"
                 :class="tableGridClass"
               >
                 <span>{{ nameLabel }}</span>
-                <span class="text-right">请求</span>
-                <span class="text-right">Token</span>
-                <span class="text-right">实际</span>
-                <span v-if="showCostColumn !== false" class="text-right">成本</span>
-                <span class="text-right">标准</span>
+                <span class="text-center">请求</span>
+                <span class="text-center">Token</span>
+                <span class="text-center">实际</span>
+                <span v-if="showCostColumn !== false" class="text-center">成本</span>
+                <span class="text-center">标准</span>
               </div>
 
               <div class="grid gap-1.5">
                 <div
-                  v-for="(item, index) in sortedItems"
+                  v-for="item in sortedItems"
                   :key="item.name"
                   class="grid items-center gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 text-[12px] font-[650]"
                   :class="tableGridClass"
                 >
                   <div class="min-w-0">
-                    <div class="flex min-w-0 items-center gap-2">
-                      <i class="size-1.75 shrink-0 rounded-full" :style="markerStyle(index)" />
-                      <span class="truncate text-[13px] font-[720] text-(--cp-text-primary)">
-                        {{ item.name || '未知' }}
-                      </span>
+                    <div class="flex min-w-0 items-start">
+                      <div
+                        class="inline-grid min-w-0 gap-1"
+                        :title="distributionNameParts(item.name).full"
+                      >
+                        <code
+                          class="block max-w-full truncate font-mono text-[12px] leading-none font-[760] text-(--cp-text-primary)"
+                        >
+                          {{ distributionNameParts(item.name).primary }}
+                        </code>
+                        <div
+                          v-if="distributionNameParts(item.name).secondary"
+                          class="flex min-w-0 items-center gap-1.25 text-(--cp-text-secondary)"
+                        >
+                          <CornerDownRight
+                            class="size-3.25 shrink-0 text-(--cp-info)"
+                            stroke-width="2.4"
+                          />
+                          <code
+                            class="block truncate font-mono text-[11px] leading-none font-[700]"
+                          >
+                            {{ distributionNameParts(item.name).secondary }}
+                          </code>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <span class="text-right font-mono tabular-nums text-(--cp-text-primary)">
+                  <span class="text-center font-mono tabular-nums text-(--cp-text-primary)">
                     {{ formatCompactUsage(item.requestCount) }}
                   </span>
                   <span
-                    class="text-right font-mono tabular-nums text-(--cp-text-secondary)"
+                    class="text-center font-mono tabular-nums text-(--cp-text-secondary)"
                     :title="formatUsageMetric(item.totalTokens)"
                   >
                     {{ formatCompactUsage(item.totalTokens) }}
                   </span>
                   <span
-                    class="text-right font-mono tabular-nums text-(--cp-success-text)"
+                    class="text-center font-mono tabular-nums text-(--cp-success-text)"
                     :title="item.actualCostDisplay || formatCostMetric(item.actualCost)"
                   >
                     {{ formatCompactCost(item.actualCost) }}
                   </span>
                   <span
                     v-if="showCostColumn !== false"
-                    class="text-right font-mono tabular-nums text-(--cp-warning-text)"
+                    class="text-center font-mono tabular-nums text-(--cp-warning-text)"
                     :title="item.accountCostDisplay || formatCostMetric(item.accountCost)"
                   >
                     {{ formatCompactCost(item.accountCost) }}
                   </span>
                   <span
-                    class="text-right font-mono tabular-nums text-(--cp-text-secondary)"
+                    class="text-center font-mono tabular-nums text-(--cp-text-secondary)"
                     :title="item.costDisplay || formatCostMetric(item.cost)"
                   >
                     {{ formatCompactCost(item.cost) }}

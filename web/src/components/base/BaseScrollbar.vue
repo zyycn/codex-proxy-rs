@@ -7,14 +7,12 @@ const props = withDefaults(
   defineProps<{
     viewClass?: string
     maxHeight?: string
-    forceVisible?: boolean
     horizontal?: boolean
     vertical?: boolean
   }>(),
   {
     viewClass: '',
     maxHeight: undefined,
-    forceVisible: false,
     horizontal: false,
     vertical: true,
   },
@@ -44,9 +42,7 @@ const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollba
 
 const canScrollY = computed(() => thumbHeight.value > 0)
 const canScrollX = computed(() => horizontalThumbWidth.value > 0)
-const scrollbarVisible = computed(
-  () => props.forceVisible || dragging.value || horizontalDragging.value || visible.value,
-)
+const scrollbarVisible = computed(() => dragging.value || horizontalDragging.value || visible.value)
 const thumbStyle = computed(() => ({
   height: `${thumbHeight.value}px`,
   transform: `translateY(${thumbTop.value}px)`,
@@ -104,7 +100,7 @@ function clearHideTimer() {
 
 function scheduleHideScrollbar() {
   clearHideTimer()
-  if (props.forceVisible || dragging.value || horizontalDragging.value) {
+  if (dragging.value || horizontalDragging.value) {
     return
   }
 
@@ -113,7 +109,7 @@ function scheduleHideScrollbar() {
 
 function hideScrollbar() {
   clearHideTimer()
-  if (!props.forceVisible && !dragging.value && !horizontalDragging.value) {
+  if (!dragging.value && !horizontalDragging.value) {
     visible.value = false
   }
 }

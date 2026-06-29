@@ -58,6 +58,7 @@ use crate::{
         pool::{AccountAcquireRequest, RuntimeAccountPoolService},
     },
     upstream::{
+        models::ModelCatalog,
         protocol::{
             events::{extract_sse_usage, extract_usage, TokenUsage},
             responses::{
@@ -386,6 +387,7 @@ impl ResponseDispatchService {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
+        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
         apply_response_model_options(&mut request, &parsed_model);
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
@@ -833,6 +835,7 @@ impl ResponseDispatchService {
                         usage_records: &self.usage_records,
                         request_id,
                         account_id: &release_account_id,
+                        account_email: account.email.as_deref(),
                         route,
                         model: requested_model,
                         started_at,
@@ -876,7 +879,7 @@ impl ResponseDispatchService {
                     request_id,
                     account_id: &account.id,
                     route,
-                    model: &request.model,
+                    model: &display_model,
                     requested_model: Some(requested_model),
                     client_ip: request.client_ip.as_deref(),
                     client_user_agent: request.client_user_agent.as_deref(),
@@ -988,6 +991,7 @@ impl ResponseDispatchService {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
+        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
         apply_response_model_options(&mut request, &parsed_model);
         request.stream = true;
         let tuple_schema = request.tuple_schema.clone();
@@ -1222,6 +1226,7 @@ impl ResponseDispatchService {
                                         usage_records: &self.usage_records,
                                         request_id,
                                         account_id: &release_account_id,
+                                        account_email: account.email.as_deref(),
                                         route,
                                         model: requested_model,
                                         started_at,
@@ -1334,7 +1339,7 @@ impl ResponseDispatchService {
                                 request_id,
                                 account_id: &release_account_id,
                                 route,
-                                model: &request.model,
+                                model: &display_model,
                                 requested_model,
                                 started_at,
                                 transport,
@@ -1358,6 +1363,7 @@ impl ResponseDispatchService {
                         request_id: request_id.to_string(),
                         route: route.to_string(),
                         model: request.model.clone(),
+                        display_model: display_model.clone(),
                         requested_model: requested_model.to_string(),
                         client_ip: request.client_ip.clone(),
                         request,
@@ -1492,6 +1498,7 @@ impl ResponseDispatchService {
                         usage_records: &self.usage_records,
                         request_id,
                         account_id: &release_account_id,
+                        account_email: account.email.as_deref(),
                         route,
                         model: requested_model,
                         started_at,
@@ -1516,6 +1523,7 @@ impl ResponseDispatchService {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let parsed_model = catalog.parse_model_name(requested_model);
+        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
         request.model = parsed_model.model_id;
         let mut excluded_account_ids = Vec::new();
         let mut rate_limited_count = 0usize;
@@ -1756,7 +1764,7 @@ impl ResponseDispatchService {
                         request_id,
                         account_id: &account.id,
                         route: "/v1/responses/compact",
-                        model: &request.model,
+                        model: &display_model,
                         requested_model: Some(requested_model),
                         client_ip: request.client_ip.as_deref(),
                         client_user_agent: request.client_user_agent.as_deref(),
@@ -2046,6 +2054,7 @@ struct LiveResponseStreamContext {
     request_id: String,
     route: String,
     model: String,
+    display_model: String,
     requested_model: String,
     client_ip: Option<String>,
     request: CodexResponsesRequest,
@@ -2169,7 +2178,7 @@ fn update_first_token_ms(
     first_token_ms: &mut Option<i64>,
 ) {
     if first_token_ms.is_none() && response_body_has_first_token(body_bytes) {
-        *first_token_ms = Some(elapsed_millis_i64(context.started_at));
+        *first_token_ms = Some(elapsed_millis_i64(context.started_at).max(1));
     }
 }
 
@@ -2180,20 +2189,75 @@ fn response_body_has_first_token(body_bytes: &[u8]) -> bool {
     };
     parse_sse_events(&body[..event_end + 2]).is_ok_and(|events| {
         events.iter().any(|event| {
-            serde_json::from_str::<Value>(&event.data).is_ok_and(|value| {
-                let event_type = event
-                    .event
-                    .as_deref()
-                    .or_else(|| value.get("type").and_then(Value::as_str));
-                matches!(
-                    event_type,
-                    Some("response.output_text.delta" | "response.reasoning_summary_text.delta")
-                ) && value
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .is_some_and(|delta| !delta.is_empty())
-            })
+            serde_json::from_str::<Value>(&event.data)
+                .is_ok_and(|value| response_event_has_first_token(event.event.as_deref(), &value))
         })
+    })
+}
+
+fn response_event_has_first_token(event_name: Option<&str>, value: &Value) -> bool {
+    match response_stream_event_type(event_name, value) {
+        Some(
+            "response.output_text.delta"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_text.delta"
+            | "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta",
+        ) => non_empty_string_field(value, &["delta"]),
+        Some("response.output_text.done" | "response.reasoning_text.done") => {
+            non_empty_string_field(value, &["text"])
+        }
+        Some("response.output_item.added" | "response.output_item.done") => value
+            .get("item")
+            .is_some_and(output_item_has_generated_content),
+        Some("response.completed") => value
+            .get("response")
+            .is_some_and(completed_response_has_generated_content),
+        _ => false,
+    }
+}
+
+fn response_stream_event_type<'a>(
+    event_name: Option<&'a str>,
+    value: &'a Value,
+) -> Option<&'a str> {
+    event_name.or_else(|| value.get("type").and_then(Value::as_str))
+}
+
+fn completed_response_has_generated_content(response: &Value) -> bool {
+    non_empty_string_field(response, &["output_text"])
+        || response
+            .get("output")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(output_item_has_generated_content))
+        || response
+            .pointer("/usage/output_tokens")
+            .and_then(Value::as_i64)
+            .is_some_and(|tokens| tokens > 0)
+}
+
+fn output_item_has_generated_content(item: &Value) -> bool {
+    non_empty_string_field(item, &["content", "text", "arguments", "input"])
+        || item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| parts.iter().any(output_content_part_has_text))
+        || item
+            .get("summary")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| parts.iter().any(output_content_part_has_text))
+}
+
+fn output_content_part_has_text(part: &Value) -> bool {
+    non_empty_string_field(part, &["text", "content"])
+}
+
+fn non_empty_string_field(value: &Value, fields: &[&str]) -> bool {
+    fields.iter().any(|field| {
+        value
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
     })
 }
 
@@ -2534,6 +2598,7 @@ struct ResponseUpstreamErrorEventRecord<'a> {
     usage_records: &'a AdminUsageRecordService,
     request_id: &'a str,
     account_id: &'a str,
+    account_email: Option<&'a str>,
     route: &'a str,
     model: &'a str,
     started_at: Instant,
@@ -2626,6 +2691,18 @@ async fn record_response_upstream_error_event(record: ResponseUpstreamErrorEvent
     event.model = Some(record.model.to_string());
     event.status_code = Some(i64::from(upstream_error_http_status(record.error)));
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
+    if let Some(object) = metadata.as_object_mut() {
+        if let Some(account_email) = record
+            .account_email
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert(
+                "accountEmail".to_string(),
+                Value::String(account_email.to_string()),
+            );
+        }
+    }
     event.metadata = metadata;
     if let Err(error) = record.usage_records.record(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
@@ -2852,13 +2929,13 @@ async fn record_live_response_stream_event(
     event.request_id = Some(context.request_id.clone());
     event.account_id = Some(context.account_id.clone());
     event.route = Some(context.route.clone());
-    event.model = Some(context.model.clone());
+    event.model = Some(context.display_model.clone());
     event.status_code = Some(status_code);
     event.latency_ms = Some(elapsed_millis_i64(context.started_at));
     enrich_usage_record_identity(
         &mut metadata,
         Some(&context.requested_model),
-        &context.model,
+        &context.display_model,
         context.client_ip.as_deref(),
         context.request.client_user_agent.as_deref(),
         reasoning_effort_from_request(&context.request),
@@ -3268,4 +3345,47 @@ fn enrich_response_dispatch_error_metadata(metadata: &mut Value, error: &Respons
 
 fn elapsed_millis_i64(started_at: Instant) -> i64 {
     started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::response_body_has_first_token;
+
+    #[test]
+    fn first_token_detection_should_match_text_delta() {
+        let body = br#"event: response.output_text.delta
+data: {"delta":"hello"}
+
+"#;
+
+        assert!(response_body_has_first_token(body));
+    }
+
+    #[test]
+    fn first_token_detection_should_match_output_item_done_text() {
+        let body = br#"event: response.output_item.done
+data: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}
+
+"#;
+
+        assert!(response_body_has_first_token(body));
+    }
+
+    #[test]
+    fn first_token_detection_should_fallback_to_completed_usage_output_tokens() {
+        let body = br#"event: response.completed
+data: {"response":{"id":"resp_1","status":"completed","usage":{"input_tokens":3,"output_tokens":4}}}
+
+"#;
+
+        assert!(response_body_has_first_token(body));
+    }
+
+    #[test]
+    fn first_token_detection_should_ignore_incomplete_frames() {
+        let body = br#"event: response.output_text.delta
+data: {"delta":"hello"}"#;
+
+        assert!(!response_body_has_first_token(body));
+    }
 }

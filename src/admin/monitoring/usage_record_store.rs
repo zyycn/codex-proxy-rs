@@ -187,12 +187,38 @@ impl SqliteUsageRecordStore {
         usage_summary(&self.pool, &filter).await
     }
 
-    /// 聚合使用记录分析数据。
-    pub async fn insights(
+    /// 按模型来源聚合使用记录分布。
+    pub async fn model_distribution(
         &self,
         filter: UsageRecordFilter,
-    ) -> SqliteUsageRecordStoreResult<UsageRecordInsights> {
-        usage_insights(&self.pool, &filter).await
+        source: UsageRecordModelSource,
+    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
+        usage_model_distribution(&self.pool, &filter, source, 8).await
+    }
+
+    /// 按端点来源聚合使用记录分布。
+    pub async fn endpoint_distribution(
+        &self,
+        filter: UsageRecordFilter,
+        source: UsageRecordEndpointSource,
+    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
+        usage_endpoint_distribution(&self.pool, &filter, source, 8).await
+    }
+
+    /// 聚合 Token 使用趋势。
+    pub async fn token_trend(
+        &self,
+        filter: UsageRecordFilter,
+    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordTrendPoint>> {
+        usage_trend(&self.pool, &filter).await
+    }
+
+    /// 聚合延迟趋势。
+    pub async fn latency_trend(
+        &self,
+        filter: UsageRecordFilter,
+    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordTrendPoint>> {
+        usage_trend(&self.pool, &filter).await
     }
 
     /// 清空使用记录。
@@ -483,88 +509,60 @@ fn nonnegative_i64(value: Option<i64>) -> u64 {
     value.unwrap_or_default().max(0).cast_unsigned()
 }
 
-async fn usage_insights(
+async fn usage_model_distribution(
     pool: &SqlitePool,
     filter: &UsageRecordFilter,
-) -> SqliteUsageRecordStoreResult<UsageRecordInsights> {
-    Ok(UsageRecordInsights {
-        models: usage_breakdown(
-            pool,
-            filter,
-            "coalesce(nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''), nullif(trim(model), ''), '未知模型')",
+    source: UsageRecordModelSource,
+    limit: u32,
+) -> SqliteUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
+    let (group_expr, group_alias) = match source {
+        UsageRecordModelSource::Requested => (
+            "coalesce(nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''), nullif(trim(usage_records.model), ''), '未知模型')",
             "requested_model",
-            8,
-        )
-        .await?,
-        upstream_models: usage_model_breakdown(pool, filter, 8).await?,
-        model_mappings: usage_breakdown(
-            pool,
-            filter,
+        ),
+        UsageRecordModelSource::Upstream => (
+            "coalesce(
+                nullif(trim(json_extract(usage_records.metadata_json, '$.upstreamModel')), ''),
+                nullif(trim(json_extract(usage_records.metadata_json, '$.requestedModel')), ''),
+                nullif(trim(usage_records.model), ''),
+                '未知模型'
+            )",
+            "model",
+        ),
+        UsageRecordModelSource::Mapping => (
             "case
                 when coalesce(nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''), nullif(trim(usage_records.model), '')) is not null
                 then coalesce(nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''), nullif(trim(usage_records.model), ''), '未知模型')
                   || ' -> ' ||
-                  coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamModel')), ''), nullif(trim(alias.value), ''), nullif(trim(usage_records.model), ''), '未知模型')
+                  coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamModel')), ''), nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''), nullif(trim(usage_records.model), ''), '未知模型')
                 else '未知模型'
             end",
             "model_mapping",
-            8,
-        )
-        .await?,
-        endpoints: usage_breakdown(
-            pool,
-            filter,
-            "coalesce(nullif(route, ''), '未知端点')",
-            "endpoint",
-            8,
-        )
-        .await?,
-        upstream_endpoints: usage_breakdown(
-            pool,
-            filter,
-            "coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamEndpoint')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamRoute')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamPath')), ''), nullif(route, ''), '未知端点')",
-            "upstream_endpoint",
-            8,
-        )
-        .await?,
-        endpoint_paths: usage_breakdown(
-            pool,
-            filter,
-            "coalesce(nullif(route, ''), '未知端点') || ' -> ' || coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamEndpoint')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamRoute')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamPath')), ''), nullif(route, ''), '未知端点')",
-            "endpoint_path",
-            8,
-        )
-        .await?,
-        types: usage_breakdown(
-            pool,
-            filter,
-            "case when json_extract(metadata_json, '$.stream') = 1 then '流式' when json_extract(metadata_json, '$.stream') = 0 then '普通' else coalesce(nullif(transport, ''), '未知') end",
-            "record_type",
-            8,
-        )
-        .await?,
-        trend: usage_trend(pool, filter).await?,
-    })
+        ),
+    };
+    usage_breakdown(pool, filter, group_expr, group_alias, limit).await
 }
 
-async fn usage_model_breakdown(
+async fn usage_endpoint_distribution(
     pool: &SqlitePool,
     filter: &UsageRecordFilter,
+    source: UsageRecordEndpointSource,
     limit: u32,
 ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
-    usage_breakdown(
-        pool,
-        filter,
-        "coalesce(
-            nullif(trim(json_extract(usage_records.metadata_json, '$.upstreamModel')), ''),
-            nullif(trim(alias.value), ''),
-            nullif(trim(usage_records.model), ''),
-            '未知模型'
-        )",
-        "model",
-        limit,
-    )
-    .await
+    let (group_expr, group_alias) = match source {
+        UsageRecordEndpointSource::Inbound => {
+            ("coalesce(nullif(route, ''), '未知端点')", "endpoint")
+        }
+        UsageRecordEndpointSource::Upstream => (
+            "coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamEndpoint')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamRoute')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamPath')), ''), nullif(route, ''), '未知端点')",
+            "upstream_endpoint",
+        ),
+        UsageRecordEndpointSource::Path => (
+            "coalesce(nullif(route, ''), '未知端点') || ' -> ' || coalesce(nullif(trim(json_extract(metadata_json, '$.upstreamEndpoint')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamRoute')), ''), nullif(trim(json_extract(metadata_json, '$.upstreamPath')), ''), nullif(route, ''), '未知端点')",
+            "endpoint_path",
+        ),
+    };
+    usage_breakdown(pool, filter, group_expr, group_alias, limit).await
 }
 
 async fn usage_breakdown(
@@ -585,15 +583,13 @@ async fn usage_breakdown(
         sum(coalesce(cast(json_extract(metadata_json, '$.usage.cachedTokens') as integer), cast(json_extract(metadata_json, '$.cachedTokens') as integer), 0)) as cached_tokens,
         coalesce(
           nullif(trim(json_extract(metadata_json, '$.upstreamModel')), ''),
-          nullif(trim(alias.value), ''),
+          nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''),
           nullif(trim(usage_records.model), ''),
           '未知模型'
         ) as billing_model,
         coalesce(nullif(trim(json_extract(metadata_json, '$.billingServiceTier')), ''), nullif(trim(json_extract(metadata_json, '$.serviceTier')), ''), nullif(trim(json_extract(metadata_json, '$.usage.serviceTier')), '')) as service_tier,
         avg(case when latency_ms > 0 then latency_ms else null end) as average_latency_ms
-        from usage_records
-        left join runtime_settings on runtime_settings.id = 1
-        left join json_each(runtime_settings.model_aliases_json) as alias on alias.key = usage_records.model",
+        from usage_records",
     );
     push_filter(&mut builder, filter, None)?;
     builder.push(" group by ");
@@ -677,15 +673,13 @@ async fn usage_trend(
             coalesce(cast(json_extract(metadata_json, '$.usage.cachedTokens') as integer), cast(json_extract(metadata_json, '$.cachedTokens') as integer), 0) as cached_tokens,
             coalesce(
               nullif(trim(json_extract(metadata_json, '$.upstreamModel')), ''),
-              nullif(trim(alias.value), ''),
+              nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''),
               nullif(trim(usage_records.model), ''),
               '未知模型'
             ) as billing_model,
             coalesce(nullif(trim(json_extract(metadata_json, '$.billingServiceTier')), ''), nullif(trim(json_extract(metadata_json, '$.serviceTier')), ''), nullif(trim(json_extract(metadata_json, '$.usage.serviceTier')), '')) as service_tier,
             latency_ms
-        from usage_records
-        left join runtime_settings on runtime_settings.id = 1
-        left join json_each(runtime_settings.model_aliases_json) as alias on alias.key = usage_records.model",
+        from usage_records",
     );
     push_filter(&mut builder, filter, None)?;
     builder.push(" order by date asc, created_at asc");
@@ -1010,25 +1004,26 @@ pub struct UsageRecordSummary {
     pub average_latency_ms: Option<f64>,
 }
 
-/// 使用记录分析。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct UsageRecordInsights {
-    /// 模型分布。
-    pub models: Vec<UsageRecordBreakdown>,
-    /// 上游模型分布。
-    pub upstream_models: Vec<UsageRecordBreakdown>,
-    /// 模型映射分布。
-    pub model_mappings: Vec<UsageRecordBreakdown>,
-    /// 端点分布。
-    pub endpoints: Vec<UsageRecordBreakdown>,
-    /// 上游端点分布。
-    pub upstream_endpoints: Vec<UsageRecordBreakdown>,
-    /// 端点路径分布。
-    pub endpoint_paths: Vec<UsageRecordBreakdown>,
-    /// 请求类型分布。
-    pub types: Vec<UsageRecordBreakdown>,
-    /// Token 趋势。
-    pub trend: Vec<UsageRecordTrendPoint>,
+/// 模型分布来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageRecordModelSource {
+    /// 客户端请求模型。
+    Requested,
+    /// 实际上游模型。
+    Upstream,
+    /// 请求模型到上游模型的映射。
+    Mapping,
+}
+
+/// 端点分布来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageRecordEndpointSource {
+    /// 入站端点。
+    Inbound,
+    /// 上游端点。
+    Upstream,
+    /// 入站到上游路径映射。
+    Path,
 }
 
 /// 使用记录分布项。
@@ -1206,13 +1201,48 @@ impl AdminUsageRecordService {
             .map_err(|_| AdminUsageRecordError::List)
     }
 
-    /// 聚合使用记录分析数据。
-    pub async fn insights(
+    /// 按模型来源聚合使用记录分布。
+    pub async fn model_distribution(
         &self,
         filter: AdminUsageRecordFilter,
-    ) -> Result<UsageRecordInsights, AdminUsageRecordError> {
+        source: UsageRecordModelSource,
+    ) -> Result<Vec<UsageRecordBreakdown>, AdminUsageRecordError> {
         self.store
-            .insights(filter.into())
+            .model_distribution(filter.into(), source)
+            .await
+            .map_err(|_| AdminUsageRecordError::List)
+    }
+
+    /// 按端点来源聚合使用记录分布。
+    pub async fn endpoint_distribution(
+        &self,
+        filter: AdminUsageRecordFilter,
+        source: UsageRecordEndpointSource,
+    ) -> Result<Vec<UsageRecordBreakdown>, AdminUsageRecordError> {
+        self.store
+            .endpoint_distribution(filter.into(), source)
+            .await
+            .map_err(|_| AdminUsageRecordError::List)
+    }
+
+    /// 聚合 Token 趋势。
+    pub async fn token_trend(
+        &self,
+        filter: AdminUsageRecordFilter,
+    ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
+        self.store
+            .token_trend(filter.into())
+            .await
+            .map_err(|_| AdminUsageRecordError::List)
+    }
+
+    /// 聚合延迟趋势。
+    pub async fn latency_trend(
+        &self,
+        filter: AdminUsageRecordFilter,
+    ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
+        self.store
+            .latency_trend(filter.into())
             .await
             .map_err(|_| AdminUsageRecordError::List)
     }

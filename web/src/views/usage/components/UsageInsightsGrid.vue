@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue'
+import { computed } from 'vue'
 import type { EChartsOption } from 'echarts'
 import { storeToRefs } from 'pinia'
 
@@ -16,14 +16,15 @@ const props = defineProps<{
 }>()
 
 const chartHeight = 236
+const chartSplitNumber = 3
 
-const modelSource = shallowRef('requested')
-const endpointSource = shallowRef('inbound')
+const modelSource = defineModel<string>('modelSource', { default: 'requested' })
+const endpointSource = defineModel<string>('endpointSource', { default: 'inbound' })
 const { themeRevision } = storeToRefs(useUiStore())
 
 const modelSourceOptions = [
-  { label: '请求', value: 'requested' },
-  { label: '上游', value: 'upstream' },
+  { label: '请求模型', value: 'requested' },
+  { label: '上游模型', value: 'upstream' },
   { label: '映射', value: 'mapping' },
 ]
 
@@ -33,19 +34,11 @@ const endpointSourceOptions = [
   { label: '路径', value: 'path' },
 ]
 
-const modelItems = computed(() => {
-  if (modelSource.value === 'upstream') return props.insights?.upstreamModels ?? []
-  if (modelSource.value === 'mapping') return props.insights?.modelMappings ?? []
-  return props.insights?.models ?? []
-})
+const modelItems = computed(() => props.insights?.modelDistribution ?? [])
+const endpointItems = computed(() => props.insights?.endpointDistribution ?? [])
 
-const endpointItems = computed(() => {
-  if (endpointSource.value === 'upstream') return props.insights?.upstreamEndpoints ?? []
-  if (endpointSource.value === 'path') return props.insights?.endpointPaths ?? []
-  return props.insights?.endpoints ?? []
-})
-
-const trendPoints = computed(() => props.insights?.trend ?? [])
+const trendPoints = computed(() => props.insights?.tokenTrend ?? [])
+const latencyPoints = computed(() => props.insights?.latencyTrend ?? [])
 const hasTrend = computed(() =>
   trendPoints.value.some(
     (point: any) =>
@@ -54,6 +47,9 @@ const hasTrend = computed(() =>
       point.cachedTokens > 0 ||
       point.averageLatencyMs > 0,
   ),
+)
+const hasLatencyTrend = computed(() =>
+  latencyPoints.value.some((point: any) => Number(point.averageLatencyMs || 0) > 0),
 )
 
 const trendOption = computed<EChartsOption>(() => ({
@@ -105,6 +101,7 @@ const trendOption = computed<EChartsOption>(() => ({
   yAxis: [
     {
       type: 'value',
+      splitNumber: chartSplitNumber,
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { show: false },
@@ -146,7 +143,7 @@ const latencyOption = computed<EChartsOption>(() => ({
   },
   xAxis: {
     type: 'category',
-    data: trendPoints.value.map((point: any) => point.date),
+    data: latencyPoints.value.map((point: any) => point.date),
     axisLabel: {
       color: themeColor('--cp-text-muted', '#94A3B8'),
       fontSize: 10,
@@ -157,6 +154,7 @@ const latencyOption = computed<EChartsOption>(() => ({
   },
   yAxis: {
     type: 'value',
+    splitNumber: chartSplitNumber,
     axisLine: { show: false },
     axisTick: { show: false },
     axisLabel: { show: false },
@@ -165,7 +163,7 @@ const latencyOption = computed<EChartsOption>(() => ({
   series: [
     lineSeries(
       '平均延迟',
-      trendPoints.value.map((point: any) => Number(point.averageLatencyMs || 0)),
+      latencyPoints.value.map((point: any) => Number(point.averageLatencyMs || 0)),
       themeColor('--cp-warning', '#D97706'),
       true,
     ),
@@ -288,7 +286,7 @@ function formatCompactNumber(value: number) {
 }
 
 function chartGridLineColor() {
-  return themeColor('--cp-default-border', '#E7EDF5')
+  return themeColor('--cp-bg-muted', '#F1F5F9')
 }
 
 function chartPointerLineColor() {
@@ -332,7 +330,7 @@ function themeColor(name: string, fallback: string) {
       body-class="px-5 pt-3 pb-4"
     >
       <template #body>
-        <div class="h-64 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 pt-3 pb-2">
+        <div class="h-64 px-3 pt-3 pb-2">
           <div v-if="hasTrend" class="flex h-full min-h-50 flex-col">
             <BaseChart :option="trendOption" :height="chartHeight" />
           </div>
@@ -355,8 +353,8 @@ function themeColor(name: string, fallback: string) {
       body-class="px-5 pt-3 pb-4"
     >
       <template #body>
-        <div class="h-64 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 pt-3 pb-2">
-          <BaseChart v-if="hasTrend" :option="latencyOption" :height="chartHeight" />
+        <div class="h-64 px-3 pt-3 pb-2">
+          <BaseChart v-if="hasLatencyTrend" :option="latencyOption" :height="chartHeight" />
           <BaseEmpty
             v-else
             compact

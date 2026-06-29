@@ -38,16 +38,25 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
 const tokenDetails = computed(() => usageTokenDetails(props.record))
 const costDetails = computed(() => usageCostDetails(props.record))
 
-const identityItems = computed(() => [
-  { label: '账号', value: usageAccountText(props.record), mono: true },
-  { label: '时间', value: props.record?.createdAtDisplay, mono: true },
-])
+const scrollViewClass = 'grid gap-3 pr-3'
+const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
+const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
+const fieldLabelClass = 'text-[11px] leading-none font-bold text-(--cp-text-muted)'
+const fieldValueBaseClass =
+  'mt-1.5 mb-0 min-w-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)'
+const codeBlockViewClass = 'rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5'
+const codeBlockClass =
+  'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)'
 
-const metricItems = computed(() => [
+const accountDisplay = computed(() => usageAccountText(props.record))
+const overviewItems = computed(() => [
+  { label: '时间', value: props.record?.createdAtDisplay, mono: true },
   { label: '类型', value: usageRecordType(props.record) },
   { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
   { label: '首 Token', value: props.record?.firstTokenLatencyMsDisplay, mono: true },
   { label: '总 Token', value: tokenDetails.value.totalTokensDisplay, mono: true },
+  { label: '请求 ID', value: props.record?.requestId, mono: true, wide: true },
+  { label: '消息', value: props.record?.message, wide: true },
 ])
 
 const detailGroups = computed(() => [
@@ -82,6 +91,8 @@ const detailGroups = computed(() => [
     ],
   },
 ])
+const modelRouteGroup = computed(() => detailGroups.value[0])
+const clientUpstreamGroup = computed(() => detailGroups.value[1])
 
 const costItems = computed(() => {
   const details = costDetails.value
@@ -189,6 +200,10 @@ function displayValue(value: unknown) {
   return String(value)
 }
 
+function fieldValueClass(mono?: boolean) {
+  return [fieldValueBaseClass, mono ? 'font-mono tabular-nums' : undefined]
+}
+
 function themeColor(name: string, fallback: string) {
   themeRevision.value
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
@@ -201,215 +216,159 @@ function themeColor(name: string, fallback: string) {
     title="使用记录详情"
     description="查看单次网关请求的模型、链路、Token、费用与上游响应。"
     variant="info"
-    width="920px"
+    width="960px"
   >
     <div v-if="record" class="flex max-h-[min(76vh,820px)] flex-col overflow-hidden">
-      <BaseScrollbar view-class="grid gap-4 pr-3" max-height="min(76vh,820px)">
-        <section class="grid gap-3 lg:grid-cols-2">
-          <section class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3">
-            <h3 class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
-              请求身份
-            </h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-[minmax(0,1fr)_180px]">
-              <div v-for="item in identityItems" :key="item.label" class="min-w-0">
-                <dt class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                  {{ item.label }}
-                </dt>
-                <dd
-                  class="mt-1.5 mb-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-none font-[700] text-(--cp-text-primary)"
-                  :class="item.mono ? 'font-mono tabular-nums' : undefined"
-                  :title="displayValue(item.value)"
-                >
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
-          <section class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3">
-            <h3 class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
-              执行指标
-            </h3>
-            <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
-              <div v-for="item in metricItems" :key="item.label" class="min-w-0">
-                <dt class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                  {{ item.label }}
-                </dt>
-                <dd
-                  class="mt-1.5 mb-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)"
-                  :class="item.mono ? 'font-mono tabular-nums' : undefined"
-                  :title="displayValue(item.value)"
-                >
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
-          </section>
-        </section>
-
-        <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5">
-            <span class="block text-[11px] leading-none font-bold text-(--cp-text-muted)">
-              结果
-            </span>
-            <div class="mt-1.5">
-              <UsageLevelBadge :level="record.level" />
-            </div>
-          </div>
-          <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5">
-            <span class="block text-[11px] leading-none font-bold text-(--cp-text-muted)">
-              状态码
-            </span>
-            <div class="mt-1.5">
-              <UsageStatusCodeBadge :status-code="record.statusCode" />
-            </div>
-          </div>
-          <div
-            class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 lg:col-span-2"
-          >
-            <span class="block text-[11px] leading-none font-bold text-(--cp-text-muted)">
-              消息
-            </span>
-            <p class="mt-2 mb-0 truncate text-[13px] font-[650] text-(--cp-text-primary)">
-              {{ displayValue(record.message) }}
+      <BaseScrollbar :view-class="scrollViewClass" max-height="min(76vh,820px)">
+        <section :class="panelClass">
+          <div class="min-w-0">
+            <span :class="fieldLabelClass">账号</span>
+            <p
+              class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
+              :title="displayValue(accountDisplay)"
+            >
+              {{ displayValue(accountDisplay) }}
             </p>
           </div>
-        </section>
 
-        <section class="grid gap-3 lg:grid-cols-2">
-          <section
-            v-for="group in detailGroups"
-            :key="group.title"
-            class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3"
+          <dl
+            class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
           >
-            <h3 class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
-              {{ group.title }}
-            </h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
-              <div v-for="item in group.items" :key="item.label" class="min-w-0">
-                <dt class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                  {{ item.label }}
-                </dt>
-                <dd
-                  class="mt-1.5 mb-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)"
-                  :class="item.mono ? 'font-mono tabular-nums' : undefined"
-                  :title="displayValue(item.value)"
-                >
-                  {{ displayValue(item.value) }}
-                </dd>
-              </div>
-            </dl>
-          </section>
+            <div class="min-w-0">
+              <dt :class="fieldLabelClass">结果</dt>
+              <dd class="mt-1.5 mb-0">
+                <UsageLevelBadge :level="record.level" />
+              </dd>
+            </div>
+            <div class="min-w-0">
+              <dt :class="fieldLabelClass">状态码</dt>
+              <dd class="mt-1.5 mb-0">
+                <UsageStatusCodeBadge :status-code="record.statusCode" />
+              </dd>
+            </div>
+
+            <div
+              v-for="item in overviewItems"
+              :key="item.label"
+              class="min-w-0"
+              :class="item.wide ? 'col-span-2 lg:col-span-2' : undefined"
+            >
+              <dt :class="fieldLabelClass">{{ item.label }}</dt>
+              <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                {{ displayValue(item.value) }}
+              </dd>
+            </div>
+          </dl>
         </section>
 
         <section class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <section
-            class="flex flex-col rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3"
-          >
-            <h3 class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">
-              Token
-            </h3>
-            <div
-              class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
-            >
-              <div class="relative mx-auto w-38 sm:mx-0">
-                <BaseChart :option="tokenDonutOption" :height="152" />
-                <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div class="grid text-center">
-                    <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                      总计
-                    </span>
-                    <strong
-                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
-                    >
-                      {{ tokenDetails.totalTokensDisplay }}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              <dl class="grid grid-cols-2 gap-x-4 gap-y-2.5">
-                <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
-                  <dt
-                    class="flex min-w-0 items-center gap-1.5 text-[11px] leading-none font-bold text-(--cp-text-muted)"
-                  >
-                    <i
-                      class="size-1.75 shrink-0 rounded-full"
-                      :style="{ backgroundColor: item.color }"
-                    />
-                    <span class="truncate">{{ item.label }}</span>
-                  </dt>
-                  <dd
-                    class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-none font-[700] tabular-nums text-(--cp-text-primary)"
-                    :title="displayValue(item.display)"
-                  >
-                    {{ displayValue(item.display) }}
+          <div class="flex min-h-0 flex-col gap-3">
+            <section :class="panelClass">
+              <h3 :class="panelTitleClass">{{ modelRouteGroup.title }}</h3>
+              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div v-for="item in modelRouteGroup.items" :key="item.label" class="min-w-0">
+                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                    {{ displayValue(item.value) }}
                   </dd>
                 </div>
               </dl>
-            </div>
-          </section>
+            </section>
 
-          <section class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3">
-            <h3 class="m-0 text-[12px] leading-none font-[760] text-(--cp-text-secondary)">费用</h3>
-            <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
-              <div v-for="item in costItems" :key="item.label" class="min-w-0">
-                <dt class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
-                  {{ item.label }}
-                </dt>
-                <dd
-                  class="mt-1.5 mb-0 truncate text-[12px] leading-none font-[700] text-(--cp-text-primary)"
-                  :class="item.mono ? 'font-mono tabular-nums' : undefined"
-                  :title="displayValue(item.value)"
-                >
-                  {{ displayValue(item.value) }}
-                </dd>
+            <section :class="[panelClass, 'flex min-h-0 flex-1 flex-col']">
+              <h3 :class="panelTitleClass">Token</h3>
+              <div
+                class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
+              >
+                <div class="relative mx-auto w-38 sm:mx-0">
+                  <BaseChart :option="tokenDonutOption" :height="152" />
+                  <div
+                    class="pointer-events-none absolute inset-0 flex items-center justify-center"
+                  >
+                    <div class="grid text-center">
+                      <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
+                        总计
+                      </span>
+                      <strong
+                        class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
+                      >
+                        {{ tokenDetails.totalTokensDisplay }}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                <dl class="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
+                    <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
+                      <i
+                        class="size-1.75 shrink-0 rounded-full"
+                        :style="{ backgroundColor: item.color }"
+                      />
+                      <span class="truncate">{{ item.label }}</span>
+                    </dt>
+                    <dd
+                      :class="[fieldValueBaseClass, 'font-mono tabular-nums']"
+                      :title="displayValue(item.display)"
+                    >
+                      {{ displayValue(item.display) }}
+                    </dd>
+                  </div>
+                </dl>
               </div>
-            </dl>
-          </section>
+            </section>
+          </div>
+
+          <div class="flex min-h-0 flex-col gap-3">
+            <section :class="[panelClass, 'flex-1']">
+              <h3 :class="panelTitleClass">{{ clientUpstreamGroup.title }}</h3>
+              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div v-for="item in clientUpstreamGroup.items" :key="item.label" class="min-w-0">
+                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                    {{ displayValue(item.value) }}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section :class="panelClass">
+              <h3 :class="panelTitleClass">费用</h3>
+              <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div v-for="item in costItems" :key="item.label" class="min-w-0">
+                  <dt :class="fieldLabelClass">{{ item.label }}</dt>
+                  <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
+                    {{ displayValue(item.value) }}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          </div>
         </section>
 
         <section
           v-if="requestText || responseText"
           class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
         >
-          <div v-if="requestText" class="min-h-0">
-            <span class="mb-1 block text-[11px] font-bold text-(--cp-text-muted)">请求内容</span>
-            <BaseScrollbar
-              max-height="180px"
-              view-class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5"
-            >
-              <pre
-                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] text-(--cp-text-primary)"
-                >{{ requestText }}</pre
-              >
+          <div v-if="requestText" :class="[panelClass, 'min-h-0']">
+            <h3 class="mb-3" :class="panelTitleClass">请求内容</h3>
+            <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
+              <pre :class="codeBlockClass">{{ requestText }}</pre>
             </BaseScrollbar>
           </div>
 
-          <div v-if="responseText" class="min-h-0">
-            <span class="mb-1 block text-[11px] font-bold text-(--cp-text-muted)">响应内容</span>
-            <BaseScrollbar
-              max-height="180px"
-              view-class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5"
-            >
-              <pre
-                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] text-(--cp-text-primary)"
-                >{{ responseText }}</pre
-              >
+          <div v-if="responseText" :class="[panelClass, 'min-h-0']">
+            <h3 class="mb-3" :class="panelTitleClass">响应内容</h3>
+            <BaseScrollbar max-height="180px" :view-class="codeBlockViewClass">
+              <pre :class="codeBlockClass">{{ responseText }}</pre>
             </BaseScrollbar>
           </div>
         </section>
 
-        <section v-if="record.metadata" class="min-h-0">
-          <span class="mb-1 block text-[11px] font-bold text-(--cp-text-muted)">元数据</span>
-          <BaseScrollbar
-            max-height="min(32vh, 340px)"
-            view-class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5"
-          >
-            <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)"
-              >{{ JSON.stringify(record.metadata, null, 2) }}</pre
-            >
+        <section v-if="record.metadata" :class="[panelClass, 'min-h-0']">
+          <h3 class="mb-3" :class="panelTitleClass">元数据</h3>
+          <BaseScrollbar max-height="min(32vh, 340px)" :view-class="codeBlockViewClass">
+            <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
           </BaseScrollbar>
         </section>
       </BaseScrollbar>

@@ -116,15 +116,8 @@ async fn admin_usage_records_should_return_numbered_page_metadata() {
 
 #[tokio::test]
 async fn admin_usage_records_should_return_table_display_fields() {
-    let (app, store, pool, _dir) = admin_usage_records_test_app_with_config(
-        "admin-usage-records-display-fields.sqlite",
-        |config| {
-            config
-                .model_aliases
-                .insert("client-alias".to_string(), "gpt-5.5".to_string());
-        },
-    )
-    .await;
+    let (app, store, pool, _dir) =
+        admin_usage_records_test_app_with_pool("admin-usage-records-display-fields.sqlite").await;
     let now = Utc::now().to_rfc3339();
     sqlx::query("insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)")
         .bind("acct_display")
@@ -140,9 +133,11 @@ async fn admin_usage_records_should_return_table_display_fields() {
     let mut event = UsageRecord::new("request", UsageRecordLevel::Info, "display fields");
     event.id = "usage_display_fields".to_string();
     event.account_id = Some("acct_display".to_string());
-    event.model = Some("client-alias".to_string());
+    event.model = Some("gpt-5.5".to_string());
     event.latency_ms = Some(12_345);
     event.metadata = json!({
+        "requestedModel": "client-alias",
+        "upstreamModel": "gpt-5.5",
         "clientIp": "203.0.113.8",
         "userAgent": "codex-tui/0.142.2 (Ubuntu 24.4.0; aarch64) xterm-256color",
         "reasoningEffort": "xhigh",
@@ -202,6 +197,38 @@ async fn admin_usage_records_should_return_table_display_fields() {
 }
 
 #[tokio::test]
+async fn admin_usage_records_should_use_record_account_email_snapshot_when_account_is_missing() {
+    let (app, store, _dir) =
+        admin_usage_records_test_app("admin-usage-records-email-snapshot.sqlite").await;
+    let mut event = UsageRecord::new("v1.response", UsageRecordLevel::Error, "upstream failed");
+    event.id = "usage_email_snapshot".to_string();
+    event.account_id = Some("acct_deleted".to_string());
+    event.metadata = json!({
+        "accountEmail": "deleted@example.com",
+        "failed": true
+    });
+    store.append(&event).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records?page=1&pageSize=20")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+
+    assert_eq!(
+        body["data"]["items"][0]["accountEmail"],
+        "deleted@example.com"
+    );
+}
+
+#[tokio::test]
 async fn admin_usage_records_summary_should_aggregate_filtered_usage() {
     let (app, store, _dir) =
         admin_usage_records_test_app("admin-usage-records-summary.sqlite").await;
@@ -256,13 +283,13 @@ async fn admin_usage_records_summary_should_aggregate_filtered_usage() {
 }
 
 #[tokio::test]
-async fn admin_usage_records_insights_should_aggregate_filtered_usage_dimensions() {
-    let (app, store, pool, _dir) =
+async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimensions() {
+    let (app, store, _pool, _dir) =
         admin_usage_records_test_app_with_pool("admin-usage-records-insights.sqlite").await;
     let mut first = UsageRecord::new("request", UsageRecordLevel::Info, "insight success");
     first.id = "usage_insight_success".to_string();
     first.route = Some("/v1/responses".to_string());
-    first.model = Some("client-alias".to_string());
+    first.model = Some("gpt-5.5".to_string());
     first.latency_ms = Some(240);
     first.metadata = json!({
         "stream": true,
@@ -277,14 +304,6 @@ async fn admin_usage_records_insights_should_aggregate_filtered_usage_dimensions
         }
     });
     store.append(&first).await.unwrap();
-    sqlx::query(
-        "insert into runtime_settings (id, model_aliases_json, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, ?, 300, 2, 3, 50, 'least_used', ?)",
-    )
-    .bind(r#"{"client-alias":"gpt-5.5"}"#)
-    .bind(chrono::Utc::now().to_rfc3339())
-    .execute(&pool)
-    .await
-    .unwrap();
 
     let mut second = UsageRecord::new("request", UsageRecordLevel::Error, "insight failure");
     second.id = "usage_insight_failure".to_string();
@@ -305,40 +324,75 @@ async fn admin_usage_records_insights_should_aggregate_filtered_usage_dimensions
     });
     store.append(&second).await.unwrap();
 
-    let response = app
+    let requested_models = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/usage/records/insights?search=insight")
+                .uri("/api/admin/usage/records/insights/models?source=requested&search=insight")
                 .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_usage_records_insights")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    let body = response_json(response).await;
+    let requested_body = response_json(requested_models).await;
+    assert_eq!(requested_body["code"], 200);
+    assert_eq!(requested_body["data"][0]["name"], "client-alias");
+    assert_eq!(requested_body["data"][0]["totalTokens"], 42);
+    assert_eq!(requested_body["data"][0]["actualCostDisplay"], "$0.000483");
 
-    assert_eq!(body["code"], 200);
-    assert_eq!(body["data"]["models"][0]["name"], "client-alias");
-    assert_eq!(body["data"]["models"][0]["totalTokens"], 42);
-    assert_eq!(body["data"]["models"][0]["actualCostDisplay"], "$0.000483");
-    assert_eq!(body["data"]["upstreamModels"][0]["name"], "gpt-5.5");
+    let upstream_models = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/models?source=upstream&search=insight")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        body["data"]["modelMappings"][0]["name"],
-        "client-alias -> gpt-5.5"
+        response_json(upstream_models).await["data"][0]["name"],
+        "gpt-5.5"
     );
+
+    let mappings = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/models?source=mapping&search=insight")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mapping_body = response_json(mappings).await;
+    assert_eq!(mapping_body["data"][0]["name"], "client-alias -> gpt-5.5");
     assert_eq!(
-        body["data"]["modelMappings"][1]["name"],
+        mapping_body["data"][1]["name"],
         "gpt-5.5-mini -> gpt-5.5-mini"
     );
-    assert_eq!(body["data"]["endpoints"].as_array().unwrap().len(), 2);
-    assert_eq!(
-        body["data"]["upstreamEndpoints"].as_array().unwrap().len(),
-        2
-    );
-    assert_eq!(body["data"]["endpointPaths"].as_array().unwrap().len(), 2);
-    let endpoint_paths = body["data"]["endpointPaths"]
+
+    let endpoints = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/endpoints?source=path&search=insight")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let endpoint_body = response_json(endpoints).await;
+    assert_eq!(endpoint_body["data"].as_array().unwrap().len(), 2);
+    let endpoint_paths = endpoint_body["data"]
         .as_array()
         .unwrap()
         .iter()
@@ -346,14 +400,185 @@ async fn admin_usage_records_insights_should_aggregate_filtered_usage_dimensions
         .collect::<Vec<_>>();
     assert!(endpoint_paths.contains(&"/v1/responses -> /backend/responses"));
     assert!(endpoint_paths.contains(&"/v1/chat/completions -> /backend/chat"));
-    assert_eq!(body["data"]["types"].as_array().unwrap().len(), 2);
-    assert_eq!(body["data"]["trend"][0]["inputTokens"], 35);
-    assert_eq!(body["data"]["trend"][0]["outputTokens"], 13);
-    assert_eq!(body["data"]["trend"][0]["cacheCreationTokens"], 0);
-    assert_eq!(body["data"]["trend"][0]["cachedTokens"], 6);
-    assert_eq!(body["data"]["trend"][0]["actualCostDisplay"], "$0.000538");
-    assert_eq!(body["data"]["trend"][0]["costDisplay"], "$0.000538");
-    assert_eq!(body["data"]["trend"][0]["averageLatencyMs"], 180.0);
+
+    let token_trend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/token-trend?search=insight")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token_body = response_json(token_trend).await;
+    assert_eq!(token_body["data"][0]["inputTokens"], 35);
+    assert_eq!(token_body["data"][0]["outputTokens"], 13);
+    assert_eq!(token_body["data"][0]["cacheCreationTokens"], 0);
+    assert_eq!(token_body["data"][0]["cachedTokens"], 6);
+    assert_eq!(token_body["data"][0]["actualCostDisplay"], "$0.000538");
+    assert_eq!(token_body["data"][0]["costDisplay"], "$0.000538");
+
+    let latency_trend = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/latency-trend?search=insight")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(latency_trend).await["data"][0]["averageLatencyMs"],
+        180.0
+    );
+}
+
+#[tokio::test]
+async fn admin_usage_records_insight_card_endpoints_should_return_source_specific_data() {
+    let (app, store, _pool, _dir) =
+        admin_usage_records_test_app_with_pool("admin-usage-records-insight-cards.sqlite").await;
+    let mut first = UsageRecord::new("request", UsageRecordLevel::Info, "card success");
+    first.id = "usage_card_success".to_string();
+    first.route = Some("/v1/responses".to_string());
+    first.model = Some("gpt-5.5".to_string());
+    first.latency_ms = Some(240);
+    first.metadata = json!({
+        "stream": true,
+        "requestedModel": "client-alias",
+        "upstreamModel": "gpt-5.5",
+        "upstreamEndpoint": "/backend/responses",
+        "usage": {
+            "inputTokens": 30,
+            "outputTokens": 12,
+            "cachedTokens": 6
+        }
+    });
+    store.append(&first).await.unwrap();
+
+    let mut second = UsageRecord::new("request", UsageRecordLevel::Info, "card mini");
+    second.id = "usage_card_mini".to_string();
+    second.route = Some("/v1/chat/completions".to_string());
+    second.model = Some("gpt-5.5-mini".to_string());
+    second.latency_ms = Some(120);
+    second.metadata = json!({
+        "stream": false,
+        "requestedModel": "gpt-5.5-mini",
+        "upstreamModel": "gpt-5.5-mini",
+        "upstreamEndpoint": "/backend/chat",
+        "usage": {
+            "inputTokens": 5,
+            "outputTokens": 1
+        }
+    });
+    store.append(&second).await.unwrap();
+
+    let upstream_models = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/models?source=upstream&search=card")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let upstream_body = response_json(upstream_models).await;
+    assert_eq!(upstream_body["code"], 200);
+    assert_eq!(upstream_body["data"][0]["name"], "gpt-5.5");
+    assert_eq!(upstream_body["data"][0]["totalTokens"], 42);
+
+    let mappings = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/models?source=mapping&search=card")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(mappings).await["data"][0]["name"],
+        "client-alias -> gpt-5.5"
+    );
+
+    let endpoints = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/endpoints?source=path&search=card")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let endpoint_body = response_json(endpoints).await;
+    let endpoint_paths = endpoint_body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(endpoint_paths.contains(&"/v1/responses -> /backend/responses"));
+    assert!(endpoint_paths.contains(&"/v1/chat/completions -> /backend/chat"));
+
+    let token_trend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/token-trend?search=card")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token_body = response_json(token_trend).await;
+    assert_eq!(token_body["data"][0]["inputTokens"], 35);
+    assert_eq!(token_body["data"][0]["cachedTokens"], 6);
+
+    let latency_trend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/latency-trend?search=card")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(latency_trend).await["data"][0]["averageLatencyMs"],
+        180.0
+    );
+
+    let invalid_source = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/models?source=actual")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_source.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response_json(invalid_source).await["code"], 40003);
 }
 
 #[tokio::test]

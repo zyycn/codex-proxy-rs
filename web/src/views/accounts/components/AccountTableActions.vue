@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { LoaderCircle, MoreHorizontal, Pencil, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
+import {
+  KeyRound,
+  LoaderCircle,
+  MoreHorizontal,
+  Pencil,
+  Power,
+  RefreshCw,
+  Trash2,
+  Wifi,
+} from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
@@ -18,6 +27,7 @@ const emit = defineEmits<{
   delete: [account: any]
   test: [account: any]
   refresh: [accountId: string]
+  reauthorize: [account: any]
   toggleSchedule: [account: any]
 }>()
 </script>
@@ -74,6 +84,14 @@ const emit = defineEmits<{
             :class="refreshing ? 'animate-spin' : undefined"
           />
           刷新 token
+        </button>
+        <button
+          type="button"
+          class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover)"
+          @click.stop="(close(), emit('reauthorize', account))"
+        >
+          <KeyRound class="size-3.5 text-(--cp-text-muted)" />
+          重新授权
         </button>
         <button
           type="button"
