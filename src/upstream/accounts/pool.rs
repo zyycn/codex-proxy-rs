@@ -45,6 +45,16 @@ pub enum RotationStrategy {
     Sticky,
 }
 
+impl RotationStrategy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LeastUsed => "least_used",
+            Self::RoundRobin => "round_robin",
+            Self::Sticky => "sticky",
+        }
+    }
+}
+
 /// 账号池配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountPoolOptions {
@@ -169,9 +179,22 @@ pub struct AccountWindowUsageDelta {
 #[derive(Debug)]
 pub struct AccountPool {
     accounts: IndexMap<String, Account>,
-    slots: BTreeMap<String, VecDeque<DateTime<Utc>>>,
+    slots: BTreeMap<String, VecDeque<AccountSlot>>,
     options: AccountPoolOptions,
     rotation_cursor: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccountSlot {
+    created_at: DateTime<Utc>,
+    model: String,
+}
+
+/// 账号释放结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleasedAccountUsage {
+    /// 被释放槽位对应的模型。槽位已被过期清理时为空。
+    pub model: Option<String>,
 }
 
 impl Default for AccountPool {
@@ -383,7 +406,13 @@ impl AccountPool {
                 .iter()
                 .find(|account| account.id == *preferred_account_id)
                 .cloned();
-            preferred.map(|account| (account, self.previous_slot_at(preferred_account_id)))
+            preferred.map(|account| {
+                (
+                    account,
+                    self.previous_slot_at(preferred_account_id),
+                    "preferred",
+                )
+            })
         } else {
             None
         }
@@ -392,35 +421,48 @@ impl AccountPool {
                 RotationStrategy::LeastUsed => {
                     let account = self.select_least_used(&candidates)?;
                     let previous = self.previous_slot_at(&account.id);
-                    (account, previous)
+                    (account, previous, "least_used")
                 }
                 RotationStrategy::RoundRobin => {
                     let account = self.select_round_robin(&candidates)?;
                     let previous = self.previous_slot_at(&account.id);
-                    (account, previous)
+                    (account, previous, "round_robin")
                 }
                 RotationStrategy::Sticky => {
                     let account = Self::select_sticky(&candidates)?;
                     let previous = self.previous_slot_at(&account.id);
-                    (account, previous)
+                    (account, previous, "sticky")
                 }
             })
         });
-        let Some((selected, previous_slot_at)) = selected else {
+        let Some((selected, previous_slot_at, selection_source)) = selected else {
             return AccountAcquireWithStatusRefresh {
                 acquired: None,
                 expired_account_ids,
             };
         };
+        tracing::info!(
+            model = %request.model,
+            rotation_strategy = self.options.rotation_strategy.as_str(),
+            selection_source,
+            account_id = %selected.id,
+            candidate_count = candidates.len(),
+            request_count = selected.request_count,
+            window_request_count = selected.window_request_count,
+            window_reset_at = ?selected.window_reset_at,
+            last_used_at = selected.last_used_at.as_deref().unwrap_or_default(),
+            quota_limit_reached = selected.quota_limit_reached,
+            quota_cooldown_until = ?selected.quota_cooldown_until,
+            previous_slot_at = ?previous_slot_at,
+            rotation_cursor = self.rotation_cursor,
+            "account selected for upstream request"
+        );
 
         let selected_id = selected.id.clone();
-        self.push_slot(&selected_id, request.now);
-        let acquired = self
-            .mark_usage(&selected_id, request.now)
-            .unwrap_or(selected);
+        self.push_slot(&selected_id, request.now, &request.model);
         AccountAcquireWithStatusRefresh {
             acquired: Some(AcquiredAccount {
-                account: acquired,
+                account: selected,
                 previous_slot_at,
             }),
             expired_account_ids,
@@ -445,14 +487,22 @@ impl AccountPool {
     }
 
     /// 释放指定账号的一个在途槽位。
-    pub fn release(&mut self, account_id: &str) {
-        let Some(slots) = self.slots.get_mut(account_id) else {
-            return;
-        };
-        slots.pop_front();
-        if slots.is_empty() {
+    pub fn release(&mut self, account_id: &str) -> Option<ReleasedAccountUsage> {
+        self.accounts.get(account_id)?;
+
+        let mut remove_slots = false;
+        let slot = self.slots.get_mut(account_id).and_then(|slots| {
+            let slot = slots.pop_front();
+            remove_slots = slots.is_empty();
+            slot
+        });
+        if remove_slots {
             self.slots.remove(account_id);
         }
+        self.mark_request_usage(account_id, Utc::now());
+        Some(ReleasedAccountUsage {
+            model: slot.map(|slot| slot.model),
+        })
     }
 
     /// 计算账号池容量摘要。
@@ -563,17 +613,21 @@ impl AccountPool {
     fn previous_slot_at(&self, account_id: &str) -> Option<DateTime<Utc>> {
         self.slots
             .get(account_id)
-            .and_then(|slots| slots.back().copied())
+            .and_then(|slots| slots.back())
+            .map(|slot| slot.created_at)
     }
 
-    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>) {
+    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>, model: &str) {
         self.slots
             .entry(account_id.to_string())
             .or_default()
-            .push_back(now);
+            .push_back(AccountSlot {
+                created_at: now,
+                model: model.to_string(),
+            });
     }
 
-    fn mark_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
+    fn mark_request_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
         let account = self.accounts.get_mut(account_id)?;
         account.last_used_at = Some(now.to_rfc3339());
         account.request_count = account.request_count.saturating_add(1);
@@ -612,7 +666,7 @@ impl AccountPool {
     fn cleanup_stale_slots(&mut self, now: DateTime<Utc>) {
         let ttl = self.options.stale_slot_ttl;
         self.slots.retain(|_, slots| {
-            slots.retain(|slot_at| now.signed_duration_since(*slot_at) <= ttl);
+            slots.retain(|slot| now.signed_duration_since(slot.created_at) <= ttl);
             !slots.is_empty()
         });
     }
@@ -732,7 +786,43 @@ impl RuntimeAccountPoolService {
 
     /// 释放账号在途槽位。
     pub async fn release(&self, account_id: &str) {
-        self.pool.lock().await.release(account_id);
+        let released = self.pool.lock().await.release(account_id);
+        let Some(released) = released else {
+            return;
+        };
+        if let Err(error) = self.store.record_request(account_id).await {
+            tracing::warn!(
+                account_id,
+                error = %error,
+                "failed to persist account request usage"
+            );
+        }
+        let Some(model) = released.model else {
+            tracing::debug!(
+                account_id,
+                "released account without active slot; skipped model request usage persistence"
+            );
+            return;
+        };
+        if let Err(error) = self
+            .store
+            .record_model_usage_delta(
+                account_id,
+                &model,
+                AccountModelUsageDelta {
+                    requests: 1,
+                    ..AccountModelUsageDelta::default()
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id,
+                model,
+                error = %error,
+                "failed to persist account model request usage"
+            );
+        }
     }
 
     /// 更新账号状态并同步内存池。
@@ -775,38 +865,10 @@ impl RuntimeAccountPoolService {
 
     /// 按请求上下文获取可用账号。
     pub async fn acquire_with(&self, request: &AccountAcquireRequest) -> Option<AcquiredAccount> {
-        let model = request.model.clone();
         let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
         self.persist_expired_statuses(refresh.expired_account_ids)
             .await;
-        let acquired = refresh.acquired?;
-        if let Err(error) = self.store.record_request(&acquired.account.id).await {
-            tracing::warn!(
-                account_id = acquired.account.id,
-                error = %error,
-                "failed to persist account request usage"
-            );
-        }
-        if let Err(error) = self
-            .store
-            .record_model_usage_delta(
-                &acquired.account.id,
-                &model,
-                AccountModelUsageDelta {
-                    requests: 1,
-                    ..AccountModelUsageDelta::default()
-                },
-            )
-            .await
-        {
-            tracing::warn!(
-                account_id = acquired.account.id,
-                model,
-                error = %error,
-                "failed to persist account model request usage"
-            );
-        }
-        Some(acquired)
+        refresh.acquired
     }
 
     async fn persist_expired_statuses(&self, account_ids: Vec<String>) {

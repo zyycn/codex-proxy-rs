@@ -11,6 +11,9 @@ use crate::infra::json::{decode_cursor, page_offset, NumberedPage, Page};
 use crate::upstream::accounts::model::{
     Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta,
 };
+use crate::upstream::accounts::quota::{
+    quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
+};
 
 // ============================================================================
 // SQL 常量
@@ -32,6 +35,7 @@ select
   a.quota_limit_reached,
   a.quota_verify_required,
   a.quota_cooldown_until,
+  a.quota_json,
   a.cloudflare_cooldown_until,
   a.added_at,
   coalesce(au.request_count, 0) as usage_request_count,
@@ -72,6 +76,7 @@ select
   a.quota_limit_reached,
   a.quota_verify_required,
   a.quota_cooldown_until,
+  a.quota_json,
   a.cloudflare_cooldown_until,
   a.added_at,
   coalesce(au.request_count, 0) as usage_request_count,
@@ -1632,6 +1637,14 @@ async fn get_pool_account(
 }
 
 fn pool_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<Account> {
+    let quota_json = row
+        .get::<Option<String>, _>("quota_json")
+        .and_then(|quota_json| serde_json::from_str::<Value>(&quota_json).ok());
+    let quota_window_reset_at = quota_json.as_ref().and_then(quota_snapshot_reset_at);
+    let quota_limit_window_seconds = quota_json
+        .as_ref()
+        .and_then(quota_snapshot_limit_window_seconds);
+
     Ok(Account {
         id: row.get("id"),
         email: row.get("email"),
@@ -1698,10 +1711,12 @@ fn pool_account_from_row(row: &SqliteRow) -> SqliteAccountStoreResult<Account> {
         window_reset_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("usage_window_reset_at")
                 .as_deref(),
-        )?,
+        )?
+        .or(quota_window_reset_at),
         limit_window_seconds: optional_positive_i64_to_u64(
             row.get::<Option<i64>, _>("usage_limit_window_seconds"),
-        ),
+        )
+        .or(quota_limit_window_seconds),
         added_at: row.get("added_at"),
         last_used_at: row.get("usage_last_used_at"),
     })

@@ -75,7 +75,7 @@ fn least_used_should_compare_request_count_when_only_one_account_has_window_rese
 }
 
 #[test]
-fn acquire_should_mark_runtime_usage_window() {
+fn release_should_mark_runtime_usage_window() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
     let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
@@ -86,17 +86,42 @@ fn acquire_should_mark_runtime_usage_window() {
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
-    assert_eq!(acquired.account.request_count, 1);
-    assert_eq!(acquired.account.window_request_count, 1);
-    assert_eq!(acquired.account.window_started_at, Some(now));
-    assert_eq!(
-        acquired.account.window_reset_at,
-        Some(now + Duration::seconds(60))
-    );
-    assert_eq!(
-        acquired.account.last_used_at.as_deref(),
-        Some(now.to_rfc3339().as_str())
-    );
+    assert_eq!(acquired.account.request_count, 0);
+    assert_eq!(acquired.account.window_request_count, 0);
+
+    pool.release(&acquired.account.id);
+    let released = pool.get(&acquired.account.id).unwrap();
+
+    assert_eq!(released.request_count, 1);
+    assert_eq!(released.window_request_count, 1);
+    assert!(released.window_started_at.is_some());
+    assert!(released.window_reset_at.is_some());
+    assert!(released.last_used_at.is_some());
+}
+
+#[test]
+fn release_should_mark_usage_after_stale_slot_cleanup() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        stale_slot_ttl: Duration::minutes(5),
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    let summary = pool.capacity_summary(now + Duration::minutes(6));
+    pool.release(&acquired.account.id);
+    let released = pool.get(&acquired.account.id).unwrap();
+
+    assert_eq!(summary.used_slots, 0);
+    assert_eq!(released.request_count, 1);
+    assert_eq!(released.window_request_count, 1);
 }
 
 #[test]

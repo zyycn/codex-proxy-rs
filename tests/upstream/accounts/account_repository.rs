@@ -257,6 +257,53 @@ async fn account_repository_should_restore_window_usage_into_runtime_pool_accoun
 }
 
 #[tokio::test]
+async fn account_repository_should_restore_window_from_quota_json_when_usage_window_is_missing() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 36).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    let reset_at = DateTime::<Utc>::from_timestamp(1_806_364_800, 0).unwrap();
+
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    sqlx::query("update accounts set quota_json = ? where id = ?")
+        .bind(
+            r#"{
+                "snapshots": [{
+                    "source": "core",
+                    "blocked": false,
+                    "primary": {
+                        "used_percent": 11,
+                        "remaining_percent": 89,
+                        "reset_at": 1806364800,
+                        "window_minutes": 43200,
+                        "limit_reached": false
+                    },
+                    "secondary": null
+                }],
+                "monthly_limit": {
+                    "key": "core-monthly",
+                    "source": "rate_limit",
+                    "used_percent": 11,
+                    "remaining_percent": 89,
+                    "reset_at": 1806364800,
+                    "window_minutes": 43200,
+                    "limit_reached": false
+                }
+            }"#,
+        )
+        .bind("acct_a")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let account = AccountStore::list_pool_accounts(&repo)
+        .await
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(account.window_reset_at, Some(reset_at));
+    assert_eq!(account.limit_window_seconds, Some(2_592_000));
+}
+
+#[tokio::test]
 async fn account_repository_should_restore_quota_verify_required_into_runtime_pool_accounts() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 34).await;
     let repo = SqliteAccountStore::new(pool.clone());

@@ -19,12 +19,13 @@ pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
 /// 从配额快照读取 UTC 重置时间。
 pub fn quota_snapshot_reset_at(quota: &Value) -> Option<DateTime<Utc>> {
     let reset_at = if monthly_limit_reached(quota) || spend_control_limit_reached(quota) {
-        quota
-            .pointer("/monthly_limit/reset_at")
-            .and_then(positive_i64)
+        monthly_limit_reset_at(quota)
             .or_else(|| blocking_core_bucket(quota).and_then(bucket_reset_at))
+            .or_else(|| core_bucket_with_reset_at(quota).and_then(bucket_reset_at))
     } else {
-        blocking_core_bucket(quota).and_then(bucket_reset_at)
+        core_bucket_with_reset_at(quota)
+            .and_then(bucket_reset_at)
+            .or_else(|| monthly_limit_reset_at(quota))
     }?;
     DateTime::<Utc>::from_timestamp(reset_at, 0)
 }
@@ -32,11 +33,12 @@ pub fn quota_snapshot_reset_at(quota: &Value) -> Option<DateTime<Utc>> {
 /// 从配额快照读取窗口大小。
 pub fn quota_snapshot_limit_window_seconds(quota: &Value) -> Option<u64> {
     if monthly_limit_reached(quota) || spend_control_limit_reached(quota) {
-        return Some(MONTH_WINDOW_SECONDS);
+        return monthly_limit_window_seconds(quota).or(Some(MONTH_WINDOW_SECONDS));
     }
-    blocking_core_bucket(quota)
+    core_bucket_with_window_minutes(quota)
         .and_then(bucket_window_minutes)
         .and_then(|minutes| minutes.checked_mul(60))
+        .or_else(|| monthly_limit_window_seconds(quota))
 }
 
 /// 从 Codex usage 响应中提取持久化配额快照。
@@ -291,6 +293,29 @@ fn blocking_core_bucket(quota: &Value) -> Option<&Value> {
         })
 }
 
+fn core_bucket_with_reset_at(quota: &Value) -> Option<&Value> {
+    core_buckets(quota).find(|bucket| bucket_reset_at(bucket).is_some())
+}
+
+fn core_bucket_with_window_minutes(quota: &Value) -> Option<&Value> {
+    core_buckets(quota).find(|bucket| bucket_window_minutes(bucket).is_some())
+}
+
+fn core_buckets<'a>(quota: &'a Value) -> impl Iterator<Item = &'a Value> + 'a {
+    quota
+        .get("snapshots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|snapshot| snapshot.get("source").and_then(Value::as_str) == Some("core"))
+        .flat_map(|snapshot| {
+            ["primary", "secondary"]
+                .into_iter()
+                .filter_map(|key| snapshot.get(key))
+        })
+        .filter(|bucket| !bucket.is_null())
+}
+
 fn bucket_reset_at(bucket: &Value) -> Option<i64> {
     bucket.get("reset_at").and_then(positive_i64)
 }
@@ -307,6 +332,20 @@ fn credits_overage_limit_reached(quota: &Value) -> bool {
         .pointer("/credits/overage_limit_reached")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn monthly_limit_reset_at(quota: &Value) -> Option<i64> {
+    quota
+        .pointer("/monthly_limit/reset_at")
+        .and_then(positive_i64)
+}
+
+fn monthly_limit_window_seconds(quota: &Value) -> Option<u64> {
+    quota
+        .pointer("/monthly_limit/window_minutes")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .and_then(|minutes| minutes.checked_mul(60))
 }
 
 fn number_value(value: &Value) -> Option<f64> {

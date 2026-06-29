@@ -5,7 +5,8 @@ use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::quota::{
-    quota_from_usage, quota_snapshot_limit_reached, RuntimeQuotaRefreshService,
+    quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
+    quota_snapshot_reset_at, RuntimeQuotaRefreshService,
 };
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
@@ -154,6 +155,62 @@ fn quota_snapshot_limit_reached_should_keep_allowed_free_account_without_reset_c
     let quota = quota_from_usage(&usage);
 
     assert!(!quota_snapshot_limit_reached(&quota));
+}
+
+#[test]
+fn quota_snapshot_reset_at_should_use_non_blocking_core_window() {
+    let usage = json!({
+        "plan_type": "free",
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {
+                "used_percent": 6,
+                "reset_at": 1_806_364_800,
+                "limit_window_seconds": 2_592_000
+            }
+        }
+    });
+    let quota = quota_from_usage(&usage);
+
+    assert_eq!(
+        quota_snapshot_reset_at(&quota).map(|reset_at| reset_at.timestamp()),
+        Some(1_806_364_800)
+    );
+    assert_eq!(quota_snapshot_limit_window_seconds(&quota), Some(2_592_000));
+}
+
+#[test]
+fn quota_snapshot_reset_at_should_prefer_core_window_over_preserved_monthly_limit() {
+    let quota = json!({
+        "snapshots": [{
+            "source": "core",
+            "blocked": false,
+            "primary": {
+                "used_percent": 25,
+                "remaining_percent": 75,
+                "reset_at": 1_893_456_300,
+                "window_minutes": 5,
+                "limit_reached": false
+            },
+            "secondary": null
+        }],
+        "monthly_limit": {
+            "key": "spend-control-monthly",
+            "source": "spend_control",
+            "used_percent": 52,
+            "remaining_percent": 48,
+            "reset_at": 1_896_048_000,
+            "window_minutes": 43200,
+            "limit_reached": false
+        }
+    });
+
+    assert_eq!(
+        quota_snapshot_reset_at(&quota).map(|reset_at| reset_at.timestamp()),
+        Some(1_893_456_300)
+    );
+    assert_eq!(quota_snapshot_limit_window_seconds(&quota), Some(300));
 }
 
 #[test]
