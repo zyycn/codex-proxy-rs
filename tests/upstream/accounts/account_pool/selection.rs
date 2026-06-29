@@ -53,6 +53,96 @@ fn account_pool_should_rotate_round_robin_across_candidates() {
 }
 
 #[test]
+fn round_robin_should_use_account_insert_order() {
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::RoundRobin,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_c",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+
+    let acquired = acquire_account(&mut pool, "gpt-5.5").unwrap();
+
+    assert_eq!(acquired.id, "acct_c");
+}
+
+#[test]
+fn round_robin_should_keep_ts_cursor_when_candidates_recover() {
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 1,
+        rotation_strategy: RotationStrategy::RoundRobin,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_c",
+        AccountStatus::Active,
+    ));
+
+    let first = acquire_account(&mut pool, "gpt-5.5").unwrap();
+    let second = acquire_account(&mut pool, "gpt-5.5").unwrap();
+    pool.release(&first.id);
+    pool.release(&second.id);
+    let third = acquire_account(&mut pool, "gpt-5.5").unwrap();
+
+    assert_eq!(third.id, "acct_c");
+}
+
+#[test]
+fn sticky_should_use_account_insert_order_when_last_used_ties() {
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Sticky,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+
+    let acquired = acquire_account(&mut pool, "gpt-5.5").unwrap();
+
+    assert_eq!(acquired.id, "acct_a");
+}
+
+#[test]
+fn sticky_should_prefer_most_recently_used_account() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Sticky,
+        ..AccountPoolOptions::default()
+    });
+    let mut older = crate::support::accounts::test_account("older", AccountStatus::Active);
+    older.last_used_at = Some((now - Duration::minutes(10)).to_rfc3339());
+    let mut newer = crate::support::accounts::test_account("newer", AccountStatus::Active);
+    newer.last_used_at = Some((now - Duration::minutes(1)).to_rfc3339());
+    pool.insert(older);
+    pool.insert(newer);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "newer");
+}
+
+#[test]
 fn acquire_should_skip_accounts_with_expired_token_metadata() {
     let now = fixed_time();
     let mut expired = crate::support::accounts::test_account("expired", AccountStatus::Active);
@@ -270,6 +360,42 @@ fn account_pool_should_rotate_tied_least_used_accounts() {
 }
 
 #[test]
+fn least_used_should_prefer_lru_before_tie_rotation() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 1,
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "seed",
+        AccountStatus::Active,
+    ));
+    let mut older = crate::support::accounts::test_account("older", AccountStatus::Active);
+    older.last_used_at = Some((now - Duration::minutes(10)).to_rfc3339());
+    let mut newer = crate::support::accounts::test_account("newer", AccountStatus::Active);
+    newer.last_used_at = Some((now - Duration::minutes(1)).to_rfc3339());
+    pool.insert(older);
+    pool.insert(newer);
+
+    assert_eq!(
+        pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+            .unwrap()
+            .account
+            .id,
+        "seed"
+    );
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(1),
+        ))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "older");
+}
+
+#[test]
 fn least_used_should_prefer_lower_runtime_request_count() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
@@ -288,4 +414,107 @@ fn least_used_should_prefer_lower_runtime_request_count() {
         .unwrap();
 
     assert_eq!(acquired.account.id, "quiet");
+}
+
+#[test]
+fn least_used_should_not_penalize_missing_window_reset() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut fresh = crate::support::accounts::test_account("fresh", AccountStatus::Active);
+    fresh.request_count = 1;
+    let mut known_window =
+        crate::support::accounts::test_account("known_window", AccountStatus::Active);
+    known_window.request_count = 5;
+    known_window.window_reset_at = Some(now + Duration::days(1));
+    pool.insert(known_window);
+    pool.insert(fresh);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "fresh");
+}
+
+#[test]
+fn least_used_should_fall_through_to_request_count_without_window_resets() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut busier = crate::support::accounts::test_account("busier", AccountStatus::Active);
+    busier.request_count = 3;
+    let mut quieter = crate::support::accounts::test_account("quieter", AccountStatus::Active);
+    quieter.request_count = 1;
+    pool.insert(busier);
+    pool.insert(quieter);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "quieter");
+}
+
+#[test]
+fn least_used_should_sort_quota_limited_accounts_by_reset_when_not_skipping() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        skip_quota_limited: false,
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut later = crate::support::accounts::test_account("later", AccountStatus::Active);
+    later.quota_limit_reached = true;
+    later.window_reset_at = Some(now + Duration::days(3));
+    let mut sooner = crate::support::accounts::test_account("sooner", AccountStatus::Active);
+    sooner.quota_limit_reached = true;
+    sooner.window_reset_at = Some(now + Duration::days(1));
+    pool.insert(later);
+    pool.insert(sooner);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "sooner");
+}
+
+#[test]
+fn least_used_should_not_mutate_candidate_order() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::LeastUsed,
+        ..AccountPoolOptions::default()
+    });
+    let mut first = crate::support::accounts::test_account("first", AccountStatus::Active);
+    first.request_count = 5;
+    let mut second = crate::support::accounts::test_account("second", AccountStatus::Active);
+    second.request_count = 3;
+    let mut third = crate::support::accounts::test_account("third", AccountStatus::Active);
+    third.request_count = 1;
+    pool.insert(first);
+    pool.insert(second);
+    pool.insert(third);
+
+    let selected = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+    pool.release(&selected.account.id);
+    pool.set_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::RoundRobin,
+        ..AccountPoolOptions::default()
+    });
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(1),
+        ))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "first");
 }

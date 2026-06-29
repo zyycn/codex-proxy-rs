@@ -15,6 +15,31 @@ fn account_pool_should_skip_accounts_with_cached_quota_limit() {
 }
 
 #[test]
+fn account_pool_should_mark_quota_state_as_quota_exhausted_status() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(crate::support::accounts::test_account(
+        "limited",
+        AccountStatus::Active,
+    ));
+
+    pool.apply_quota_state("limited", true, Some(now + Duration::seconds(60)));
+
+    let limited = pool.get("limited").unwrap();
+    assert_eq!(limited.status, AccountStatus::QuotaExhausted);
+    assert!(limited.quota_limit_reached);
+    assert!(pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .is_none());
+
+    pool.apply_quota_state("limited", false, None);
+
+    let restored = pool.get("limited").unwrap();
+    assert_eq!(restored.status, AccountStatus::Active);
+    assert!(!restored.quota_limit_reached);
+}
+
+#[test]
 fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
@@ -81,7 +106,8 @@ fn account_pool_should_not_replace_known_window_length_with_cooldown_seconds() {
 #[test]
 fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
     let now = fixed_time();
-    let mut account = crate::support::accounts::test_account("acct_a", AccountStatus::Active);
+    let mut account =
+        crate::support::accounts::test_account("acct_a", AccountStatus::QuotaExhausted);
     account.quota_limit_reached = true;
     account.quota_cooldown_until = Some(now - Duration::seconds(1));
     account.cloudflare_cooldown_until = Some(now - Duration::seconds(1));
@@ -97,6 +123,7 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
 
     assert!(!acquired.account.quota_limit_reached);
     assert!(acquired.account.quota_verify_required);
+    assert_eq!(acquired.account.status, AccountStatus::Active);
     assert!(acquired.account.quota_cooldown_until.is_none());
     assert!(acquired.account.cloudflare_cooldown_until.is_none());
     assert_eq!(acquired.account.window_request_count, 1);

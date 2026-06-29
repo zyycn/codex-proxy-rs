@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use codex_proxy_rs::upstream::accounts::{
-    pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
+    pool::{
+        AccountAcquireRequest, AccountPoolOptions, RotationStrategy, RuntimeAccountPoolService,
+    },
     store::{AccountStore, SqliteAccountStore},
 };
 
@@ -48,6 +50,34 @@ async fn runtime_account_pool_should_restore_capacity_and_clear_runtime_state() 
     assert_eq!(restored_again, 1);
     assert_eq!(restored_capacity.used_slots, 0);
     assert_eq!(restored_capacity.available_slots, 2);
+}
+
+#[tokio::test]
+async fn runtime_account_pool_should_restore_accounts_in_insert_order() {
+    let (pool, _dir) = init_test_db("runtime-account-pool-order.sqlite").await;
+    insert_account(&pool, "acct_c").await;
+    insert_account(&pool, "acct_a").await;
+
+    let store = SqliteAccountStore::new(pool);
+    let service = RuntimeAccountPoolService::new(
+        Arc::new(store) as Arc<dyn AccountStore>,
+        AccountPoolOptions {
+            rotation_strategy: RotationStrategy::RoundRobin,
+            ..AccountPoolOptions::default()
+        },
+        0,
+    );
+
+    service
+        .restore_from_repository()
+        .await
+        .expect("account pool should restore");
+    let acquired = service
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await
+        .expect("active account should be acquired");
+
+    assert_eq!(acquired.account.id, "acct_c");
 }
 
 async fn insert_account(pool: &sqlx::SqlitePool, id: &str) {

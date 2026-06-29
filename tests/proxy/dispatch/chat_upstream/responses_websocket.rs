@@ -2129,6 +2129,23 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
     assert_eq!(metadata["transport"], "websocket");
     assert_eq!(metadata["usage"]["inputTokens"], 3);
     assert_eq!(metadata["usage"]["outputTokens"], 1);
+    assert!(
+        metadata["firstTokenMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0),
+        "websocket stream usage metadata should include first token latency: {metadata:?}",
+    );
     assert_rate_limit_header(&metadata, "x-codex-primary-used-percent", "44");
     assert_rate_limit_header(&metadata, "x-codex-primary-window-minutes", "5");
+    let stored_quota: (Option<String>,) =
+        sqlx::query_as("select quota_json from accounts where id = ?")
+            .bind("acct_chat")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let quota: Value = serde_json::from_str(stored_quota.0.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        quota["snapshots"][0]["primary"]["used_percent"].as_f64(),
+        Some(44.0)
+    );
 }

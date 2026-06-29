@@ -592,6 +592,9 @@ impl ResponseDispatchService {
                             &response.set_cookie_headers,
                         )
                         .await;
+                    self.account_pool
+                        .sync_passive_rate_limit_headers(&account, &response.rate_limit_headers)
+                        .await;
                     let collected_response =
                         match response_from_codex_sse(&response.body, tuple_schema.as_ref()) {
                             Ok(collected_response) => collected_response,
@@ -855,9 +858,6 @@ impl ResponseDispatchService {
             CollectedResponse::Completed(body) => {
                 let response_id = body.get("id").and_then(Value::as_str);
                 self.cloudflare.reset_account_recovery(&account.id).await;
-                self.account_pool
-                    .sync_passive_rate_limit_headers(&account, &response.rate_limit_headers)
-                    .await;
                 if let Some(usage) = response.usage {
                     self.account_pool
                         .record_response_usage(
@@ -1208,6 +1208,9 @@ impl ResponseDispatchService {
                     self.cloudflare
                         .capture_set_cookie_headers(&release_account_id, &set_cookie_headers)
                         .await;
+                    self.account_pool
+                        .sync_passive_rate_limit_headers(&account, &rate_limit_headers)
+                        .await;
                     let (prefetched, body) = match prefetch_first_sse_chunk(response.body).await {
                         Ok(prefetched) => prefetched,
                         Err(ResponseDispatchError::Upstream(error))
@@ -1366,6 +1369,7 @@ impl ResponseDispatchService {
                         usage_records: Arc::clone(&self.usage_records),
                         cloudflare: self.cloudflare.clone(),
                         account_id: account.id,
+                        account_plan_type: account.plan_type,
                         request_id: request_id.to_string(),
                         route: route.to_string(),
                         model: request.model.clone(),
@@ -1760,6 +1764,9 @@ impl ResponseDispatchService {
                         )
                         .await;
                     self.cloudflare.reset_account_recovery(&account.id).await;
+                    self.account_pool
+                        .sync_passive_rate_limit_headers(&account, &response.rate_limit_headers)
+                        .await;
                     let usage = extract_usage(&response.body);
                     if let Some(usage) = usage {
                         self.account_pool
@@ -2058,6 +2065,7 @@ struct LiveResponseStreamContext {
     usage_records: Arc<AdminUsageRecordService>,
     cloudflare: CloudflareRecovery,
     account_id: String,
+    account_plan_type: Option<String>,
     request_id: String,
     route: String,
     model: String,
@@ -2380,12 +2388,20 @@ fn latest_response_id(body: &str) -> Option<String> {
     })
 }
 
+const STREAM_DISCONNECTED_CODE: &str = "stream_disconnected";
+const STREAM_DISCONNECTED_MESSAGE: &str = "Upstream stream closed before response.completed";
+
 fn premature_close_failed_event(response_id: Option<&str>, detail: Option<&str>) -> String {
     let message = match detail.filter(|value| !value.trim().is_empty()) {
-        Some(detail) => format!("Upstream stream closed before response.completed: {detail}"),
-        None => "Upstream stream closed before response.completed".to_string(),
+        Some(detail) => format!("{STREAM_DISCONNECTED_MESSAGE}: {detail}"),
+        None => STREAM_DISCONNECTED_MESSAGE.to_string(),
     };
-    response_failed_sse_event_with_id(response_id, "server_error", "stream_disconnected", &message)
+    response_failed_sse_event_with_id(
+        response_id,
+        "server_error",
+        STREAM_DISCONNECTED_CODE,
+        &message,
+    )
 }
 
 async fn finalize_live_response_stream(
@@ -2394,6 +2410,14 @@ async fn finalize_live_response_stream(
     first_token_ms: Option<i64>,
 ) {
     let rate_limit_headers = live_response_rate_limit_headers(&context).await;
+    context
+        .account_pool
+        .sync_passive_rate_limit_headers_for_account(
+            &context.account_id,
+            context.account_plan_type.as_deref(),
+            &rate_limit_headers,
+        )
+        .await;
     let turn_state = live_response_turn_state(&context).await;
     let usage = match extract_sse_usage(&body) {
         Ok(Some(usage)) => {
@@ -2453,10 +2477,29 @@ async fn finalize_live_response_stream(
                 )
                 .await;
             }
+            let response_id = latest_response_id(&body);
+            let latency_ms = elapsed_millis_i64(context.started_at);
+            let failure_source = stream_failure_source(&failure);
+            let failure_detail = synthetic_stream_disconnected_detail(&failure);
+            let websocket_pool_kind = context
+                .websocket_pool_decision
+                .map(|decision| decision.kind());
+            let websocket_pool_reason = context
+                .websocket_pool_decision
+                .and_then(|decision| decision.reason());
             tracing::warn!(
                 account_id = %context.account_id,
+                request_id = %context.request_id,
+                response_id = response_id.as_deref().unwrap_or(""),
+                transport = %backend_transport_name(context.transport),
+                websocket_pool_kind = ?websocket_pool_kind,
+                websocket_pool_reason = ?websocket_pool_reason,
+                first_token_ms = ?first_token_ms,
+                latency_ms,
                 event = %failure.event,
                 code = ?failure.upstream_code.as_deref(),
+                failure_source = %failure_source,
+                failure_detail = ?failure_detail.as_deref(),
                 "live upstream stream ended with response.failed"
             );
             let mut metadata = stream_failure_metadata(&failure, usage);
@@ -2859,6 +2902,7 @@ async fn record_live_response_stream_event(
     ensure_stream_metadata_flag(&mut metadata);
     enrich_event_route_metadata(&mut metadata, &context.route);
     enrich_live_response_stream_metadata(context, rate_limit_headers, &mut metadata, body);
+    log_live_response_stream_finalized(context, status_code, level, message, &metadata, body);
     let mut event = UsageRecord::new(response_event_kind(&context.route), level, message);
     event.request_id = Some(context.request_id.clone());
     event.account_id = Some(context.account_id.clone());
@@ -2880,6 +2924,79 @@ async fn record_live_response_stream_event(
     }
 }
 
+fn log_live_response_stream_finalized(
+    context: &LiveResponseStreamContext,
+    status_code: i64,
+    level: UsageRecordLevel,
+    message: &str,
+    metadata: &Value,
+    body: &str,
+) {
+    let response_id = metadata_string_field(metadata, "responseId")
+        .map(ToString::to_string)
+        .or_else(|| latest_response_id(body));
+    let first_token_ms = metadata.get("firstTokenMs").and_then(Value::as_i64);
+    let websocket_pool_kind = context
+        .websocket_pool_decision
+        .map(WebSocketPoolDecision::kind);
+    let websocket_pool_reason = context
+        .websocket_pool_decision
+        .and_then(WebSocketPoolDecision::reason);
+    let completed = metadata.get("completed").and_then(Value::as_bool);
+    let failed = metadata.get("failed").and_then(Value::as_bool);
+    let upstream_code = metadata_string_field(metadata, "upstreamCode");
+    let failure_class = metadata_string_field(metadata, "failureClass");
+    let failure_source = metadata_string_field(metadata, "failureSource");
+    let failure_detail = metadata_string_field(metadata, "failureDetail");
+
+    macro_rules! emit_stream_finalized_log {
+        ($level:expr) => {
+            tracing::event!(
+                $level,
+                account_id = %context.account_id,
+                request_id = %context.request_id,
+                route = %context.route,
+                model = %context.display_model,
+                status_code,
+                usage_level = ?level,
+                event_message = %message,
+                transport = %backend_transport_name(context.transport),
+                websocket_pool_kind = ?websocket_pool_kind,
+                websocket_pool_reason = ?websocket_pool_reason,
+                response_id = response_id.as_deref().unwrap_or(""),
+                first_token_ms = ?first_token_ms,
+                latency_ms = elapsed_millis_i64(context.started_at),
+                completed = ?completed,
+                failed = ?failed,
+                upstream_code = ?upstream_code,
+                failure_class = ?failure_class,
+                failure_source = ?failure_source,
+                failure_detail = ?failure_detail,
+                "live response stream finalized"
+            );
+        };
+    }
+
+    match level {
+        UsageRecordLevel::Debug => {
+            emit_stream_finalized_log!(tracing::Level::DEBUG);
+        }
+        UsageRecordLevel::Info => {
+            emit_stream_finalized_log!(tracing::Level::INFO);
+        }
+        UsageRecordLevel::Warn => {
+            emit_stream_finalized_log!(tracing::Level::WARN);
+        }
+        UsageRecordLevel::Error => {
+            emit_stream_finalized_log!(tracing::Level::ERROR);
+        }
+    }
+}
+
+fn metadata_string_field<'a>(metadata: &'a Value, field: &str) -> Option<&'a str> {
+    metadata.get(field).and_then(Value::as_str)
+}
+
 async fn live_response_rate_limit_headers(
     context: &LiveResponseStreamContext,
 ) -> Vec<(String, String)> {
@@ -2898,14 +3015,54 @@ async fn live_response_turn_state(context: &LiveResponseStreamContext) -> Option
 }
 
 fn stream_failure_metadata(failure: &ResponsesSseFailure, usage: Option<TokenUsage>) -> Value {
-    serde_json::json!({
+    let mut metadata = serde_json::json!({
         "stream": true,
         "failed": true,
         "failureEvent": failure.event,
         "failureMessage": failure.message,
         "upstreamCode": failure.upstream_code,
         "usage": usage,
-    })
+    });
+    enrich_stream_failure_source_metadata(&mut metadata, failure);
+    metadata
+}
+
+fn enrich_stream_failure_source_metadata(metadata: &mut Value, failure: &ResponsesSseFailure) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "failureSource".to_string(),
+        Value::String(stream_failure_source(failure).to_string()),
+    );
+    if let Some(detail) = synthetic_stream_disconnected_detail(failure) {
+        object.insert("synthetic".to_string(), Value::Bool(true));
+        if !detail.is_empty() {
+            object.insert("failureDetail".to_string(), Value::String(detail));
+        }
+    }
+}
+
+fn stream_failure_source(failure: &ResponsesSseFailure) -> &'static str {
+    if synthetic_stream_disconnected_detail(failure).is_some() {
+        "proxy"
+    } else {
+        "upstream"
+    }
+}
+
+fn synthetic_stream_disconnected_detail(failure: &ResponsesSseFailure) -> Option<String> {
+    if failure.upstream_code.as_deref() != Some(STREAM_DISCONNECTED_CODE) {
+        return None;
+    }
+    let detail = failure
+        .message
+        .strip_prefix(STREAM_DISCONNECTED_MESSAGE)?
+        .strip_prefix(": ")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Some(detail)
 }
 
 fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {
@@ -3292,7 +3449,10 @@ fn elapsed_millis_i64(started_at: Instant) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::upstream::protocol::responses::response_body_has_first_event;
+    use super::{stream_failure_metadata, STREAM_DISCONNECTED_CODE, STREAM_DISCONNECTED_MESSAGE};
+    use crate::upstream::protocol::responses::{
+        response_body_has_first_event, ResponsesSseFailure,
+    };
 
     #[test]
     fn first_event_detection_should_match_text_delta() {
@@ -3305,13 +3465,68 @@ data: {"delta":"hello"}
     }
 
     #[test]
-    fn first_event_detection_should_match_response_created() {
+    fn first_event_detection_should_match_reasoning_delta() {
+        let body = br#"event: response.reasoning_summary_text.delta
+data: {"delta":"thinking"}
+
+"#;
+
+        assert!(response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_match_function_call_arguments_delta() {
+        let body = br#"event: response.function_call_arguments.delta
+data: {"delta":"{\"path\""}
+
+"#;
+
+        assert!(response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_match_type_when_event_name_is_missing() {
+        let body = br#"data: {"type":"response.output_text.delta","delta":"hello"}
+
+"#;
+
+        assert!(response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_ignore_response_created() {
         let body = br#"event: response.created
 data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}
 
 "#;
 
-        assert!(response_body_has_first_event(body));
+        assert!(!response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_ignore_metadata_and_rate_limit_events() {
+        let body = br#"event: codex.rate_limits
+data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":42}}}
+
+event: response.metadata
+data: {"type":"response.metadata","x-codex-turn-state":"state"}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_1","status":"in_progress"}}
+
+"#;
+
+        assert!(!response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_ignore_empty_delta() {
+        let body = br#"event: response.output_text.delta
+data: {"delta":""}
+
+"#;
+
+        assert!(!response_body_has_first_event(body));
     }
 
     #[test]
@@ -3333,8 +3548,28 @@ data: {"delta":"hello"}"#;
 
     #[test]
     fn first_event_detection_should_match_crlf_frames() {
-        let body = b"event: response.created\r\ndata: {\"type\":\"response.created\"}\r\n\r\n";
+        let body = b"event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\r\n\r\n";
 
         assert!(response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn stream_failure_metadata_should_mark_synthetic_proxy_disconnect() {
+        let failure = ResponsesSseFailure {
+            event: "response.failed".to_string(),
+            message: format!(
+                "{STREAM_DISCONNECTED_MESSAGE}: websocket receive idle timeout after 20s"
+            ),
+            upstream_code: Some(STREAM_DISCONNECTED_CODE.to_string()),
+        };
+
+        let metadata = stream_failure_metadata(&failure, None);
+
+        assert_eq!(metadata["failureSource"], "proxy");
+        assert_eq!(metadata["synthetic"], true);
+        assert_eq!(
+            metadata["failureDetail"],
+            "websocket receive idle timeout after 20s"
+        );
     }
 }

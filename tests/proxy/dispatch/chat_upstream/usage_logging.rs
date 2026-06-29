@@ -22,6 +22,7 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
 
     let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -101,6 +102,7 @@ async fn chat_completions_non_stream_should_record_first_token_latency() {
 
     let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -158,6 +160,7 @@ async fn responses_usage_record_should_store_resolved_upstream_model_after_alias
     })
     .await;
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -359,6 +362,7 @@ async fn responses_should_passively_cache_rate_limit_headers() {
     .unwrap();
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -380,8 +384,8 @@ async fn responses_should_passively_cache_rate_limit_headers() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let stored: (String, i64, Option<String>, i64) = sqlx::query_as(
-        "select quota_json, quota_limit_reached, quota_cooldown_until, quota_verify_required from accounts where id = ?",
+    let stored: (String, String, i64, Option<String>, i64) = sqlx::query_as(
+        "select quota_json, status, quota_limit_reached, quota_cooldown_until, quota_verify_required from accounts where id = ?",
     )
     .bind("acct_chat")
     .fetch_one(&pool)
@@ -392,9 +396,10 @@ async fn responses_should_passively_cache_rate_limit_headers() {
     assert_eq!(quota["snapshots"][0]["primary"]["limit_reached"], true);
     assert_eq!(quota["snapshots"][0]["primary"]["reset_at"], reset_at);
     assert_eq!(quota["credits"]["balance"], 12);
-    assert_eq!(stored.1, 1);
-    assert!(stored.2.is_some());
-    assert_eq!(stored.3, 0);
+    assert_eq!(stored.1, "quota_exhausted");
+    assert_eq!(stored.2, 1);
+    assert!(stored.3.is_some());
+    assert_eq!(stored.4, 0);
     let window: (i64, i64, i64, i64, Option<String>, Option<String>, Option<i64>) =
         sqlx::query_as(
             "select window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds from account_usage where account_id = ?",
@@ -415,6 +420,28 @@ async fn responses_should_passively_cache_rate_limit_headers() {
         reset_at
     );
     assert_eq!(window.6, Some(300));
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(second_response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -721,8 +748,85 @@ data: {"delta":"partial before logged disconnect"}
     assert_eq!(metadata["stream"], true);
     assert_eq!(metadata["failed"], true);
     assert_eq!(metadata["upstreamCode"], "stream_disconnected");
+    assert_eq!(metadata["failureSource"], "proxy");
+    assert_eq!(metadata["synthetic"], true);
     assert_rate_limit_header(&metadata, "retry-after", "11");
     assert_rate_limit_header(&metadata, "x-codex-primary-used-percent", "88");
+    let stored_quota: (Option<String>,) =
+        sqlx::query_as("select quota_json from accounts where id = ?")
+            .bind("acct_chat")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let quota: Value = serde_json::from_str(stored_quota.0.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        quota["snapshots"][0]["primary"]["used_percent"].as_f64(),
+        Some(88.0)
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_should_not_record_first_token_when_metadata_only_prefix_fails() {
+    let first_frame = r#"event: response.created
+data: {"type":"response.created","response":{"id":"resp_metadata_only","status":"in_progress"}}
+
+event: codex.rate_limits
+data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":42.0}}}
+
+event: response.metadata
+data: {"type":"response.metadata","x-codex-turn-state":"state"}
+
+"#;
+    let (base_url, first_chunk_sent, close_upstream) =
+        spawn_chunked_sse_upstream_then_clean_close(first_frame).await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let response_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_stream_metadata_only_disconnect")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "metadata then close"}],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+    first_chunk_sent.await.unwrap();
+    let response = response_task.await.unwrap();
+    close_upstream.send(()).unwrap();
+    let body = response_text(response).await;
+    let event = latest_response_usage_record(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+    let first_token_bucket: (i64, i64) = sqlx::query_as(
+        "select coalesce(sum(first_token_latency_sum), 0), coalesce(sum(first_token_latency_count), 0) from usage_time_buckets",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(body.contains("stream_disconnected"));
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_stream_metadata_only_disconnect")
+    );
+    assert_eq!(event.status_code, Some(502));
+    assert_eq!(metadata["stream"], true);
+    assert_eq!(metadata["failed"], true);
+    assert!(metadata.get("firstTokenMs").is_none());
+    assert_eq!(first_token_bucket, (0, 0));
 }
 
 #[tokio::test]
