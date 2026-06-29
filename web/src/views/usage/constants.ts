@@ -2,14 +2,14 @@ export const usageRecordColumns = [
   {
     key: 'accountEmail',
     label: '账号',
-    width: '240px',
+    width: '250px',
     fixed: 'left' as const,
     ellipsis: false,
   },
   {
     key: 'model',
     label: '模型',
-    width: '178px',
+    width: '160px',
     ellipsis: false,
   },
   {
@@ -80,7 +80,7 @@ export const usageRecordColumns = [
   {
     key: 'userAgent',
     label: 'User-Agent',
-    width: '280px',
+    width: '300px',
     ellipsis: false,
     cellClass:
       'whitespace-normal break-words text-[12px] leading-[1.45] font-[650] text-(--cp-text-secondary)',

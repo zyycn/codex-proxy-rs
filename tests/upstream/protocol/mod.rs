@@ -41,7 +41,7 @@ use codex_proxy_rs::upstream::protocol::websocket::{
     websocket_tool_search_call_output_item_event_invalid_required_fields,
     websocket_tool_search_output_item_event_invalid_required_fields,
     websocket_web_search_call_output_item_event_invalid_required_fields, OpeningAuditHeader,
-    OpeningAuditSnapshot, WebSocketErrorClassificationProfile,
+    OpeningAuditSnapshot,
 };
 use serde_json::json;
 
