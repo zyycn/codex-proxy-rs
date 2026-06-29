@@ -232,6 +232,7 @@ fn account_pool_should_filter_by_model_plan_allowlist() {
     model_plans.insert("gpt-5.5".to_string(), vec!["plus".to_string()]);
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         model_plan_allowlist: model_plans,
+        fetched_model_plan_types: BTreeSet::from(["free".to_string(), "plus".to_string()]),
         ..AccountPoolOptions::default()
     });
     let mut free = crate::support::accounts::test_account("free", AccountStatus::Active);
@@ -242,6 +243,54 @@ fn account_pool_should_filter_by_model_plan_allowlist() {
     pool.insert(plus);
 
     assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "plus");
+}
+
+#[test]
+fn account_pool_should_keep_unfetched_plan_when_model_allowlist_exists() {
+    let mut model_plans = BTreeMap::new();
+    model_plans.insert("gpt-5.5".to_string(), vec!["plus".to_string()]);
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        model_plan_allowlist: model_plans,
+        fetched_model_plan_types: BTreeSet::from(["plus".to_string()]),
+        ..AccountPoolOptions::default()
+    });
+    let mut free = crate::support::accounts::test_account("free", AccountStatus::Active);
+    free.plan_type = Some("free".to_string());
+    let mut plus = crate::support::accounts::test_account("plus", AccountStatus::Active);
+    plus.plan_type = Some("plus".to_string());
+    pool.insert(free);
+    pool.insert(plus);
+
+    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "free");
+}
+
+#[test]
+fn account_pool_distinct_plan_accounts_should_filter_like_model_refresh() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 1,
+        ..AccountPoolOptions::default()
+    });
+    let mut plus_limited =
+        crate::support::accounts::test_account("plus-limited", AccountStatus::Active);
+    plus_limited.plan_type = Some("plus".to_string());
+    plus_limited.quota_limit_reached = true;
+    plus_limited.quota_cooldown_until = Some(now + Duration::minutes(10));
+    let mut plus_ok = crate::support::accounts::test_account("plus-ok", AccountStatus::Active);
+    plus_ok.plan_type = Some("plus".to_string());
+    let mut team_cf = crate::support::accounts::test_account("team-cf", AccountStatus::Active);
+    team_cf.plan_type = Some("team".to_string());
+    team_cf.cloudflare_cooldown_until = Some(now + Duration::minutes(10));
+    pool.insert(plus_limited);
+    pool.insert(plus_ok);
+    pool.insert(team_cf);
+
+    let selected = pool.distinct_plan_accounts(now);
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].plan_type, "plus");
+    assert_eq!(selected[0].account.id, "plus-ok");
+    assert_eq!(pool.release("plus-ok").unwrap().model, None);
 }
 
 #[test]

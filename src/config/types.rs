@@ -19,8 +19,8 @@ pub struct AppConfig {
     /// 认证与刷新配置，由固定默认值和数据库运行时设置承载，配置文件不承载该字段。
     #[serde(skip)]
     pub auth: AuthConfig,
-    /// 配额配置，由固定默认值承载，配置文件不承载该字段。
-    #[serde(skip)]
+    /// 配额配置。
+    #[serde(default)]
     pub quota: QuotaConfig,
     /// 数据库配置。
     pub database: DatabaseConfig,
@@ -98,17 +98,31 @@ impl Default for AuthConfig {
 
 /// 配额刷新与跳过配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct QuotaConfig {
     /// 配额刷新周期。
+    #[serde(default = "default_quota_refresh_interval_minutes")]
     pub refresh_interval_minutes: u64,
+    /// 是否跳过已耗尽配额的账号。
+    #[serde(default = "default_skip_exhausted")]
+    pub skip_exhausted: bool,
 }
 
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
-            refresh_interval_minutes: 5,
+            refresh_interval_minutes: default_quota_refresh_interval_minutes(),
+            skip_exhausted: default_skip_exhausted(),
         }
     }
+}
+
+fn default_quota_refresh_interval_minutes() -> u64 {
+    5
+}
+
+fn default_skip_exhausted() -> bool {
+    true
 }
 
 /// 数据库连接配置。

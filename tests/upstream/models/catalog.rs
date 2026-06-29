@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
 use codex_proxy_rs::upstream::models::{
     BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy, ModelConfig,
-    ModelPlanSnapshot, ParsedModelName,
+    ModelPlanSnapshot, ModelRefreshPlanAccount, ParsedModelName,
 };
 use codex_proxy_rs::upstream::models::{
     ModelCatalog, ModelRefreshResult, ModelService, ModelServiceError, ModelSnapshotStore,
@@ -117,7 +117,7 @@ async fn model_service_should_return_empty_catalog_when_snapshot_store_is_missin
 }
 
 #[tokio::test]
-async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist() {
+async fn model_service_should_refresh_plan_accounts_and_build_routing() {
     let snapshot_store = Arc::new(InMemorySnapshotStore::default());
     let upstream = Arc::new(FakeModelCatalogClient::with_models(BTreeMap::from([
         ("plus".to_string(), backend_models("gpt-6")),
@@ -132,10 +132,8 @@ async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist(
     let result = service
         .refresh_backend_models_with_installation_id(
             &[
-                active_account("acct-plus-1", "plus"),
-                active_account("acct-plus-2", "plus"),
-                active_account("acct-team", "team"),
-                inactive_account("acct-disabled", "plus"),
+                refresh_plan_account("plus", active_account("acct-plus-1", "plus")),
+                refresh_plan_account("team", active_account("acct-team", "team")),
             ],
             "req-model-refresh",
             None,
@@ -158,26 +156,30 @@ async fn model_service_should_refresh_distinct_active_plans_and_build_allowlist(
     assert_eq!(snapshots[0].plan_type, "plus");
     assert_eq!(snapshots[1].plan_type, "team");
 
-    let allowlist = service
-        .model_plan_allowlist()
+    let routing = service
+        .model_plan_routing()
         .await
-        .expect("allowlist should be available");
-    assert_eq!(allowlist.get("gpt-6").unwrap(), &vec!["plus".to_string()]);
-    assert_eq!(allowlist.get("gpt-7").unwrap(), &vec!["team".to_string()]);
+        .expect("routing should be available");
+    assert_eq!(
+        routing.allowlist.get("gpt-6").unwrap(),
+        &vec!["plus".to_string()]
+    );
+    assert_eq!(
+        routing.allowlist.get("gpt-7").unwrap(),
+        &vec!["team".to_string()]
+    );
+    assert!(routing.fetched_plan_types.contains("plus"));
+    assert!(routing.fetched_plan_types.contains("team"));
 }
 
 #[tokio::test]
-async fn model_service_should_return_no_accounts_when_no_active_plans_exist() {
+async fn model_service_should_return_no_accounts_when_no_plan_accounts_exist() {
     let snapshot_store = Arc::new(InMemorySnapshotStore::default());
     let upstream = Arc::new(FakeModelCatalogClient::default());
     let service = ModelService::new(test_model_config(), Some(snapshot_store), Some(upstream));
 
     let error = service
-        .refresh_backend_models_with_installation_id(
-            &[inactive_account("acct-disabled", "plus")],
-            "req-model-refresh",
-            None,
-        )
+        .refresh_backend_models_with_installation_id(&[], "req-model-refresh", None)
         .await
         .expect_err("refresh should fail");
 
@@ -211,10 +213,11 @@ fn active_account(id: &str, plan_type: &str) -> Account {
     account
 }
 
-fn inactive_account(id: &str, plan_type: &str) -> Account {
-    let mut account = active_account(id, plan_type);
-    account.status = AccountStatus::Disabled;
-    account
+fn refresh_plan_account(plan_type: &str, account: Account) -> ModelRefreshPlanAccount {
+    ModelRefreshPlanAccount {
+        plan_type: plan_type.to_string(),
+        account,
+    }
 }
 
 #[derive(Default)]

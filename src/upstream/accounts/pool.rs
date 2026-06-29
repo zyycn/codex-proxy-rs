@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc as StdArc,
     time::Duration as StdDuration,
 };
@@ -70,6 +70,8 @@ pub struct AccountPoolOptions {
     pub tier_priority: Vec<String>,
     /// 模型到允许订阅计划的映射。
     pub model_plan_allowlist: BTreeMap<String, Vec<String>>,
+    /// 已成功拉取过模型列表的订阅计划。
+    pub fetched_model_plan_types: BTreeSet<String>,
     /// 模型到指定账号 ID 的显式路由。
     pub model_account_routes: BTreeMap<String, Vec<String>>,
 }
@@ -83,6 +85,7 @@ impl Default for AccountPoolOptions {
             skip_quota_limited: true,
             tier_priority: Vec::new(),
             model_plan_allowlist: BTreeMap::new(),
+            fetched_model_plan_types: BTreeSet::new(),
             model_account_routes: BTreeMap::new(),
         }
     }
@@ -137,9 +140,24 @@ pub struct AcquiredAccount {
     pub previous_slot_at: Option<DateTime<Utc>>,
 }
 
+/// 模型刷新时每个订阅计划选中的账号。
+#[derive(Debug, Clone)]
+pub struct DistinctPlanAccount {
+    /// 订阅计划类型。
+    pub plan_type: String,
+    /// 被选中的账号快照。
+    pub account: Account,
+}
+
 #[derive(Debug)]
 struct AccountAcquireWithStatusRefresh {
     acquired: Option<AcquiredAccount>,
+    expired_account_ids: Vec<String>,
+}
+
+#[derive(Debug)]
+struct DistinctPlanAccountsWithStatusRefresh {
+    accounts: Vec<DistinctPlanAccount>,
     expired_account_ids: Vec<String>,
 }
 
@@ -187,7 +205,7 @@ pub struct AccountPool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccountSlot {
     created_at: DateTime<Utc>,
-    model: String,
+    model: Option<String>,
 }
 
 /// 账号释放结果。
@@ -459,7 +477,7 @@ impl AccountPool {
         );
 
         let selected_id = selected.id.clone();
-        self.push_slot(&selected_id, request.now, &request.model);
+        self.push_slot(&selected_id, request.now, Some(&request.model));
         AccountAcquireWithStatusRefresh {
             acquired: Some(AcquiredAccount {
                 account: selected,
@@ -501,7 +519,7 @@ impl AccountPool {
         }
         self.mark_request_usage(account_id, Utc::now());
         Some(ReleasedAccountUsage {
-            model: slot.map(|slot| slot.model),
+            model: slot.and_then(|slot| slot.model),
         })
     }
 
@@ -512,7 +530,6 @@ impl AccountPool {
         let is_capacity_account = |account: &Account| {
             account.status == AccountStatus::Active
                 && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
-                && AccountService::cloudflare_available_at(account, now)
         };
         let active_accounts = self
             .accounts
@@ -536,6 +553,67 @@ impl AccountPool {
             total_slots,
             used_slots,
             available_slots: total_slots.saturating_sub(used_slots),
+        }
+    }
+
+    /// 按订阅计划各选一个可用账号，用于刷新模型列表。
+    pub fn distinct_plan_accounts(&mut self, now: DateTime<Utc>) -> Vec<DistinctPlanAccount> {
+        self.distinct_plan_accounts_with_status_refresh(now)
+            .accounts
+    }
+
+    fn distinct_plan_accounts_with_status_refresh(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> DistinctPlanAccountsWithStatusRefresh {
+        self.cleanup_stale_slots(now);
+        let expired_account_ids = self.refresh_account_statuses(now);
+        let mut by_plan = IndexMap::<String, Vec<Account>>::new();
+
+        for account in self.accounts.values() {
+            if !self.is_model_refresh_available(account, now) {
+                continue;
+            }
+            let Some(plan_type) = account.plan_type.as_ref() else {
+                continue;
+            };
+            by_plan
+                .entry(plan_type.clone())
+                .or_default()
+                .push(account.clone());
+        }
+
+        let mut accounts = Vec::new();
+        for (plan_type, group) in by_plan {
+            let selected = match self.options.rotation_strategy {
+                RotationStrategy::LeastUsed => self.select_least_used(&group),
+                RotationStrategy::RoundRobin => self.select_round_robin(&group),
+                RotationStrategy::Sticky => Self::select_sticky(&group),
+            };
+            let Some(account) = selected else {
+                continue;
+            };
+            tracing::info!(
+                plan_type,
+                rotation_strategy = self.options.rotation_strategy.as_str(),
+                account_id = %account.id,
+                candidate_count = group.len(),
+                request_count = account.request_count,
+                window_request_count = account.window_request_count,
+                window_reset_at = ?account.window_reset_at,
+                last_used_at = account.last_used_at.as_deref().unwrap_or_default(),
+                quota_limit_reached = account.quota_limit_reached,
+                quota_cooldown_until = ?account.quota_cooldown_until,
+                rotation_cursor = self.rotation_cursor,
+                "account selected for model refresh"
+            );
+            self.push_slot(&account.id, now, None);
+            accounts.push(DistinctPlanAccount { plan_type, account });
+        }
+
+        DistinctPlanAccountsWithStatusRefresh {
+            accounts,
+            expired_account_ids,
         }
     }
 
@@ -617,14 +695,21 @@ impl AccountPool {
             .map(|slot| slot.created_at)
     }
 
-    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>, model: &str) {
+    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>, model: Option<&str>) {
         self.slots
             .entry(account_id.to_string())
             .or_default()
             .push_back(AccountSlot {
                 created_at: now,
-                model: model.to_string(),
+                model: model.map(str::to_string),
             });
+    }
+
+    fn is_model_refresh_available(&self, account: &Account, now: DateTime<Utc>) -> bool {
+        account.status == AccountStatus::Active
+            && self.slot_count(&account.id) < self.options.max_concurrent_per_account
+            && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
+            && AccountService::cloudflare_available_at(account, now)
     }
 
     fn mark_request_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
@@ -675,9 +760,11 @@ impl AccountPool {
         let Some(allowed_plans) = self.options.model_plan_allowlist.get(model) else {
             return true;
         };
-        allowed_plans
-            .iter()
-            .any(|plan| account.plan_type.as_deref() == Some(plan.as_str()))
+        let Some(plan_type) = account.plan_type.as_deref() else {
+            return false;
+        };
+        allowed_plans.iter().any(|plan| plan == plan_type)
+            || !self.options.fetched_model_plan_types.contains(plan_type)
     }
 
     fn is_model_account_allowed(&self, account: &Account, model: &str) -> bool {
@@ -742,6 +829,7 @@ impl RuntimeAccountPoolService {
     pub async fn apply_options(&self, mut options: AccountPoolOptions, request_interval_ms: u64) {
         let mut pool = self.pool.lock().await;
         options.model_plan_allowlist = pool.options.model_plan_allowlist.clone();
+        options.fetched_model_plan_types = pool.options.fetched_model_plan_types.clone();
         pool.set_options(options);
         *self
             .request_interval
@@ -751,11 +839,14 @@ impl RuntimeAccountPoolService {
     }
 
     /// 更新模型到可用账号计划的调度约束。
-    pub(crate) async fn apply_model_plan_allowlist(
+    pub(crate) async fn apply_model_plan_routing(
         &self,
         model_plan_allowlist: BTreeMap<String, Vec<String>>,
+        fetched_model_plan_types: BTreeSet<String>,
     ) {
-        self.pool.lock().await.options.model_plan_allowlist = model_plan_allowlist;
+        let mut pool = self.pool.lock().await;
+        pool.options.model_plan_allowlist = model_plan_allowlist;
+        pool.options.fetched_model_plan_types = fetched_model_plan_types;
     }
 
     /// 从持久化账号恢复运行时账号池。
@@ -869,6 +960,18 @@ impl RuntimeAccountPoolService {
         self.persist_expired_statuses(refresh.expired_account_ids)
             .await;
         refresh.acquired
+    }
+
+    /// 按订阅计划各选一个可用账号，用于刷新模型列表。
+    pub async fn distinct_plan_accounts(&self, now: DateTime<Utc>) -> Vec<DistinctPlanAccount> {
+        let refresh = self
+            .pool
+            .lock()
+            .await
+            .distinct_plan_accounts_with_status_refresh(now);
+        self.persist_expired_statuses(refresh.expired_account_ids)
+            .await;
+        refresh.accounts
     }
 
     async fn persist_expired_statuses(&self, account_ids: Vec<String>) {

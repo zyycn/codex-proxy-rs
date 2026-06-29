@@ -51,6 +51,23 @@ fn account_pool_should_report_capacity_summary() {
 }
 
 #[test]
+fn capacity_summary_should_not_exclude_cloudflare_cooldown_accounts() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 2,
+        ..AccountPoolOptions::default()
+    });
+    let mut account = crate::support::accounts::test_account("acct_cf", AccountStatus::Active);
+    account.cloudflare_cooldown_until = Some(now + Duration::minutes(10));
+    pool.insert(account);
+
+    let summary = pool.capacity_summary(now);
+
+    assert_eq!(summary.total_slots, 2);
+    assert_eq!(summary.available_slots, 2);
+}
+
+#[test]
 fn least_used_should_compare_request_count_when_only_one_account_has_window_reset() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {

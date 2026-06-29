@@ -291,3 +291,72 @@ Rust 与 TS 一个高风险差异：
 - 第一条完成后，第二条选择前已看到 `request_count` 从 21 增至 22，说明 release 阶段计数生效。
 - 两条连续请求没有 A/B 跳账号；在两个候选都有 reset 且 `acct_fa9...` reset 更早时，智能分配持续选它，符合 TS 文案。
 - 两条请求的 `conversation_id_hash` 与 `ws_pool_key_hash` 一致，第二条 WS 复用成功。
+
+## 2026-06-29 二次审计：候选集对齐
+
+继续对照 TS `AccountLifecycle` 后，发现排序器本身已对齐，但候选集还有额外偏差：
+
+- TS 模型 plan 过滤在 `getModelPlanTypes(model)` 有结果时，允许两类账号进入候选集：
+  - `planType` 命中该模型的 preferred plans。
+  - `planType` 尚未抓取过模型列表，即 `!isPlanFetched(planType)`。
+- Rust 旧实现只有 `model -> plans` allowlist，缺少 `isPlanFetched(planType)` 等价状态，导致某个 plan 尚未刷新模型列表时会被提前排除。
+- TS 的 `quota.skip_exhausted` 是配置项，默认 true；Rust 旧实现配置层没有该字段，账号池参数固定为 true。
+- TS `getDistinctPlanAccounts()` 用账号池当前策略为每个 plan 选择模型刷新账号，并过滤 active、slot、Cloudflare cooldown、quota exhausted；Rust 旧模型刷新直接从 store 里按 plan 取第一个 active 账号，绕过了账号池策略。
+- TS `getCapacitySummary()` 不把 Cloudflare cooldown 从容量统计中剔除；Rust 旧容量摘要会剔除，前端容量条和 TS 不一致。
+
+本轮修复目标：
+
+- 账号池保存 `fetched_model_plan_types`，模型 allowlist 命中时只排除“已抓取且不支持该模型”的 plan，未抓取 plan 继续参与调度。
+- `quota.skip_exhausted` 加入配置文件和 `QuotaConfig`，默认 true，并映射到账号池 `skip_quota_limited`。
+- 模型刷新通过账号池 `distinct_plan_accounts()` 获取每个 plan 的代表账号，使用当前 rotation strategy，并在刷新后 release。
+- 模型刷新槽位不绑定具体模型；release 只计账号请求，不写入模型维度 request 计数。
+- 容量摘要只按 active、quota、slot 统计，不再排除 Cloudflare cooldown 账号。
+
+新增/调整测试：
+
+- `account_pool_should_filter_by_model_plan_allowlist`
+- `account_pool_should_keep_unfetched_plan_when_model_allowlist_exists`
+- `account_pool_distinct_plan_accounts_should_filter_like_model_refresh`
+- `capacity_summary_should_not_exclude_cloudflare_cooldown_accounts`
+- `account_pool_options_should_use_quota_skip_exhausted`
+- `model_service_should_refresh_plan_accounts_and_build_routing`
+
+### 二次审计真实链路验证
+
+运行环境：
+
+- 新二进制临时实例端口 `18081`，不影响既有 `8080` 进程。
+- 临时配置目录：`.runtime/real-chain-scheduler-20260629_233941-candidate-alignment/`
+- 复用现有 SQLite 数据库；临时 client key 通过管理员登录创建，测试结束后已删除。
+- 请求：两条连续 `/v1/responses` stream，自然中文文本，同一个 `prompt_cache_key`，`rotation_strategy=least_used`。
+
+结果：
+
+- 模型刷新先通过账号池选择 `plan_type=free` 的代表账号：
+  - `account_id=acct_fa9f0172d2084eaf86ddbd0e5d0c1c16`
+  - `rotation_strategy=least_used`
+  - `candidate_count=2`
+  - `window_reset_at=Some(2026-07-29T11:47:25Z)`
+- `candidate-alignment-1`：HTTP 200，选中 `acct_fa9f0172d2084eaf86ddbd0e5d0c1c16`。
+  - `request_id=req_60d7f1f9-03e7-4297-9e7d-fa5a4588f986`
+  - `request_count=25`
+  - `window_request_count=25`
+  - `window_reset_at=Some(2026-07-29T11:47:25Z)`
+  - `websocket_pool_kind=Some("new")`
+  - `conversation_id_hash=3bec01931326`
+  - `ws_pool_key_hash=900a71d29b76`
+- `candidate-alignment-2`：HTTP 200，继续选中 `acct_fa9f0172d2084eaf86ddbd0e5d0c1c16`。
+  - `request_id=req_20710963-668b-4c98-9a3c-19e8ef676da8`
+  - `request_count=26`
+  - `window_request_count=26`
+  - `last_used_at=2026-06-29T15:41:04.860145306+00:00`
+  - `window_reset_at=Some(2026-07-29T11:47:25Z)`
+  - `websocket_pool_kind=Some("reuse")`
+  - `conversation_id_hash=3bec01931326`
+  - `ws_pool_key_hash=900a71d29b76`
+
+结论：
+
+- 模型刷新账号选择已走账号池策略和日志，不再绕过调度逻辑。
+- 两条真实请求没有 A/B 跳账号。
+- 同一个 `prompt_cache_key` 下第二条请求复用了同一个 `ws_pool_key_hash`，连接复用符合预期。
