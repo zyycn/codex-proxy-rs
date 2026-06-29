@@ -8,6 +8,7 @@ use std::{
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::{net::TcpStream, sync::Mutex, time::timeout};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
@@ -42,6 +43,18 @@ impl CodexWebSocketPoolKey {
 
     pub(crate) fn account_id(&self) -> &str {
         &self.account_id
+    }
+
+    pub(crate) fn conversation_id_hash(&self) -> String {
+        short_sha256([self.conversation_id.as_str()])
+    }
+
+    pub(crate) fn stable_hash(&self) -> String {
+        short_sha256([
+            self.base_url.as_str(),
+            self.account_id.as_str(),
+            self.conversation_id.as_str(),
+        ])
     }
 }
 
@@ -502,6 +515,15 @@ impl WebSocketPoolDecisionKind {
             Self::RetryAfterStaleReuse => "retry_after_stale_reuse",
         }
     }
+}
+
+fn short_sha256<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\0");
+    }
+    hex::encode(hasher.finalize()).chars().take(12).collect()
 }
 
 fn account_slot_count(

@@ -126,7 +126,7 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
     assert_eq!(acquired.account.status, AccountStatus::Active);
     assert!(acquired.account.quota_cooldown_until.is_none());
     assert!(acquired.account.cloudflare_cooldown_until.is_none());
-    assert_eq!(acquired.account.window_request_count, 1);
+    assert_eq!(acquired.account.window_request_count, 0);
     assert!(acquired
         .account
         .window_reset_at
@@ -209,13 +209,12 @@ fn sync_rate_limit_window_should_reset_window_counters_when_drift_crosses_thresh
     let acquired = pool
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
+    pool.release(&acquired.account.id);
+    let released = pool.get(&acquired.account.id).unwrap();
 
-    assert_eq!(acquired.account.window_request_count, 1);
-    assert_eq!(acquired.account.window_input_tokens, 0);
-    assert_eq!(acquired.account.window_output_tokens, 0);
-    assert_eq!(acquired.account.window_cached_tokens, 0);
-    assert_eq!(
-        acquired.account.window_reset_at,
-        Some(now + Duration::seconds(121))
-    );
+    assert_eq!(released.window_request_count, 1);
+    assert_eq!(released.window_input_tokens, 0);
+    assert_eq!(released.window_output_tokens, 0);
+    assert_eq!(released.window_cached_tokens, 0);
+    assert_eq!(released.window_reset_at, Some(now + Duration::seconds(121)));
 }

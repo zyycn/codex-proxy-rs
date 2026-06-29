@@ -385,6 +385,7 @@ fn least_used_should_prefer_lru_before_tie_rotation() {
             .id,
         "seed"
     );
+    pool.release("seed");
     let acquired = pool
         .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",

@@ -581,6 +581,7 @@ impl CodexBackendClient {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
         }
         let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
+        let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
                 execute_response_create_request_with_pool(&prepared, Some((pool, key)), started_at)
@@ -592,6 +593,7 @@ impl CodexBackendClient {
         log_websocket_pool_decision(
             context.request_id,
             pool_account_id.or(context.account_id),
+            pool_log_context.as_ref(),
             exchange.pool_decision,
         );
 
@@ -631,6 +633,7 @@ impl CodexBackendClient {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
         }
         let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
+        let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
                 execute_response_create_request_stream_with_pool(&prepared, Some((pool, key))).await
@@ -641,6 +644,7 @@ impl CodexBackendClient {
         log_websocket_pool_decision(
             context.request_id,
             pool_account_id.or(context.account_id),
+            pool_log_context.as_ref(),
             exchange.pool_decision,
         );
 
@@ -961,6 +965,7 @@ fn update_first_token_ms(started_at: Instant, body_bytes: &[u8], first_token_ms:
 fn log_websocket_pool_decision(
     request_id: &str,
     account_id: Option<&str>,
+    pool_context: Option<&WebSocketPoolLogContext>,
     decision: Option<WebSocketPoolDecision>,
 ) {
     let Some(decision) = decision else {
@@ -974,6 +979,8 @@ fn log_websocket_pool_decision(
             account_id = account_id.unwrap_or_default(),
             ws_pool = decision.kind(),
             ws_pool_reason = reason,
+            conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
+            ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
             "websocket pool decision"
         );
     } else {
@@ -982,8 +989,25 @@ fn log_websocket_pool_decision(
             rid = %rid_short,
             account_id = account_id.unwrap_or_default(),
             ws_pool = decision.kind(),
+            conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
+            ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
             "websocket pool decision"
         );
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WebSocketPoolLogContext {
+    conversation_id_hash: String,
+    pool_key_hash: String,
+}
+
+impl WebSocketPoolLogContext {
+    fn from_key(key: &CodexWebSocketPoolKey) -> Self {
+        Self {
+            conversation_id_hash: key.conversation_id_hash(),
+            pool_key_hash: key.stable_hash(),
+        }
     }
 }
 
