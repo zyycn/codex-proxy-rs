@@ -240,6 +240,7 @@ impl ChatDispatchService {
                 &request,
                 request_id,
                 &account,
+                started_at,
             )
             .await;
             self.account_pool.release(&release_account_id).await;
@@ -397,6 +398,7 @@ impl ChatDispatchService {
                 "responseId": response_id,
                 "stream": false,
                 "transport": backend_transport_name(response.transport),
+                "firstTokenMs": response.first_token_ms,
                 "usage": response.usage,
             }),
             rate_limit_headers: &response.rate_limit_headers,

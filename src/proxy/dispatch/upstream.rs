@@ -1,5 +1,7 @@
 //! 调度层共享的账号级 Codex 上游调用。
 
+use std::time::Instant;
+
 use serde_json::Value;
 
 use crate::{
@@ -130,6 +132,7 @@ pub(crate) async fn create_response_with_account(
     request: &CodexResponsesRequest,
     request_id: &str,
     account: &Account,
+    started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
     let cookie_header = cloudflare
         .cookie_header_for_request(&account.id, "/codex/responses")
@@ -140,7 +143,7 @@ pub(crate) async fn create_response_with_account(
         &account.id,
     );
     codex
-        .create_response(
+        .create_response_with_pool_account_started_at(
             request,
             CodexRequestContext {
                 access_token: &account.access_token,
@@ -157,6 +160,8 @@ pub(crate) async fn create_response_with_account(
                 installation_id,
                 session_id: identity.conversation_id.as_deref(),
             },
+            Some(&account.id),
+            started_at,
         )
         .await
 }
@@ -178,7 +183,7 @@ async fn create_response_stream_with_account(
         &account.id,
     );
     codex
-        .create_response_stream(
+        .create_response_stream_with_pool_account(
             request,
             CodexRequestContext {
                 access_token: &account.access_token,
@@ -195,6 +200,7 @@ async fn create_response_stream_with_account(
                 installation_id,
                 session_id: identity.conversation_id.as_deref(),
             },
+            Some(&account.id),
         )
         .await
 }
@@ -241,6 +247,7 @@ pub(crate) async fn create_response_with_account_retrying_5xx(
     request: &CodexResponsesRequest,
     request_id: &str,
     account: &Account,
+    started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
     let mut retries = 0;
     loop {
@@ -251,6 +258,7 @@ pub(crate) async fn create_response_with_account_retrying_5xx(
             request,
             request_id,
             account,
+            started_at,
         )
         .await;
         match result {
