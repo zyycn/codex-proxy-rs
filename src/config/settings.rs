@@ -647,7 +647,7 @@ pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOption
     AccountPoolOptions {
         max_concurrent_per_account: config.auth.max_concurrent_per_account,
         rotation_strategy: rotation_strategy_from_config(&config.auth.rotation_strategy),
-        skip_quota_limited: true,
+        skip_quota_limited: config.quota.skip_exhausted,
         tier_priority: config.auth.tier_priority.clone(),
         model_account_routes: config.model_account_routes.clone(),
         ..AccountPoolOptions::default()

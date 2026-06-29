@@ -5,6 +5,9 @@ api:
   base_url: 'https://chatgpt.com/backend-api'
 database:
   url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
+quota:
+  refresh_interval_minutes: 5
+  skip_exhausted: true
 tls:
   force_http11: false
 ws_pool:

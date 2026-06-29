@@ -20,7 +20,6 @@ async fn model_refresh_task_should_start_and_shutdown() {
 
     let handle = codex_proxy_rs::runtime::tasks::model_refresh::ModelRefreshTask::new(
         model_service,
-        account_store,
         account_pool,
     )
     .start();
@@ -60,7 +59,6 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
 
     codex_proxy_rs::runtime::tasks::model_refresh::ModelRefreshTask::new(
         model_service,
-        account_store,
         account_pool.clone(),
     )
     .refresh_once()

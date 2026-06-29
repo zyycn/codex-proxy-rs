@@ -2,20 +2,20 @@
 
 use std::{sync::Arc, time::Duration};
 
+use chrono::Utc;
 use tokio::time::{interval, sleep};
 use tracing::{info, warn};
 
-use crate::upstream::accounts::{
-    model::Account, pool::RuntimeAccountPoolService, store::AccountStore,
+use crate::upstream::accounts::pool::RuntimeAccountPoolService;
+use crate::upstream::models::{
+    ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
-use crate::upstream::models::{ModelRefreshResult, ModelService, ModelServiceError};
 
 use super::coordinator::SchedulerHandle;
 
 /// 模型刷新任务接线器。
 pub struct ModelRefreshTask {
     model_service: Arc<ModelService>,
-    account_store: Arc<dyn AccountStore>,
     account_pool: Arc<RuntimeAccountPoolService>,
     refresh_interval_secs: u64,
     initial_delay_ms: u64,
@@ -33,12 +33,10 @@ impl ModelRefreshTask {
     /// 构造默认任务。
     pub fn new(
         model_service: Arc<ModelService>,
-        account_store: Arc<dyn AccountStore>,
         account_pool: Arc<RuntimeAccountPoolService>,
     ) -> Self {
         Self {
             model_service,
-            account_store,
             account_pool,
             refresh_interval_secs: DEFAULT_REFRESH_INTERVAL_SECS,
             initial_delay_ms: INITIAL_DELAY_MS,
@@ -140,29 +138,32 @@ impl ModelRefreshTask {
     /// 执行一次模型刷新并同步账号池模型计划约束。
     pub async fn refresh_once(&self) -> Result<ModelRefreshResult, ModelServiceError> {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let accounts = self.load_accounts().await?;
+        let selected_accounts = self.account_pool.distinct_plan_accounts(Utc::now()).await;
+        let plan_accounts = selected_accounts
+            .iter()
+            .map(|selected| ModelRefreshPlanAccount {
+                plan_type: selected.plan_type.clone(),
+                account: selected.account.clone(),
+            })
+            .collect::<Vec<_>>();
+
         let result = self
             .model_service
             .refresh_backend_models_with_installation_id(
-                &accounts,
+                &plan_accounts,
                 &request_id,
                 self.installation_id.as_deref(),
             )
-            .await?;
-        let allowlist = self.model_service.model_plan_allowlist().await?;
+            .await;
+        for selected in &selected_accounts {
+            self.account_pool.release(&selected.account.id).await;
+        }
+
+        let result = result?;
+        let routing = self.model_service.model_plan_routing().await?;
         self.account_pool
-            .apply_model_plan_allowlist(allowlist)
+            .apply_model_plan_routing(routing.allowlist, routing.fetched_plan_types)
             .await;
         Ok(result)
-    }
-
-    async fn load_accounts(&self) -> Result<Vec<Account>, ModelServiceError> {
-        self.account_store
-            .list_pool_accounts()
-            .await
-            .map_err(|error| {
-                tracing::warn!(error = %error, "加载账号列表失败");
-                ModelServiceError::NoAccounts
-            })
     }
 }

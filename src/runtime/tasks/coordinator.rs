@@ -61,13 +61,9 @@ impl TaskCoordinator {
         );
         coordinator.push(
             "model_refresh",
-            ModelRefreshTask::new(
-                services.models.clone(),
-                services.accounts.clone(),
-                services.account_pool.clone(),
-            )
-            .with_installation_id(services.installation_id.clone())
-            .start(),
+            ModelRefreshTask::new(services.models.clone(), services.account_pool.clone())
+                .with_installation_id(services.installation_id.clone())
+                .start(),
         );
         if config.auth.refresh_enabled {
             coordinator.push(

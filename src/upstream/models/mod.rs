@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use thiserror::Error;
 
-use crate::upstream::accounts::model::{Account, AccountStatus};
+use crate::upstream::accounts::model::Account;
 
 // ---------------------------------------------------------------------------
 // 数据类型
@@ -271,6 +271,7 @@ pub struct ModelCatalog {
     models: Vec<CodexModelInfo>,
     model_aliases: BTreeMap<String, String>,
     model_plan_index: BTreeMap<String, Vec<String>>,
+    fetched_plan_types: BTreeSet<String>,
 }
 
 impl ModelPlanSnapshot {
@@ -294,6 +295,7 @@ impl ModelCatalog {
             models: Vec::new(),
             model_aliases,
             model_plan_index: BTreeMap::new(),
+            fetched_plan_types: BTreeSet::new(),
         }
     }
 
@@ -309,8 +311,10 @@ impl ModelCatalog {
         let model_aliases = normalize_aliases(&config.model_aliases);
         let mut models_by_id = BTreeMap::new();
         let mut model_plan_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut fetched_plan_types = BTreeSet::new();
 
         for snapshot in snapshots {
+            fetched_plan_types.insert(snapshot.plan_type.clone());
             for model in &snapshot.models {
                 models_by_id.insert(model.id.clone(), model.clone());
                 let plans = model_plan_index.entry(model.id.clone()).or_default();
@@ -322,13 +326,19 @@ impl ModelCatalog {
 
         let models = models_by_id.into_values().collect::<Vec<_>>();
         if models.is_empty() {
-            return Self::from_config(config);
+            return Self {
+                models,
+                model_aliases,
+                model_plan_index,
+                fetched_plan_types,
+            };
         }
 
         Self {
             models,
             model_aliases,
             model_plan_index,
+            fetched_plan_types,
         }
     }
 
@@ -348,6 +358,11 @@ impl ModelCatalog {
     /// 返回 model -> plans allowlist。
     pub fn model_plan_allowlist(&self) -> BTreeMap<String, Vec<String>> {
         self.model_plan_index.clone()
+    }
+
+    /// 返回已成功拉取过模型列表的订阅计划。
+    pub fn fetched_plan_types(&self) -> BTreeSet<String> {
+        self.fetched_plan_types.clone()
     }
 
     /// 判断输入模型名是否在目录中可识别。
@@ -579,6 +594,24 @@ pub enum ModelServiceError {
 /// 模型到可用计划的映射。
 pub type ModelPlanAllowlist = BTreeMap<String, Vec<String>>;
 
+/// 模型调度约束快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelPlanRouting {
+    /// 模型到允许订阅计划的映射。
+    pub allowlist: ModelPlanAllowlist,
+    /// 已成功拉取过模型列表的订阅计划。
+    pub fetched_plan_types: BTreeSet<String>,
+}
+
+/// 模型刷新用的计划账号。
+#[derive(Debug, Clone)]
+pub struct ModelRefreshPlanAccount {
+    /// 订阅计划类型。
+    pub plan_type: String,
+    /// 用于刷新该计划模型列表的账号。
+    pub account: Account,
+}
+
 /// 模型目录服务。
 #[derive(Clone)]
 pub struct ModelService {
@@ -631,7 +664,7 @@ impl ModelService {
     /// 使用运行时 installation id 刷新活跃账号对应的后端模型目录。
     pub async fn refresh_backend_models_with_installation_id(
         &self,
-        accounts: &[Account],
+        plan_accounts: &[ModelRefreshPlanAccount],
         request_id: &str,
         installation_id: Option<&str>,
     ) -> Result<ModelRefreshResult, ModelServiceError> {
@@ -644,7 +677,6 @@ impl ModelService {
             .as_ref()
             .ok_or(ModelServiceError::UpstreamClientUnavailable)?;
 
-        let plan_accounts = distinct_active_plan_accounts(accounts);
         if plan_accounts.is_empty() {
             return Err(ModelServiceError::NoAccounts);
         }
@@ -655,13 +687,13 @@ impl ModelService {
             failed_plans: 0,
         };
 
-        for (plan_type, account) in plan_accounts {
+        for plan_account in plan_accounts {
             let request = CodexModelCatalogRequest {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
+                access_token: &plan_account.account.access_token,
+                account_id: plan_account.account.account_id.as_deref(),
                 request_id,
                 installation_id,
-                plan_type: &plan_type,
+                plan_type: &plan_account.plan_type,
             };
 
             let entries = match upstream_client.fetch_models(&request).await {
@@ -671,13 +703,14 @@ impl ModelService {
                     continue;
                 }
                 Err(error) => {
-                    tracing::warn!(error = %error, plan_type, "刷新后端模型失败");
+                    tracing::warn!(error = %error, plan_type = %plan_account.plan_type, "刷新后端模型失败");
                     result.failed_plans += 1;
                     continue;
                 }
             };
 
-            let snapshot = ModelPlanSnapshot::from_backend_entries(plan_type, entries);
+            let snapshot =
+                ModelPlanSnapshot::from_backend_entries(plan_account.plan_type.clone(), entries);
             result.model_count += snapshot.models.len();
             snapshot_store
                 .replace_plan_snapshot(&snapshot)
@@ -690,19 +723,22 @@ impl ModelService {
             return Err(ModelServiceError::AllPlansFailed(result));
         }
 
-        self.model_plan_allowlist_from_store().await?;
+        self.model_plan_routing_from_store().await?;
 
         Ok(result)
     }
 
     /// 读取当前缓存的 model -> plans allowlist。
     pub async fn model_plan_allowlist(&self) -> Result<ModelPlanAllowlist, ModelServiceError> {
-        self.model_plan_allowlist_from_store().await
+        Ok(self.model_plan_routing_from_store().await?.allowlist)
     }
 
-    async fn model_plan_allowlist_from_store(
-        &self,
-    ) -> Result<ModelPlanAllowlist, ModelServiceError> {
+    /// 读取当前缓存的模型调度约束。
+    pub async fn model_plan_routing(&self) -> Result<ModelPlanRouting, ModelServiceError> {
+        self.model_plan_routing_from_store().await
+    }
+
+    async fn model_plan_routing_from_store(&self) -> Result<ModelPlanRouting, ModelServiceError> {
         let snapshot_store = self
             .snapshot_store
             .as_ref()
@@ -712,7 +748,11 @@ impl ModelService {
             .await
             .map_err(map_load_snapshots_error)?;
         let config = self.config_snapshot();
-        Ok(ModelCatalog::from_config_and_snapshots(&config, &snapshots).model_plan_allowlist())
+        let catalog = ModelCatalog::from_config_and_snapshots(&config, &snapshots);
+        Ok(ModelPlanRouting {
+            allowlist: catalog.model_plan_allowlist(),
+            fetched_plan_types: catalog.fetched_plan_types(),
+        })
     }
 
     fn config_snapshot(&self) -> ModelConfig {
@@ -721,25 +761,6 @@ impl ModelService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
-}
-
-fn distinct_active_plan_accounts(accounts: &[Account]) -> Vec<(String, Account)> {
-    let mut by_plan = BTreeMap::new();
-
-    for account in accounts {
-        if account.status != AccountStatus::Active {
-            continue;
-        }
-
-        let plan_type = account
-            .plan_type
-            .as_deref()
-            .unwrap_or("unknown")
-            .to_string();
-        by_plan.entry(plan_type).or_insert_with(|| account.clone());
-    }
-
-    by_plan.into_iter().collect()
 }
 
 fn map_store_snapshot_error(_: ModelSnapshotStoreError) -> ModelServiceError {

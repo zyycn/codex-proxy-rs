@@ -1,3 +1,4 @@
+use codex_proxy_rs::config::settings::account_pool_options_from_config;
 use codex_proxy_rs::config::types::AppConfig;
 use codex_proxy_rs::config::types::LoggingConfig;
 use std::fs;
@@ -10,6 +11,9 @@ api:
   base_url: https://chatgpt.com/backend-api
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+quota:
+  refresh_interval_minutes: 5
+  skip_exhausted: true
 tls:
   force_http11: false
 ws_pool:
@@ -83,6 +87,8 @@ fn default_config_keeps_only_codex_backend() {
         cfg.auth.oauth_token_endpoint,
         "https://auth.openai.com/oauth/token"
     );
+    assert_eq!(cfg.quota.refresh_interval_minutes, 5);
+    assert!(cfg.quota.skip_exhausted);
     assert!(cfg.ws_pool.enabled);
     assert_eq!(cfg.ws_pool.max_age_ms, 3_300_000);
     assert_eq!(cfg.ws_pool.max_per_account, 8);
@@ -100,6 +106,16 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
     );
     assert_eq!(cfg.logging.directory, ".runtime/logs");
+}
+
+#[test]
+fn account_pool_options_should_use_quota_skip_exhausted() {
+    let mut cfg: AppConfig = serde_yml::from_str(DEFAULT_CONFIG_YAML).unwrap();
+    cfg.quota.skip_exhausted = false;
+
+    let options = account_pool_options_from_config(&cfg);
+
+    assert!(!options.skip_quota_limited);
 }
 
 #[test]
@@ -137,6 +153,8 @@ api:
   base_url: https://chatgpt.com/backend-api
 database:
   url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+quota:
+  skip_exhausted: false
 tls:
   force_http11: false
 ws_pool:
@@ -221,6 +239,8 @@ ws_pool:
     );
     assert!(cfg.model_aliases.is_empty());
     assert_eq!(cfg.auth.max_concurrent_per_account, 3);
+    assert_eq!(cfg.quota.refresh_interval_minutes, 5);
+    assert!(!cfg.quota.skip_exhausted);
     assert_eq!(cfg.auth.oauth_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
     assert_eq!(
         cfg.auth.oauth_token_endpoint,

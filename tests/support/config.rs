@@ -29,6 +29,7 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         },
         quota: QuotaConfig {
             refresh_interval_minutes: 5,
+            skip_exhausted: true,
         },
         database: DatabaseConfig { url: database_url },
         tls: TlsConfig {
