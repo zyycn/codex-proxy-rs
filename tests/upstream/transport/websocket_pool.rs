@@ -73,6 +73,68 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
 }
 
 #[tokio::test]
+async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_accounts() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        for response_id in ["resp_local_a", "resp_local_b"] {
+            let (stream, _) = listener.accept().await.unwrap();
+            accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _message = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response(response_id, 3, 1).into(),
+                ))
+                .await
+                .unwrap();
+            websocket.close(None).await.unwrap();
+        }
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "be brief",
+            Vec::new(),
+        );
+    request.previous_response_id = Some("resp_previous".to_string());
+    request.prompt_cache_key = Some("conversation-pool".to_string());
+
+    let first = backend
+        .create_response_with_pool_account_started_at(
+            &request,
+            request_context("req_pool_local_a", Some("same-chatgpt-account")),
+            Some("acct_local_a"),
+            std::time::Instant::now(),
+        )
+        .await
+        .expect("first local account websocket response should succeed");
+    let second = backend
+        .create_response_with_pool_account_started_at(
+            &request,
+            request_context("req_pool_local_b", Some("same-chatgpt-account")),
+            Some("acct_local_b"),
+            std::time::Instant::now(),
+        )
+        .await
+        .expect("second local account websocket response should succeed");
+    server.await.unwrap();
+
+    assert!(first.body.contains("resp_local_a"));
+    assert!(second.body.contains("resp_local_b"));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

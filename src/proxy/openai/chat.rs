@@ -484,6 +484,7 @@ pub fn translate_chat_to_codex(
         .as_deref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let use_websocket = user.is_some();
     let codex = CodexResponsesRequest::new_http_sse(
         request.model,
         String::new(),
@@ -506,7 +507,7 @@ pub fn translate_chat_to_codex(
         service_tier: request.service_tier,
         prompt_cache_key: user.clone(),
         client_conversation_id: user,
-        force_http_sse: true,
+        use_websocket,
         ..codex
     })
 }

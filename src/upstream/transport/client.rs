@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -26,8 +26,8 @@ use crate::upstream::fingerprint::Fingerprint;
 use crate::upstream::models::BackendModelEntry;
 use crate::upstream::protocol::events::extract_sse_usage;
 use crate::upstream::protocol::responses::{
-    http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,
-    CodexTransport,
+    http_sse_fallback_allowed, response_body_has_first_event, transport_for_request,
+    CodexCompactRequest, CodexResponsesRequest, CodexTransport,
 };
 use crate::upstream::protocol::sse::SseError;
 use crate::upstream::protocol::websocket::{
@@ -41,10 +41,9 @@ use super::headers::{
 };
 use super::tls::{build_reqwest_client_with_custom_ca, custom_ca_env_cache_key, CustomCaError};
 use super::websocket::{
-    execute_response_create_request, execute_response_create_request_stream_with_pool,
-    execute_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
-    CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRateLimitHeaderUpdates,
-    CodexWebSocketTurnStateUpdate,
+    execute_response_create_request_stream_with_pool, execute_response_create_request_with_pool,
+    write_websocket_audit_artifact_from_env, CodexWebSocketConnection, CodexWebSocketExchangeError,
+    CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketTurnStateUpdate,
 };
 use super::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolKey};
 
@@ -244,6 +243,8 @@ pub struct CodexBackendResponse {
     pub set_cookie_headers: Vec<String>,
     /// 上游透传的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
+    /// 首个有效上游 SSE/WebSocket 事件到达代理的耗时。
+    pub first_token_ms: Option<i64>,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -345,6 +346,7 @@ impl CodexBackendClient {
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
+        started_at: Instant,
     ) -> CodexClientResult<CodexBackendResponse> {
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let response = self
@@ -371,7 +373,14 @@ impl CodexBackendClient {
             });
         }
 
-        let body = response.text().await?;
+        let mut body_bytes = Vec::new();
+        let mut first_token_ms = None;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.try_next().await? {
+            body_bytes.extend_from_slice(&chunk);
+            update_first_token_ms(started_at, &body_bytes, &mut first_token_ms);
+        }
+        let body = String::from_utf8_lossy(&body_bytes).into_owned();
         let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
         Ok(CodexBackendResponse {
             body,
@@ -380,6 +389,7 @@ impl CodexBackendClient {
             turn_state,
             set_cookie_headers,
             rate_limit_headers,
+            first_token_ms,
         })
     }
 
@@ -430,15 +440,41 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendResponse> {
+        self.create_response_started_at(request, context, Instant::now())
+            .await
+    }
+
+    pub async fn create_response_started_at(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        started_at: Instant,
+    ) -> CodexClientResult<CodexBackendResponse> {
+        self.create_response_with_pool_account_started_at(request, context, None, started_at)
+            .await
+    }
+
+    pub async fn create_response_with_pool_account_started_at(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        started_at: Instant,
+    ) -> CodexClientResult<CodexBackendResponse> {
         let upstream_request = response_upstream_request(request, context);
         match transport_for_request(&upstream_request) {
             CodexTransport::HttpSse => {
-                self.create_response_http_sse(&upstream_request, context)
+                self.create_response_http_sse(&upstream_request, context, started_at)
                     .await
             }
             CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired => {
                 match self
-                    .create_response_websocket(&upstream_request, context)
+                    .create_response_websocket(
+                        &upstream_request,
+                        context,
+                        pool_account_id,
+                        started_at,
+                    )
                     .await
                 {
                     Ok(response) => Ok(response),
@@ -447,7 +483,7 @@ impl CodexBackendClient {
                             && websocket_error_allows_http_fallback(&error) =>
                     {
                         tracing::warn!(error = %error, "websocket response failed; falling back to HTTP SSE");
-                        self.create_response_http_sse(&upstream_request, context)
+                        self.create_response_http_sse(&upstream_request, context, started_at)
                             .await
                     }
                     Err(error) => Err(error),
@@ -462,6 +498,16 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        self.create_response_stream_with_pool_account(request, context, None)
+            .await
+    }
+
+    pub async fn create_response_stream_with_pool_account(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let upstream_request = response_upstream_request(request, context);
         match transport_for_request(&upstream_request) {
             CodexTransport::HttpSse => {
@@ -470,7 +516,7 @@ impl CodexBackendClient {
             }
             CodexTransport::WebSocketPreferred | CodexTransport::WebSocketRequired => {
                 match self
-                    .create_response_websocket_stream(&upstream_request, context)
+                    .create_response_websocket_stream(&upstream_request, context, pool_account_id)
                     .await
                 {
                     Ok(response) => Ok(response),
@@ -492,6 +538,8 @@ impl CodexBackendClient {
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+        started_at: Instant,
     ) -> CodexClientResult<CodexBackendResponse> {
         let websocket_request = websocket_upstream_request(upstream_request);
         let headers = self.request_headers_for_http_response(&websocket_request, context)?;
@@ -510,12 +558,13 @@ impl CodexBackendClient {
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
         }
-        let pool_key = self.websocket_pool_key(upstream_request, context);
+        let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
-                execute_response_create_request_with_pool(&prepared, Some((pool, key))).await
+                execute_response_create_request_with_pool(&prepared, Some((pool, key)), started_at)
+                    .await
             }
-            _ => execute_response_create_request(&prepared).await,
+            _ => execute_response_create_request_with_pool(&prepared, None, started_at).await,
         }
         .map_err(websocket_exchange_error_to_client_error)?;
 
@@ -526,6 +575,7 @@ impl CodexBackendClient {
             turn_state: exchange.turn_state,
             set_cookie_headers: exchange.set_cookie_headers,
             rate_limit_headers: exchange.rate_limit_headers,
+            first_token_ms: exchange.first_token_ms,
         })
     }
 
@@ -533,6 +583,7 @@ impl CodexBackendClient {
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let websocket_request = websocket_upstream_request(upstream_request);
         let headers = self.request_headers_for_http_response(&websocket_request, context)?;
@@ -551,7 +602,7 @@ impl CodexBackendClient {
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
             tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
         }
-        let pool_key = self.websocket_pool_key(upstream_request, context);
+        let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
                 execute_response_create_request_stream_with_pool(&prepared, Some((pool, key))).await
@@ -579,8 +630,9 @@ impl CodexBackendClient {
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
     ) -> Option<CodexWebSocketPoolKey> {
-        let account_id = context.account_id?;
+        let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request
             .prompt_cache_key
             .as_deref()
@@ -864,6 +916,16 @@ fn turn_state(response: &ReqwestResponse) -> Option<String> {
         .get("x-codex-turn-state")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string)
+}
+
+fn update_first_token_ms(started_at: Instant, body_bytes: &[u8], first_token_ms: &mut Option<i64>) {
+    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
+        *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
+    }
+}
+
+fn elapsed_millis_i64(started_at: Instant) -> i64 {
+    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
 }
 
 fn set_cookie_headers(response: &ReqwestResponse) -> Vec<String> {

@@ -63,8 +63,9 @@ use crate::{
             events::{extract_sse_usage, extract_usage, TokenUsage},
             responses::{
                 apply_response_model_options, completed_response_metadata,
-                reconvert_responses_sse_event_tuple_values, response_from_codex_sse,
-                CodexCompactRequest, CodexResponsesRequest, CollectedResponse, ResponsesSseFailure,
+                reconvert_responses_sse_event_tuple_values, response_body_has_first_event,
+                response_from_codex_sse, CodexCompactRequest, CodexResponsesRequest,
+                CollectedResponse, ResponsesSseFailure,
             },
             sse::{
                 encode_sse_event, parse_sse_events, sse_body_has_done, SseError, DONE_SSE_FRAME,
@@ -570,6 +571,7 @@ impl ResponseDispatchService {
                 &request,
                 request_id,
                 &account,
+                started_at,
             )
             .await;
             self.account_pool.release(&release_account_id).await;
@@ -892,6 +894,7 @@ impl ResponseDispatchService {
                         "responseId": response_id,
                         "stream": false,
                         "transport": backend_transport_name(response.transport),
+                        "firstTokenMs": response.first_token_ms,
                         "usage": response.usage,
                     }),
                     rate_limit_headers: &response.rate_limit_headers,
@@ -2177,88 +2180,9 @@ fn update_first_token_ms(
     body_bytes: &[u8],
     first_token_ms: &mut Option<i64>,
 ) {
-    if first_token_ms.is_none() && response_body_has_first_token(body_bytes) {
+    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
         *first_token_ms = Some(elapsed_millis_i64(context.started_at).max(1));
     }
-}
-
-fn response_body_has_first_token(body_bytes: &[u8]) -> bool {
-    let body = String::from_utf8_lossy(body_bytes);
-    let Some(event_end) = body.rfind("\n\n") else {
-        return false;
-    };
-    parse_sse_events(&body[..event_end + 2]).is_ok_and(|events| {
-        events.iter().any(|event| {
-            serde_json::from_str::<Value>(&event.data)
-                .is_ok_and(|value| response_event_has_first_token(event.event.as_deref(), &value))
-        })
-    })
-}
-
-fn response_event_has_first_token(event_name: Option<&str>, value: &Value) -> bool {
-    match response_stream_event_type(event_name, value) {
-        Some(
-            "response.output_text.delta"
-            | "response.reasoning_summary_text.delta"
-            | "response.reasoning_text.delta"
-            | "response.function_call_arguments.delta"
-            | "response.custom_tool_call_input.delta",
-        ) => non_empty_string_field(value, &["delta"]),
-        Some("response.output_text.done" | "response.reasoning_text.done") => {
-            non_empty_string_field(value, &["text"])
-        }
-        Some("response.output_item.added" | "response.output_item.done") => value
-            .get("item")
-            .is_some_and(output_item_has_generated_content),
-        Some("response.completed") => value
-            .get("response")
-            .is_some_and(completed_response_has_generated_content),
-        _ => false,
-    }
-}
-
-fn response_stream_event_type<'a>(
-    event_name: Option<&'a str>,
-    value: &'a Value,
-) -> Option<&'a str> {
-    event_name.or_else(|| value.get("type").and_then(Value::as_str))
-}
-
-fn completed_response_has_generated_content(response: &Value) -> bool {
-    non_empty_string_field(response, &["output_text"])
-        || response
-            .get("output")
-            .and_then(Value::as_array)
-            .is_some_and(|items| items.iter().any(output_item_has_generated_content))
-        || response
-            .pointer("/usage/output_tokens")
-            .and_then(Value::as_i64)
-            .is_some_and(|tokens| tokens > 0)
-}
-
-fn output_item_has_generated_content(item: &Value) -> bool {
-    non_empty_string_field(item, &["content", "text", "arguments", "input"])
-        || item
-            .get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|parts| parts.iter().any(output_content_part_has_text))
-        || item
-            .get("summary")
-            .and_then(Value::as_array)
-            .is_some_and(|parts| parts.iter().any(output_content_part_has_text))
-}
-
-fn output_content_part_has_text(part: &Value) -> bool {
-    non_empty_string_field(part, &["text", "content"])
-}
-
-fn non_empty_string_field(value: &Value, fields: &[&str]) -> bool {
-    fields.iter().any(|field| {
-        value
-            .get(field)
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.trim().is_empty())
-    })
 }
 
 async fn send_live_response_stream_chunk(
@@ -3349,43 +3273,49 @@ fn elapsed_millis_i64(started_at: Instant) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::response_body_has_first_token;
+    use crate::upstream::protocol::responses::response_body_has_first_event;
 
     #[test]
-    fn first_token_detection_should_match_text_delta() {
+    fn first_event_detection_should_match_text_delta() {
         let body = br#"event: response.output_text.delta
 data: {"delta":"hello"}
 
 "#;
 
-        assert!(response_body_has_first_token(body));
+        assert!(response_body_has_first_event(body));
     }
 
     #[test]
-    fn first_token_detection_should_match_output_item_done_text() {
-        let body = br#"event: response.output_item.done
-data: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}
+    fn first_event_detection_should_match_response_created() {
+        let body = br#"event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}
 
 "#;
 
-        assert!(response_body_has_first_token(body));
+        assert!(response_body_has_first_event(body));
     }
 
     #[test]
-    fn first_token_detection_should_fallback_to_completed_usage_output_tokens() {
-        let body = br#"event: response.completed
-data: {"response":{"id":"resp_1","status":"completed","usage":{"input_tokens":3,"output_tokens":4}}}
+    fn first_event_detection_should_ignore_done_frame() {
+        let body = br#"data: [DONE]
 
 "#;
 
-        assert!(response_body_has_first_token(body));
+        assert!(!response_body_has_first_event(body));
     }
 
     #[test]
-    fn first_token_detection_should_ignore_incomplete_frames() {
+    fn first_event_detection_should_ignore_incomplete_frames() {
         let body = br#"event: response.output_text.delta
 data: {"delta":"hello"}"#;
 
-        assert!(!response_body_has_first_token(body));
+        assert!(!response_body_has_first_event(body));
+    }
+
+    #[test]
+    fn first_event_detection_should_match_crlf_frames() {
+        let body = b"event: response.created\r\ndata: {\"type\":\"response.created\"}\r\n\r\n";
+
+        assert!(response_body_has_first_event(body));
     }
 }

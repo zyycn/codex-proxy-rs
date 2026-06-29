@@ -140,6 +140,30 @@ pub fn http_sse_fallback_allowed(request: &CodexResponsesRequest) -> bool {
     )
 }
 
+/// 判断已收到的 Responses SSE 内容是否包含首个完整的有效数据事件。
+pub fn response_body_has_first_event(body_bytes: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body_bytes);
+    let Some(complete_body) = complete_sse_body_prefix(&body) else {
+        return false;
+    };
+    parse_sse_events(complete_body).is_ok_and(|events| {
+        events.iter().any(|event| {
+            let data = event.data.trim();
+            !data.is_empty() && data != "[DONE]"
+        })
+    })
+}
+
+fn complete_sse_body_prefix(body: &str) -> Option<&str> {
+    let lf_end = body.rfind("\n\n").map(|index| index + 2);
+    let crlf_end = body.rfind("\r\n\r\n").map(|index| index + 4);
+    lf_end
+        .into_iter()
+        .chain(crlf_end)
+        .max()
+        .map(|end| &body[..end])
+}
+
 /// 从 Codex SSE 收集出的非流式 Responses 结果。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectedResponse {

@@ -95,6 +95,122 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
 }
 
 #[tokio::test]
+async fn chat_completions_with_user_should_use_and_reuse_websocket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let first_payload = send_chat_websocket_response(
+            &mut websocket,
+            "websocket chat first",
+            "resp_chat_ws_first",
+        )
+        .await;
+
+        loop {
+            tokio::select! {
+                message = websocket.next() => {
+                    match message {
+                        Some(Ok(message)) if message.is_text() => {
+                            let second_payload = send_chat_websocket_response_after_message(
+                                &mut websocket,
+                                message,
+                                "websocket chat second",
+                                "resp_chat_ws_second",
+                            )
+                            .await;
+                            websocket.close(None).await.unwrap();
+                            break (true, first_payload, second_payload);
+                        }
+                        Some(_) => {}
+                        None => {
+                            let second_payload = accept_chat_websocket_response(
+                                &listener,
+                                "websocket chat second",
+                                "resp_chat_ws_second",
+                            )
+                            .await;
+                            break (false, first_payload, second_payload);
+                        }
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted.unwrap();
+                    let mut second_websocket = accept_async(stream).await.unwrap();
+                    let second_payload = send_chat_websocket_response(
+                        &mut second_websocket,
+                        "websocket chat second",
+                        "resp_chat_ws_second",
+                    )
+                    .await;
+                    second_websocket.close(None).await.unwrap();
+                    break (false, first_payload, second_payload);
+                }
+            }
+        }
+    });
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+
+    let first_response = app
+        .clone()
+        .oneshot(chat_json_request(
+            &api_key,
+            "req_chat_ws_first",
+            "chat-ws-user",
+            "Say hello over websocket",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_json(first_response).await;
+    assert_eq!(
+        first_body["choices"][0]["message"]["content"],
+        "websocket chat first"
+    );
+
+    let second_response = app
+        .oneshot(chat_json_request(
+            &api_key,
+            "req_chat_ws_second",
+            "chat-ws-user",
+            "Continue over the same websocket",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_json(second_response).await;
+    assert_eq!(
+        second_body["choices"][0]["message"]["content"],
+        "websocket chat second"
+    );
+    let (reused_connection, first_payload, second_payload) = upstream.await.unwrap();
+    let event = latest_usage_record(&pool, "v1.chat").await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+
+    assert!(
+        reused_connection,
+        "second chat request opened a new websocket"
+    );
+    assert_eq!(first_payload["type"], "response.create");
+    assert_eq!(second_payload["type"], "response.create");
+    assert_eq!(
+        first_payload["prompt_cache_key"], second_payload["prompt_cache_key"],
+        "same chat user should keep the same account-scoped conversation key"
+    );
+    assert!(first_payload["prompt_cache_key"]
+        .as_str()
+        .is_some_and(|key| key.starts_with("cp_")));
+    assert_eq!(metadata["transport"], "websocket");
+    assert!(
+        metadata["firstTokenMs"]
+            .as_i64()
+            .is_some_and(|value| value > 0),
+        "chat websocket usage metadata should include first token latency: {metadata:?}",
+    );
+}
+
+#[tokio::test]
 async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -911,4 +1027,71 @@ async fn chat_completions_should_return_quota_error_when_402_fallback_is_exhaust
     assert!(message.contains("quota reached"));
     assert_eq!(body["error"]["code"], "upstream_error");
     assert_eq!(account_status.0, "quota_exhausted");
+}
+
+fn chat_json_request(api_key: &str, request_id: &str, user: &str, content: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .header("x-request-id", request_id)
+        .body(Body::from(
+            json!({
+                "model": "gpt-5.5",
+                "user": user,
+                "messages": [{"role": "user", "content": content}]
+            })
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+async fn accept_chat_websocket_response(
+    listener: &TcpListener,
+    content: &str,
+    response_id: &str,
+) -> Value {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut websocket = accept_async(stream).await.unwrap();
+    let payload = send_chat_websocket_response(&mut websocket, content, response_id).await;
+    websocket.close(None).await.unwrap();
+    payload
+}
+
+async fn send_chat_websocket_response(
+    websocket: &mut WebSocketStream<TcpStream>,
+    content: &str,
+    response_id: &str,
+) -> Value {
+    let message = websocket.next().await.unwrap().unwrap();
+    send_chat_websocket_response_after_message(websocket, message, content, response_id).await
+}
+
+async fn send_chat_websocket_response_after_message(
+    websocket: &mut WebSocketStream<TcpStream>,
+    message: Message,
+    content: &str,
+    response_id: &str,
+) -> Value {
+    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+        .expect("websocket payload should be json");
+    websocket
+        .send(Message::Text(
+            json!({
+                "type": "response.output_text.delta",
+                "delta": content
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    websocket
+        .send(Message::Text(
+            response_completed_websocket_message(response_id).into(),
+        ))
+        .await
+        .unwrap();
+    payload
 }

@@ -37,7 +37,8 @@ fn chat_completion_request_should_translate_to_codex_request() {
         .expect("chat request should translate");
 
     assert_eq!(codex.model, "gpt-5.5");
-    assert!(codex.force_http_sse);
+    assert!(codex.use_websocket);
+    assert!(!codex.force_http_sse);
     assert_eq!(codex.prompt_cache_key.as_deref(), Some("client-123"));
     assert_eq!(codex.client_conversation_id.as_deref(), Some("client-123"));
 }
