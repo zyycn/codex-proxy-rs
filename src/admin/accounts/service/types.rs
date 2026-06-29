@@ -79,8 +79,6 @@ pub enum AdminAccountError {
     StoreQuota,
     #[error("failed to fetch quota: {0}")]
     FetchQuota(String),
-    #[error("failed to fetch models: {0}")]
-    FetchModels(String),
     #[error("no available models returned")]
     NoModels,
     #[error("invalid status: {0}")]

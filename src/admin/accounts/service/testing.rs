@@ -7,11 +7,12 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::upstream::{
+    models::CodexModelInfo,
     protocol::{
         responses::CodexResponsesRequest,
         sse::{encode_sse_event, parse_sse_events, SseEvent},
     },
-    transport::{CodexModelCatalogClient, CodexModelCatalogRequest, CodexRequestContext},
+    transport::CodexRequestContext,
 };
 
 use super::{types::AdminAccountError, AdminAccountService};
@@ -29,7 +30,6 @@ impl AdminAccountService {
     pub async fn account_models(
         &self,
         account_id: &str,
-        request_id: &str,
     ) -> Result<Vec<AccountModelOption>, AdminAccountError> {
         let account = self
             .store
@@ -37,21 +37,12 @@ impl AdminAccountService {
             .await
             .map_err(|_| AdminAccountError::Inspect)?
             .ok_or(AdminAccountError::NotFound)?;
-        let token = account.access_token.expose_secret().to_string();
-        let request = CodexModelCatalogRequest {
-            access_token: &token,
-            account_id: account.account_id.as_deref(),
-            request_id,
-            installation_id: self.installation_id.as_deref(),
-            plan_type: account.plan_type.as_deref().unwrap_or("default"),
-        };
-        let models = self
-            .codex
-            .fetch_models(&request)
-            .await
-            .map_err(|error| AdminAccountError::FetchModels(error.to_string()))?
+        let plan_type = account.plan_type.as_deref().unwrap_or("default");
+        let catalog = self.models.catalog().await;
+        let models = catalog
+            .models_for_plan(plan_type)
             .iter()
-            .filter_map(account_model_option)
+            .map(account_model_option)
             .collect::<Vec<_>>();
         if models.is_empty() {
             return Err(AdminAccountError::NoModels);
@@ -145,32 +136,11 @@ impl AdminAccountService {
     }
 }
 
-fn account_model_option(
-    entry: &crate::upstream::models::BackendModelEntry,
-) -> Option<AccountModelOption> {
-    let id = first_non_empty([
-        entry.slug.as_deref(),
-        entry.id.as_deref(),
-        entry.name.as_deref(),
-    ])?
-    .to_string();
-    let label = first_non_empty([
-        entry.display_name.as_deref(),
-        entry.title.as_deref(),
-        entry.name.as_deref(),
-        Some(id.as_str()),
-    ])
-    .unwrap_or(&id)
-    .to_string();
-    Some(AccountModelOption { id, label })
-}
-
-fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
-    values
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|value| !value.is_empty())
+fn account_model_option(model: &CodexModelInfo) -> AccountModelOption {
+    AccountModelOption {
+        id: model.id.clone(),
+        label: model.display_name.clone(),
+    }
 }
 
 fn test_responses_request(model: String) -> CodexResponsesRequest {

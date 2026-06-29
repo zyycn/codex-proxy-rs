@@ -35,24 +35,8 @@ fn test_events(body: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
-async fn account_models_should_return_upstream_models_only() {
+async fn account_models_should_return_database_snapshot_models() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/codex/models"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "models": [
-                {
-                    "slug": "gpt-5.5",
-                    "display_name": "GPT 5.5"
-                },
-                {
-                    "id": "gpt-5.4",
-                    "title": "GPT 5.4"
-                }
-            ]
-        })))
-        .mount(&server)
-        .await;
     let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
         "admin-account-models.sqlite",
         91,
@@ -60,6 +44,7 @@ async fn account_models_should_return_upstream_models_only() {
     )
     .await;
     seed_test_account(&pool).await;
+    seed_model_snapshot(&pool, "plus").await;
 
     let response = app
         .oneshot(
@@ -74,31 +59,55 @@ async fn account_models_should_return_upstream_models_only() {
         .await
         .unwrap();
     let requests = server.received_requests().await.unwrap();
-    let upstream = requests
-        .iter()
-        .find(|request| request.url.path() == "/backend-api/codex/models")
-        .expect("models request should hit upstream");
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        upstream
-            .headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok()),
-        Some("Bearer access-test")
-    );
-    assert_eq!(
-        upstream
-            .headers
-            .get("chatgpt-account-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("chatgpt-test")
-    );
+    assert!(requests.is_empty(), "model list should be loaded from DB");
     let body = response_json(response).await;
-    assert_eq!(body["data"]["models"][0]["id"], "gpt-5.5");
-    assert_eq!(body["data"]["models"][0]["label"], "GPT 5.5");
-    assert_eq!(body["data"]["models"][1]["id"], "gpt-5.4");
-    assert_eq!(body["data"]["models"][1]["label"], "GPT 5.4");
+    assert_eq!(body["data"]["models"][0]["id"], "gpt-5.4");
+    assert_eq!(body["data"]["models"][0]["label"], "GPT 5.4");
+    assert_eq!(body["data"]["models"][1]["id"], "gpt-5.5");
+    assert_eq!(body["data"]["models"][1]["label"], "GPT 5.5");
+}
+
+async fn seed_model_snapshot(pool: &SqlitePool, plan_type: &str) {
+    let models_json = json!([
+        {
+            "id": "gpt-5.5",
+            "displayName": "GPT 5.5",
+            "description": "Test model",
+            "isDefault": false,
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "medium"}],
+            "defaultReasoningEffort": "medium",
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "supportsPersonality": false,
+            "upgrade": null,
+            "source": "test"
+        },
+        {
+            "id": "gpt-5.4",
+            "displayName": "GPT 5.4",
+            "description": "Test model",
+            "isDefault": false,
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "medium"}],
+            "defaultReasoningEffort": "medium",
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "supportsPersonality": false,
+            "upgrade": null,
+            "source": "test"
+        }
+    ])
+    .to_string();
+    sqlx::query(
+        "insert or replace into model_plan_snapshots (plan_type, models_json, fetched_at) values (?, ?, ?)",
+    )
+    .bind(plan_type)
+    .bind(models_json)
+    .bind("2026-06-29T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

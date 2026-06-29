@@ -190,10 +190,22 @@ impl Services {
             stores.client_keys.clone(),
         )));
         let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
+        let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
+        let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
+            crate::upstream::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
+        );
+        let models = StdArc::new(ModelService::new(
+            crate::upstream::models::ModelConfig {
+                model_aliases: config.model_aliases.clone(),
+            },
+            Some(snapshot_store),
+            Some(upstream_client),
+        ));
         let admin_accounts = StdArc::new(AdminAccountService::new(AdminAccountServiceParts {
             store: stores.accounts.clone(),
             cookies: stores.cookies.clone(),
             codex: codex.clone(),
+            models: models.clone(),
             account_pool: account_pool.clone(),
             token_refresher: token_client,
             oauth: crate::admin::accounts::service::oauth::AccountOAuthService::new(
@@ -216,17 +228,6 @@ impl Services {
             stores.session_affinity.clone(),
         ));
 
-        let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
-        let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
-            crate::upstream::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
-        );
-        let models = StdArc::new(ModelService::new(
-            crate::upstream::models::ModelConfig {
-                model_aliases: config.model_aliases.clone(),
-            },
-            Some(snapshot_store),
-            Some(upstream_client),
-        ));
         let cloudflare_recovery =
             crate::proxy::dispatch::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
         let chat = StdArc::new(ChatDispatchService::new(

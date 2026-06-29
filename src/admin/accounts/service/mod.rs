@@ -20,6 +20,7 @@ use crate::{
         store::SqliteAccountStore,
         token_refresh::{RuntimeRefreshPolicy, TokenRefresher},
     },
+    upstream::models::ModelService,
     upstream::transport::CodexBackendClient,
 };
 
@@ -34,6 +35,7 @@ pub struct AdminAccountService {
     pub store: SqliteAccountStore,
     pub(crate) cookies: SqliteCookieStore,
     pub(crate) codex: StdArc<CodexBackendClient>,
+    pub(crate) models: StdArc<ModelService>,
     pub(crate) account_pool: StdArc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: StdArc<dyn TokenRefresher>,
     pub(crate) oauth: oauth::AccountOAuthService,
@@ -45,6 +47,7 @@ pub struct AdminAccountServiceParts {
     pub store: SqliteAccountStore,
     pub cookies: SqliteCookieStore,
     pub codex: StdArc<CodexBackendClient>,
+    pub models: StdArc<ModelService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub token_refresher: StdArc<dyn TokenRefresher>,
     pub oauth: oauth::AccountOAuthService,
@@ -58,6 +61,7 @@ impl AdminAccountService {
             store: parts.store,
             cookies: parts.cookies,
             codex: parts.codex,
+            models: parts.models,
             account_pool: parts.account_pool,
             token_refresher: parts.token_refresher,
             oauth: parts.oauth,
