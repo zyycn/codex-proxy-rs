@@ -8,6 +8,7 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Utc};
+use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::upstream::accounts::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
@@ -167,11 +168,10 @@ pub struct AccountWindowUsageDelta {
 /// 纯内存账号池，负责账号调度和运行时状态维护。
 #[derive(Debug)]
 pub struct AccountPool {
-    accounts: BTreeMap<String, Account>,
+    accounts: IndexMap<String, Account>,
     slots: BTreeMap<String, VecDeque<DateTime<Utc>>>,
     options: AccountPoolOptions,
-    round_robin_cursor: usize,
-    least_used_cursor: usize,
+    rotation_cursor: usize,
 }
 
 impl Default for AccountPool {
@@ -184,11 +184,10 @@ impl AccountPool {
     /// 使用指定配置创建账号池。
     pub fn with_options(options: AccountPoolOptions) -> Self {
         Self {
-            accounts: BTreeMap::new(),
+            accounts: IndexMap::new(),
             slots: BTreeMap::new(),
             options,
-            round_robin_cursor: 0,
-            least_used_cursor: 0,
+            rotation_cursor: 0,
         }
     }
 
@@ -204,7 +203,7 @@ impl AccountPool {
 
     /// 移除账号及其在途槽位。
     pub fn remove(&mut self, account_id: &str) -> bool {
-        let removed = self.accounts.remove(account_id).is_some();
+        let removed = self.accounts.shift_remove(account_id).is_some();
         self.slots.remove(account_id);
         removed
     }
@@ -213,12 +212,14 @@ impl AccountPool {
     pub fn clear(&mut self) {
         self.accounts.clear();
         self.slots.clear();
-        self.round_robin_cursor = 0;
-        self.least_used_cursor = 0;
+        self.rotation_cursor = 0;
     }
 
     /// 替换账号池运行参数。
     pub fn set_options(&mut self, options: AccountPoolOptions) {
+        if self.options.rotation_strategy != options.rotation_strategy {
+            self.rotation_cursor = 0;
+        }
         self.options = options;
     }
 
@@ -276,6 +277,11 @@ impl AccountPool {
         account.quota_verify_required = false;
         account.quota_limit_reached = limit_reached;
         account.quota_cooldown_until = limit_reached.then_some(cooldown_until).flatten();
+        match (account.status, limit_reached) {
+            (AccountStatus::Active, true) => account.status = AccountStatus::QuotaExhausted,
+            (AccountStatus::QuotaExhausted, false) => account.status = AccountStatus::Active,
+            _ => {}
+        }
         if let Some(cooldown_until) = account.quota_cooldown_until {
             account.window_reset_at = account
                 .window_reset_at
@@ -484,33 +490,39 @@ impl AccountPool {
     }
 
     fn select_least_used(&mut self, candidates: &[Account]) -> Option<Account> {
-        let best_key = candidates
+        let mut sorted = candidates.iter().collect::<Vec<_>>();
+        sorted.sort_by(|a, b| compare_least_used(a, b));
+        let best = *sorted.first()?;
+        let tied_count = sorted
             .iter()
-            .map(LeastUsedGroupKey::from_account)
-            .min_by(compare_least_used_group)?;
-        let mut tied = candidates
-            .iter()
-            .filter(|account| LeastUsedGroupKey::from_account(account) == best_key)
-            .collect::<Vec<_>>();
-        tied.sort_by(compare_lru_then_id);
-        let index = self.least_used_cursor % tied.len();
-        self.least_used_cursor = self.least_used_cursor.wrapping_add(1);
-        Some((*tied[index]).clone())
+            .take_while(|account| compare_least_used(best, account) == Ordering::Equal)
+            .count();
+        let index = self.rotation_cursor % tied_count;
+        self.rotation_cursor = self.rotation_cursor.wrapping_add(1);
+        Some((*sorted[index]).clone())
     }
 
     fn select_sticky(candidates: &[Account]) -> Option<Account> {
-        candidates
-            .iter()
-            .max_by_key(|account| account.last_used_at.clone())
-            .cloned()
+        let mut selected = candidates.first()?;
+        for candidate in &candidates[1..] {
+            if compare_last_used(
+                candidate.last_used_at.as_deref(),
+                selected.last_used_at.as_deref(),
+            ) == Ordering::Greater
+            {
+                selected = candidate;
+            }
+        }
+        Some((*selected).clone())
     }
 
     fn select_round_robin(&mut self, candidates: &[Account]) -> Option<Account> {
         if candidates.is_empty() {
             return None;
         }
-        let index = self.round_robin_cursor % candidates.len();
-        self.round_robin_cursor = (index + 1) % candidates.len();
+        self.rotation_cursor %= candidates.len();
+        let index = self.rotation_cursor;
+        self.rotation_cursor = self.rotation_cursor.wrapping_add(1);
         Some(candidates[index].clone())
     }
 
@@ -963,27 +975,38 @@ impl RuntimeAccountPoolService {
         account: &Account,
         headers: &[(String, String)],
     ) {
+        self.sync_passive_rate_limit_headers_for_account(
+            &account.id,
+            account.plan_type.as_deref(),
+            headers,
+        )
+        .await;
+    }
+
+    /// 根据上游返回的 rate-limit header 被动同步指定账号 quota 状态。
+    pub async fn sync_passive_rate_limit_headers_for_account(
+        &self,
+        account_id: &str,
+        plan_type: Option<&str>,
+        headers: &[(String, String)],
+    ) {
         let Some(rate_limits) = parse_rate_limit_headers(headers) else {
             return;
         };
-        let existing_quota = match self.store.get_quota_json(&account.id).await {
+        let existing_quota = match self.store.get_quota_json(account_id).await {
             Ok(Some(quota_json)) => serde_json::from_str::<serde_json::Value>(&quota_json).ok(),
             Ok(None) => None,
             Err(error) => {
                 tracing::warn!(
-                    account_id = %account.id,
+                    account_id = %account_id,
                     error = %error,
                     "failed to read existing quota json before passive rate-limit sync"
                 );
                 None
             }
         };
-        let quota = rate_limit_quota(
-            &rate_limits,
-            account.plan_type.as_deref(),
-            existing_quota.as_ref(),
-        );
-        self.apply_quota_snapshot(&account.id, &quota).await;
+        let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
+        self.apply_quota_snapshot(account_id, &quota).await;
     }
 
     /// 读取运行时账号快照。
@@ -1122,6 +1145,9 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
         account.quota_verify_required = true;
         account.quota_limit_reached = false;
         account.quota_cooldown_until = None;
+        if account.status == AccountStatus::QuotaExhausted {
+            account.status = AccountStatus::Active;
+        }
     }
 }
 
@@ -1194,28 +1220,12 @@ fn refresh_cloudflare_cooldown(account: &mut Account, now: DateTime<Utc>) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LeastUsedGroupKey {
-    quota_limited: bool,
-    window_reset_at: Option<DateTime<Utc>>,
-    request_count: u64,
-}
-
-impl LeastUsedGroupKey {
-    fn from_account(account: &Account) -> Self {
-        Self {
-            quota_limited: account.quota_limit_reached,
-            window_reset_at: account.window_reset_at,
-            request_count: account.request_count,
-        }
-    }
-}
-
-fn compare_least_used_group(a: &LeastUsedGroupKey, b: &LeastUsedGroupKey) -> Ordering {
-    a.quota_limited
-        .cmp(&b.quota_limited)
+fn compare_least_used(a: &Account, b: &Account) -> Ordering {
+    a.quota_limit_reached
+        .cmp(&b.quota_limit_reached)
         .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
         .then_with(|| a.request_count.cmp(&b.request_count))
+        .then_with(|| compare_last_used(a.last_used_at.as_deref(), b.last_used_at.as_deref()))
 }
 
 fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
@@ -1225,8 +1235,13 @@ fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> O
     }
 }
 
-fn compare_lru_then_id(a: &&Account, b: &&Account) -> Ordering {
-    a.last_used_at
-        .cmp(&b.last_used_at)
-        .then_with(|| a.id.cmp(&b.id))
+fn compare_last_used(a: Option<&str>, b: Option<&str>) -> Ordering {
+    last_used_millis(a).cmp(&last_used_millis(b))
+}
+
+fn last_used_millis(value: Option<&str>) -> i64 {
+    value
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|datetime| datetime.timestamp_millis())
+        .unwrap_or(0)
 }

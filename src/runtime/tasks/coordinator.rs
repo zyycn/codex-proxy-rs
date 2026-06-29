@@ -95,6 +95,7 @@ impl TaskCoordinator {
             )
             .with_installation_id(services.installation_id.clone())
             .with_cookie_store(stores.cookies.clone())
+            .with_account_pool(services.account_pool.clone())
             .start(),
         );
         coordinator.push(

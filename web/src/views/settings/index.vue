@@ -66,19 +66,19 @@ const rotationOptions: Array<{
   description: string
 }> = [
   {
-    label: '智能分配',
+    label: '智能分配（推荐）',
     value: 'least_used',
-    description: '优先使用压力更低的账号，适合长期稳定运行。',
+    description: '优先使用即将刷新额度的账号，最大化总使用量。',
   },
   {
     label: '轮询',
     value: 'round_robin',
-    description: '按顺序分配请求，让账号池保持均匀节奏。',
+    description: '按顺序轮流使用各账号。',
   },
   {
-    label: '粘性',
+    label: '粘滞',
     value: 'sticky',
-    description: '持续使用同一账号，直到遇到限速或不可用。',
+    description: '持续使用同一账号，直到限速或额度耗尽。',
   },
 ]
 

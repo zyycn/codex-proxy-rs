@@ -8,6 +8,7 @@ use tracing::warn;
 
 use crate::upstream::accounts::{
     model::AccountStatus,
+    pool::RuntimeAccountPoolService,
     quota::{
         quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
         quota_snapshot_reset_at,
@@ -30,6 +31,7 @@ pub struct RuntimeQuotaRefreshService {
     request_spacing: Duration,
     installation_id: Option<String>,
     cookie_store: Option<SqliteCookieStore>,
+    account_pool: Option<Arc<RuntimeAccountPoolService>>,
 }
 
 impl RuntimeQuotaRefreshService {
@@ -42,6 +44,7 @@ impl RuntimeQuotaRefreshService {
             request_spacing: Self::default_request_spacing(),
             installation_id: None,
             cookie_store: None,
+            account_pool: None,
         }
     }
 
@@ -62,6 +65,7 @@ impl RuntimeQuotaRefreshService {
             request_spacing: Self::default_request_spacing(),
             installation_id: None,
             cookie_store: None,
+            account_pool: None,
         }
     }
 
@@ -80,6 +84,12 @@ impl RuntimeQuotaRefreshService {
     /// 设置 usage 请求可复用的账号 Cookie 存储。
     pub fn with_cookie_store(mut self, cookie_store: SqliteCookieStore) -> Self {
         self.cookie_store = Some(cookie_store);
+        self
+    }
+
+    /// 设置运行时账号池，用于刷新后同步内存调度状态。
+    pub fn with_account_pool(mut self, account_pool: Arc<RuntimeAccountPoolService>) -> Self {
+        self.account_pool = Some(account_pool);
         self
     }
 
@@ -103,8 +113,9 @@ impl RuntimeQuotaRefreshService {
         let mut candidates = accounts
             .into_iter()
             .filter(|account| {
-                account.status == AccountStatus::Active
-                    && (account.quota_limit_reached || account.quota_verify_required)
+                account.status == AccountStatus::QuotaExhausted
+                    || (account.status == AccountStatus::Active
+                        && (account.quota_limit_reached || account.quota_verify_required))
             })
             .peekable();
 
@@ -167,6 +178,7 @@ impl RuntimeQuotaRefreshService {
                             )
                             .await?;
                     }
+                    self.sync_runtime_pool_account(&account.id).await;
                 }
                 Err(error) => {
                     warn!(
@@ -193,6 +205,19 @@ impl RuntimeQuotaRefreshService {
             .await
             .ok()
             .flatten()
+    }
+
+    async fn sync_runtime_pool_account(&self, account_id: &str) {
+        let Some(account_pool) = &self.account_pool else {
+            return;
+        };
+        if let Err(error) = account_pool.sync_account_from_repository(account_id).await {
+            warn!(
+                account_id = %account_id,
+                error = %error,
+                "failed to sync runtime account pool after quota refresh"
+            );
+        }
     }
 }
 

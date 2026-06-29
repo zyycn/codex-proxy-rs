@@ -7,7 +7,7 @@ use crate::upstream::{
     models::ParsedModelName,
     protocol::{
         schema::reconvert_tuple_values,
-        sse::{parse_sse_events, SseError},
+        sse::{parse_sse_events, SseError, SseEvent},
     },
 };
 
@@ -146,12 +146,50 @@ pub fn response_body_has_first_event(body_bytes: &[u8]) -> bool {
     let Some(complete_body) = complete_sse_body_prefix(&body) else {
         return false;
     };
-    parse_sse_events(complete_body).is_ok_and(|events| {
-        events.iter().any(|event| {
-            let data = event.data.trim();
-            !data.is_empty() && data != "[DONE]"
-        })
-    })
+    parse_sse_events(complete_body)
+        .is_ok_and(|events| events.iter().any(response_sse_event_has_first_output))
+}
+
+fn response_sse_event_has_first_output(event: &SseEvent) -> bool {
+    let data = event.data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return false;
+    }
+
+    let value = serde_json::from_str::<Value>(data).ok();
+    let event_type = event.event.as_deref().or_else(|| {
+        value
+            .as_ref()
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+    });
+
+    match event_type {
+        Some("response.output_text.delta")
+        | Some("response.reasoning_summary_text.delta")
+        | Some("response.reasoning_text.delta")
+        | Some("response.function_call_arguments.delta")
+        | Some("response.custom_tool_call_input.delta") => value
+            .as_ref()
+            .and_then(|value| value.get("delta"))
+            .and_then(Value::as_str)
+            .is_some_and(|delta| !delta.is_empty()),
+        Some("response.output_text.done") => value
+            .as_ref()
+            .and_then(|value| value.get("text"))
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty()),
+        Some("response.function_call_arguments.done") => value
+            .as_ref()
+            .and_then(|value| value.get("arguments"))
+            .and_then(Value::as_str)
+            .is_some_and(|arguments| !arguments.is_empty()),
+        Some("response.output_item.added" | "response.output_item.done") => value
+            .as_ref()
+            .and_then(|value| value.get("item"))
+            .is_some_and(Value::is_object),
+        _ => false,
+    }
 }
 
 fn complete_sse_body_prefix(body: &str) -> Option<&str> {

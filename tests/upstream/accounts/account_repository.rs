@@ -312,6 +312,84 @@ async fn account_repository_should_update_quota_json_and_fetched_at() {
     );
 }
 
+#[tokio::test]
+async fn account_repository_should_map_quota_snapshot_to_account_status() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 37).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    let reset_at = Utc::now() + Duration::minutes(5);
+
+    let limited = repo
+        .apply_quota_snapshot(
+            "acct_a",
+            r#"{"plan_type":"free","monthly_limit":{"limit_reached":true}}"#,
+            true,
+            Some(reset_at),
+        )
+        .await
+        .unwrap();
+    let limited_status: (String, i64, Option<String>) = sqlx::query_as(
+        "select status, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(limited);
+    assert_eq!(limited_status.0, "quota_exhausted");
+    assert_eq!(limited_status.1, 1);
+    assert!(limited_status.2.is_some());
+
+    let restored = repo
+        .apply_quota_snapshot(
+            "acct_a",
+            r#"{"plan_type":"free","monthly_limit":{"limit_reached":false}}"#,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let restored_status: (String, i64, Option<String>) = sqlx::query_as(
+        "select status, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(restored);
+    assert_eq!(restored_status.0, "active");
+    assert_eq!(restored_status.1, 0);
+    assert!(restored_status.2.is_none());
+}
+
+#[tokio::test]
+async fn account_repository_should_not_override_disabled_status_from_quota_snapshot() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 38).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    repo.set_status("acct_a", AccountStatus::Disabled)
+        .await
+        .unwrap();
+
+    repo.apply_quota_snapshot(
+        "acct_a",
+        r#"{"plan_type":"free","monthly_limit":{"limit_reached":true}}"#,
+        true,
+        Some(Utc::now() + Duration::minutes(5)),
+    )
+    .await
+    .unwrap();
+    let status: (String,) = sqlx::query_as("select status from accounts where id = ?")
+        .bind("acct_a")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(status.0, "disabled");
+}
+
 async fn sqlite_account_store_parts(
     db_name: &str,
     _key_byte: u8,

@@ -488,7 +488,15 @@ impl CodexBackendClient {
                         if http_sse_fallback_allowed(&upstream_request)
                             && websocket_error_allows_http_fallback(&error) =>
                     {
-                        tracing::warn!(error = %error, "websocket response failed; falling back to HTTP SSE");
+                        tracing::warn!(
+                            request_id = %context.request_id,
+                            account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
+                            transport = "websocket",
+                            fallback_transport = "http_sse",
+                            fallback_reason = "websocket_error",
+                            error = %error,
+                            "websocket response failed; falling back to HTTP SSE"
+                        );
                         self.create_response_http_sse(&upstream_request, context, started_at)
                             .await
                     }
@@ -530,7 +538,15 @@ impl CodexBackendClient {
                         if http_sse_fallback_allowed(&upstream_request)
                             && websocket_error_allows_http_fallback(&error) =>
                     {
-                        tracing::warn!(error = %error, "websocket response stream failed; falling back to HTTP SSE");
+                        tracing::warn!(
+                            request_id = %context.request_id,
+                            account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
+                            transport = "websocket",
+                            fallback_transport = "http_sse",
+                            fallback_reason = "websocket_error",
+                            error = %error,
+                            "websocket response stream failed; falling back to HTTP SSE"
+                        );
                         self.create_response_stream_http_sse(&upstream_request, context)
                             .await
                     }

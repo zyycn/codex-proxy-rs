@@ -323,6 +323,68 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
 }
 
 #[tokio::test]
+async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 12,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("quota-refresh-exhausted.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool.clone());
+    insert_quota_locked_account(&store, &pool, "acct-quota", "access-token").await;
+    store
+        .set_status("acct-quota", AccountStatus::QuotaExhausted)
+        .await
+        .expect("status should update");
+    sqlx::query(
+        "update accounts set quota_limit_reached = 0, quota_verify_required = 0 where id = ?",
+    )
+    .bind("acct-quota")
+    .execute(&pool)
+    .await
+    .expect("quota flags should reset");
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex));
+
+    let mut last_refreshed = HashMap::new();
+    let summary = service
+        .refresh_locked_accounts(&mut last_refreshed)
+        .await
+        .expect("quota refresh should succeed");
+    let stored: (String, i64) =
+        sqlx::query_as("select status, quota_limit_reached from accounts where id = ?")
+            .bind("acct-quota")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(summary.refreshed, 1);
+    assert_eq!(stored, ("active".to_string(), 0));
+}
+
+#[tokio::test]
 async fn quota_refresh_service_should_stagger_multiple_locked_account_requests() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

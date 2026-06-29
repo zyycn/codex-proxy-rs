@@ -212,6 +212,66 @@ async fn chat_completions_with_user_should_use_and_reuse_websocket() {
 }
 
 #[tokio::test]
+async fn chat_completions_websocket_should_report_unmapped_response_failed_without_rotation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let message = websocket.next().await.unwrap().unwrap();
+        let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+            .expect("websocket payload should be json");
+        websocket
+            .send(Message::Text(
+                response_failed_websocket_message(
+                    "resp_chat_failed_terminal",
+                    "policy_violation",
+                    "Terminal policy failure",
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        payload
+    });
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+
+    let response = app
+        .oneshot(chat_json_request(
+            &api_key,
+            "req_chat_ws_unmapped_failed",
+            "chat-ws-failed-user",
+            "Trigger a terminal response.failed",
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let payload = upstream.await.unwrap();
+    let event = latest_usage_record(&pool, "v1.chat").await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"]["code"], "invalid_upstream_response");
+    assert_eq!(payload["type"], "response.create");
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_chat_ws_unmapped_failed")
+    );
+    assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
+    assert_eq!(event.route.as_deref(), Some("/v1/chat/completions"));
+    assert_eq!(event.status_code, Some(502));
+    assert_eq!(metadata["route"], "/v1/chat/completions");
+    assert_eq!(metadata["apiKind"], "chat");
+    assert_eq!(metadata["stream"], false);
+    assert_eq!(metadata["transport"], "websocket");
+    assert_eq!(metadata["failureClass"], "invalid_sse");
+    assert!(metadata["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("Terminal policy failure")));
+}
+
+#[tokio::test]
 async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

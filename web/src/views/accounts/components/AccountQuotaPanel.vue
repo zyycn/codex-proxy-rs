@@ -21,8 +21,25 @@ function quotaWindowPercent(window?: any) {
   return clamp(window?.usedPercent ?? 0, 0, 100)
 }
 
-function quotaWindowBarWidth(window?: any) {
-  return `${quotaWindowPercent(window)}%`
+function quotaWindowBarStyle(window?: any) {
+  const percent = quotaWindowPercent(window)
+  return {
+    width: `${percent}%`,
+    minWidth: percent > 0 ? '8px' : '0',
+  }
+}
+
+function quotaWindowBarClass(window?: any) {
+  if (window?.usedPercent === null || window?.usedPercent === undefined) {
+    return 'bg-(--cp-default-border-hover)'
+  }
+  if (window.usedPercent >= 95) {
+    return 'bg-(--cp-danger)'
+  }
+  if (window.usedPercent >= 80) {
+    return 'bg-(--cp-warning)'
+  }
+  return 'bg-(--cp-success)'
 }
 </script>
 
@@ -58,10 +75,11 @@ function quotaWindowBarWidth(window?: any) {
           <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
           <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
         </div>
-        <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+        <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
           <div
-            class="h-full rounded-full bg-(--cp-info)"
-            :style="{ width: quotaWindowBarWidth(window) }"
+            class="h-full rounded-full transition-[width,background-color] duration-200"
+            :class="quotaWindowBarClass(window)"
+            :style="quotaWindowBarStyle(window)"
           />
         </div>
         <div
@@ -82,10 +100,11 @@ function quotaWindowBarWidth(window?: any) {
             <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
             <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
           </div>
-          <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+          <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
             <div
-              class="h-full rounded-full bg-(--cp-info)"
-              :style="{ width: quotaWindowBarWidth(window) }"
+              class="h-full rounded-full transition-[width,background-color] duration-200"
+              :class="quotaWindowBarClass(window)"
+              :style="quotaWindowBarStyle(window)"
             />
           </div>
           <div class="mt-3 flex flex-col gap-1 text-[12px] font-[620] text-(--cp-text-secondary)">
@@ -104,10 +123,11 @@ function quotaWindowBarWidth(window?: any) {
           <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
           <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
         </div>
-        <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-bg-tertiary)">
+        <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
           <div
-            class="h-full rounded-full bg-(--cp-info)"
-            :style="{ width: quotaWindowBarWidth(window) }"
+            class="h-full rounded-full transition-[width,background-color] duration-200"
+            :class="quotaWindowBarClass(window)"
+            :style="quotaWindowBarStyle(window)"
           />
         </div>
         <div

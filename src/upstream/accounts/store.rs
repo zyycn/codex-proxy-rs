@@ -54,7 +54,7 @@ select
   au.last_used_at as usage_last_used_at
 from accounts a
 left join account_usage au on au.account_id = a.id
-order by a.added_at desc, a.id desc";
+order by a.rowid asc";
 
 const GET_POOL_ACCOUNT_SQL: &str = r"
 select
@@ -376,6 +376,12 @@ set
   quota_json = ?,
   quota_fetched_at = ?,
   plan_type = coalesce(?, plan_type),
+  status = case
+    when status in ('disabled', 'banned', 'expired', 'refreshing') then status
+    when ? = 1 then 'quota_exhausted'
+    when status = 'quota_exhausted' then 'active'
+    else status
+  end,
   quota_limit_reached = ?,
   quota_verify_required = 0,
   quota_cooldown_until = ?,
@@ -1371,6 +1377,7 @@ impl SqliteAccountStore {
             .bind(quota_json)
             .bind(&now)
             .bind(&plan_type)
+            .bind(if limit_reached { 1 } else { 0 })
             .bind(if limit_reached { 1 } else { 0 })
             .bind(&cooldown)
             .bind(&now)

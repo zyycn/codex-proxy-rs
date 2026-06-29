@@ -147,7 +147,7 @@ impl ChatDispatchService {
             }};
         }
 
-        let (account_id, response) = loop {
+        let (account, response) = loop {
             let acquire_request = AccountAcquireRequest::new(&request.model, Utc::now())
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
             let acquired = match self.account_pool.acquire_with(&acquire_request).await {
@@ -246,7 +246,7 @@ impl ChatDispatchService {
             self.account_pool.release(&release_account_id).await;
 
             match response_result {
-                Ok(response) => break (release_account_id, response),
+                Ok(response) => break (account, response),
                 Err(error) if is_rate_limit_upstream_error(&error) => {
                     rate_limited_count += 1;
                     last_rate_limit_error = Some(upstream_error_body(&error));
@@ -351,6 +351,7 @@ impl ChatDispatchService {
                 }
             }
         };
+        let account_id = account.id.clone();
         let body = match crate::proxy::openai::chat::chat_completion_from_codex_sse(
             &response.body,
             &display_model,
@@ -375,6 +376,9 @@ impl ChatDispatchService {
         };
         let response_id = body.get("id").and_then(Value::as_str);
         self.cloudflare.reset_account_recovery(&account_id).await;
+        self.account_pool
+            .sync_passive_rate_limit_headers(&account, &response.rate_limit_headers)
+            .await;
         if let Some(ref usage) = response.usage {
             self.account_pool
                 .record_token_usage(&account_id, &request.model, usage)
