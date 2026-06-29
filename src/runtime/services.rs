@@ -14,7 +14,10 @@ use crate::{
     admin::{
         accounts::service::{AdminAccountService, AdminAccountServiceParts},
         auth::service::{AdminSessionService, SqliteAdminSessionStore},
-        keys::service::{AdminClientKeyService, ClientKeyService, SqliteClientKeyStore},
+        keys::service::{
+            AdminClientKeyService, ClientKeyService, ClientKeyStoreError, RuntimeClientKeyStore,
+            SqliteClientKeyStore,
+        },
     },
     config::{
         settings::{account_pool_options_from_config, RuntimeSettingsService},
@@ -35,13 +38,22 @@ use crate::{
     },
     upstream::{
         fingerprint::{Fingerprint, FingerprintRepository},
-        models::{ModelService, ModelSnapshotStore},
+        models::{ModelService, ModelServiceError, ModelSnapshotStore},
         token_client::{default_openai_token_client, TokenClientConfig},
         transport::{
             build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
         },
     },
 };
+
+/// 运行时热路径内存状态初始化错误。
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeServiceInitializationError {
+    #[error("failed to initialize client key runtime cache: {0}")]
+    ClientKeys(#[from] ClientKeyStoreError),
+    #[error("failed to initialize model catalog runtime cache: {0}")]
+    Models(#[from] ModelServiceError),
+}
 
 // ============================================================================
 // BackgroundTaskStores
@@ -185,10 +197,13 @@ impl Services {
             config.admin.default_username.clone(),
             config.admin.session_ttl_minutes,
         ));
-        let admin_client_keys = StdArc::new(AdminClientKeyService::new(stores.client_keys.clone()));
-        let client_keys = StdArc::new(ClientKeyService::new(StdArc::new(
+        let runtime_client_keys =
+            StdArc::new(RuntimeClientKeyStore::new(stores.client_keys.clone()));
+        let admin_client_keys = StdArc::new(AdminClientKeyService::new(
             stores.client_keys.clone(),
-        )));
+            runtime_client_keys.clone(),
+        ));
+        let client_keys = StdArc::new(ClientKeyService::new(runtime_client_keys));
         let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
         let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
         let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
@@ -268,6 +283,13 @@ impl Services {
             installation_id,
             background_tasks: stores,
         })
+    }
+
+    /// 初始化请求热路径依赖的内存状态。
+    pub async fn initialize_hot_path_state(&self) -> Result<(), RuntimeServiceInitializationError> {
+        self.client_keys.reload_from_store().await?;
+        self.models.reload_from_store().await?;
+        Ok(())
     }
 }
 

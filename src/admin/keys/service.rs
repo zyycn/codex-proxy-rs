@@ -1,11 +1,19 @@
 //! 客户端 API Key 端口定义、业务服务与 SQLite 存储适配器。
 
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::infra::{
@@ -38,6 +46,8 @@ pub trait ClientKeyStore: Send + Sync + 'static {
     async fn verify_and_touch(&self, plaintext: &str) -> ClientKeyStoreResult<bool>;
 }
 
+const CLIENT_KEY_LAST_USED_FLUSH_DELAY: Duration = Duration::from_secs(1);
+
 // ---------------------------------------------------------------------------
 // 业务服务
 // ---------------------------------------------------------------------------
@@ -45,12 +55,12 @@ pub trait ClientKeyStore: Send + Sync + 'static {
 /// 客户端 API Key 服务。
 #[derive(Clone)]
 pub struct ClientKeyService {
-    store: Arc<dyn ClientKeyStore>,
+    store: Arc<RuntimeClientKeyStore>,
 }
 
 impl ClientKeyService {
     /// 构造服务。
-    pub fn new(store: Arc<dyn ClientKeyStore>) -> Self {
+    pub fn new(store: Arc<RuntimeClientKeyStore>) -> Self {
         Self { store }
     }
 
@@ -60,6 +70,16 @@ impl ClientKeyService {
             return Ok(false);
         }
         self.store.verify_and_touch(plaintext).await
+    }
+
+    /// 重新加载运行时内存鉴权表。
+    pub async fn reload_from_store(&self) -> ClientKeyStoreResult<()> {
+        self.store.reload_from_store().await
+    }
+
+    /// 立即刷写待持久化的最近使用时间。
+    pub async fn flush_pending_last_used(&self) {
+        self.store.flush_pending_last_used().await;
     }
 }
 
@@ -71,12 +91,13 @@ impl ClientKeyService {
 #[derive(Clone)]
 pub struct AdminClientKeyService {
     store: SqliteClientKeyStore,
+    runtime: Arc<RuntimeClientKeyStore>,
 }
 
 impl AdminClientKeyService {
     /// 构造服务。
-    pub fn new(store: SqliteClientKeyStore) -> Self {
-        Self { store }
+    pub fn new(store: SqliteClientKeyStore, runtime: Arc<RuntimeClientKeyStore>) -> Self {
+        Self { store, runtime }
     }
 
     /// 创建客户端 API Key。
@@ -91,6 +112,7 @@ impl AdminClientKeyService {
         self.store
             .create(name)
             .await
+            .inspect(|created| self.runtime.upsert_created(created))
             .map(AdminCreatedClientApiKey::from)
             .map_err(|_| AdminClientKeyError::Create)
     }
@@ -151,10 +173,27 @@ impl AdminClientKeyService {
         status: &str,
     ) -> Result<bool, AdminClientKeyError> {
         let enabled = parse_client_key_status(status)?;
-        self.store
+        let updated = self
+            .store
             .set_enabled(key_id, enabled)
             .await
-            .map_err(|_| AdminClientKeyError::UpdateStatus)
+            .map_err(|_| AdminClientKeyError::UpdateStatus)?;
+        if updated {
+            if enabled {
+                let Some(key) = self
+                    .store
+                    .get(key_id)
+                    .await
+                    .map_err(|_| AdminClientKeyError::UpdateStatus)?
+                else {
+                    return Ok(false);
+                };
+                self.runtime.upsert_stored(&key);
+            } else {
+                self.runtime.remove_by_id(key_id);
+            }
+        }
+        Ok(updated)
     }
 
     /// 批量删除客户端 API Key。
@@ -169,7 +208,10 @@ impl AdminClientKeyService {
         let mut not_found = Vec::new();
         for id in ids {
             match self.store.delete(&id).await {
-                Ok(true) => deleted += 1,
+                Ok(true) => {
+                    self.runtime.remove_by_id(&id);
+                    deleted += 1;
+                }
                 Ok(false) => not_found.push(id),
                 Err(_) => return Err(AdminClientKeyError::Delete),
             }
@@ -346,6 +388,20 @@ impl SqliteClientKeyStore {
         &self.pool
     }
 
+    /// 读取所有已启用客户端 API Key，用于运行时内存鉴权表初始化。
+    pub async fn list_enabled(&self) -> Result<Vec<StoredClientApiKey>, SqliteClientKeyStoreError> {
+        let rows = sqlx::query(
+            "select id, name, label, prefix, key, enabled, created_at, last_used_at from client_api_keys where enabled = 1 order by created_at asc, id asc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| Self::key_from_row(&row))
+            .collect())
+    }
+
     /// 创建新的本地客户端 API Key。
     pub async fn create(
         &self,
@@ -481,6 +537,21 @@ impl SqliteClientKeyStore {
         Ok(result.rows_affected() > 0)
     }
 
+    /// 更新最近使用时间。
+    pub async fn update_last_used_at(
+        &self,
+        id: &str,
+        last_used_at: &str,
+    ) -> Result<bool, SqliteClientKeyStoreError> {
+        let result = sqlx::query("update client_api_keys set last_used_at = ? where id = ?")
+            .bind(last_used_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     fn key_from_row(row: &sqlx::sqlite::SqliteRow) -> StoredClientApiKey {
         StoredClientApiKey {
             id: row.get("id"),
@@ -496,34 +567,186 @@ impl SqliteClientKeyStore {
 }
 
 #[async_trait]
-impl ClientKeyStore for SqliteClientKeyStore {
+impl ClientKeyStore for RuntimeClientKeyStore {
     async fn verify_and_touch(&self, plaintext: &str) -> ClientKeyStoreResult<bool> {
-        verify_and_touch(&self.pool, plaintext)
-            .await
-            .map_err(|error| map_client_key_store_error(&error))
+        let Some(id) = self.lookup_key_id(plaintext) else {
+            return Ok(false);
+        };
+
+        self.queue_last_used_touch(id);
+        Ok(true)
     }
 }
 
-async fn verify_and_touch(
-    pool: &SqlitePool,
-    plaintext: &str,
-) -> Result<bool, SqliteClientKeyStoreError> {
-    let row = sqlx::query("select id from client_api_keys where key = ? and enabled = 1")
-        .bind(plaintext)
-        .fetch_optional(pool)
-        .await?;
+/// 运行时客户端 API Key 内存鉴权表。
+#[derive(Clone)]
+pub struct RuntimeClientKeyStore {
+    store: SqliteClientKeyStore,
+    cache: Arc<RwLock<RuntimeClientKeyCache>>,
+    pending_last_used: Arc<Mutex<BTreeMap<String, String>>>,
+    flush_scheduled: Arc<AtomicBool>,
+    flush_delay: Duration,
+}
 
-    if let Some(row) = row {
-        let id = row.get::<String, _>("id");
-        sqlx::query("update client_api_keys set last_used_at = ? where id = ?")
-            .bind(Utc::now().to_rfc3339())
-            .bind(id)
-            .execute(pool)
-            .await?;
-        return Ok(true);
+#[derive(Default)]
+struct RuntimeClientKeyCache {
+    keys_by_plaintext: HashMap<String, String>,
+    plaintext_by_id: HashMap<String, String>,
+}
+
+impl RuntimeClientKeyStore {
+    /// 构造运行时内存鉴权表。
+    pub fn new(store: SqliteClientKeyStore) -> Self {
+        Self {
+            store,
+            cache: Arc::new(RwLock::new(RuntimeClientKeyCache::default())),
+            pending_last_used: Arc::new(Mutex::new(BTreeMap::new())),
+            flush_scheduled: Arc::new(AtomicBool::new(false)),
+            flush_delay: CLIENT_KEY_LAST_USED_FLUSH_DELAY,
+        }
     }
 
-    Ok(false)
+    /// 从 SQLite 加载当前启用的客户端 API Key。
+    pub async fn reload_from_store(&self) -> ClientKeyStoreResult<()> {
+        let keys = self
+            .store
+            .list_enabled()
+            .await
+            .map_err(|error| map_client_key_store_error(&error))?;
+        let mut keys_by_plaintext = HashMap::with_capacity(keys.len());
+        let mut plaintext_by_id = HashMap::with_capacity(keys.len());
+        for key in keys {
+            keys_by_plaintext.insert(key.key.clone(), key.id.clone());
+            plaintext_by_id.insert(key.id, key.key);
+        }
+
+        *self
+            .cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = RuntimeClientKeyCache {
+            keys_by_plaintext,
+            plaintext_by_id,
+        };
+        Ok(())
+    }
+
+    fn lookup_key_id(&self, plaintext: &str) -> Option<String> {
+        self.cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys_by_plaintext
+            .get(plaintext)
+            .cloned()
+    }
+
+    fn upsert_created(&self, key: &CreatedClientApiKey) {
+        if key.enabled {
+            self.upsert_enabled_key(&key.id, &key.key);
+        }
+    }
+
+    fn upsert_stored(&self, key: &StoredClientApiKey) {
+        if key.enabled {
+            self.upsert_enabled_key(&key.id, &key.key);
+        } else {
+            self.remove_by_id(&key.id);
+        }
+    }
+
+    fn upsert_enabled_key(&self, id: &str, plaintext: &str) {
+        let mut cache = self
+            .cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(old_plaintext) = cache.plaintext_by_id.remove(id) {
+            cache.keys_by_plaintext.remove(&old_plaintext);
+        }
+        cache
+            .keys_by_plaintext
+            .insert(plaintext.to_string(), id.to_string());
+        cache
+            .plaintext_by_id
+            .insert(id.to_string(), plaintext.to_string());
+    }
+
+    fn remove_by_id(&self, id: &str) {
+        let mut cache = self
+            .cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(plaintext) = cache.plaintext_by_id.remove(id) {
+            cache.keys_by_plaintext.remove(&plaintext);
+        }
+        drop(cache);
+        self.pending_last_used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+    }
+
+    fn queue_last_used_touch(&self, id: String) {
+        self.pending_last_used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, Utc::now().to_rfc3339());
+        self.schedule_flush();
+    }
+
+    fn schedule_flush(&self) {
+        if self
+            .flush_scheduled
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            sleep(runtime.flush_delay).await;
+            runtime.flush_pending_last_used().await;
+        });
+    }
+
+    /// 立即刷写待持久化的最近使用时间。
+    pub async fn flush_pending_last_used(&self) {
+        let updates = self.take_pending_last_used();
+        let mut failed = BTreeMap::new();
+        for (id, last_used_at) in updates {
+            if let Err(error) = self.store.update_last_used_at(&id, &last_used_at).await {
+                tracing::warn!(
+                    key_id = %id,
+                    error = %error,
+                    "failed to flush client api key last_used_at"
+                );
+                failed.insert(id, last_used_at);
+            }
+        }
+        if !failed.is_empty() {
+            self.pending_last_used
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(failed);
+        }
+        self.flush_scheduled.store(false, Ordering::Release);
+        if !self
+            .pending_last_used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+        {
+            self.schedule_flush();
+        }
+    }
+
+    fn take_pending_last_used(&self) -> BTreeMap<String, String> {
+        std::mem::take(
+            &mut *self
+                .pending_last_used
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
 }
 
 fn map_client_key_store_error(error: &SqliteClientKeyStoreError) -> ClientKeyStoreError {

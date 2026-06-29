@@ -37,7 +37,7 @@ fn test_events(body: &str) -> Vec<Value> {
 #[tokio::test]
 async fn account_models_should_return_database_snapshot_models() {
     let server = MockServer::start().await;
-    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
         "admin-account-models.sqlite",
         91,
         format!("{}/backend-api", server.uri()),
@@ -45,6 +45,12 @@ async fn account_models_should_return_database_snapshot_models() {
     .await;
     seed_test_account(&pool).await;
     seed_model_snapshot(&pool, "plus").await;
+    state
+        .services
+        .models
+        .reload_from_store()
+        .await
+        .expect("model catalog should reload from seeded snapshot");
 
     let response = app
         .oneshot(

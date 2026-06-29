@@ -83,7 +83,11 @@ pub(crate) async fn verify_acquired_quota_if_required(
         Ok(raw) => raw,
         Err(error) => {
             tracing::warn!(
+                request_id = %context.request_id,
                 account_id = %account_id,
+                quota_verify_required = true,
+                quota_verify_result = "upstream_error",
+                retry_with_another_account = false,
                 error = %error,
                 "failed to verify stale quota state before upstream request"
             );
@@ -98,9 +102,19 @@ pub(crate) async fn verify_acquired_quota_if_required(
         .await;
     if quota_snapshot_limit_reached(&quota) {
         context.account_pool.release(&account_id).await;
-        context.excluded_account_ids.push(account_id);
+        context.excluded_account_ids.push(account_id.clone());
         *context.verify_attempts += 1;
-        if *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS {
+        let max_attempts_reached = *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS;
+        tracing::info!(
+            request_id = %context.request_id,
+            account_id = %account_id,
+            quota_verify_required = true,
+            quota_verify_result = "limit_reached",
+            verify_attempts = *context.verify_attempts,
+            retry_with_another_account = !max_attempts_reached,
+            "quota verification reported exhausted account before upstream request"
+        );
+        if max_attempts_reached {
             return QuotaVerificationDecision::MaxAttemptsReached;
         }
         return QuotaVerificationDecision::RetryWithAnotherAccount;
@@ -266,9 +280,26 @@ pub(crate) async fn create_response_with_account_retrying_5xx(
                 if is_retryable_upstream_5xx_error(&error)
                     && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
             {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    retry = retries + 1,
+                    error = %error,
+                    "upstream response request failed with retryable 5xx"
+                );
                 retries += 1;
             }
-            result => return result,
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    retries,
+                    error = %error,
+                    "upstream response request failed"
+                );
+                return Err(error);
+            }
         }
     }
 }
@@ -297,9 +328,26 @@ pub(crate) async fn create_response_stream_with_account_retrying_5xx(
                 if is_retryable_upstream_5xx_error(&error)
                     && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
             {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    retry = retries + 1,
+                    error = %error,
+                    "upstream response stream request failed with retryable 5xx"
+                );
                 retries += 1;
             }
-            result => return result,
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    retries,
+                    error = %error,
+                    "upstream response stream request failed"
+                );
+                return Err(error);
+            }
         }
     }
 }
@@ -328,9 +376,28 @@ pub(crate) async fn create_compact_response_with_account_retrying_5xx(
                 if is_retryable_upstream_5xx_error(&error)
                     && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
             {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    endpoint = "compact",
+                    retry = retries + 1,
+                    error = %error,
+                    "upstream compact request failed with retryable 5xx"
+                );
                 retries += 1;
             }
-            result => return result,
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account.id,
+                    endpoint = "compact",
+                    retries,
+                    error = %error,
+                    "upstream compact request failed"
+                );
+                return Err(error);
+            }
         }
     }
 }

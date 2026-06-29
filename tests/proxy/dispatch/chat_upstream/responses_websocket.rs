@@ -898,7 +898,8 @@ async fn responses_websocket_should_implicitly_resume_after_sqlite_affinity_rest
         &test_config(format!("sqlite://{}", db.display()), server_base_url),
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
-    );
+    )
+    .await;
     assert_eq!(
         restored_state
             .services

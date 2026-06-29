@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use async_trait::async_trait;
 
@@ -119,6 +125,30 @@ async fn model_service_should_return_empty_catalog_when_snapshot_store_is_missin
 }
 
 #[tokio::test]
+async fn model_service_catalog_should_use_loaded_memory_snapshot() {
+    let snapshot_store = Arc::new(InMemorySnapshotStore::default());
+    snapshot_store
+        .replace_plan_snapshot(&ModelPlanSnapshot::from_backend_entries(
+            "plus",
+            backend_models("gpt-6"),
+        ))
+        .await
+        .unwrap();
+    let service = ModelService::new(test_model_config(), Some(snapshot_store.clone()), None);
+
+    service
+        .reload_from_store()
+        .await
+        .expect("initial model catalog load should succeed");
+    let first = service.catalog().await;
+    let second = service.catalog().await;
+
+    assert!(first.is_recognized_model_name("gpt-6"));
+    assert!(second.is_recognized_model_name("gpt-6"));
+    assert_eq!(snapshot_store.list_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn model_service_should_refresh_plan_accounts_and_build_routing() {
     let snapshot_store = Arc::new(InMemorySnapshotStore::default());
     let upstream = Arc::new(FakeModelCatalogClient::with_models(BTreeMap::from([
@@ -225,6 +255,7 @@ fn refresh_plan_account(plan_type: &str, account: Account) -> ModelRefreshPlanAc
 #[derive(Default)]
 struct InMemorySnapshotStore {
     snapshots: tokio::sync::Mutex<BTreeMap<String, ModelPlanSnapshot>>,
+    list_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -241,6 +272,7 @@ impl ModelSnapshotStore for InMemorySnapshotStore {
     }
 
     async fn list_plan_snapshots(&self) -> ModelSnapshotStoreResult<Vec<ModelPlanSnapshot>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.snapshots.lock().await.values().cloned().collect())
     }
 }

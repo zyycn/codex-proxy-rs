@@ -347,6 +347,16 @@ impl ModelCatalog {
         self.models.clone()
     }
 
+    /// 返回模型数量。
+    pub fn len(&self) -> usize {
+        self.models.len()
+    }
+
+    /// 模型目录是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
+
     /// 返回指定订阅计划可用的模型列表。
     pub fn models_for_plan(&self, plan_type: &str) -> Vec<CodexModelInfo> {
         self.models
@@ -629,6 +639,8 @@ pub struct ModelRefreshPlanAccount {
 #[derive(Clone)]
 pub struct ModelService {
     config: Arc<RwLock<ModelConfig>>,
+    snapshots: Arc<RwLock<Vec<ModelPlanSnapshot>>>,
+    catalog: Arc<RwLock<ModelCatalog>>,
     snapshot_store: Option<Arc<dyn ModelSnapshotStore>>,
     upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
 }
@@ -640,8 +652,11 @@ impl ModelService {
         snapshot_store: Option<Arc<dyn ModelSnapshotStore>>,
         upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
     ) -> Self {
+        let catalog = ModelCatalog::from_config(&config);
         Self {
             config: Arc::new(RwLock::new(config)),
+            snapshots: Arc::new(RwLock::new(Vec::new())),
+            catalog: Arc::new(RwLock::new(catalog)),
             snapshot_store,
             upstream_client,
         }
@@ -653,25 +668,26 @@ impl ModelService {
             .config
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+        self.rebuild_catalog_from_memory();
+    }
+
+    /// 从快照存储加载运行时内存模型目录。
+    pub async fn reload_from_store(&self) -> Result<(), ModelServiceError> {
+        let Some(snapshot_store) = self.snapshot_store.as_ref() else {
+            self.replace_snapshots(Vec::new());
+            return Ok(());
+        };
+        let snapshots = snapshot_store
+            .list_plan_snapshots()
+            .await
+            .map_err(map_load_snapshots_error)?;
+        self.replace_snapshots(snapshots);
+        Ok(())
     }
 
     /// 构造当前对外暴露的模型目录。
     pub async fn catalog(&self) -> ModelCatalog {
-        let config = self.config_snapshot();
-        let Some(snapshot_store) = self.snapshot_store.as_ref() else {
-            return ModelCatalog::from_config(&config);
-        };
-
-        match snapshot_store.list_plan_snapshots().await {
-            Ok(snapshots) if !snapshots.is_empty() => {
-                ModelCatalog::from_config_and_snapshots(&config, &snapshots)
-            }
-            Ok(_) => ModelCatalog::from_config(&config),
-            Err(error) => {
-                tracing::warn!(error = %error, "加载模型快照失败，回退到静态目录");
-                ModelCatalog::from_config(&config)
-            }
-        }
+        self.cached_catalog()
     }
 
     /// 使用运行时 installation id 刷新活跃账号对应的后端模型目录。
@@ -736,36 +752,56 @@ impl ModelService {
             return Err(ModelServiceError::AllPlansFailed(result));
         }
 
-        self.model_plan_routing_from_store().await?;
+        self.reload_from_store().await?;
 
         Ok(result)
     }
 
     /// 读取当前缓存的 model -> plans allowlist。
     pub async fn model_plan_allowlist(&self) -> Result<ModelPlanAllowlist, ModelServiceError> {
-        Ok(self.model_plan_routing_from_store().await?.allowlist)
+        Ok(self.model_plan_routing().await?.allowlist)
     }
 
     /// 读取当前缓存的模型调度约束。
     pub async fn model_plan_routing(&self) -> Result<ModelPlanRouting, ModelServiceError> {
-        self.model_plan_routing_from_store().await
-    }
-
-    async fn model_plan_routing_from_store(&self) -> Result<ModelPlanRouting, ModelServiceError> {
-        let snapshot_store = self
-            .snapshot_store
-            .as_ref()
-            .ok_or(ModelServiceError::SnapshotStoreUnavailable)?;
-        let snapshots = snapshot_store
-            .list_plan_snapshots()
-            .await
-            .map_err(map_load_snapshots_error)?;
-        let config = self.config_snapshot();
-        let catalog = ModelCatalog::from_config_and_snapshots(&config, &snapshots);
+        let catalog = self.cached_catalog();
         Ok(ModelPlanRouting {
             allowlist: catalog.model_plan_allowlist(),
             fetched_plan_types: catalog.fetched_plan_types(),
         })
+    }
+
+    fn cached_catalog(&self) -> ModelCatalog {
+        self.catalog
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn replace_snapshots(&self, snapshots: Vec<ModelPlanSnapshot>) {
+        *self
+            .snapshots
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = snapshots;
+        self.rebuild_catalog_from_memory();
+    }
+
+    fn rebuild_catalog_from_memory(&self) {
+        let config = self.config_snapshot();
+        let snapshots = self
+            .snapshots
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let catalog = if snapshots.is_empty() {
+            ModelCatalog::from_config(&config)
+        } else {
+            ModelCatalog::from_config_and_snapshots(&config, &snapshots)
+        };
+        *self
+            .catalog
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = catalog;
     }
 
     fn config_snapshot(&self) -> ModelConfig {

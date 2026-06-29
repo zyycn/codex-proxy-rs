@@ -73,6 +73,7 @@ async fn build_application(
         runtime_fingerprint,
         Some(installation_id),
     )?;
+    services.initialize_hot_path_state().await?;
 
     let created_default_admin = services
         .admin_sessions
