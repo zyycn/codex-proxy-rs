@@ -83,13 +83,18 @@ async fn admin_accounts_import_should_store_cpr_account_tokens() {
 
 #[tokio::test]
 async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_identity() {
+    const CURRENT_IMPORT_ACCOUNT_ID: &str = "acct_import_current_token";
+    const CURRENT_IMPORT_EMAIL: &str = "current-import@example.test";
+    const CURRENT_IMPORT_ORG_ID: &str = "org-import-current";
+    const CURRENT_IMPORT_USER_ID: &str = "user-import-current";
+
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/usage"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "user_id": "user-fkAgiY6kv2Xs5hloB1j27yGo",
+            "user_id": CURRENT_IMPORT_USER_ID,
             "account_id": "wham-account-current",
-            "email": "setup-down-penpal@duck.com",
+            "email": CURRENT_IMPORT_EMAIL,
             "plan_type": "free",
             "rate_limit": {
                 "allowed": true,
@@ -129,11 +134,11 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
     let payload = json!({
         "exp": 4_102_444_800i64,
         "https://api.openai.com/auth": {
-            "user_id": "user-fkAgiY6kv2Xs5hloB1j27yGo",
-            "poid": "org-CwdMgN6joZmuKKiL91oumkwE",
+            "user_id": CURRENT_IMPORT_USER_ID,
+            "poid": CURRENT_IMPORT_ORG_ID,
         },
         "https://api.openai.com/profile": {
-            "email": "setup-down-penpal@duck.com",
+            "email": CURRENT_IMPORT_EMAIL,
             "email_verified": true,
         },
     });
@@ -151,8 +156,8 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
                 .body(Body::from(
                     json!({
                         "accounts": [{
-                            "id": "a18bcfa9ae932857",
-                            "email": "setup-down-penpal@duck.com",
+                            "id": CURRENT_IMPORT_ACCOUNT_ID,
+                            "email": CURRENT_IMPORT_EMAIL,
                             "accountId": null,
                             "userId": null,
                             "token": access_token.clone(),
@@ -169,19 +174,16 @@ async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_
     let status = response.status();
     let body = response_json(response).await;
     let stored = SqliteAccountStore::new(pool)
-        .get("a18bcfa9ae932857")
+        .get(CURRENT_IMPORT_ACCOUNT_ID)
         .await
         .unwrap()
         .unwrap();
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["imported"], 1);
-    assert_eq!(stored.email.as_deref(), Some("setup-down-penpal@duck.com"));
+    assert_eq!(stored.email.as_deref(), Some(CURRENT_IMPORT_EMAIL));
     assert_eq!(stored.account_id.as_deref(), Some("wham-account-current"));
-    assert_eq!(
-        stored.user_id.as_deref(),
-        Some("user-fkAgiY6kv2Xs5hloB1j27yGo")
-    );
+    assert_eq!(stored.user_id.as_deref(), Some(CURRENT_IMPORT_USER_ID));
     assert_eq!(stored.plan_type.as_deref(), Some("free"));
     assert_eq!(stored.access_token.expose_secret(), access_token);
     assert_eq!(stored.status, AccountStatus::Active);
