@@ -108,7 +108,11 @@ fn admin_page_envelope_should_expose_numbered_page_metadata() {
 
 #[test]
 fn admin_response_should_keep_http_status_separate_from_body_code() {
-    let body = AdminEnvelope::new(40101, "Admin login required", ());
+    let body = serde_json::json!({
+        "code": 40101,
+        "message": "Admin session required",
+        "data": null,
+    });
     let response: Response = AdminResponse::new(StatusCode::UNAUTHORIZED, body).into_response();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -116,7 +120,7 @@ fn admin_response_should_keep_http_status_separate_from_body_code() {
 
 #[test]
 fn admin_error_body_should_use_null_data() {
-    let body = AdminEnvelope::new(40101, "Admin login required", ());
+    let body = AdminEnvelope::ok(());
 
     let value = serde_json::to_value(body).unwrap();
 
@@ -125,8 +129,7 @@ fn admin_error_body_should_use_null_data() {
 
 #[tokio::test]
 async fn admin_error_into_response_should_use_admin_envelope() {
-    let response: Response =
-        AdminError::new(StatusCode::UNAUTHORIZED, 40101, "Admin login required").into_response();
+    let response: Response = AdminError::admin_session_required().into_response();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -135,7 +138,7 @@ async fn admin_error_into_response_should_use_admin_envelope() {
         value,
         json!({
             "code": 40101,
-            "message": "Admin login required",
+            "message": "Admin session required",
             "data": null
         })
     );

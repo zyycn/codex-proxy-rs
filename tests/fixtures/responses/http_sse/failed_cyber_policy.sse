@@ -1,0 +1,3 @@
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_cyber_policy","object":"response","status":"failed","error":{"code":"cyber_policy","message":"This request has been flagged for possible cybersecurity risk."}}}
+

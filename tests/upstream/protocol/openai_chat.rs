@@ -45,9 +45,9 @@ fn chat_completion_request_should_translate_to_codex_request() {
 
 #[test]
 fn sse_parser_should_combine_multiline_data_and_metadata() {
-    let events = codex_proxy_rs::upstream::protocol::sse::parse_sse_events(
-        "event: message\nid: evt_1\ndata: hello\ndata: world\nretry: 10\n\n",
-    )
+    let events = codex_proxy_rs::upstream::protocol::sse::parse_sse_events(include_str!(
+        "../../fixtures/sse/multiline_data_with_metadata.sse"
+    ))
     .expect("sse should parse");
 
     assert_eq!(events[0].data, "hello\nworld");
@@ -56,22 +56,17 @@ fn sse_parser_should_combine_multiline_data_and_metadata() {
 #[test]
 fn sse_body_has_done_should_detect_done_frame() {
     assert!(sse_body_has_done(DONE_SSE_FRAME));
-    assert!(sse_body_has_done(
-        "event: response.completed\ndata: {}\n\ndata: [DONE]\r\n\r\n"
-    ));
-    assert!(!sse_body_has_done(
-        "event: response.completed\ndata: {}\n\n"
-    ));
+    assert!(sse_body_has_done(include_str!(
+        "../../fixtures/responses/http_sse/completed_empty_done_crlf.sse"
+    )));
+    assert!(!sse_body_has_done(include_str!(
+        "../../fixtures/responses/http_sse/completed_empty.sse"
+    )));
 }
 
 #[test]
 fn chat_completion_from_codex_sse_should_convert_completed_response() {
-    let body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"hello\"}\n\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
-    );
+    let body = include_str!("../../fixtures/responses/http_sse/chat_delta_completed_usage.sse");
 
     let response = codex_proxy_rs::proxy::openai::chat::chat_completion_from_codex_sse(
         body, "gpt-5.5", false, None,
@@ -87,15 +82,10 @@ fn chat_completion_stream_translator_should_emit_openai_chunks() {
     let mut translator = codex_proxy_rs::proxy::openai::chat::ChatCompletionStreamTranslator::new(
         "gpt-5.5", false, None,
     );
-    let first = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"he",
-    );
-    let rest = concat!(
-        "llo\"}\n\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
-    );
+    let body =
+        include_str!("../../fixtures/responses/http_sse/chat_delta_completed_usage_with_id.sse");
+    let split_at = body.find("llo").expect("fixture should split inside hello");
+    let (first, rest) = body.split_at(split_at);
     let pending_output = translator
         .push_str(first)
         .expect("partial event should be buffered");

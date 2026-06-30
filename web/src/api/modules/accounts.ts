@@ -1,4 +1,4 @@
-import request from '../request'
+import request, { type ApiPayload } from '../request'
 
 export function getAccounts(params?: any) {
   return request({
@@ -8,7 +8,7 @@ export function getAccounts(params?: any) {
   })
 }
 
-export function importAccounts(data: any) {
+export function importAccounts(data: ApiPayload) {
   return request({
     url: '/api/admin/accounts/import',
     method: 'POST',
@@ -24,15 +24,15 @@ export function exportAccounts(params?: any) {
   })
 }
 
-export function authorizeAccountOAuth(data?: any) {
+export function authorizeAccountOAuth(data: ApiPayload = {}) {
   return request({
     url: '/api/admin/accounts/oauth/authorize',
     method: 'POST',
-    data: data || {},
+    data,
   })
 }
 
-export function exchangeAccountOAuth(data: any) {
+export function exchangeAccountOAuth(data: ApiPayload) {
   return request({
     url: '/api/admin/accounts/oauth/exchange',
     method: 'POST',
@@ -40,7 +40,7 @@ export function exchangeAccountOAuth(data: any) {
   })
 }
 
-export function deleteAccounts(data: any) {
+export function deleteAccounts(data: ApiPayload) {
   return request({
     url: '/api/admin/accounts/delete',
     method: 'POST',
@@ -48,7 +48,7 @@ export function deleteAccounts(data: any) {
   })
 }
 
-export function refreshAccount(data: any) {
+export function refreshAccount(data: ApiPayload) {
   return request({
     url: '/api/admin/accounts/refresh',
     method: 'POST',
@@ -56,7 +56,7 @@ export function refreshAccount(data: any) {
   })
 }
 
-export function updateAccount(data: any) {
+export function updateAccount(data: ApiPayload) {
   return request({
     url: '/api/admin/accounts/update',
     method: 'POST',
@@ -72,43 +72,7 @@ export function getAccountQuota(params: any) {
   })
 }
 
-export async function testAccountConnectionStream(data: any, onEvent: any, signal?: AbortSignal) {
-  const { id, ...payload } = data
-  const baseURL = import.meta.env.DEV ? '/dev' : ''
-  const params = new URLSearchParams({ id: String(id) })
-  const response = await fetch(`${baseURL}/api/admin/accounts/test?${params}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-    body: JSON.stringify(payload),
-    signal,
-  })
-
-  if (!response.ok) {
-    throw new Error((await response.text()) || `HTTP ${response.status}`)
-  }
-  if (!response.body) {
-    throw new Error('测试连接没有返回流')
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    buffer = consumeAccountTestFrames(buffer, onEvent)
-  }
-
-  buffer += decoder.decode()
-  consumeAccountTestFrames(buffer, onEvent)
-}
-
-export function getAccountModels(data: any) {
+export function getAccountModels(data: { id: string | number }) {
   return request({
     url: '/api/admin/accounts/models',
     method: 'GET',
@@ -116,34 +80,4 @@ export function getAccountModels(data: any) {
       id: data.id,
     },
   })
-}
-
-function consumeAccountTestFrames(buffer: string, onEvent: any) {
-  let rest = buffer
-  let frameEnd = findFrameEnd(rest)
-  while (frameEnd) {
-    const frame = rest.slice(0, frameEnd.index)
-    rest = rest.slice(frameEnd.index + frameEnd.length)
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n')
-      .trim()
-    if (data && data !== '[DONE]') {
-      onEvent(JSON.parse(data))
-    }
-    frameEnd = findFrameEnd(rest)
-  }
-  return rest
-}
-
-function findFrameEnd(value: string) {
-  const lf = value.indexOf('\n\n')
-  const crlf = value.indexOf('\r\n\r\n')
-  if (lf === -1 && crlf === -1) return null
-  if (crlf !== -1 && (lf === -1 || crlf < lf)) {
-    return { index: crlf, length: 4 }
-  }
-  return { index: lf, length: 2 }
 }

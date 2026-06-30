@@ -1,0 +1,6 @@
+event: response.created
+data: {"response":{"id":"resp_clean_close"}}
+
+event: response.output_text.delta
+data: {"delta":"partial before clean close"}
+

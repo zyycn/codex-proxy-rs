@@ -1,0 +1,3 @@
+event: response.reasoning_summary_text.delta
+data: {"delta":"thinking"}
+

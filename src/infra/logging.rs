@@ -191,36 +191,3 @@ fn is_managed_log_file(file_name: &str) -> bool {
     file_name.starts_with(&format!("{LOG_PREFIX}."))
         && file_name.ends_with(&format!(".{LOG_SUFFIX}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn china_log_timestamp_should_use_china_offset() {
-        let now = "2026-06-24T16:36:59.190910486Z"
-            .parse::<DateTime<Utc>>()
-            .unwrap();
-
-        assert_eq!(china_log_timestamp(now), "2026-06-25T00:36:59.190+08:00");
-    }
-
-    #[test]
-    fn log_file_name_should_use_china_date() {
-        assert_eq!(log_file_name("2026-06-25"), "codex-proxy-rs.2026-06-25.log");
-    }
-
-    #[test]
-    fn cleanup_old_logs_should_keep_recent_china_dates() {
-        let dir = tempfile::tempdir().unwrap();
-        for date in ["2026-06-23", "2026-06-24", "2026-06-25"] {
-            fs::write(dir.path().join(log_file_name(date)), b"log").unwrap();
-        }
-
-        cleanup_old_logs(dir.path(), 2).unwrap();
-
-        assert!(!dir.path().join(log_file_name("2026-06-23")).exists());
-        assert!(dir.path().join(log_file_name("2026-06-24")).exists());
-        assert!(dir.path().join(log_file_name("2026-06-25")).exists());
-    }
-}

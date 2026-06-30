@@ -144,11 +144,7 @@ pub(crate) async fn write_empty_http_response(stream: &mut TcpStream) {
 }
 
 pub(crate) async fn write_completed_sse_response(stream: &mut TcpStream) {
-    let body = concat!(
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_order\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n",
-        "\n",
-    );
+    let body = include_str!("../../fixtures/responses/http_sse/completed_order_usage.sse");
     stream
         .write_all(
             format!(

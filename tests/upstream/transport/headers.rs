@@ -380,11 +380,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
 #[tokio::test]
 async fn codex_backend_client_should_send_desktop_headers_and_capture_response_metadata() {
     let server = wiremock::MockServer::start().await;
-    let sse_body = concat!(
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n",
-        "\n",
-    );
+    let sse_body = include_str!("../../fixtures/responses/http_sse/completed_usage_basic.sse");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/codex/responses"))
         .and(wiremock::matchers::header(

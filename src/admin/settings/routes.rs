@@ -156,28 +156,21 @@ pub(crate) async fn delete_admin_api_key(
 
 fn parse_settings_patch(body: &[u8]) -> Result<AdminSettingsPatch, AdminError> {
     let value = serde_json::from_slice::<Value>(body)
-        .map_err(|_| AdminError::new(StatusCode::BAD_REQUEST, 40000, "Malformed JSON body"))?;
-    let object = value.as_object().ok_or_else(|| {
-        AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "Settings payload must be an object",
-        )
-    })?;
+        .map_err(|_| AdminError::malformed_json("Malformed JSON body"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| AdminError::bad_request("Settings payload must be an object"))?;
 
     if let Some(key) = object
         .keys()
         .find(|key| !ALLOWED_SETTINGS_KEYS.contains(&key.as_str()))
     {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("Unsupported settings field: {key}"),
-        ));
+        return Err(AdminError::bad_request(format!(
+            "Unsupported settings field: {key}"
+        )));
     }
 
-    serde_json::from_value(value)
-        .map_err(|_| AdminError::new(StatusCode::BAD_REQUEST, 40001, "Invalid settings payload"))
+    serde_json::from_value(value).map_err(|_| AdminError::bad_request("Invalid settings payload"))
 }
 
 fn settings_service_error(error: RuntimeSettingsError) -> AdminError {
@@ -185,17 +178,11 @@ fn settings_service_error(error: RuntimeSettingsError) -> AdminError {
         RuntimeSettingsError::InvalidField(SettingsServiceError::InvalidField {
             field,
             message,
-        }) => AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("Invalid setting {field}: {message}"),
-        ),
+        }) => AdminError::bad_request(format!("Invalid setting {field}: {message}")),
         RuntimeSettingsError::Database(_)
         | RuntimeSettingsError::Json(_)
-        | RuntimeSettingsError::StoredField { .. } => AdminError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            50000,
-            "Failed to persist settings",
-        ),
+        | RuntimeSettingsError::StoredField { .. } => {
+            AdminError::settings_persist_failed("Failed to persist settings")
+        }
     }
 }

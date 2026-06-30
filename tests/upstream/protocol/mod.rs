@@ -8,8 +8,9 @@ use codex_proxy_rs::upstream::protocol::events::{
     rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow, TokenUsage,
 };
 use codex_proxy_rs::upstream::protocol::responses::{
-    apply_response_model_options, http_sse_fallback_allowed, response_from_codex_sse,
-    transport_for_request, CodexResponsesRequest, CodexTransport, CollectedResponse,
+    apply_response_model_options, http_sse_fallback_allowed, response_body_has_first_event,
+    response_from_codex_sse, transport_for_request, CodexResponsesRequest, CodexTransport,
+    CollectedResponse,
 };
 use codex_proxy_rs::upstream::protocol::sse::{
     parse_sse_events, sse_body_has_done, DONE_SSE_FRAME,
@@ -50,4 +51,5 @@ use crate::support::assertions::assert_substrings_appear_in_order;
 mod codex_websocket;
 mod openai_chat;
 mod openai_responses;
+mod response_first_event;
 mod usage_rate_limits;

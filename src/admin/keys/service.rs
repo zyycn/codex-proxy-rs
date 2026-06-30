@@ -101,10 +101,7 @@ impl AdminClientKeyService {
     }
 
     /// 创建客户端 API Key。
-    pub async fn create(
-        &self,
-        name: &str,
-    ) -> Result<AdminCreatedClientApiKey, AdminClientKeyError> {
+    pub async fn create(&self, name: &str) -> Result<AdminClientApiKey, AdminClientKeyError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(AdminClientKeyError::EmptyName);
@@ -112,8 +109,8 @@ impl AdminClientKeyService {
         self.store
             .create(name)
             .await
-            .inspect(|created| self.runtime.upsert_created(created))
-            .map(AdminCreatedClientApiKey::from)
+            .inspect(|created| self.runtime.upsert_stored(created))
+            .map(AdminClientApiKey::from)
             .map_err(|_| AdminClientKeyError::Create)
     }
 
@@ -122,7 +119,7 @@ impl AdminClientKeyService {
         &self,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<Page<AdminStoredClientApiKey>, AdminClientKeyError> {
+    ) -> Result<Page<AdminClientApiKey>, AdminClientKeyError> {
         let page = self
             .store
             .list(cursor, limit)
@@ -132,7 +129,7 @@ impl AdminClientKeyService {
             items: page
                 .items
                 .into_iter()
-                .map(AdminStoredClientApiKey::from)
+                .map(AdminClientApiKey::from)
                 .collect(),
             next_cursor: page.next_cursor,
         })
@@ -142,11 +139,11 @@ impl AdminClientKeyService {
     pub async fn get(
         &self,
         key_id: &str,
-    ) -> Result<Option<AdminStoredClientApiKey>, AdminClientKeyError> {
+    ) -> Result<Option<AdminClientApiKey>, AdminClientKeyError> {
         self.store
             .get(key_id)
             .await
-            .map(|key| key.map(AdminStoredClientApiKey::from))
+            .map(|key| key.map(AdminClientApiKey::from))
             .map_err(|_| AdminClientKeyError::List)
     }
 
@@ -155,14 +152,14 @@ impl AdminClientKeyService {
         &self,
         key_id: &str,
         label: Option<String>,
-    ) -> Result<Option<AdminStoredClientApiKey>, AdminClientKeyError> {
+    ) -> Result<Option<AdminClientApiKey>, AdminClientKeyError> {
         if label.as_ref().is_some_and(|l| l.chars().count() > 64) {
             return Err(AdminClientKeyError::LabelTooLong);
         }
         self.store
             .set_label(key_id, label)
             .await
-            .map(|key| key.map(AdminStoredClientApiKey::from))
+            .map(|key| key.map(AdminClientApiKey::from))
             .map_err(|_| AdminClientKeyError::UpdateLabel)
     }
 
@@ -220,22 +217,9 @@ impl AdminClientKeyService {
     }
 }
 
-/// 管理端可见的客户端 API Key 元数据。
+/// 管理端可见的客户端 API Key。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminStoredClientApiKey {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub prefix: String,
-    pub key: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub last_used_at: Option<String>,
-}
-
-/// 管理端创建客户端 API Key 的一次性返回。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminCreatedClientApiKey {
+pub struct AdminClientApiKey {
     pub id: String,
     pub name: String,
     pub label: Option<String>,
@@ -284,23 +268,8 @@ fn parse_client_key_status(status: &str) -> Result<bool, AdminClientKeyError> {
     }
 }
 
-impl From<StoredClientApiKey> for AdminStoredClientApiKey {
+impl From<StoredClientApiKey> for AdminClientApiKey {
     fn from(key: StoredClientApiKey) -> Self {
-        Self {
-            id: key.id,
-            name: key.name,
-            label: key.label,
-            prefix: key.prefix,
-            key: key.key,
-            enabled: key.enabled,
-            created_at: key.created_at,
-            last_used_at: key.last_used_at,
-        }
-    }
-}
-
-impl From<CreatedClientApiKey> for AdminCreatedClientApiKey {
-    fn from(key: CreatedClientApiKey) -> Self {
         Self {
             id: key.id,
             name: key.name,
@@ -332,27 +301,6 @@ pub enum SqliteClientKeyStoreError {
 /// 已持久化的客户端 API Key 元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredClientApiKey {
-    /// API Key 记录 ID。
-    pub id: String,
-    /// API Key 名称。
-    pub name: String,
-    /// 管理员可见标签。
-    pub label: Option<String>,
-    /// 明文 API Key 的短前缀。
-    pub prefix: String,
-    /// 管理端可复制的完整 API Key。
-    pub key: String,
-    /// 是否允许用于 `/v1` 认证。
-    pub enabled: bool,
-    /// 创建时间。
-    pub created_at: String,
-    /// 最近一次成功使用时间。
-    pub last_used_at: Option<String>,
-}
-
-/// 新建客户端 API Key 后的一次性结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreatedClientApiKey {
     /// API Key 记录 ID。
     pub id: String,
     /// API Key 名称。
@@ -406,7 +354,7 @@ impl SqliteClientKeyStore {
     pub async fn create(
         &self,
         name: &str,
-    ) -> Result<CreatedClientApiKey, SqliteClientKeyStoreError> {
+    ) -> Result<StoredClientApiKey, SqliteClientKeyStoreError> {
         let generated = generate_client_api_key();
         let id = format!("key_{}", Uuid::new_v4().simple());
         let now = Utc::now().to_rfc3339();
@@ -421,7 +369,7 @@ impl SqliteClientKeyStore {
         .execute(&self.pool)
         .await?;
 
-        Ok(CreatedClientApiKey {
+        Ok(StoredClientApiKey {
             id,
             name: name.to_string(),
             label: None,
@@ -637,12 +585,6 @@ impl RuntimeClientKeyStore {
             .keys_by_plaintext
             .get(plaintext)
             .cloned()
-    }
-
-    fn upsert_created(&self, key: &CreatedClientApiKey) {
-        if key.enabled {
-            self.upsert_enabled_key(&key.id, &key.key);
-        }
     }
 
     fn upsert_stored(&self, key: &StoredClientApiKey) {

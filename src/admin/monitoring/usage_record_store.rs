@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::admin::monitoring::{
     billing,
-    usage_record::{UsageRecord, UsageRecordLevel},
+    usage_record::{metadata_service_tier, UsageRecord, UsageRecordLevel},
 };
 use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
 use crate::infra::time::china_quarter_hour_start;
@@ -41,6 +41,9 @@ pub enum SqliteUsageRecordStoreError {
 
 /// SQLite 使用记录结果。
 pub type SqliteUsageRecordStoreResult<T> = Result<T, SqliteUsageRecordStoreError>;
+
+const USAGE_RECORD_SERVICE_TIER_SQL: &str =
+    "nullif(trim(json_extract(metadata_json, '$.serviceTier')), '')";
 
 /// 使用记录查询过滤器。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -429,26 +432,6 @@ fn metadata_first_token_latency(metadata: &Value) -> Option<i64> {
     })
 }
 
-fn metadata_service_tier(metadata: &Value) -> Option<&str> {
-    metadata_service_tier_value(metadata)
-        .or_else(|| metadata.get("usage").and_then(metadata_service_tier_value))
-}
-
-fn metadata_service_tier_value(value: &Value) -> Option<&str> {
-    [
-        "billingServiceTier",
-        "billing_service_tier",
-        "actualServiceTier",
-        "actual_service_tier",
-        "serviceTier",
-        "service_tier",
-    ]
-    .into_iter()
-    .find_map(|field| value.get(field).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-}
-
 async fn trim_to_capacity(pool: &SqlitePool, capacity: u32) -> SqliteUsageRecordStoreResult<u64> {
     let result = sqlx::query(
         "delete from usage_records where id in (
@@ -586,8 +569,11 @@ async fn usage_breakdown(
           nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''),
           nullif(trim(usage_records.model), ''),
           '未知模型'
-        ) as billing_model,
-        coalesce(nullif(trim(json_extract(metadata_json, '$.billingServiceTier')), ''), nullif(trim(json_extract(metadata_json, '$.serviceTier')), ''), nullif(trim(json_extract(metadata_json, '$.usage.serviceTier')), '')) as service_tier,
+        ) as billing_model, ",
+    );
+    builder.push(USAGE_RECORD_SERVICE_TIER_SQL);
+    builder.push(
+        " as service_tier,
         avg(case when latency_ms > 0 then latency_ms else null end) as average_latency_ms
         from usage_records",
     );
@@ -676,8 +662,11 @@ async fn usage_trend(
               nullif(trim(json_extract(metadata_json, '$.requestedModel')), ''),
               nullif(trim(usage_records.model), ''),
               '未知模型'
-            ) as billing_model,
-            coalesce(nullif(trim(json_extract(metadata_json, '$.billingServiceTier')), ''), nullif(trim(json_extract(metadata_json, '$.serviceTier')), ''), nullif(trim(json_extract(metadata_json, '$.usage.serviceTier')), '')) as service_tier,
+            ) as billing_model, ",
+    );
+    builder.push(USAGE_RECORD_SERVICE_TIER_SQL);
+    builder.push(
+        " as service_tier,
             latency_ms
         from usage_records",
     );

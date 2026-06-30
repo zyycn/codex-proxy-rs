@@ -8,6 +8,23 @@ use axum::{
 };
 use serde::Serialize;
 
+pub(crate) const ADMIN_OK_CODE: u32 = 200;
+pub(crate) const ADMIN_OK_MESSAGE: &str = "OK";
+const ADMIN_MALFORMED_JSON_CODE: u32 = 40000;
+const ADMIN_BAD_REQUEST_CODE: u32 = 40001;
+const ADMIN_INVALID_TIME_RANGE_CODE: u32 = 40002;
+const ADMIN_INVALID_MODEL_SOURCE_CODE: u32 = 40003;
+const ADMIN_INVALID_ENDPOINT_SOURCE_CODE: u32 = 40004;
+const ADMIN_SESSION_REQUIRED_CODE: u32 = 40101;
+const ADMIN_INVALID_CREDENTIALS_CODE: u32 = 40102;
+const ADMIN_INVALID_API_KEY_CODE: u32 = 40103;
+const ADMIN_NOT_FOUND_CODE: u32 = 40401;
+const ADMIN_CONFLICT_CODE: u32 = 40901;
+const ADMIN_SETTINGS_PERSIST_CODE: u32 = 50000;
+const ADMIN_INTERNAL_CODE: u32 = 50001;
+const ADMIN_USAGE_RECORD_ACCOUNTS_CODE: u32 = 50002;
+const ADMIN_BAD_GATEWAY_CODE: u32 = 50201;
+
 /// 管理端错误。
 pub struct AdminError {
     status: StatusCode,
@@ -16,12 +33,104 @@ pub struct AdminError {
 }
 
 impl AdminError {
-    pub fn new(status: StatusCode, code: u32, message: impl Into<String>) -> Self {
+    fn new(status: StatusCode, code: u32, message: impl Into<String>) -> Self {
         Self {
             status,
             code,
             message: message.into(),
         }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, ADMIN_BAD_REQUEST_CODE, message)
+    }
+
+    pub fn malformed_json(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, ADMIN_MALFORMED_JSON_CODE, message)
+    }
+
+    pub fn invalid_time_range(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            ADMIN_INVALID_TIME_RANGE_CODE,
+            message,
+        )
+    }
+
+    pub fn invalid_model_source(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            ADMIN_INVALID_MODEL_SOURCE_CODE,
+            message,
+        )
+    }
+
+    pub fn invalid_endpoint_source(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            ADMIN_INVALID_ENDPOINT_SOURCE_CODE,
+            message,
+        )
+    }
+
+    pub fn admin_session_required() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            ADMIN_SESSION_REQUIRED_CODE,
+            "Admin session required",
+        )
+    }
+
+    pub fn invalid_admin_credentials() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            ADMIN_INVALID_CREDENTIALS_CODE,
+            "Invalid admin credentials",
+        )
+    }
+
+    pub fn invalid_admin_api_key() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            ADMIN_INVALID_API_KEY_CODE,
+            "Invalid admin API key",
+        )
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, ADMIN_NOT_FOUND_CODE, message)
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, ADMIN_CONFLICT_CODE, message)
+    }
+
+    pub fn settings_persist_failed(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ADMIN_SETTINGS_PERSIST_CODE,
+            message,
+        )
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ADMIN_INTERNAL_CODE,
+            message,
+        )
+    }
+
+    pub fn usage_record_accounts_failed(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ADMIN_USAGE_RECORD_ACCOUNTS_CODE,
+            message,
+        )
+    }
+
+    pub fn bad_gateway(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, ADMIN_BAD_GATEWAY_CODE, message)
     }
 }
 
@@ -49,7 +158,7 @@ pub struct AdminEnvelope<T> {
 }
 
 impl<T> AdminEnvelope<T> {
-    pub fn new(code: u32, message: impl Into<String>, data: T) -> Self {
+    fn new(code: u32, message: impl Into<String>, data: T) -> Self {
         Self {
             code,
             message: message.into(),
@@ -57,7 +166,7 @@ impl<T> AdminEnvelope<T> {
         }
     }
     pub fn ok(data: T) -> Self {
-        Self::new(200, "OK", data)
+        Self::new(ADMIN_OK_CODE, ADMIN_OK_MESSAGE, data)
     }
 }
 
@@ -105,12 +214,20 @@ struct PageData<T> {
     page: PageMeta,
 }
 
+/// 批量删除响应数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BatchDeleteData {
+    pub(crate) deleted: u32,
+    pub(crate) not_found: Vec<String>,
+}
+
 impl<T> AdminPageEnvelope<T> {
     pub fn ok(page: Page<T>, limit: u32) -> Self {
         let Page { items, next_cursor } = page;
         Self {
-            code: 200,
-            message: "OK".into(),
+            code: ADMIN_OK_CODE,
+            message: ADMIN_OK_MESSAGE.into(),
             data: PageData {
                 items,
                 page: PageMeta::Cursor(CursorPageMeta { limit, next_cursor }),
@@ -126,8 +243,8 @@ impl<T> AdminPageEnvelope<T> {
             page_size,
         } = page;
         Self {
-            code: 200,
-            message: "OK".into(),
+            code: ADMIN_OK_CODE,
+            message: ADMIN_OK_MESSAGE.into(),
             data: PageData {
                 items,
                 page: PageMeta::Numbered(NumberedPageMeta {

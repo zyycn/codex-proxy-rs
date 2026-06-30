@@ -1,67 +1,62 @@
 <p align="center">
-  <img src="web/public/favicon.svg" width="96" height="96" alt="Codex Proxy RS" />
+  <img src="web/public/favicon.svg" width="88" height="88" alt="Codex Proxy RS" />
 </p>
 
 <h1 align="center">Codex Proxy RS</h1>
 
 <p align="center">
-  轻量、安全、高效的 Codex 模型网关。
+  ChatGPT / Codex 账号池网关，提供 OpenAI 兼容接口和本地管理控制台。
 </p>
 
 <p align="center">
-  <code>/v1/responses</code> · <code>/v1/chat/completions</code> · <code>/v1/models</code> · 管理控制台
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.95-000?style=flat-square&logo=rust" />
+  <img alt="Axum" src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" />
+  <img alt="Vue" src="https://img.shields.io/badge/Vue-3-42b883?style=flat-square&logo=vuedotjs&logoColor=white" />
+  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local-003b57?style=flat-square&logo=sqlite" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" />
 </p>
 
-Codex Proxy RS 是一个面向 ChatGPT/Codex 账号池的 Rust 模型网关。它把上游 Codex 能力整理成 OpenAI 兼容接口，同时提供账号调度、配额感知、使用记录和管理控制台。
+<p align="center">
+  <code>/v1/responses</code>
+  ·
+  <code>/v1/chat/completions</code>
+  ·
+  <code>/v1/models</code>
+  ·
+  <code>/api/admin</code>
+</p>
 
-它不是一个臃肿的平台，也不是只做转发的薄代理。它更像一层安静但可靠的网关：把账号、模型、配额、Cookie、WebSocket、SSE 和错误恢复放在后端统一处理，让调用方只需要面对稳定、清晰的 OpenAI 风格接口。
+## ✦ 功能清单
 
-## 为什么需要它
+| 部分 | 内容 |
+| --- | --- |
+| ⚡ OpenAI 兼容接口 | `responses`、`chat completions`、模型列表、流式输出 |
+| 🔐 账号池 | OAuth、refresh token、CPR / Sub2API 导入、状态管理 |
+| 🧭 调度 | 账号轮转、并发限制、请求间隔、会话亲和性 |
+| 📡 上游传输 | Codex Desktop 风格 headers、HTTP SSE、WebSocket、连接池 |
+| 📊 记录 | 使用记录、Token、成本、延迟、失败原因、请求轨迹 |
+| 🛠 管理端 | 账号、API Key、仪表盘、使用记录、运行时设置 |
+| 💾 本地持久化 | SQLite 数据库，运行数据默认写入 `.runtime` |
 
-当你有多个 Codex 账号、多个调用方和持续运行的任务时，真正麻烦的通常不是发出一条请求，而是让每条请求都走在正确的账号、正确的模型和正确的上游状态上。
-
-Codex Proxy RS 关注这些细节：
-
-- 账号是否可用，是否过期、禁用、封禁或配额受限
-- 请求应该落到哪个账号，是否要保持会话亲和性
-- 上游返回的是 HTTP SSE、WebSocket 还是错误事件
-- Cookie、fingerprint、headers 和 Codex Desktop 行为是否足够接近
-- 管理端能否看清请求、用量、延迟和失败原因
-
-## 核心能力
-
-**OpenAI 兼容入口**
-
-- `POST /v1/responses`
-- `POST /v1/chat/completions`
-- `GET /v1/models`
-- `GET /v1/models/catalog`
-
-**Codex 账号池**
-
-- 支持 ChatGPT/Codex OAuth、CPR JSON、Sub2API JSON 和 refresh token 账号接入
-- 支持账号轮转、并发控制、请求间隔和会话亲和性
-- 支持账号状态、配额、Cookie、模型目录和连接测试管理
-
-**上游行为对齐**
-
-- Codex Desktop 风格的 headers、TLS、fingerprint 和 Cookie 处理
-- HTTP SSE 与 WebSocket 上游传输
-- reasoning replay、tuple schema、compact/review 等 Codex 请求路径
-
-**可观测与管理**
-
-- 管理控制台内置账号、密钥、使用记录、用量统计和系统设置
-- SQLite 持久化，账号、Cookie 与访问密钥采用统一的本地存储策略
-- 结构化使用记录，便于定位请求失败、上游状态和调度路径
-
-## 快速开始
+## ✦ 快速启动
 
 ```bash
 cargo run
 ```
 
-默认读取根目录 `config.yaml`，监听 `0.0.0.0:8080`。首次启动会初始化管理员账号，默认用户名和密码来自 `config.yaml`：
+默认监听：
+
+```text
+http://0.0.0.0:8080
+```
+
+默认配置文件：
+
+```text
+config.yaml
+```
+
+首次启动会初始化管理端账号。默认账号来自 `config.yaml`：
 
 ```yaml
 admin:
@@ -69,18 +64,11 @@ admin:
   default_password: admin
 ```
 
-长期运行前请修改默认密码，并确认数据库和日志路径符合你的部署环境。
+正式使用前请改掉默认密码。
 
-运行时数据默认写入 `.runtime`：
+## ✦ 管理控制台
 
-```text
-.runtime/data/
-.runtime/logs/
-```
-
-## 管理控制台
-
-前端位于 `web/`，用于账号管理、密钥管理、使用记录、仪表盘和系统设置。
+前端代码在 `web/`。
 
 开发模式：
 
@@ -95,59 +83,85 @@ pnpm --dir web build
 cargo run
 ```
 
-后端会将构建后的前端资源作为静态页面提供，并保留 API 路由优先级。
+构建后的控制台由后端直接提供，API 路由优先于静态资源。
 
-## 配置重点
+## ✦ OpenAI 兼容入口
 
-`config.yaml` 只放启动级配置，模型由客户端请求决定，网关不会兜底默认模型；`auth`、`quota`、模型别名和模型账号路由都不再从 YAML 读取：
+```http
+POST /v1/responses
+POST /v1/chat/completions
+GET  /v1/models
+GET  /v1/models/catalog
+```
+
+示例：
+
+```bash
+curl http://127.0.0.1:8080/v1/responses \
+  -H 'Authorization: Bearer <client-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-5.5",
+    "input": "Say hello",
+    "stream": true
+  }'
+```
+
+## ✦ config.yaml
+
+示例：
 
 ```yaml
 server:
-  host: 0.0.0.0
+  host: '0.0.0.0'
   port: 8080
 
 api:
-  base_url: https://chatgpt.com/backend-api
+  base_url: 'https://chatgpt.com/backend-api'
 
 database:
-  url: sqlite://.runtime/data/codex-proxy-rs.sqlite
+  url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
 
 logging:
   directory: .runtime/logs
+  retention_days: 14
 ```
 
-## 开发验证
+运行数据：
 
-后端：
+```text
+.runtime/data/
+.runtime/logs/
+```
+
+账号、API Key、模型路由和运行时设置在管理端修改，不写进 YAML。
+
+## ✦ 项目结构
+
+```text
+src/
+  admin/      管理端 API、账号、密钥、监控、设置
+  config/     配置加载与运行时设置
+  http/       路由、中间件、静态资源
+  infra/      SQLite、时间、格式化、日志
+  proxy/      OpenAI 兼容接口与请求分发
+  runtime/    服务装配和后台任务
+  upstream/   Codex 协议、账号、模型、传输
+  web/        管理控制台静态资源挂载
+
+web/          Vue 管理控制台
+tests/        集成测试与 fixture
+```
+
+## ✦ 开发命令
 
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
-RUSTFLAGS="-D warnings" cargo test --all-targets --all-features --locked
-```
-
-前端：
-
-```bash
+cargo test --test main
 pnpm --dir web build
 ```
 
-## 架构
-
-```mermaid
-flowchart LR
-    client[Client] --> http[http<br/>HTTP 路由和中间件]
-    http --> proxy[proxy<br/>OpenAI 兼容入口和请求分发]
-    proxy --> accounts[accounts<br/>账号、OAuth、配额和令牌刷新]
-    proxy --> codex[codex<br/>Codex 协议、模型和上游传输]
-    http --> admin[admin<br/>管理端 API]
-    admin --> runtime[runtime<br/>启动装配、状态和后台任务]
-    runtime --> infra[infra<br/>SQLite、路径和日志]
-    proxy --> telemetry[telemetry<br/>使用记录和用量统计]
-    admin --> telemetry
-    http --> web[web<br/>管理控制台静态资源]
-```
-
-## License
+## ✦ License
 
 MIT
