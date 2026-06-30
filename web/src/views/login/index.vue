@@ -168,13 +168,14 @@ async function handleSubmit() {
   --login-wash-line: #ffffff8f;
   --login-depth-x: 0px;
   --login-depth-y: 0px;
-  --login-form-glass-a: #ffffff42;
-  --login-form-glass-mid: #f5fbff20;
-  --login-form-glass-b: #ffffff16;
-  --login-form-sheen: #ffffff24;
-  --login-form-shadow: #0e17262f;
-  --login-form-highlight-a: #60a5fa26;
-  --login-form-highlight-b: #2dd4bf1f;
+  --login-form-glass-a: #ffffff72;
+  --login-form-glass-mid: #f6fbff48;
+  --login-form-glass-b: #eef7f22e;
+  --login-form-sheen: #ffffff36;
+  --login-form-shadow: #0e17264a;
+  --login-form-glow: #5eead426;
+  --login-form-highlight-a: #60a5fa2e;
+  --login-form-highlight-b: #2dd4bf24;
   --login-control-height: 46px;
   position: relative;
   isolation: isolate;
@@ -199,13 +200,14 @@ async function handleSubmit() {
   --login-grid-line: #e6edf70a;
   --login-rail-line: #6ea8ff12;
   --login-wash-line: #ffffff12;
-  --login-form-glass-a: #31466526;
-  --login-form-glass-mid: #1427431a;
-  --login-form-glass-b: #06132624;
-  --login-form-sheen: #ffffff0c;
-  --login-form-shadow: #0000005c;
-  --login-form-highlight-a: #6ea8ff18;
-  --login-form-highlight-b: #2dd4bf14;
+  --login-form-glass-a: #31466536;
+  --login-form-glass-mid: #14274328;
+  --login-form-glass-b: #06132634;
+  --login-form-sheen: #ffffff10;
+  --login-form-shadow: #00000078;
+  --login-form-glow: #2dd4bf18;
+  --login-form-highlight-a: #6ea8ff20;
+  --login-form-highlight-b: #2dd4bf18;
 }
 
 .login-page::before {
@@ -401,7 +403,8 @@ async function handleSubmit() {
       var(--login-form-glass-b)
     );
   box-shadow:
-    0 34px 78px -54px var(--login-form-shadow),
+    0 44px 96px -48px var(--login-form-shadow),
+    0 18px 42px -36px var(--login-form-glow),
     0 24px 64px -58px var(--login-form-highlight-a) inset,
     0 -18px 42px -40px var(--login-form-highlight-b) inset;
   backdrop-filter: blur(9px) saturate(1.45);
