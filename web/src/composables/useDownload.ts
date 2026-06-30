@@ -2,7 +2,7 @@
 import { useObjectUrl } from '@vueuse/core'
 import { nextTick, shallowRef } from 'vue'
 
-export function useJsonDownload() {
+export function useDownload() {
   const object = shallowRef<Blob | null>(null)
   const objectUrl = useObjectUrl(object)
 

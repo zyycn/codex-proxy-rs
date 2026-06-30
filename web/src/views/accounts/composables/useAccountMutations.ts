@@ -14,7 +14,7 @@ import {
   updateAccount,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
-import { useJsonDownload } from '@/composables/useJsonDownload'
+import { useDownload } from '@/composables/useDownload'
 import { withMinimumDuration } from '@/utils/async'
 
 export function useAccountMutations(options: {
@@ -24,7 +24,7 @@ export function useAccountMutations(options: {
   selectedIds: Ref<Set<string>>
   totalAccounts: Ref<number>
 }) {
-  const { downloadJson } = useJsonDownload()
+  const { downloadJson } = useDownload()
   const loading = ref(true)
   const accounts = ref<any[]>([])
   const accountSummary = ref({
