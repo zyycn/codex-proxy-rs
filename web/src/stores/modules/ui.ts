@@ -1,9 +1,10 @@
-import { usePreferredDark, usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
+import { useDark, usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
 import { defineStore } from 'pinia'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef } from 'vue'
 
 type ThemeMode = 'system' | 'light' | 'dark'
 type ThemeName = 'light' | 'dark'
+type ColorModeStorageValue = 'auto' | ThemeName
 type ThemeTransitionOrigin = { x: number; y: number }
 type ViewTransition = {
   ready: Promise<void>
@@ -20,14 +21,7 @@ export const useUiStore = defineStore(
     const sidebarCollapsed = shallowRef(false)
     const themeMode = shallowRef<ThemeMode>('system')
     const themeRevision = shallowRef(0)
-    const prefersDark = usePreferredDark()
     const preferredMotion = usePreferredReducedMotion()
-    const systemTheme = computed<ThemeName>(() => (prefersDark.value ? 'dark' : 'light'))
-
-    const effectiveTheme = computed<ThemeName>(() =>
-      themeMode.value === 'system' ? systemTheme.value : themeMode.value,
-    )
-
     let themeApplied = false
     let themeTransitionOrigin: ThemeTransitionOrigin | undefined
     let themeTransitionRequested = false
@@ -38,6 +32,22 @@ export const useUiStore = defineStore(
       180,
       { immediate: false },
     )
+
+    const colorModeStorage = computed<ColorModeStorageValue>({
+      get: () => (themeMode.value === 'system' ? 'auto' : themeMode.value),
+      set: (mode) => {
+        themeMode.value = mode === 'auto' ? 'system' : mode
+      },
+    })
+
+    const isDark = useDark({
+      storageRef: colorModeStorage,
+      onChanged: (dark) => {
+        applyTheme(dark ? 'dark' : 'light')
+      },
+    })
+
+    const effectiveTheme = computed<ThemeName>(() => (isDark.value ? 'dark' : 'light'))
 
     function toggleSidebar() {
       sidebarCollapsed.value = !sidebarCollapsed.value
@@ -124,7 +134,9 @@ export const useUiStore = defineStore(
     }
 
     function initializeTheme() {
-      applyTheme(effectiveTheme.value)
+      if (!themeApplied) {
+        applyTheme(effectiveTheme.value)
+      }
     }
 
     function setThemeMode(mode: ThemeMode) {
@@ -141,8 +153,6 @@ export const useUiStore = defineStore(
       }
       themeMode.value = effectiveTheme.value === 'dark' ? 'light' : 'dark'
     }
-
-    watch(effectiveTheme, applyTheme, { immediate: true })
 
     return {
       sidebarCollapsed,

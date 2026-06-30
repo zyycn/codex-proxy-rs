@@ -137,7 +137,7 @@ function syncLoading(element: LoadingElement, binding: DirectiveBinding<LoadingB
   }
 }
 
-export const loadingDirective: Directive<LoadingElement, LoadingBindingValue> = {
+export const loading: Directive<LoadingElement, LoadingBindingValue> = {
   mounted: syncLoading,
   updated: syncLoading,
   beforeUnmount: hideLoading,

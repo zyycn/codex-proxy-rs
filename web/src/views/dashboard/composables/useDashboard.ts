@@ -239,7 +239,11 @@ export function useDashboard(): any {
           points.map((point) => point.cachedTokensValue),
           'warning',
         ),
-        trend: trendState(cache.todayHitRateValue ?? 0, cache.yesterdayHitRateValue ?? 0, 'warning'),
+        trend: trendState(
+          cache.todayHitRateValue ?? 0,
+          cache.yesterdayHitRateValue ?? 0,
+          'warning',
+        ),
         details: [
           { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
           {
