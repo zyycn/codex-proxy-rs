@@ -129,7 +129,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_not_retry_ambiguous_transport_failure() {
+async fn token_refresh_task_should_retry_transport_failure_before_recovery() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-transport-failure.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -183,7 +183,7 @@ async fn token_refresh_task_should_not_retry_ambiguous_transport_failure() {
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(summary.failed, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing]);
+    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 5]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert!(stored.next_refresh_at.is_some_and(|next| next > now));
     assert_eq!(
@@ -248,12 +248,19 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
         .refresh_due_accounts_once_at(now)
         .await
         .expect("first scan should summarize retry exhaustion");
+    let recovery_at = store
+        .get("acct-refresh-delayed-recovery")
+        .await
+        .expect("account should load")
+        .expect("account should exist")
+        .next_refresh_at
+        .expect("retry exhaustion should persist recovery time");
     let delayed = task
         .refresh_due_accounts_once_at(now + Duration::minutes(5))
         .await
         .expect("recovery window should skip refresh");
     let refreshed = task
-        .refresh_due_accounts_once_at(now + Duration::minutes(10) + Duration::seconds(1))
+        .refresh_due_accounts_once_at(recovery_at + Duration::seconds(1))
         .await
         .expect("recovery window should allow refresh");
     let stored = store
@@ -264,6 +271,8 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(failed.failed, 1);
+    assert!(recovery_at >= now + Duration::minutes(8));
+    assert!(recovery_at <= now + Duration::minutes(12));
     assert_eq!(delayed.skipped, 1);
     assert_eq!(refreshed.refreshed, 1);
     assert_eq!(observed_statuses, [AccountStatus::Refreshing; 6]);

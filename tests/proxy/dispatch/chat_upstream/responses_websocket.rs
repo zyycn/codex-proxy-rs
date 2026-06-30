@@ -693,7 +693,7 @@ async fn responses_websocket_should_implicitly_resume_full_history_with_reasonin
 }
 
 #[tokio::test]
-async fn responses_websocket_should_strip_implicit_banned_affinity_when_switching_accounts() {
+async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switching_accounts() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -746,7 +746,7 @@ async fn responses_websocket_should_strip_implicit_banned_affinity_when_switchin
         .await
         .contains("\"id\":\"resp_implicit_ban_first\""));
 
-    update_admin_account_status(&app, "acct_primary", "banned").await;
+    update_admin_account_status(&app, "acct_primary", "disabled").await;
 
     let second_response = app
         .oneshot(responses_json_request(

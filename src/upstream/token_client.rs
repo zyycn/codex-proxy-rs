@@ -77,25 +77,15 @@ fn parse_token_pair(body: &str) -> Result<TokenPair, ()> {
     })
 }
 
-fn classify_refresh_failure(status: StatusCode, body: &str) -> RefreshFailure {
+fn classify_refresh_failure(_status: StatusCode, body: &str) -> RefreshFailure {
     let lower = body.to_ascii_lowercase();
-    if lower.contains("quota") {
-        return RefreshFailure::QuotaExhausted;
-    }
-    if lower.contains("banned") || lower.contains("account has been deactivated") {
+    if lower.contains("account has been deactivated") || lower.contains("refresh_token_reused") {
         return RefreshFailure::Banned;
     }
-    if lower.contains("account disabled") {
-        return RefreshFailure::Disabled;
-    }
-    if status == StatusCode::BAD_REQUEST
-        || status == StatusCode::UNAUTHORIZED
-        || lower.contains("invalid_grant")
+    if lower.contains("invalid_grant")
         || lower.contains("invalid_token")
         || lower.contains("access_denied")
         || lower.contains("refresh_token_expired")
-        || lower.contains("refresh_token_reused")
-        || lower.contains("token_revoked")
     {
         return RefreshFailure::InvalidGrant;
     }

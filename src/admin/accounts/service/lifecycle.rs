@@ -1,11 +1,22 @@
-use chrono::Utc;
-use secrecy::{ExposeSecret, SecretString};
+use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    hash::{Hash, Hasher},
+};
 
-use crate::infra::json::{NumberedPage, Page};
+use chrono::Utc;
+use futures::{stream, StreamExt};
+use secrecy::{ExposeSecret, SecretString};
+use tokio::time::sleep;
+
+use crate::{
+    infra::json::{NumberedPage, Page},
+    upstream::accounts::store::AccountStore,
+};
 
 use super::{
     types::{
-        parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountMetadata,
+        parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountHealthCheck,
+        AdminAccountMetadata, AdminAccountRefreshOutcome, AdminAccountRefreshResult,
         AdminAccountUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
     },
     AdminAccountService,
@@ -97,10 +108,7 @@ impl AdminAccountService {
             .ok_or(AdminAccountError::TokenRequired)?;
             ManualCreateTokens {
                 access_token,
-                refresh_token_for_new: token_pair
-                    .refresh_token
-                    .clone()
-                    .or_else(|| Some(refresh_token.clone())),
+                refresh_token_for_new: token_pair.refresh_token.clone(),
                 refresh_token_for_existing: token_pair.refresh_token,
             }
         } else {
@@ -137,7 +145,7 @@ impl AdminAccountService {
                             .map(|token| SecretString::new(token.into())),
                         access_token_expires_at: Some(claims.expires_at),
                         next_refresh_at: Some(
-                            self.next_refresh_at_for_expires_at(claims.expires_at),
+                            self.next_refresh_at_for_expires_at(&existing.id, claims.expires_at),
                         ),
                         status: crate::upstream::accounts::model::AccountStatus::Active,
                     },
@@ -292,15 +300,33 @@ impl AdminAccountService {
     pub async fn refresh_account(
         &self,
         account_id: &str,
-    ) -> Result<AdminAccountMetadata, AdminAccountError> {
+    ) -> Result<AdminAccountRefreshResult, AdminAccountError> {
         let account = match self.store.get(account_id).await {
             Ok(Some(account)) => account,
             Ok(None) => return Err(AdminAccountError::NotFound),
             Err(_) => return Err(AdminAccountError::Inspect),
         };
-        let Some(refresh_token) = account.refresh_token.as_ref() else {
-            return Err(AdminAccountError::TokenRequired);
+        let previous_status = account.status;
+        let started_at = std::time::Instant::now();
+
+        let skipped = |error: &'static str| AdminAccountRefreshResult {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            previous_status,
+            outcome: AdminAccountRefreshOutcome::Skipped,
+            error: Some(error.to_string()),
+            duration_ms: elapsed_millis_i64(started_at),
         };
+
+        let Some(refresh_token) = account.refresh_token.as_ref() else {
+            return Ok(skipped("no refresh token"));
+        };
+        if account.status == crate::upstream::accounts::model::AccountStatus::Disabled {
+            return Ok(skipped("manually disabled"));
+        }
+        if account.status == crate::upstream::accounts::model::AccountStatus::Refreshing {
+            return Ok(skipped("refresh already in progress"));
+        }
 
         match self
             .token_refresher
@@ -334,7 +360,7 @@ impl AdminAccountService {
                                 .map(|token| SecretString::new(token.into())),
                             access_token_expires_at: Some(claims.expires_at),
                             next_refresh_at: Some(
-                                self.next_refresh_at_for_expires_at(claims.expires_at),
+                                self.next_refresh_at_for_expires_at(account_id, claims.expires_at),
                             ),
                             status: crate::upstream::accounts::model::AccountStatus::Active,
                         },
@@ -345,11 +371,18 @@ impl AdminAccountService {
                     return Err(AdminAccountError::NotFound);
                 }
                 self.sync_account_pool(account_id).await?;
+                Ok(AdminAccountRefreshResult {
+                    id: account.id,
+                    email: account.email,
+                    previous_status,
+                    outcome: AdminAccountRefreshOutcome::Alive,
+                    error: None,
+                    duration_ms: elapsed_millis_i64(started_at),
+                })
             }
             Err(failure) => {
-                if let Some(status) =
-                    manual_refresh_failure_status(&failure, account.access_token.expose_secret())
-                {
+                if manual_refresh_failure_is_permanent(&failure) {
+                    let status = crate::upstream::accounts::model::AccountStatus::Expired;
                     let updated = self
                         .store
                         .set_status(account_id, status)
@@ -373,46 +406,85 @@ impl AdminAccountService {
                     self.sync_account_pool_best_effort(account_id, "account refresh failure")
                         .await;
                 }
-                return Err(AdminAccountError::RefreshTokenExchange(failure));
+                Ok(AdminAccountRefreshResult {
+                    id: account.id,
+                    email: account.email,
+                    previous_status,
+                    outcome: AdminAccountRefreshOutcome::Dead,
+                    error: Some(format!("token refresh exchange failed: {failure}")),
+                    duration_ms: elapsed_millis_i64(started_at),
+                })
             }
         }
+    }
 
-        self.store
-            .get(account_id)
+    pub async fn health_check_accounts(
+        &self,
+        ids: Option<Vec<String>>,
+        stagger_ms: u64,
+        concurrency: usize,
+    ) -> Result<AdminAccountHealthCheck, AdminAccountError> {
+        let accounts = self
+            .store
+            .list_pool_accounts()
             .await
-            .map_err(|_| AdminAccountError::Inspect)?
-            .map(stored_to_admin_metadata)
-            .ok_or(AdminAccountError::NotFound)
+            .map_err(|_| AdminAccountError::List)?;
+        let ids = ids.map(|ids| ids.into_iter().collect::<HashSet<_>>());
+        let candidate_ids = accounts
+            .into_iter()
+            .filter(|account| {
+                ids.as_ref()
+                    .is_none_or(|ids| ids.contains(account.id.as_str()))
+            })
+            .map(|account| account.id)
+            .collect::<Vec<_>>();
+        let results = stream::iter(candidate_ids.into_iter().enumerate().map(
+            |(index, account_id)| async move {
+                if index > 0 && stagger_ms > 0 {
+                    let base_delay = stagger_ms.saturating_mul(index.min(concurrency) as u64);
+                    let delay = stable_jittered_millis(&account_id, base_delay, 0.30);
+                    sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                self.refresh_account(&account_id).await
+            },
+        ))
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(AdminAccountHealthCheck { results })
     }
 }
 
-fn manual_refresh_failure_status(
-    failure: &crate::upstream::accounts::token_refresh::RefreshFailure,
-    current_access_token: &str,
-) -> Option<crate::upstream::accounts::model::AccountStatus> {
-    match failure {
-        crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted => {
-            Some(crate::upstream::accounts::model::AccountStatus::QuotaExhausted)
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::Banned => {
-            Some(crate::upstream::accounts::model::AccountStatus::Banned)
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::Disabled => {
-            Some(crate::upstream::accounts::model::AccountStatus::Disabled)
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
-            if matches!(
-                crate::upstream::accounts::token_refresh::jwt_expiry(
-                    current_access_token,
-                    Utc::now()
-                ),
-                crate::upstream::accounts::token_refresh::JwtExpiry::Expired
-            ) =>
-        {
-            Some(crate::upstream::accounts::model::AccountStatus::Expired)
-        }
-        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
-        | crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
-        | crate::upstream::accounts::token_refresh::RefreshFailure::Transport => None,
+fn stable_jittered_millis(account_id: &str, base_millis: u64, variance: f64) -> u64 {
+    if base_millis == 0 {
+        return 0;
     }
+
+    let mut hasher = DefaultHasher::new();
+    account_id.hash(&mut hasher);
+    "health-check-stagger".hash(&mut hasher);
+    let unit = hasher.finish() as f64 / u64::MAX as f64;
+    let factor = (1.0 - variance) + unit * variance * 2.0;
+    (base_millis as f64 * factor)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
+}
+
+fn manual_refresh_failure_is_permanent(
+    failure: &crate::upstream::accounts::token_refresh::RefreshFailure,
+) -> bool {
+    match failure {
+        crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
+        | crate::upstream::accounts::token_refresh::RefreshFailure::Banned => true,
+        crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted
+        | crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
+        | crate::upstream::accounts::token_refresh::RefreshFailure::Transport => false,
+    }
+}
+
+fn elapsed_millis_i64(started_at: std::time::Instant) -> i64 {
+    i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
 }

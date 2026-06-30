@@ -146,8 +146,13 @@ pub fn is_banned_upstream_error(error: &CodexClientError) -> bool {
     matches!(
         error,
         CodexClientError::Upstream { status, body, .. }
-            if status.as_u16() == 403 && is_banned_auth_signal(body)
+            if status.as_u16() == 403 && !is_html_error_body(body)
     )
+}
+
+fn is_html_error_body(value: &str) -> bool {
+    let value = value.trim_start().to_ascii_lowercase();
+    value.starts_with("<!doctype") || value.starts_with("<html") || value.contains("<html")
 }
 
 /// Codex 客户端结果类型。

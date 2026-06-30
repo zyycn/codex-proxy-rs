@@ -26,7 +26,9 @@ use crate::{
     },
     admin::{
         accounts::service::{
-            AdminAccountError, AdminAccountMetadata, AdminAccountUpdate, OAuthExchangeInput,
+            AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata,
+            AdminAccountRefreshOutcome, AdminAccountRefreshResult, AdminAccountUpdate,
+            OAuthExchangeInput,
         },
         monitoring::{billing, service::AdminUsageRecord},
     },
@@ -407,6 +409,73 @@ enum AccountUpdateData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AccountRefreshData {
+    id: String,
+    email: Option<String>,
+    previous_status: String,
+    result: &'static str,
+    error: Option<String>,
+    duration_ms: i64,
+}
+
+impl From<AdminAccountRefreshResult> for AccountRefreshData {
+    fn from(result: AdminAccountRefreshResult) -> Self {
+        Self {
+            id: result.id,
+            email: result.email,
+            previous_status: account_status_str(result.previous_status).to_string(),
+            result: account_refresh_outcome_str(result.outcome),
+            error: result.error,
+            duration_ms: result.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct AccountHealthCheckRequest {
+    ids: Option<Vec<String>>,
+    stagger_ms: Option<u64>,
+    concurrency: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountHealthCheckSummaryData {
+    total: usize,
+    alive: usize,
+    dead: usize,
+    skipped: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountHealthCheckData {
+    summary: AccountHealthCheckSummaryData,
+    results: Vec<AccountRefreshData>,
+}
+
+impl From<AdminAccountHealthCheck> for AccountHealthCheckData {
+    fn from(result: AdminAccountHealthCheck) -> Self {
+        let summary = AccountHealthCheckSummaryData {
+            total: result.results.len(),
+            alive: result.alive(),
+            dead: result.dead(),
+            skipped: result.skipped(),
+        };
+        Self {
+            summary,
+            results: result
+                .results
+                .into_iter()
+                .map(AccountRefreshData::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AccountImportData {
     imported: u32,
     skipped: u32,
@@ -541,9 +610,43 @@ pub(crate) async fn refresh_account(
         .refresh_account(&account_id)
         .await
     {
-        Ok(account) => Ok(AdminResponse::new(
+        Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(AdminAccountData::from(account)),
+            AdminEnvelope::ok(AccountRefreshData::from(result)),
+        )),
+        Err(error) => Err(account_error(&error)),
+    }
+}
+
+/// `POST /api/admin/accounts/health-check`
+pub(crate) async fn health_check_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AccountHealthCheckRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    require_admin_auth(&state, &headers).await?;
+    let stagger_ms = payload.stagger_ms.unwrap_or(3_000);
+    if !(500..=30_000).contains(&stagger_ms) && stagger_ms != 0 {
+        return Err(AdminError::bad_request(
+            "stagger_ms must be between 500 and 30000",
+        ));
+    }
+    if let Some(concurrency) = payload.concurrency {
+        if !(1..=10).contains(&concurrency) {
+            return Err(AdminError::bad_request(
+                "concurrency must be between 1 and 10",
+            ));
+        }
+    }
+    match state
+        .services
+        .admin_accounts
+        .health_check_accounts(payload.ids, stagger_ms, payload.concurrency.unwrap_or(2))
+        .await
+    {
+        Ok(result) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(AccountHealthCheckData::from(result)),
         )),
         Err(error) => Err(account_error(&error)),
     }
@@ -1461,6 +1564,14 @@ fn account_error(error: &AdminAccountError) -> AdminError {
         AdminAccountError::NotFound => account_not_found(),
         AdminAccountError::Inactive(_) => AdminError::conflict(error.to_string()),
         _ => AdminError::internal(error.to_string()),
+    }
+}
+
+fn account_refresh_outcome_str(outcome: AdminAccountRefreshOutcome) -> &'static str {
+    match outcome {
+        AdminAccountRefreshOutcome::Alive => "alive",
+        AdminAccountRefreshOutcome::Dead => "dead",
+        AdminAccountRefreshOutcome::Skipped => "skipped",
     }
 }
 

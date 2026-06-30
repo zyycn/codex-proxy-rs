@@ -183,7 +183,7 @@ async fn token_refresh_task_should_schedule_future_per_account_timer_without_ref
         .expect("account should be inserted");
     let refresher = CountingTokenRefresher::default();
     let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
-        store,
+        store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
             refresh_concurrency: 1,
@@ -195,11 +195,150 @@ async fn token_refresh_task_should_schedule_future_per_account_timer_without_ref
         .schedule_account_timers_once_at(now)
         .await
         .expect("timer scheduling should succeed");
+    let stored = store
+        .get("acct-refresh-future-timer")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
     tokio::task::yield_now().await;
 
     assert_eq!(summary.scheduled, 1);
     assert_eq!(task.scheduled_timer_count().await, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
+    let scheduled_at = stored
+        .next_refresh_at
+        .expect("future refresh timer should persist next_refresh_at");
+    let exact_margin_at = now + Duration::minutes(5);
+    assert_ne!(scheduled_at, exact_margin_at);
+    assert!(scheduled_at >= now + Duration::seconds(255));
+    assert!(scheduled_at <= now + Duration::seconds(345));
+}
+
+#[tokio::test]
+async fn token_refresh_task_should_refresh_immediately_after_unauthorized_even_with_future_timer() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-unauthorized-now.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool);
+    let now = Utc::now();
+    let old_access_token = test_jwt((now + Duration::minutes(10)).timestamp());
+    let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-unauthorized-now".to_string(),
+            email: Some("unauthorized-now@example.com".to_string()),
+            account_id: Some("chatgpt-unauthorized-now".to_string()),
+            user_id: Some("user-unauthorized-now".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(old_access_token.into()),
+            refresh_token: Some(SecretString::new(
+                "refresh-unauthorized-now".to_string().into(),
+            )),
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::minutes(10)),
+            status: AccountStatus::Active,
+        })
+        .await
+        .expect("account should be inserted");
+    let refresher = NotifyingTokenRefresher {
+        calls: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Notify::new()),
+        response: Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }),
+    };
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher.clone(),
+    )
+    .with_retry_delays(vec![StdDuration::ZERO; 4]);
+    task.schedule_account_timers_once_at(now)
+        .await
+        .expect("future timer should be scheduled");
+    assert_eq!(task.scheduled_timer_count().await, 1);
+    assert!(store
+        .set_status("acct-refresh-unauthorized-now", AccountStatus::Expired)
+        .await
+        .expect("expired status should persist"));
+
+    task.trigger_account_refresh_now("acct-refresh-unauthorized-now")
+        .await
+        .expect("unauthorized refresh should run immediately");
+    let stored = store
+        .get("acct-refresh-unauthorized-now")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        new_access_token.as_str()
+    );
+    assert!(stored.next_refresh_at.is_some());
+    assert_eq!(task.scheduled_timer_count().await, 1);
+}
+
+#[tokio::test]
+async fn token_refresh_task_should_skip_unauthorized_refresh_without_refresh_token() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-unauthorized-no-rt.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool);
+    let now = Utc::now();
+    let old_access_token = test_jwt((now + Duration::minutes(10)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-unauthorized-no-rt".to_string(),
+            email: Some("unauthorized-no-rt@example.com".to_string()),
+            account_id: Some("chatgpt-unauthorized-no-rt".to_string()),
+            user_id: Some("user-unauthorized-no-rt".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(old_access_token.clone().into()),
+            refresh_token: None,
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::minutes(10)),
+            status: AccountStatus::Expired,
+        })
+        .await
+        .expect("account should be inserted");
+    let refresher = CountingTokenRefresher::default();
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher.clone(),
+    );
+
+    task.trigger_account_refresh_now("acct-refresh-unauthorized-no-rt")
+        .await
+        .expect("unauthorized refresh should no-op without refresh token");
+    let stored = store
+        .get("acct-refresh-unauthorized-no-rt")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(stored.status, AccountStatus::Expired);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        old_access_token.as_str()
+    );
 }
 
 #[tokio::test]

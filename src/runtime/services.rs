@@ -34,12 +34,13 @@ use crate::{
         store::{AccountStore as AccountStoreTrait, SqliteAccountStore},
         token_refresh::{
             RefreshLeaseStore as SqliteRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy,
+            RuntimeTokenRefreshService,
         },
     },
     upstream::{
         fingerprint::{Fingerprint, FingerprintRepository},
         models::{ModelService, ModelServiceError, ModelSnapshotStore},
-        token_client::{default_openai_token_client, TokenClientConfig},
+        token_client::{default_openai_token_client, OpenAiTokenClient, TokenClientConfig},
         transport::{
             build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
         },
@@ -90,6 +91,7 @@ pub struct Services {
     pub usage_records: StdArc<AdminUsageRecordService>,
     pub usage: StdArc<AdminUsageService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
+    pub token_refresh: StdArc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     pub chat: StdArc<ChatDispatchService>,
     pub responses: StdArc<ResponseDispatchService>,
     pub session_affinity: StdArc<RuntimeSessionAffinityService>,
@@ -204,7 +206,15 @@ impl Services {
             runtime_client_keys.clone(),
         ));
         let client_keys = StdArc::new(ClientKeyService::new(runtime_client_keys));
-        let token_client = StdArc::new(default_openai_token_client(token_client_config(config)));
+        let token_client = default_openai_token_client(token_client_config(config));
+        let token_refresh = StdArc::new(
+            RuntimeTokenRefreshService::new(
+                stores.accounts.clone(),
+                refresh_policy.clone(),
+                token_client.clone(),
+            )
+            .with_refresh_lease_store(stores.refresh_leases.clone()),
+        );
         let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
         let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
             crate::upstream::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
@@ -222,7 +232,7 @@ impl Services {
             codex: codex.clone(),
             models: models.clone(),
             account_pool: account_pool.clone(),
-            token_refresher: token_client,
+            token_refresher: StdArc::new(token_client),
             oauth: crate::admin::accounts::service::oauth::AccountOAuthService::new(
                 reqwest::Client::new(),
                 config.auth.oauth_client_id.clone(),
@@ -250,6 +260,7 @@ impl Services {
             models.clone(),
             codex.clone(),
             usage_records.clone(),
+            token_refresh.clone(),
             installation_id.clone(),
             cloudflare_recovery.clone(),
         ));
@@ -259,6 +270,7 @@ impl Services {
             codex.clone(),
             session_affinity.clone(),
             usage_records.clone(),
+            token_refresh.clone(),
             installation_id.clone(),
             cloudflare_recovery,
         ));
@@ -275,6 +287,7 @@ impl Services {
             usage_records,
             usage,
             account_pool,
+            token_refresh,
             chat,
             responses,
             session_affinity,
