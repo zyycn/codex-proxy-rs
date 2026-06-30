@@ -195,7 +195,7 @@ const quotaToneClasses: Record<string, string> = {
       >
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          总请求排序
+          最近使用排序
         </p>
 
         <div

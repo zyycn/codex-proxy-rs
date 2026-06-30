@@ -69,6 +69,13 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
             input_tokens: 3_500_000,
             output_tokens: 13_900,
             cached_tokens: 3_400_000,
+            window_request_count: 7,
+            window_input_tokens: 120_000,
+            window_output_tokens: 4_000,
+            window_cached_tokens: 40_000,
+            window_started_at: "2026-06-20T00:00:00Z",
+            window_reset_at: "2026-06-27T00:00:00Z",
+            limit_window_seconds: 604_800,
             last_used_at: "2026-06-23T08:50:13Z",
         },
     )
@@ -163,6 +170,48 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-23T08:45:00+00:00")
+    .bind("acct_stats")
+    .bind("gpt-5")
+    .bind(3)
+    .bind(60_000)
+    .bind(1_500)
+    .bind(20_000)
+    .bind("2026-06-23T08:45:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-23T09:00:00+00:00")
+    .bind("acct_stats")
+    .bind("gpt-5.5")
+    .bind(4)
+    .bind(60_000)
+    .bind(2_500)
+    .bind(20_000)
+    .bind("2026-06-23T09:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-19T23:45:00+00:00")
+    .bind("acct_stats")
+    .bind("gpt-outside-window")
+    .bind(99)
+    .bind(900_000)
+    .bind(90_000)
+    .bind(9_000)
+    .bind("2026-06-19T23:45:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let response = app
         .oneshot(
@@ -180,7 +229,11 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     let item = &body["data"]["items"][0];
-    assert_eq!(item["usage"]["requestCount"], 41);
+    assert_eq!(item["usage"]["requestCount"], 7);
+    assert_eq!(item["usage"]["inputTokens"], 120_000);
+    assert_eq!(item["usage"]["outputTokens"], 4_000);
+    assert_eq!(item["usage"]["cachedTokens"], 40_000);
+    assert_eq!(item["usage"]["totalTokens"], 124_000);
     assert_eq!(item["quota"]["windows"].as_array().unwrap().len(), 3);
     assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
     assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
@@ -191,11 +244,11 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
         .as_str()
         .is_some_and(|value| value.contains(" / 7.0d")));
-    assert_eq!(item["usage"]["createdTokens"], 100_000);
-    assert_eq!(item["usage"]["readTokens"], 3_400_000);
+    assert_eq!(item["usage"]["createdTokens"], 80_000);
+    assert_eq!(item["usage"]["readTokens"], 40_000);
     assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 2);
     assert_eq!(item["usage"]["models"][0]["model"], "gpt-5.5");
-    assert_eq!(item["usage"]["models"][0]["requestCount"], 2);
+    assert_eq!(item["usage"]["models"][0]["requestCount"], 4);
     assert_eq!(item["usage"]["models"][1]["model"], "gpt-5");
 }
 

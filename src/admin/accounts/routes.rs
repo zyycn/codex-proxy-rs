@@ -12,9 +12,10 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::{
     admin::auth::session::require_admin_auth,
@@ -230,17 +231,17 @@ impl AdminAccountUsageData {
         usage: Option<&AdminUsageRecord>,
         models: Vec<AdminAccountModelUsageData>,
     ) -> Self {
-        let request_count = usage.map_or(0, |usage| usage.request_count);
-        let empty_response_count = usage.map_or(0, |usage| usage.empty_response_count);
-        let input_tokens = usage.map_or(0, |usage| usage.input_tokens);
-        let output_tokens = usage.map_or(0, |usage| usage.output_tokens);
-        let cached_tokens = usage.map_or(0, |usage| usage.cached_tokens);
-        let reasoning_tokens = usage.map_or(0, |usage| usage.reasoning_tokens);
-        let total_tokens = usage.map_or(0, |usage| usage.total_tokens);
-        let image_input_tokens = usage.map_or(0, |usage| usage.image_input_tokens);
-        let image_output_tokens = usage.map_or(0, |usage| usage.image_output_tokens);
-        let image_request_count = usage.map_or(0, |usage| usage.image_request_count);
-        let image_request_failed_count = usage.map_or(0, |usage| usage.image_request_failed_count);
+        let request_count = usage.map_or(0, |usage| usage.window_request_count);
+        let empty_response_count = 0;
+        let input_tokens = usage.map_or(0, |usage| usage.window_input_tokens);
+        let output_tokens = usage.map_or(0, |usage| usage.window_output_tokens);
+        let cached_tokens = usage.map_or(0, |usage| usage.window_cached_tokens);
+        let reasoning_tokens = 0;
+        let total_tokens = input_tokens.saturating_add(output_tokens);
+        let image_input_tokens = 0;
+        let image_output_tokens = 0;
+        let image_request_count = 0;
+        let image_request_failed_count = 0;
         let created_tokens = input_tokens.saturating_sub(cached_tokens);
         let read_tokens = cached_tokens;
         let last_used_at = usage.and_then(|usage| usage.last_used_at);
@@ -789,13 +790,7 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
         .list_quota_snapshots()
         .await
         .unwrap_or_default();
-    let model_usage_records = state
-        .services
-        .background_tasks
-        .accounts
-        .list_model_usage()
-        .await
-        .unwrap_or_default();
+    let models_by_account = list_current_window_model_usage(state, &usage_records).await;
 
     AccountListStats {
         usage_by_account: usage_records
@@ -811,7 +806,7 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
                 )
             })
             .collect(),
-        models_by_account: models_by_account(model_usage_records),
+        models_by_account,
     }
 }
 
@@ -900,6 +895,90 @@ async fn list_all_usage_records(state: &AppState) -> Vec<AdminUsageRecord> {
         };
         cursor = Some(next_cursor);
     }
+}
+
+async fn list_current_window_model_usage(
+    state: &AppState,
+    usage_records: &[AdminUsageRecord],
+) -> HashMap<String, Vec<AdminAccountModelUsageData>> {
+    let now = Utc::now();
+    let windows = usage_records
+        .iter()
+        .filter_map(|usage| {
+            current_usage_window(usage, now)
+                .map(|(start, end)| (usage.account_id.clone(), start, end))
+        })
+        .collect::<Vec<_>>();
+    if windows.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "select
+          account_id,
+          model,
+          coalesce(sum(request_count), 0) as request_count,
+          coalesce(sum(error_count), 0) as error_count,
+          coalesce(sum(input_tokens), 0) as input_tokens,
+          coalesce(sum(output_tokens), 0) as output_tokens,
+          coalesce(sum(cached_tokens), 0) as cached_tokens,
+          max(bucket_start) as last_used_at
+        from usage_time_buckets
+        where model != '' and (",
+    );
+    for (index, (account_id, start, end)) in windows.iter().enumerate() {
+        if index > 0 {
+            builder.push(" or ");
+        }
+        builder.push("(account_id = ");
+        builder.push_bind(account_id);
+        builder.push(" and bucket_start >= ");
+        builder.push_bind(start.to_rfc3339());
+        builder.push(" and bucket_start <= ");
+        builder.push_bind(end.to_rfc3339());
+        builder.push(")");
+    }
+    builder.push(") group by account_id, model");
+
+    let rows = builder
+        .build()
+        .fetch_all(state.services.background_tasks.accounts.pool())
+        .await
+        .unwrap_or_default();
+    let records = rows
+        .into_iter()
+        .map(|row| {
+            let last_used_at = row
+                .get::<Option<String>, _>("last_used_at")
+                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+                .map(|value| value.with_timezone(&Utc));
+            AccountModelUsageRecord {
+                account_id: row.get("account_id"),
+                model: row.get("model"),
+                request_count: row.get("request_count"),
+                error_count: row.get("error_count"),
+                input_tokens: row.get("input_tokens"),
+                output_tokens: row.get("output_tokens"),
+                cached_tokens: row.get("cached_tokens"),
+                last_used_at,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    models_by_account(records)
+}
+
+fn current_usage_window(
+    usage: &AdminUsageRecord,
+    now: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let start = usage.window_started_at.or_else(|| {
+        let reset_at = usage.window_reset_at?;
+        let seconds = i64::try_from(usage.limit_window_seconds?).ok()?;
+        Some(reset_at - Duration::seconds(seconds))
+    })?;
+    let end = usage.window_reset_at.unwrap_or(now);
+    (start <= end).then_some((start, end))
 }
 
 fn models_by_account(

@@ -20,7 +20,8 @@ export const accountColumns = [
   { key: 'identity', label: '邮箱', flex: 2.6, minWidth: '260px', cellClass: relaxedCellClass },
   { key: 'status', label: '状态', flex: 0.8, cellClass: relaxedCellClass },
   { key: 'planType', label: '套餐', flex: 0.8, cellClass: relaxedCellClass },
-  { key: 'usage', label: '用量', flex: 1.5, minWidth: '220px', cellClass: relaxedCellClass },
+  { key: 'usage', label: '用量', flex: 1.4, minWidth: '210px', cellClass: relaxedCellClass },
+  { key: 'quota', label: '额度', flex: 0.8, minWidth: '112px', cellClass: relaxedCellClass },
   {
     key: 'updatedAtDisplay',
     label: '最后使用',

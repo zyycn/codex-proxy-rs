@@ -149,6 +149,20 @@ export function formatUsageMetric(value: number) {
   return new Intl.NumberFormat('zh-CN').format(value || 0)
 }
 
+export function formatCompactUsageMetric(value: number) {
+  const num = Number(value || 0)
+  if (num >= 1_000_000_000) return `${formatCompact(num / 1_000_000_000)}B`
+  if (num >= 1_000_000) return `${formatCompact(num / 1_000_000)}M`
+  if (num >= 1_000) return `${formatCompact(num / 1_000)}K`
+  return new Intl.NumberFormat('zh-CN').format(num)
+}
+
+function formatCompact(value: number) {
+  const rounded =
+    value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)
+  return rounded.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
+}
+
 export function formatLatencyAverage(value: number | null) {
   if (value === null || value === undefined) {
     return '—'

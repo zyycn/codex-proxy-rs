@@ -132,6 +132,11 @@ function planTypeClass(planType?: string) {
   }
   return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
 }
+
+function quotaTokenDisplay(account: any) {
+  const display = account?.usage?.totalTokensDisplay
+  return typeof display === 'string' && display.trim() ? display : '0'
+}
 </script>
 
 <template>
@@ -260,6 +265,12 @@ function planTypeClass(planType?: string) {
 
           <template #usage="{ row }">
             <AccountQuotaSummaryCell :account="row" />
+          </template>
+
+          <template #quota="{ row }">
+            <span class="font-mono text-[12px] font-[760] text-(--cp-text-primary)">
+              {{ quotaTokenDisplay(row) }}
+            </span>
           </template>
 
           <template #actions="{ row }">

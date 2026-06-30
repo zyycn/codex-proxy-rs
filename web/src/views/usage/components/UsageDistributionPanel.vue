@@ -138,7 +138,7 @@ function distributionNameParts(name: unknown) {
             class="size-34 rounded-full transition-transform duration-200 hover:scale-[1.02] lg:size-42"
             :style="donutStyle"
           />
-          <div class="absolute size-17 rounded-full bg-(--cp-bg-surface) lg:size-21" />
+          <div class="absolute size-18 rounded-full bg-(--cp-bg-surface) lg:size-23" />
           <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div class="grid text-center">
               <span class="text-[11px] font-bold text-(--cp-text-muted)">Token</span>

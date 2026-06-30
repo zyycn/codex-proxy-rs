@@ -259,6 +259,43 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
+    let (app, _store, pool, _dir) = dashboard_test_app(
+        "dashboard-account-usage-recent-order.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    seed_dashboard_account_usage(
+        &pool,
+        "acct_old_heavy",
+        "old-heavy@example.com",
+        2_600_000,
+        "2026-06-29T09:00:00Z",
+    )
+    .await;
+    seed_dashboard_account_usage(
+        &pool,
+        "acct_recent_light",
+        "recent-light@example.com",
+        660_000,
+        "2026-06-30T08:00:00Z",
+    )
+    .await;
+
+    let body = dashboard_summary(app).await;
+
+    assert_eq!(
+        body["data"]["accountUsage"][0]["email"],
+        "recent-light@example.com"
+    );
+    assert_eq!(body["data"]["accountUsage"][0]["requests"], 660_000);
+    assert_eq!(
+        body["data"]["accountUsage"][1]["email"],
+        "old-heavy@example.com"
+    );
+}
+
+#[tokio::test]
 async fn dashboard_summary_should_return_seven_day_health_timeline() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-health-timeline.sqlite",
@@ -388,6 +425,39 @@ async fn seed_usage_summary_with_last_used(
     .bind(input_tokens as i64)
     .bind(output_tokens as i64)
     .bind((input_tokens + output_tokens) as i64)
+    .bind(last_used_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_dashboard_account_usage(
+    pool: &SqlitePool,
+    account_id: &str,
+    email: &str,
+    request_count: i64,
+    last_used_at: &str,
+) {
+    sqlx::query(
+        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(account_id)
+    .bind(email)
+    .bind("cipher")
+    .bind("active")
+    .bind("2026-06-18T00:00:00Z")
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, total_tokens, last_used_at) values (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(account_id)
+    .bind(request_count)
+    .bind(0_i64)
+    .bind(0_i64)
+    .bind(0_i64)
     .bind(last_used_at)
     .execute(pool)
     .await

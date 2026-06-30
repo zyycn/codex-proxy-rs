@@ -310,12 +310,16 @@ impl ModelCatalog {
 
         let model_aliases = normalize_aliases(&config.model_aliases);
         let mut models_by_id = BTreeMap::new();
+        let mut model_order = Vec::new();
         let mut model_plan_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut fetched_plan_types = BTreeSet::new();
 
         for snapshot in snapshots {
             fetched_plan_types.insert(snapshot.plan_type.clone());
             for model in &snapshot.models {
+                if !models_by_id.contains_key(&model.id) {
+                    model_order.push(model.id.clone());
+                }
                 models_by_id.insert(model.id.clone(), model.clone());
                 let plans = model_plan_index.entry(model.id.clone()).or_default();
                 if !plans.contains(&snapshot.plan_type) {
@@ -324,7 +328,10 @@ impl ModelCatalog {
             }
         }
 
-        let models = models_by_id.into_values().collect::<Vec<_>>();
+        let models = model_order
+            .into_iter()
+            .filter_map(|id| models_by_id.remove(&id))
+            .collect::<Vec<_>>();
         if models.is_empty() {
             return Self {
                 models,

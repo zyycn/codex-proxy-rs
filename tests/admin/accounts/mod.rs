@@ -46,6 +46,13 @@ struct UsageAccountSeed<'a> {
     input_tokens: i64,
     output_tokens: i64,
     cached_tokens: i64,
+    window_request_count: i64,
+    window_input_tokens: i64,
+    window_output_tokens: i64,
+    window_cached_tokens: i64,
+    window_started_at: &'a str,
+    window_reset_at: &'a str,
+    limit_window_seconds: i64,
     last_used_at: &'a str,
 }
 
@@ -54,13 +61,20 @@ async fn seed_usage_account(pool: &SqlitePool, seed: UsageAccountSeed<'_>) {
         .bind(seed.id).bind(seed.email).bind(seed.label).bind(seed.plan_type).bind("access-token")
         .bind("2026-06-11T00:00:00Z").bind("2026-06-11T00:00:00Z")
         .execute(pool).await.unwrap();
-    sqlx::query("insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("insert into account_usage (account_id, request_count, empty_response_count, input_tokens, output_tokens, cached_tokens, window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens, window_started_at, window_reset_at, limit_window_seconds, last_used_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(seed.id)
         .bind(seed.request_count)
         .bind(seed.empty_response_count)
         .bind(seed.input_tokens)
         .bind(seed.output_tokens)
         .bind(seed.cached_tokens)
+        .bind(seed.window_request_count)
+        .bind(seed.window_input_tokens)
+        .bind(seed.window_output_tokens)
+        .bind(seed.window_cached_tokens)
+        .bind(seed.window_started_at)
+        .bind(seed.window_reset_at)
+        .bind(seed.limit_window_seconds)
         .bind(seed.last_used_at)
         .execute(pool).await.unwrap();
 }

@@ -210,6 +210,10 @@ function formatLatency(ms: number): string {
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
   return `${ms}ms`
 }
+
+function summaryMarkerStyle(item: any) {
+  return item.colorVar ? { backgroundColor: `var(${item.colorVar})` } : undefined
+}
 </script>
 
 <template>
@@ -261,6 +265,7 @@ function formatLatency(ms: number): string {
             </span>
             <i
               class="size-2 justify-self-end rounded-full"
+              :style="summaryMarkerStyle(item)"
               :class="{
                 'bg-(--cp-info)': item.tone === 'info',
                 'bg-(--cp-success)': item.tone === 'success',
