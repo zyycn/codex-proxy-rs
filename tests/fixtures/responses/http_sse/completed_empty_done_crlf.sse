@@ -1,0 +1,5 @@
+event: response.completed
+data: {}
+
+data: [DONE]
+

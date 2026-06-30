@@ -40,6 +40,7 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
+validator = { version = "0.20.0", features = ["derive"] }
 
 [dev-dependencies]
 serde_yml = "0.0.13"

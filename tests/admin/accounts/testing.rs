@@ -151,12 +151,11 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
     let response = app
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri("/api/admin/accounts/test?id=acct_test")
-                .header("content-type", "application/json")
+                .method("GET")
+                .uri("/api/admin/accounts/test?id=acct_test&modelId=gpt-5.5")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_account_test_stream")
-                .body(Body::from(json!({ "modelId": "gpt-5.5" }).to_string()))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await

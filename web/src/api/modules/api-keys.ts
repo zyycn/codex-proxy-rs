@@ -1,4 +1,4 @@
-import request from '../request'
+import request, { type ApiPayload } from '../request'
 
 // ==================== API Keys 管理 ====================
 
@@ -9,7 +9,7 @@ export function getApiKeys() {
   })
 }
 
-export function createApiKey(data: any) {
+export function createApiKey(data: ApiPayload) {
   return request({
     url: '/api/admin/keys',
     method: 'POST',
@@ -17,7 +17,7 @@ export function createApiKey(data: any) {
   })
 }
 
-export function deleteApiKeys(data: any) {
+export function deleteApiKeys(data: ApiPayload) {
   return request({
     url: '/api/admin/keys/delete',
     method: 'POST',
@@ -25,7 +25,7 @@ export function deleteApiKeys(data: any) {
   })
 }
 
-export function updateApiKey(data: any) {
+export function updateApiKey(data: ApiPayload) {
   return request({
     url: '/api/admin/keys/update',
     method: 'POST',

@@ -1,0 +1,9 @@
+event: codex.rate_limits
+data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":42}}}
+
+event: response.metadata
+data: {"type":"response.metadata","x-codex-turn-state":"state"}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_1","status":"in_progress"}}
+

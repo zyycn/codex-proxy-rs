@@ -14,7 +14,7 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::{
     admin::monitoring::{
         billing,
-        usage_record::{UsageRecord, UsageRecordLevel},
+        usage_record::{metadata_service_tier, UsageRecord, UsageRecordLevel},
         usage_record_store::{
             AdminUsageRecordError, AdminUsageRecordFilter, UsageRecordBreakdown,
             UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
@@ -377,11 +377,7 @@ pub(crate) async fn usage_record_detail(
                 AdminEnvelope::ok(usage_record_data(log, &account_emails)),
             ))
         }
-        Ok(None) => Err(AdminError::new(
-            StatusCode::NOT_FOUND,
-            40401,
-            "Usage record not found",
-        )),
+        Ok(None) => Err(AdminError::not_found("Usage record not found")),
         Err(error) => Err(log_error(&error)),
     }
 }
@@ -406,8 +402,7 @@ pub(crate) async fn clear_usage_records(
 fn filter_from_query(query: UsageRecordsQuery) -> Result<AdminUsageRecordFilter, AdminError> {
     Ok(AdminUsageRecordFilter {
         kind: non_empty(query.kind),
-        level: level_from_query(query.level)
-            .map_err(|message| AdminError::new(StatusCode::BAD_REQUEST, 40001, message))?,
+        level: level_from_query(query.level).map_err(AdminError::bad_request)?,
         request_id: non_empty(query.request_id),
         account_id: non_empty(query.account_id),
         route: non_empty(query.route),
@@ -430,9 +425,7 @@ fn model_source_from_query(value: Option<String>) -> Result<UsageRecordModelSour
         "requested" => Ok(UsageRecordModelSource::Requested),
         "upstream" => Ok(UsageRecordModelSource::Upstream),
         "mapping" => Ok(UsageRecordModelSource::Mapping),
-        _ => Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40003,
+        _ => Err(AdminError::invalid_model_source(
             "Invalid model distribution source",
         )),
     }
@@ -445,9 +438,7 @@ fn endpoint_source_from_query(
         "inbound" => Ok(UsageRecordEndpointSource::Inbound),
         "upstream" => Ok(UsageRecordEndpointSource::Upstream),
         "path" => Ok(UsageRecordEndpointSource::Path),
-        _ => Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40004,
+        _ => Err(AdminError::invalid_endpoint_source(
             "Invalid endpoint distribution source",
         )),
     }
@@ -461,7 +452,7 @@ fn optional_datetime(
     };
     chrono::DateTime::parse_from_rfc3339(&value)
         .map(|value| Some(value.with_timezone(&chrono::Utc)))
-        .map_err(|_| AdminError::new(StatusCode::BAD_REQUEST, 40002, "Invalid time range"))
+        .map_err(|_| AdminError::invalid_time_range("Invalid time range"))
 }
 
 fn log_error(error: &AdminUsageRecordError) -> AdminError {
@@ -470,9 +461,7 @@ fn log_error(error: &AdminUsageRecordError) -> AdminError {
         | AdminUsageRecordError::Get
         | AdminUsageRecordError::Clear
         | AdminUsageRecordError::Append
-        | AdminUsageRecordError::Trim => {
-            AdminError::new(StatusCode::INTERNAL_SERVER_ERROR, 50001, error.to_string())
-        }
+        | AdminUsageRecordError::Trim => AdminError::internal(error.to_string()),
     }
 }
 
@@ -523,11 +512,9 @@ pub(crate) async fn account_email_map(
         .fetch_all(state.services.background_tasks.accounts.pool())
         .await
         .map_err(|error| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50002,
-                format!("Failed to load usage record accounts: {error}"),
-            )
+            AdminError::usage_record_accounts_failed(format!(
+                "Failed to load usage record accounts: {error}"
+            ))
         })?;
 
     Ok(rows
@@ -647,13 +634,13 @@ fn usage_cost_details(
         .or(record.model.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    let service_tier = usage_service_tier(&record.metadata);
+    let service_tier = metadata_service_tier(&record.metadata);
     let breakdown = billing::calculate_cost_breakdown(
         tokens.input_tokens,
         tokens.output_tokens,
         tokens.cached_tokens,
         model,
-        service_tier.as_deref(),
+        service_tier,
     );
     let original_cost = breakdown.input_cost + breakdown.output_cost + breakdown.cache_read_cost;
 
@@ -685,18 +672,6 @@ fn usage_cost_details(
         cache_read_price_display: format_token_price(breakdown.cache_read_price_per_mtoken),
         multiplier_display: format_multiplier(breakdown.tier_multiplier),
     })
-}
-
-fn usage_service_tier(metadata: &Value) -> Option<String> {
-    metadata_string(
-        metadata,
-        &[
-            "billingServiceTier",
-            "billing_service_tier",
-            "serviceTier",
-            "service_tier",
-        ],
-    )
 }
 
 fn metadata_usage_u64(metadata: &Value, key: &str) -> u64 {

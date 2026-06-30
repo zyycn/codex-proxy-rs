@@ -406,6 +406,7 @@ impl ChatDispatchService {
             client_ip: request.client_ip.as_deref(),
             client_user_agent: request.client_user_agent.as_deref(),
             reasoning_effort: reasoning_effort_from_request(&request),
+            service_tier: request.service_tier.as_deref(),
             started_at,
             status_code: 200,
             level: UsageRecordLevel::Info,
@@ -582,6 +583,7 @@ async fn record_response_event(record: ResponseUsageRecord<'_>) {
             record.client_ip,
             record.client_user_agent,
             record.reasoning_effort,
+            record.service_tier,
         );
     }
     let rate_limit_headers = record.rate_limit_headers;
@@ -605,6 +607,7 @@ fn enrich_usage_record_identity(
     client_ip: Option<&str>,
     client_user_agent: Option<&str>,
     reasoning_effort: Option<&str>,
+    service_tier: Option<&str>,
 ) {
     let upstream_model = upstream_model.trim();
     let requested_model = requested_model
@@ -641,6 +644,16 @@ fn enrich_usage_record_identity(
         object.insert(
             "reasoningEffort".to_string(),
             Value::String(reasoning_effort.to_string()),
+        );
+    }
+
+    if let Some(service_tier) = service_tier
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "serviceTier".to_string(),
+            Value::String(service_tier.to_string()),
         );
     }
 }

@@ -693,13 +693,9 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
 
 #[tokio::test]
 async fn responses_stream_should_record_usage_record_after_late_disconnect() {
-    let first_frame = r#"event: response.output_text.delta
-data: {"delta":"partial before logged disconnect"}
-
-"#;
     let (base_url, first_chunk_sent, close_upstream) =
         spawn_chunked_sse_upstream_then_clean_close_with_headers(
-            first_frame,
+            include_str!("../../../fixtures/responses/http_sse/partial_logged_disconnect.sse"),
             &[
                 ("retry-after", "11"),
                 ("x-codex-primary-used-percent", "88"),
@@ -766,19 +762,56 @@ data: {"delta":"partial before logged disconnect"}
 }
 
 #[tokio::test]
-async fn responses_stream_should_not_record_first_token_when_metadata_only_prefix_fails() {
-    let first_frame = r#"event: response.created
-data: {"type":"response.created","response":{"id":"resp_metadata_only","status":"in_progress"}}
-
-event: codex.rate_limits
-data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":42.0}}}
-
-event: response.metadata
-data: {"type":"response.metadata","x-codex-turn-state":"state"}
-
-"#;
+async fn responses_stream_should_record_failure_detail_after_transport_error() {
     let (base_url, first_chunk_sent, close_upstream) =
-        spawn_chunked_sse_upstream_then_clean_close(first_frame).await;
+        spawn_chunked_sse_upstream_then_abrupt_close(include_str!(
+            "../../../fixtures/responses/http_sse/partial_transport_failure.sse"
+        ))
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let response_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_stream_transport_error_log")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "stream transport error log"}],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+    first_chunk_sent.await.unwrap();
+    let response = response_task.await.unwrap();
+    close_upstream.send(()).unwrap();
+    let _body = response_text(response).await;
+    let event = latest_response_usage_record(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+
+    assert_eq!(metadata["failureSource"], "proxy");
+    assert_eq!(metadata["synthetic"], true);
+    assert!(metadata["failureDetail"]
+        .as_str()
+        .is_some_and(|detail| !detail.trim().is_empty()));
+}
+
+#[tokio::test]
+async fn responses_stream_should_not_record_first_token_when_metadata_only_prefix_fails() {
+    let (base_url, first_chunk_sent, close_upstream) = spawn_chunked_sse_upstream_then_clean_close(
+        include_str!("../../../fixtures/responses/http_sse/metadata_only_prefix.sse"),
+    )
+    .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
     let response_task = tokio::spawn(async move {

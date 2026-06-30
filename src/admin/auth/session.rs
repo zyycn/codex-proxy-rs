@@ -45,16 +45,8 @@ pub(crate) async fn login(
         .admin_sessions
         .login(payload.username.as_deref(), payload.password.as_str())
         .await
-        .map_err(|_| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to create admin session",
-            )
-        })?
-        .ok_or_else(|| {
-            AdminError::new(StatusCode::UNAUTHORIZED, 40102, "Invalid admin credentials")
-        })?;
+        .map_err(|_| AdminError::internal("Failed to create admin session"))?
+        .ok_or_else(AdminError::invalid_admin_credentials)?;
 
     let mut response = AdminResponse::new(
         StatusCode::OK,
@@ -69,13 +61,8 @@ pub(crate) async fn login(
     );
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&cookie).map_err(|_| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to create admin session cookie",
-            )
-        })?,
+        HeaderValue::from_str(&cookie)
+            .map_err(|_| AdminError::internal("Failed to create admin session cookie"))?,
     );
     Ok(response)
 }
@@ -90,13 +77,7 @@ pub(crate) async fn session_status(
         .admin_sessions
         .validate(admin_session_cookie(&headers).as_deref())
         .await
-        .map_err(|_| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to validate admin session",
-            )
-        })?;
+        .map_err(|_| AdminError::internal("Failed to validate admin session"))?;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -128,13 +109,8 @@ pub(crate) async fn logout(
     let cookie = format!("{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&cookie).map_err(|_| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to clear admin session cookie",
-            )
-        })?,
+        HeaderValue::from_str(&cookie)
+            .map_err(|_| AdminError::internal("Failed to clear admin session cookie"))?,
     );
 
     Ok(response)
@@ -152,16 +128,8 @@ pub(crate) async fn require_admin_session(
         .await
     {
         Ok(true) => Ok(()),
-        Ok(false) => Err(AdminError::new(
-            StatusCode::UNAUTHORIZED,
-            40101,
-            "Admin session required",
-        )),
-        Err(_) => Err(AdminError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            50001,
-            "Failed to validate admin session",
-        )),
+        Ok(false) => Err(AdminError::admin_session_required()),
+        Err(_) => Err(AdminError::internal("Failed to validate admin session")),
     }
 }
 
@@ -173,16 +141,8 @@ pub(crate) async fn require_admin_auth(
     if let Some(api_key) = admin_api_key_header(headers) {
         return match state.services.settings.verify_admin_api_key(&api_key).await {
             Ok(true) => Ok(()),
-            Ok(false) => Err(AdminError::new(
-                StatusCode::UNAUTHORIZED,
-                40103,
-                "Invalid admin API key",
-            )),
-            Err(_) => Err(AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to validate admin API key",
-            )),
+            Ok(false) => Err(AdminError::invalid_admin_api_key()),
+            Err(_) => Err(AdminError::internal("Failed to validate admin API key")),
         };
     }
 

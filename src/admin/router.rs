@@ -57,7 +57,7 @@ pub fn router() -> Router<AppState> {
             "/api/admin/accounts/oauth/exchange",
             post(oauth_exchange_account),
         )
-        .route("/api/admin/accounts/test", post(test_account_connection))
+        .route("/api/admin/accounts/test", get(test_account_connection))
         .route("/api/admin/accounts/models", get(account_models))
         .route("/api/admin/accounts/delete", post(batch_delete_accounts))
         .route("/api/admin/accounts/update", post(update_account))

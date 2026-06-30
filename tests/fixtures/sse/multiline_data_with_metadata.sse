@@ -1,0 +1,6 @@
+event: message
+id: evt_1
+data: hello
+data: world
+retry: 10
+

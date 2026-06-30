@@ -1,7 +1,7 @@
 //! 账号管理 HTTP 处理器。
 
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     extract::{Query, State},
     http::{
         header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
@@ -16,11 +16,13 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
+use validator::{Validate, ValidationError};
 
 use crate::{
     admin::auth::session::require_admin_auth,
     admin::response::{
-        AdminEnvelope, AdminError, AdminResponse, CursorPageMeta, NumberedPageMeta, PageMeta,
+        AdminEnvelope, AdminError, AdminResponse, BatchDeleteData, CursorPageMeta,
+        NumberedPageMeta, PageMeta, ADMIN_OK_CODE, ADMIN_OK_MESSAGE,
     },
     admin::{
         accounts::service::{
@@ -37,7 +39,6 @@ use crate::{
     },
     runtime::state::AppState,
     upstream::accounts::model::AccountStatus,
-    upstream::accounts::store::AccountModelUsageRecord,
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
@@ -86,10 +87,10 @@ pub(crate) struct AccountExportQuery {
     ids: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AccountTestRequest {
-    #[serde(alias = "model_id")]
+pub(crate) struct AccountTestQuery {
+    id: String,
     model_id: Option<String>,
 }
 
@@ -309,6 +310,18 @@ struct AccountListStats {
     models_by_account: HashMap<String, Vec<AdminAccountModelUsageData>>,
 }
 
+struct AccountModelUsageRecord {
+    account_id: String,
+    model: String,
+    request_count: i64,
+    error_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cached_tokens: i64,
+    total_cost_usd: f64,
+    last_used_at: Option<DateTime<Utc>>,
+}
+
 impl AccountListStats {
     fn data_for(&self, account: AdminAccountMetadata) -> AdminAccountData {
         let account_id = account.id.clone();
@@ -352,8 +365,8 @@ struct AdminAccountPageEnvelope {
 impl AdminAccountPageEnvelope {
     fn cursor(page: Page<AdminAccountData>, limit: u32, summary: AdminAccountSummaryData) -> Self {
         Self {
-            code: 200,
-            message: "OK".into(),
+            code: ADMIN_OK_CODE,
+            message: ADMIN_OK_MESSAGE.into(),
             data: AdminAccountPageData {
                 items: page.items,
                 page: PageMeta::Cursor(CursorPageMeta {
@@ -370,8 +383,8 @@ impl AdminAccountPageEnvelope {
         summary: AdminAccountSummaryData,
     ) -> Self {
         Self {
-            code: 200,
-            message: "OK".into(),
+            code: ADMIN_OK_CODE,
+            message: ADMIN_OK_MESSAGE.into(),
             data: AdminAccountPageData {
                 page: PageMeta::Numbered(NumberedPageMeta {
                     page: page.page,
@@ -384,13 +397,6 @@ impl AdminAccountPageEnvelope {
             },
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchDeleteAccountsData {
-    deleted: u32,
-    not_found: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -577,19 +583,13 @@ pub(crate) async fn account_quota(
             ))
         }
         Err(AdminAccountError::NotFound) => Err(account_not_found()),
-        Err(AdminAccountError::Inactive(status)) => Err(AdminError::new(
-            StatusCode::CONFLICT,
-            40901,
-            format!(
-                "Account is {}, cannot query quota",
-                account_status_str(status)
-            ),
-        )),
-        Err(AdminAccountError::FetchQuota(msg)) => Err(AdminError::new(
-            StatusCode::BAD_GATEWAY,
-            50201,
-            format!("Failed to fetch quota from Codex API: {msg}"),
-        )),
+        Err(AdminAccountError::Inactive(status)) => Err(AdminError::conflict(format!(
+            "Account is {}, cannot query quota",
+            account_status_str(status)
+        ))),
+        Err(AdminAccountError::FetchQuota(msg)) => Err(AdminError::bad_gateway(format!(
+            "Failed to fetch quota from Codex API: {msg}"
+        ))),
         Err(e) => Err(account_error(&e)),
     }
 }
@@ -664,24 +664,22 @@ pub(crate) async fn oauth_exchange_account(
     }
 }
 
-/// `POST /api/admin/accounts/test?id=...`
+/// `GET /api/admin/accounts/test?id=...&modelId=...`
 pub(crate) async fn test_account_connection(
     State(state): State<AppState>,
-    Query(query): Query<AccountIdQuery>,
+    Query(query): Query<AccountTestQuery>,
     headers: HeaderMap,
-    body: Bytes,
 ) -> Result<Response, AdminError> {
     let account_id = query.id;
-    let payload = parse_account_test_request(&body)?;
     require_admin_auth(&state, &headers).await?;
 
-    let model = payload
+    let model = query
         .model_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-        .ok_or_else(|| AdminError::new(StatusCode::BAD_REQUEST, 40001, "Model is required"))?;
+        .ok_or_else(|| AdminError::bad_request("Model is required"))?;
     let stream = state
         .services
         .admin_accounts
@@ -696,13 +694,7 @@ pub(crate) async fn test_account_connection(
         .header(CONNECTION, "keep-alive")
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(stream))
-        .map_err(|_| {
-            AdminError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                50001,
-                "Failed to build account test stream",
-            )
-        })
+        .map_err(|_| AdminError::internal("Failed to build account test stream"))
 }
 
 /// `GET /api/admin/accounts/models?id=...`
@@ -750,7 +742,7 @@ pub(crate) async fn batch_delete_accounts(
     {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(BatchDeleteAccountsData {
+            AdminEnvelope::ok(BatchDeleteData {
                 deleted: result.deleted,
                 not_found: result.not_found,
             }),
@@ -920,6 +912,7 @@ async fn list_current_window_model_usage(
         "select
           account_id,
           model,
+          service_tier,
           coalesce(sum(request_count), 0) as request_count,
           coalesce(sum(error_count), 0) as error_count,
           coalesce(sum(input_tokens), 0) as input_tokens,
@@ -941,32 +934,56 @@ async fn list_current_window_model_usage(
         builder.push_bind(end.to_rfc3339());
         builder.push(")");
     }
-    builder.push(") group by account_id, model");
+    builder.push(") group by account_id, model, service_tier");
 
     let rows = builder
         .build()
         .fetch_all(state.services.background_tasks.accounts.pool())
         .await
         .unwrap_or_default();
-    let records = rows
-        .into_iter()
-        .map(|row| {
-            let last_used_at = row
-                .get::<Option<String>, _>("last_used_at")
-                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-                .map(|value| value.with_timezone(&Utc));
-            AccountModelUsageRecord {
-                account_id: row.get("account_id"),
-                model: row.get("model"),
-                request_count: row.get("request_count"),
-                error_count: row.get("error_count"),
-                input_tokens: row.get("input_tokens"),
-                output_tokens: row.get("output_tokens"),
-                cached_tokens: row.get("cached_tokens"),
-                last_used_at,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut records_by_model = HashMap::<(String, String), AccountModelUsageRecord>::new();
+    for row in rows {
+        let account_id: String = row.get("account_id");
+        let model: String = row.get("model");
+        let request_count: i64 = row.get("request_count");
+        let error_count: i64 = row.get("error_count");
+        let input_tokens: i64 = row.get("input_tokens");
+        let output_tokens: i64 = row.get("output_tokens");
+        let cached_tokens: i64 = row.get("cached_tokens");
+        let total_cost_usd = billing::calculate_cost(
+            nonnegative_i64_to_u64(input_tokens),
+            nonnegative_i64_to_u64(output_tokens),
+            nonnegative_i64_to_u64(cached_tokens),
+            &model,
+            row.get::<Option<String>, _>("service_tier").as_deref(),
+        );
+        let last_used_at = row
+            .get::<Option<String>, _>("last_used_at")
+            .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+            .map(|value| value.with_timezone(&Utc));
+
+        let record = records_by_model
+            .entry((account_id.clone(), model.clone()))
+            .or_insert_with(|| AccountModelUsageRecord {
+                account_id,
+                model,
+                request_count: 0,
+                error_count: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+                total_cost_usd: 0.0,
+                last_used_at: None,
+            });
+        record.request_count += request_count;
+        record.error_count += error_count;
+        record.input_tokens += input_tokens;
+        record.output_tokens += output_tokens;
+        record.cached_tokens += cached_tokens;
+        record.total_cost_usd += total_cost_usd;
+        record.last_used_at = record.last_used_at.max(last_used_at);
+    }
+    let records = records_by_model.into_values().collect::<Vec<_>>();
 
     models_by_account(records)
 }
@@ -1025,13 +1042,7 @@ fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountModelUsageDat
     } else {
         0.0
     };
-    let total_cost_usd = billing::calculate_cost(
-        input_tokens,
-        output_tokens,
-        cached_tokens,
-        &usage.model,
-        None,
-    );
+    let total_cost_usd = usage.total_cost_usd;
 
     AdminAccountModelUsageData {
         model: usage.model,
@@ -1380,94 +1391,55 @@ struct ParsedAccountUpdate {
     update: AdminAccountUpdate,
 }
 
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccountUpdateRequest {
+    #[validate(custom(function = "validate_non_empty_trimmed"))]
+    id: String,
+    label: Option<Option<String>>,
+    #[validate(custom(function = "validate_non_empty_trimmed"))]
+    status: Option<String>,
+}
+
 fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminError> {
-    let object = payload.as_object().ok_or_else(|| {
-        AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "Account update request must be an object",
-        )
-    })?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| AdminError::bad_request("Account update request must be an object"))?;
     for field in object.keys() {
         if !matches!(field.as_str(), "id" | "label" | "status") {
-            return Err(AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                format!("{field} is not editable"),
-            ));
+            return Err(AdminError::bad_request(format!("{field} is not editable")));
         }
     }
-    let id = required_string_field(object, "id")?;
-    let label = optional_string_update_field(object, "label")?;
-    let status = object
-        .get("status")
-        .map(|value| required_string_value(value, "status"))
-        .transpose()?;
-    let update = AdminAccountUpdate { label, status };
+    let payload = serde_json::from_value::<AccountUpdateRequest>(payload.clone())
+        .map_err(|_| AdminError::bad_request("Invalid account update request"))?;
+    payload
+        .validate()
+        .map_err(|_| AdminError::bad_request("Invalid account update request"))?;
+    let update = AdminAccountUpdate {
+        label: payload.label.map(|label| {
+            label.and_then(|value| {
+                let value = value.trim();
+                (!value.is_empty()).then(|| value.to_string())
+            })
+        }),
+        status: payload.status,
+    };
     if !update.any() {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
+        return Err(AdminError::bad_request(
             "Account update request must include editable fields",
         ));
     }
-    Ok(ParsedAccountUpdate { id, update })
+    Ok(ParsedAccountUpdate {
+        id: payload.id,
+        update,
+    })
 }
 
-fn required_string_field(
-    object: &serde_json::Map<String, Value>,
-    field: &'static str,
-) -> Result<String, AdminError> {
-    let Some(value) = object.get(field) else {
-        return Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("{field} is required"),
-        ));
-    };
-    required_string_value(value, field)
-}
-
-fn required_string_value(value: &Value, field: &'static str) -> Result<String, AdminError> {
-    value
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .ok_or_else(|| {
-            AdminError::new(
-                StatusCode::BAD_REQUEST,
-                40001,
-                format!("{field} must be a non-empty string"),
-            )
-        })
-}
-
-fn optional_string_field(value: &Value, field: &'static str) -> Result<Option<String>, AdminError> {
-    if value.is_null() {
-        return Ok(None);
+fn validate_non_empty_trimmed(value: &str) -> Result<(), ValidationError> {
+    if value.trim().is_empty() {
+        return Err(ValidationError::new("required"));
     }
-    match value.as_str() {
-        Some(value) => {
-            let value = value.trim();
-            Ok((!value.is_empty()).then(|| value.to_string()))
-        }
-        None => Err(AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            format!("{field} must be a string or null"),
-        )),
-    }
-}
-
-fn optional_string_update_field(
-    object: &serde_json::Map<String, Value>,
-    field: &'static str,
-) -> Result<Option<Option<String>>, AdminError> {
-    object
-        .get(field)
-        .map(|value| optional_string_field(value, field))
-        .transpose()
+    Ok(())
 }
 
 fn account_error(error: &AdminAccountError) -> AdminError {
@@ -1484,22 +1456,16 @@ fn account_error(error: &AdminAccountError) -> AdminError {
         | AdminAccountError::OAuthSessionInvalid
         | AdminAccountError::OAuthCallbackInvalid
         | AdminAccountError::OAuthStateMismatch
-        | AdminAccountError::NoValidCookies => {
-            AdminError::new(StatusCode::BAD_REQUEST, 40001, error.to_string())
-        }
-        AdminAccountError::OAuthCodeExchange(_) => {
-            AdminError::new(StatusCode::BAD_GATEWAY, 50201, error.to_string())
-        }
+        | AdminAccountError::NoValidCookies => AdminError::bad_request(error.to_string()),
+        AdminAccountError::OAuthCodeExchange(_) => AdminError::bad_gateway(error.to_string()),
         AdminAccountError::NotFound => account_not_found(),
-        AdminAccountError::Inactive(_) => {
-            AdminError::new(StatusCode::CONFLICT, 40901, error.to_string())
-        }
-        _ => AdminError::new(StatusCode::INTERNAL_SERVER_ERROR, 50001, error.to_string()),
+        AdminAccountError::Inactive(_) => AdminError::conflict(error.to_string()),
+        _ => AdminError::internal(error.to_string()),
     }
 }
 
 fn account_not_found() -> AdminError {
-    AdminError::new(StatusCode::NOT_FOUND, 40401, "Account not found")
+    AdminError::not_found("Account not found")
 }
 
 fn account_export_ids(value: Option<&str>) -> Vec<String> {
@@ -1521,17 +1487,4 @@ fn account_status_str(status: crate::upstream::accounts::model::AccountStatus) -
         crate::upstream::accounts::model::AccountStatus::Disabled => "disabled",
         crate::upstream::accounts::model::AccountStatus::Banned => "banned",
     }
-}
-
-fn parse_account_test_request(body: &Bytes) -> Result<AccountTestRequest, AdminError> {
-    if body.is_empty() {
-        return Ok(AccountTestRequest::default());
-    }
-    serde_json::from_slice(body).map_err(|_| {
-        AdminError::new(
-            StatusCode::BAD_REQUEST,
-            40001,
-            "Invalid account test request",
-        )
-    })
 }

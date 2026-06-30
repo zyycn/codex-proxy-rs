@@ -894,6 +894,7 @@ impl ResponseDispatchService {
                     client_ip: request.client_ip.as_deref(),
                     client_user_agent: request.client_user_agent.as_deref(),
                     reasoning_effort: reasoning_effort_from_request(&request),
+                    service_tier: request.service_tier.as_deref(),
                     started_at,
                     status_code: 200,
                     level: UsageRecordLevel::Info,
@@ -1783,6 +1784,7 @@ impl ResponseDispatchService {
                         client_ip: request.client_ip.as_deref(),
                         client_user_agent: request.client_user_agent.as_deref(),
                         reasoning_effort: reasoning_effort_from_compact_request(&request),
+                        service_tier: None,
                         started_at,
                         status_code: 200,
                         level: UsageRecordLevel::Info,
@@ -2708,6 +2710,7 @@ async fn record_prefetched_response_stream_failure_event(
         client_ip: record.request.client_ip.as_deref(),
         client_user_agent: record.request.client_user_agent.as_deref(),
         reasoning_effort: reasoning_effort_from_request(record.request),
+        service_tier: record.request.service_tier.as_deref(),
         started_at: record.started_at,
         status_code: status_code_for_stream_failure(record.failure),
         level: UsageRecordLevel::Error,
@@ -2739,6 +2742,7 @@ async fn record_response_event(record: ResponseUsageRecord<'_>) {
         record.client_ip,
         record.client_user_agent,
         record.reasoning_effort,
+        record.service_tier,
     );
     event.metadata = metadata;
     let rate_limit_headers = record.rate_limit_headers;
@@ -2790,6 +2794,7 @@ fn enrich_usage_record_identity(
     client_ip: Option<&str>,
     client_user_agent: Option<&str>,
     reasoning_effort: Option<&str>,
+    service_tier: Option<&str>,
 ) {
     let Some(object) = metadata.as_object_mut() else {
         return;
@@ -2830,6 +2835,16 @@ fn enrich_usage_record_identity(
         object.insert(
             "reasoningEffort".to_string(),
             Value::String(reasoning_effort.to_string()),
+        );
+    }
+
+    if let Some(service_tier) = service_tier
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "serviceTier".to_string(),
+            Value::String(service_tier.to_string()),
         );
     }
 }
@@ -2917,6 +2932,7 @@ async fn record_live_response_stream_event(
         context.client_ip.as_deref(),
         context.request.client_user_agent.as_deref(),
         reasoning_effort_from_request(&context.request),
+        context.request.service_tier.as_deref(),
     );
     event.metadata = metadata;
     if let Err(error) = context.usage_records.record(event).await {
@@ -3445,131 +3461,4 @@ fn enrich_response_dispatch_error_metadata(metadata: &mut Value, error: &Respons
 
 fn elapsed_millis_i64(started_at: Instant) -> i64 {
     started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{stream_failure_metadata, STREAM_DISCONNECTED_CODE, STREAM_DISCONNECTED_MESSAGE};
-    use crate::upstream::protocol::responses::{
-        response_body_has_first_event, ResponsesSseFailure,
-    };
-
-    #[test]
-    fn first_event_detection_should_match_text_delta() {
-        let body = br#"event: response.output_text.delta
-data: {"delta":"hello"}
-
-"#;
-
-        assert!(response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_match_reasoning_delta() {
-        let body = br#"event: response.reasoning_summary_text.delta
-data: {"delta":"thinking"}
-
-"#;
-
-        assert!(response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_match_function_call_arguments_delta() {
-        let body = br#"event: response.function_call_arguments.delta
-data: {"delta":"{\"path\""}
-
-"#;
-
-        assert!(response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_match_type_when_event_name_is_missing() {
-        let body = br#"data: {"type":"response.output_text.delta","delta":"hello"}
-
-"#;
-
-        assert!(response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_ignore_response_created() {
-        let body = br#"event: response.created
-data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}
-
-"#;
-
-        assert!(!response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_ignore_metadata_and_rate_limit_events() {
-        let body = br#"event: codex.rate_limits
-data: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":42}}}
-
-event: response.metadata
-data: {"type":"response.metadata","x-codex-turn-state":"state"}
-
-event: response.in_progress
-data: {"type":"response.in_progress","response":{"id":"resp_1","status":"in_progress"}}
-
-"#;
-
-        assert!(!response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_ignore_empty_delta() {
-        let body = br#"event: response.output_text.delta
-data: {"delta":""}
-
-"#;
-
-        assert!(!response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_ignore_done_frame() {
-        let body = br#"data: [DONE]
-
-"#;
-
-        assert!(!response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_ignore_incomplete_frames() {
-        let body = br#"event: response.output_text.delta
-data: {"delta":"hello"}"#;
-
-        assert!(!response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn first_event_detection_should_match_crlf_frames() {
-        let body = b"event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\r\n\r\n";
-
-        assert!(response_body_has_first_event(body));
-    }
-
-    #[test]
-    fn stream_failure_metadata_should_mark_synthetic_proxy_disconnect() {
-        let failure = ResponsesSseFailure {
-            event: "response.failed".to_string(),
-            message: format!(
-                "{STREAM_DISCONNECTED_MESSAGE}: websocket receive idle timeout after 20s"
-            ),
-            upstream_code: Some(STREAM_DISCONNECTED_CODE.to_string()),
-        };
-
-        let metadata = stream_failure_metadata(&failure, None);
-
-        assert_eq!(metadata["failureSource"], "proxy");
-        assert_eq!(metadata["synthetic"], true);
-        assert_eq!(
-            metadata["failureDetail"],
-            "websocket receive idle timeout after 20s"
-        );
-    }
 }

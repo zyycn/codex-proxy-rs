@@ -1,4 +1,4 @@
-import request from '../request'
+import request, { type ApiPayload } from '../request'
 
 export function getSettings() {
   return request({
@@ -7,7 +7,7 @@ export function getSettings() {
   })
 }
 
-export function updateSettings(data: any) {
+export function updateSettings(data: ApiPayload) {
   return request({
     url: '/api/admin/settings',
     method: 'POST',

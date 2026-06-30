@@ -92,6 +92,14 @@ impl UsageRecord {
     }
 }
 
+pub(in crate::admin) fn metadata_service_tier(metadata: &Value) -> Option<&str> {
+    metadata
+        .get("serviceTier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// 响应事件记录（供 dispatch 模块使用）。
 pub struct ResponseUsageRecord<'a> {
     pub usage_records: &'a crate::admin::monitoring::usage_record_store::AdminUsageRecordService,
@@ -103,6 +111,7 @@ pub struct ResponseUsageRecord<'a> {
     pub client_ip: Option<&'a str>,
     pub client_user_agent: Option<&'a str>,
     pub reasoning_effort: Option<&'a str>,
+    pub service_tier: Option<&'a str>,
     pub started_at: std::time::Instant,
     pub status_code: i64,
     pub level: UsageRecordLevel,

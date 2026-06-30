@@ -120,12 +120,7 @@ fn extract_usage_should_read_openai_usage_shape() {
 
 #[test]
 fn extract_sse_usage_should_prefer_completed_response_usage() {
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":1}}}}\n\n",
-    );
+    let body = include_str!("../../fixtures/responses/http_sse/created_completed_usage.sse");
 
     let usage = extract_sse_usage(body)
         .expect("usage extraction should succeed")
@@ -147,10 +142,7 @@ fn extract_sse_usage_should_prefer_completed_response_usage() {
 
 #[test]
 fn extract_sse_usage_should_read_completed_image_generation_tokens() {
-    let body = concat!(
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":3}},\"tool_usage\":{\"image_gen\":{\"input_tokens\":31,\"output_tokens\":9}}}}\n\n",
-    );
+    let body = include_str!("../../fixtures/responses/http_sse/completed_image_tool_usage.sse");
 
     let usage = extract_sse_usage(body)
         .expect("usage extraction should succeed")

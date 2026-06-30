@@ -12,7 +12,10 @@ use codex_proxy_rs::{
             usage_record_store::SqliteUsageRecordStore,
         },
     },
-    infra::{database::connect_sqlite, time::china_day_start},
+    infra::{
+        database::connect_sqlite,
+        time::{china_day_start, china_hour},
+    },
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
         services::{BackgroundTaskStores, Services},
@@ -137,6 +140,31 @@ async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
             .sum::<u64>(),
         1
     );
+}
+
+#[tokio::test]
+async fn dashboard_trend_should_bucket_usage_by_china_hour() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-trend-china-hour.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let now = Utc::now();
+    store
+        .append(&usage_record_with_tokens(now - Duration::seconds(1), 10))
+        .await
+        .unwrap();
+
+    let body = dashboard_trend(app).await;
+    let point = body["data"]["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|point| point["requestsValue"] == 1)
+        .expect("trend should include the inserted usage bucket");
+
+    assert_eq!(point["time"], format!("{:02}", china_hour(&now)));
+    assert_eq!(point["tokensValue"], 10);
 }
 
 #[tokio::test]
@@ -384,6 +412,23 @@ async fn dashboard_summary(app: axum::Router) -> Value {
                 .uri("/api/admin/dashboard/summary")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_dashboard_summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
+}
+
+async fn dashboard_trend(app: axum::Router) -> Value {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/dashboard/trend?kind=usage")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_dashboard_trend")
                 .body(Body::empty())
                 .unwrap(),
         )

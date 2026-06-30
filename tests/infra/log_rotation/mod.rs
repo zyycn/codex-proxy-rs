@@ -33,3 +33,22 @@ fn rotation_config_should_not_accept_size_limit() {
 
     assert_eq!(config.retention_days, 14);
 }
+
+#[test]
+fn rolling_appender_should_remove_managed_logs_outside_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(managed_log_name("2000-01-01")), b"old").unwrap();
+    fs::write(dir.path().join(managed_log_name("2001-01-01")), b"recent").unwrap();
+    fs::write(dir.path().join("other.log"), b"unmanaged").unwrap();
+    let config = RotationConfig::new(dir.path(), 2);
+
+    let _appender = build_file_appender(&config).unwrap();
+
+    assert!(!dir.path().join(managed_log_name("2000-01-01")).exists());
+    assert!(dir.path().join(managed_log_name("2001-01-01")).exists());
+    assert!(dir.path().join("other.log").exists());
+}
+
+fn managed_log_name(date: &str) -> String {
+    format!("codex-proxy-rs.{date}.log")
+}

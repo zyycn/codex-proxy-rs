@@ -90,6 +90,7 @@ async fn chat_completions_should_dispatch_to_codex_and_return_openai_response() 
     assert_eq!(metadata["responseId"], response_id);
     assert_eq!(metadata["stream"], false);
     assert_eq!(metadata["transport"], "http_sse");
+    assert_eq!(metadata["serviceTier"], "priority");
     assert_eq!(metadata["usage"]["inputTokens"], 9);
     assert_eq!(metadata["usage"]["outputTokens"], 3);
 }
@@ -281,13 +282,8 @@ async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(concat!(
-                    "event: response.reasoning_summary_text.delta\n",
-                    "data: {\"delta\":\"I considered the context.\"}\n\n",
-                    "event: response.output_text.delta\n",
-                    "data: {\"delta\":\"hello\"}\n\n",
-                    "event: response.completed\n",
-                    "data: {\"response\":{\"id\":\"resp_1\",\"output_text\":\"hello\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3}}}\n\n",
+                .set_body_string(include_str!(
+                    "../../../fixtures/responses/http_sse/chat_reasoning_text_completed.sse"
                 )),
         )
         .mount(&server)

@@ -864,7 +864,7 @@ async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects
         write_chunked_http_sse_headers(&mut socket).await;
         write_http_chunk(
             &mut socket,
-            b"event: response.output_text.delta\ndata: {\"delta\":\"hello\"}\n\n",
+            include_bytes!("../../../fixtures/responses/http_sse/text_delta_hello.sse"),
         )
         .await;
         socket.flush().await.unwrap();
@@ -919,16 +919,11 @@ async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects
 
 #[tokio::test]
 async fn responses_stream_should_forward_first_chunk_before_upstream_completes() {
-    let first_frame = r#"event: response.output_text.delta
-data: {"delta":"live stream hello"}
-
-"#;
-    let final_frame = r#"event: response.completed
-data: {"response":{"id":"resp_live_stream","object":"response","status":"completed","usage":{"input_tokens":3,"output_tokens":4}}}
-
-"#;
-    let (base_url, first_chunk_sent, finish_upstream) =
-        spawn_chunked_sse_upstream(first_frame, final_frame).await;
+    let (base_url, first_chunk_sent, finish_upstream) = spawn_chunked_sse_upstream(
+        include_str!("../../../fixtures/responses/http_sse/live_stream_hello_delta.sse"),
+        include_str!("../../../fixtures/responses/http_sse/live_stream_completed.sse"),
+    )
+    .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_and_pool(base_url).await;
     let response_task = tokio::spawn(async move {
@@ -1003,12 +998,11 @@ data: {"response":{"id":"resp_live_stream","object":"response","status":"complet
 #[tokio::test]
 async fn responses_stream_should_emit_failed_event_after_upstream_read_error_once_downstream_started(
 ) {
-    let first_frame = r#"event: response.output_text.delta
-data: {"delta":"partial before transport failure"}
-
-"#;
     let (base_url, first_chunk_sent, close_upstream) =
-        spawn_chunked_sse_upstream_then_abrupt_close(first_frame).await;
+        spawn_chunked_sse_upstream_then_abrupt_close(include_str!(
+            "../../../fixtures/responses/http_sse/partial_transport_failure.sse"
+        ))
+        .await;
 
     let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
     let response_task = tokio::spawn(async move {
@@ -1058,15 +1052,10 @@ data: {"delta":"partial before transport failure"}
 
 #[tokio::test]
 async fn responses_stream_should_emit_failed_event_when_upstream_closes_without_completed() {
-    let first_frame = r#"event: response.created
-data: {"response":{"id":"resp_clean_close"}}
-
-event: response.output_text.delta
-data: {"delta":"partial before clean close"}
-
-"#;
-    let (base_url, first_chunk_sent, close_upstream) =
-        spawn_chunked_sse_upstream_then_clean_close(first_frame).await;
+    let (base_url, first_chunk_sent, close_upstream) = spawn_chunked_sse_upstream_then_clean_close(
+        include_str!("../../../fixtures/responses/http_sse/partial_clean_close.sse"),
+    )
+    .await;
 
     let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
     let response_task = tokio::spawn(async move {

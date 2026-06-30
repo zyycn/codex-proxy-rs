@@ -54,9 +54,8 @@ async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(concat!(
-                    "event: response.failed\n",
-                    "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_cyber_policy\",\"object\":\"response\",\"status\":\"failed\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"This request has been flagged for possible cybersecurity risk.\"}}}\n\n"
+                .set_body_string(include_str!(
+                    "../../../fixtures/responses/http_sse/failed_cyber_policy.sse"
                 )),
         )
         .mount(&server)

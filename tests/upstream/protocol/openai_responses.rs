@@ -68,12 +68,7 @@ fn codex_responses_transport_flags_should_not_serialize_to_upstream_json() {
 
 #[test]
 fn response_from_codex_sse_should_collect_completed_response_with_deltas() {
-    let body = concat!(
-        "event: response.output_text.delta\n",
-        "data: {\"delta\":\"hello\"}\n\n",
-        "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
-    );
+    let body = include_str!("../../fixtures/responses/http_sse/text_delta_completed_usage.sse");
 
     let response = response_from_codex_sse(body, None).expect("conversion should succeed");
 

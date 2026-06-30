@@ -1,0 +1,2 @@
+event: response.output_text.delta
+data: {"delta":"hello"}

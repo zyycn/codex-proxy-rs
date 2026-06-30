@@ -6,6 +6,22 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 
+import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
+
+export type ApiPayload = Record<string, unknown>
+
+interface ApiEnvelope<T = unknown> {
+  code: number
+  message: string
+  data: T
+}
+
+interface ApiErrorBody {
+  code?: number
+  message?: string
+  data?: unknown
+}
+
 class ApiError extends Error {
   constructor(
     message: string,
@@ -19,8 +35,8 @@ class ApiError extends Error {
 }
 
 const http: AxiosInstance = axios.create({
-  baseURL: import.meta.env.DEV ? '/dev' : '',
-  timeout: 30000,
+  baseURL: API_BASE_URL,
+  timeout: API_TIMEOUT_MS,
   withCredentials: true,
 })
 
@@ -45,7 +61,7 @@ http.interceptors.response.use(
   (response: AxiosResponse) => {
     return response
   },
-  (error: AxiosError<any>) => {
+  (error: AxiosError<ApiErrorBody>) => {
     const { response } = error
 
     const status = response?.status || 0
@@ -74,7 +90,7 @@ http.interceptors.response.use(
   },
 )
 
-function isApiEnvelope(value: any): value is { data: any } {
+function isApiEnvelope(value: unknown): value is ApiEnvelope {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -85,13 +101,13 @@ function isApiEnvelope(value: any): value is { data: any } {
 }
 
 export default async function request<T = any>(config: AxiosRequestConfig): Promise<T> {
-  const response = await http.request<any, AxiosResponse<any>>({
+  const response = await http.request<unknown, AxiosResponse<unknown>>({
     ...config,
   })
 
   if (isApiEnvelope(response.data)) {
-    return response.data.data
+    return response.data.data as T
   }
 
-  return response.data
+  return response.data as T
 }
