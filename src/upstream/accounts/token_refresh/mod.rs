@@ -1,6 +1,10 @@
 //! 刷新租约存储、JWT 解码与账号 claims 验证。
 
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -217,6 +221,29 @@ impl From<RefreshPolicy> for RuntimeRefreshPolicy {
     }
 }
 
+/// 按账号稳定扰动刷新提前量，范围与 TS 版 `jitter(margin, 0.15)` 一致。
+pub(crate) fn jittered_refresh_at(
+    account_id: &str,
+    expires_at: DateTime<Utc>,
+    margin_seconds: u64,
+) -> DateTime<Utc> {
+    expires_at - Duration::seconds(jittered_refresh_margin_seconds(account_id, margin_seconds))
+}
+
+fn jittered_refresh_margin_seconds(account_id: &str, margin_seconds: u64) -> i64 {
+    if margin_seconds == 0 {
+        return 0;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    account_id.hash(&mut hasher);
+    let unit = hasher.finish() as f64 / u64::MAX as f64;
+    let factor = 0.85 + unit * 0.30;
+    (margin_seconds as f64 * factor)
+        .round()
+        .clamp(0.0, i64::MAX as f64) as i64
+}
+
 /// 触发刷新动作的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshTrigger {
@@ -238,9 +265,6 @@ pub enum RefreshFailure {
     /// 账号被上游封禁。
     #[error("account is banned")]
     Banned,
-    /// 账号被显式禁用。
-    #[error("account is disabled")]
-    Disabled,
     /// 刷新请求在到达服务端前失败，可安全复用当前 refresh token 重试。
     #[error("refresh transport failed before server processing")]
     RetryableTransport,
@@ -326,6 +350,7 @@ where
 
         match self.client.refresh(refresh_token).await {
             Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
+            Err(RefreshFailure::QuotaExhausted) => Err(RefreshError::Transport),
             Err(RefreshFailure::RetryableTransport) => Err(RefreshError::RetryableTransport),
             Err(RefreshFailure::Transport) => Err(RefreshError::Transport),
             Err(error) => Ok(apply_refresh_failure(account, error)),
@@ -388,7 +413,6 @@ pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Acco
         RefreshFailure::InvalidGrant => AccountStatus::Expired,
         RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
         RefreshFailure::Banned => AccountStatus::Banned,
-        RefreshFailure::Disabled => AccountStatus::Disabled,
         RefreshFailure::RetryableTransport => AccountStatus::Active,
         RefreshFailure::Transport => AccountStatus::Active,
     };

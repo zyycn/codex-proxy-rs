@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use tokio::task::JoinHandle;
 
-use crate::upstream::token_client::{default_openai_token_client, TokenClientConfig};
-
 use super::{
     cookie_cleanup::CookieCleanupTask,
     fingerprint_update::{
@@ -68,13 +66,7 @@ impl TaskCoordinator {
         if config.auth.refresh_enabled {
             coordinator.push(
                 "token_refresh",
-                TokenRefreshTask::new(
-                    stores.accounts.clone(),
-                    services.refresh_policy.clone(),
-                    default_openai_token_client(token_client_config(config)),
-                )
-                .with_refresh_lease_store(stores.refresh_leases.clone())
-                .start(),
+                TokenRefreshTask::from_service((*services.token_refresh).clone()).start(),
             );
         }
         coordinator.push(
@@ -116,13 +108,6 @@ impl TaskCoordinator {
             tracing::info!(task = name, "后台任务已停止");
         }
         tracing::info!("所有后台任务已停止");
-    }
-}
-
-fn token_client_config(config: &crate::runtime::state::RuntimeConfig) -> TokenClientConfig {
-    TokenClientConfig {
-        client_id: config.auth.oauth_client_id.clone(),
-        token_endpoint: config.auth.oauth_token_endpoint.clone(),
     }
 }
 

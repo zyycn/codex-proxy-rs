@@ -92,8 +92,6 @@ impl AdminAccountService {
             .as_ref()
             .map(|claims| claims.expires_at)
             .or(access_token_expires_at);
-        let next_refresh_at = access_token_expires_at
-            .map(|expires_at| self.next_refresh_at_for_expires_at(expires_at));
         let claims = resolved_tokens.claims.as_ref();
         let mut plan_type = claims
             .and_then(|claims| claims.plan_type.clone())
@@ -145,6 +143,8 @@ impl AdminAccountService {
                 chatgpt_user_id.as_deref(),
             )
             .await?;
+        let next_refresh_at = access_token_expires_at
+            .map(|expires_at| self.next_refresh_at_for_expires_at(&account_id, expires_at));
         if plan_type.is_none() {
             plan_type = supplemental.plan_type;
         }
@@ -297,7 +297,7 @@ impl AdminAccountService {
                 ),
             ))
             .ok_or(AdminAccountError::TokenRequired)?;
-            refresh_token = refreshed.refresh_token.or(Some(existing_refresh_token));
+            refresh_token = refreshed.refresh_token;
             let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
                 &access_token,
                 Utc::now(),
@@ -337,7 +337,7 @@ impl AdminAccountService {
             crate::upstream::accounts::importing::normalize_bearer_token(&refreshed.access_token),
         ))
         .ok_or(AdminAccountError::TokenRequired)?;
-        refresh_token = refreshed.refresh_token.or(Some(existing_refresh_token));
+        refresh_token = refreshed.refresh_token;
         let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
             &access_token,
             Utc::now(),

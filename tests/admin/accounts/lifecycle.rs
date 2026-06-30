@@ -262,7 +262,7 @@ async fn admin_account_status_update_should_update_proxy_account_pool() {
                 .header("content-type", "application/json")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::from(
-                    json!({"id": "acct_runtime_status", "status": "banned"}).to_string(),
+                    json!({"id": "acct_runtime_status", "status": "disabled"}).to_string(),
                 ))
                 .unwrap(),
         )
@@ -282,7 +282,61 @@ async fn admin_account_status_update_should_update_proxy_account_pool() {
 }
 
 #[tokio::test]
-async fn admin_account_refresh_should_not_mark_valid_account_banned_when_refresh_token_reused() {
+async fn admin_account_status_update_should_reject_non_manual_statuses() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-account-status-reject-banned.sqlite", 125).await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_reject_status".to_string(),
+            email: Some("reject-status@example.com".to_string()),
+            account_id: Some("chatgpt-reject-status".to_string()),
+            user_id: Some("user-reject-status".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-reject-status",
+                    Some("user-reject-status"),
+                    Some("reject-status@example.com"),
+                    Some("free"),
+                )
+                .into(),
+            ),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/update")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({"id": "acct_reject_status", "status": "banned"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_reject_status")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(stored.status, AccountStatus::Active);
+}
+
+#[tokio::test]
+async fn admin_account_refresh_should_mark_account_expired_when_refresh_token_reused() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/oauth/token"))
@@ -338,14 +392,353 @@ async fn admin_account_refresh_should_not_mark_valid_account_banned_when_refresh
         )
         .await
         .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
     let stored = SqliteAccountStore::new(pool)
         .get("acct_refresh_rt_reused")
         .await
         .unwrap()
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["result"], "dead");
+    assert_eq!(body["data"]["previousStatus"], "active");
+    assert_eq!(stored.status, AccountStatus::Expired);
+}
+
+#[tokio::test]
+async fn admin_account_refresh_should_skip_disabled_account_without_consuming_refresh_token() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": test_jwt(
+                "chatgpt-disabled-refresh",
+                Some("user-disabled-refresh"),
+                Some("disabled-refresh@example.com"),
+                Some("plus"),
+            ),
+            "refresh_token": "refresh-disabled-rotated"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-account-refresh-disabled-skip.sqlite",
+        124,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_refresh_disabled".to_string(),
+            email: Some("disabled-refresh@example.com".to_string()),
+            account_id: Some("chatgpt-disabled-refresh".to_string()),
+            user_id: Some("user-disabled-refresh".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-disabled-refresh",
+                    Some("user-disabled-refresh"),
+                    Some("disabled-refresh@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-disabled".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Disabled,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/refresh")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({"id": "acct_refresh_disabled"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_refresh_disabled")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["result"], "skipped");
+    assert_eq!(body["data"]["error"], "manually disabled");
+    assert_eq!(stored.status, AccountStatus::Disabled);
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "refresh-disabled"
+    );
+}
+
+#[tokio::test]
+async fn admin_account_refresh_should_skip_account_without_refresh_token() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-account-refresh-no-rt-skip.sqlite", 124).await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_refresh_no_rt".to_string(),
+            email: Some("no-rt-refresh@example.com".to_string()),
+            account_id: Some("chatgpt-no-rt-refresh".to_string()),
+            user_id: Some("user-no-rt-refresh".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-no-rt-refresh",
+                    Some("user-no-rt-refresh"),
+                    Some("no-rt-refresh@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/refresh")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({"id": "acct_refresh_no_rt"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_refresh_no_rt")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["result"], "skipped");
+    assert_eq!(body["data"]["error"], "no refresh token");
     assert_eq!(stored.status, AccountStatus::Active);
+}
+
+#[tokio::test]
+async fn admin_account_refresh_should_not_change_status_for_non_permanent_refresh_error() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(400).set_body_string("quota exceeded"))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-account-refresh-quota-temporary.sqlite",
+        124,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_refresh_quota".to_string(),
+            email: Some("quota-refresh@example.com".to_string()),
+            account_id: Some("chatgpt-quota-refresh".to_string()),
+            user_id: Some("user-quota-refresh".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-quota-refresh",
+                    Some("user-quota-refresh"),
+                    Some("quota-refresh@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-quota".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/refresh")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({"id": "acct_refresh_quota"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_refresh_quota")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["result"], "dead");
+    assert_eq!(stored.status, AccountStatus::Active);
+}
+
+#[tokio::test]
+async fn admin_accounts_health_check_should_return_alive_dead_and_skipped_summary() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": test_jwt(
+                "chatgpt-health-alive",
+                Some("user-health-alive"),
+                Some("health-alive@example.com"),
+                Some("plus"),
+            ),
+            "refresh_token": "refresh-health-alive-rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-accounts-health-check.sqlite",
+        124,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_health_alive".to_string(),
+            email: Some("health-alive@example.com".to_string()),
+            account_id: Some("chatgpt-health-alive".to_string()),
+            user_id: Some("user-health-alive".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-health-alive",
+                    Some("user-health-alive"),
+                    Some("health-alive@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-health-alive".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_health_no_rt".to_string(),
+            email: Some("health-no-rt@example.com".to_string()),
+            account_id: Some("chatgpt-health-no-rt".to_string()),
+            user_id: Some("user-health-no-rt".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-health-no-rt",
+                    Some("user-health-no-rt"),
+                    Some("health-no-rt@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_health_disabled".to_string(),
+            email: Some("health-disabled@example.com".to_string()),
+            account_id: Some("chatgpt-health-disabled".to_string()),
+            user_id: Some("user-health-disabled".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-health-disabled",
+                    Some("user-health-disabled"),
+                    Some("health-disabled@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new(
+                "refresh-health-disabled".to_string().into(),
+            )),
+            access_token_expires_at: None,
+            status: AccountStatus::Disabled,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/health-check")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(json!({"stagger_ms": 0}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored_alive = SqliteAccountStore::new(pool)
+        .get("acct_health_alive")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["summary"]["total"], 3);
+    assert_eq!(body["data"]["summary"]["alive"], 1);
+    assert_eq!(body["data"]["summary"]["dead"], 0);
+    assert_eq!(body["data"]["summary"]["skipped"], 2);
+    assert_eq!(stored_alive.status, AccountStatus::Active);
+    assert_eq!(
+        stored_alive.refresh_token.unwrap().expose_secret(),
+        "refresh-health-alive-rotated"
+    );
 }
 
 #[tokio::test]
@@ -436,6 +829,43 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
         let response = post_admin_account(&app, payload).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name}");
     }
+}
+
+#[tokio::test]
+async fn admin_account_manual_create_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated(
+) {
+    let server = wiremock::MockServer::start().await;
+    let access_token = test_jwt(
+        "rt-create-account",
+        Some("rt-create-user"),
+        Some("rt-create@example.com"),
+        Some("plus"),
+    );
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": access_token,
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-account-create-rt-no-rotation.sqlite",
+        126,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+
+    let response = post_admin_account(&app, json!({"refreshToken": "rt-create-source"})).await;
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get(body["data"]["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(stored.refresh_token.is_none());
 }
 
 #[tokio::test]

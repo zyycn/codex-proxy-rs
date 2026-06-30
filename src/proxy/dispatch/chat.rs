@@ -34,10 +34,12 @@ use crate::{
     upstream::accounts::{
         model::AccountStatus,
         pool::{AccountAcquireRequest, RuntimeAccountPoolService},
+        token_refresh::RuntimeTokenRefreshService,
     },
     upstream::{
         models::ModelCatalog,
         protocol::responses::{apply_response_model_options, CodexResponsesRequest},
+        token_client::OpenAiTokenClient,
         transport::{
             backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
             CodexClientError,
@@ -52,6 +54,7 @@ pub struct ChatDispatchService {
     models: Arc<crate::upstream::models::ModelService>,
     codex: Arc<CodexBackendClient>,
     usage_records: Arc<AdminUsageRecordService>,
+    token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -62,6 +65,7 @@ impl ChatDispatchService {
         models: Arc<crate::upstream::models::ModelService>,
         codex: Arc<CodexBackendClient>,
         usage_records: Arc<AdminUsageRecordService>,
+        token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
         installation_id: Option<String>,
         cloudflare: CloudflareRecovery,
     ) -> Self {
@@ -70,9 +74,28 @@ impl ChatDispatchService {
             models,
             codex,
             usage_records,
+            token_refresh,
             installation_id,
             cloudflare,
         }
+    }
+
+    fn trigger_refresh_after_auth_failure(&self, account_id: &str, status: AccountStatus) {
+        if status != AccountStatus::Expired {
+            return;
+        }
+
+        let token_refresh = self.token_refresh.clone();
+        let account_id = account_id.to_string();
+        tokio::spawn(async move {
+            if let Err(error) = token_refresh.trigger_account_refresh_now(&account_id).await {
+                tracing::warn!(
+                    account_id = %account_id,
+                    error = %error,
+                    "reactive token refresh after upstream auth failure failed"
+                );
+            }
+        });
     }
 
     /// 调度非流式 Chat Completions 请求到 Codex Responses 上游。
@@ -288,6 +311,7 @@ impl ChatDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
+                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {

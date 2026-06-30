@@ -3,7 +3,7 @@ use codex_proxy_rs::{
     infra::database::connect_sqlite,
     upstream::accounts::{
         model::{AccountStatus, AccountUsageDelta},
-        store::{AccountStore, NewAccount, SqliteAccountStore},
+        store::{AccountClaimsUpdate, AccountStore, NewAccount, SqliteAccountStore},
     },
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -153,6 +153,64 @@ async fn account_repository_should_update_status_and_label_without_rewriting_tok
     assert_eq!(loaded.status, AccountStatus::Disabled);
     assert_eq!(loaded.label.as_deref(), Some("work"));
     assert!(updated_at.0.parse::<DateTime<Utc>>().is_ok());
+}
+
+#[tokio::test]
+async fn account_repository_should_not_reactivate_disabled_or_banned_accounts_from_claims_update() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 11).await;
+    let repo = SqliteAccountStore::new(pool);
+    seed_new_account(&repo, "acct_disabled").await;
+    seed_new_account(&repo, "acct_banned").await;
+    repo.set_status("acct_disabled", AccountStatus::Disabled)
+        .await
+        .expect("disabled status should persist");
+    repo.set_status("acct_banned", AccountStatus::Banned)
+        .await
+        .expect("banned status should persist");
+
+    for account_id in ["acct_disabled", "acct_banned"] {
+        assert!(repo
+            .update_from_claims(
+                account_id,
+                AccountClaimsUpdate {
+                    email: Some(format!("{account_id}@example.com")),
+                    account_id: Some(format!("chatgpt-{account_id}")),
+                    user_id: Some(format!("user-{account_id}")),
+                    plan_type: Some("plus".to_string()),
+                    access_token: SecretString::new(format!("new-access-{account_id}").into()),
+                    refresh_token: Some(SecretString::new(
+                        format!("new-refresh-{account_id}").into(),
+                    )),
+                    access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+                    next_refresh_at: Some(Utc::now() + Duration::minutes(30)),
+                    status: AccountStatus::Active,
+                },
+            )
+            .await
+            .expect("claims update should persist"));
+    }
+
+    let disabled = repo
+        .get("acct_disabled")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+    let banned = repo
+        .get("acct_banned")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(disabled.status, AccountStatus::Disabled);
+    assert_eq!(
+        disabled.access_token.expose_secret(),
+        "new-access-acct_disabled"
+    );
+    assert_eq!(banned.status, AccountStatus::Banned);
+    assert_eq!(
+        banned.access_token.expose_secret(),
+        "new-access-acct_banned"
+    );
 }
 
 #[tokio::test]

@@ -33,7 +33,7 @@ async fn openai_token_client_should_exchange_refresh_token_with_form_body() {
 }
 
 #[tokio::test]
-async fn openai_token_client_should_not_treat_refresh_token_reuse_as_banned() {
+async fn openai_token_client_should_treat_refresh_token_reuse_as_banned() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -47,17 +47,32 @@ async fn openai_token_client_should_not_treat_refresh_token_reuse_as_banned() {
 
     let failure = client.refresh("refresh-secret").await.unwrap_err();
 
-    assert_eq!(failure, RefreshFailure::InvalidGrant);
+    assert_eq!(failure, RefreshFailure::Banned);
 }
 
 #[tokio::test]
-async fn openai_token_client_should_treat_explicit_banned_signal_as_banned() {
+async fn openai_token_client_should_not_treat_generic_banned_signal_as_banned() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("account is banned"))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::Transport);
+}
+
+#[tokio::test]
+async fn openai_token_client_should_treat_deactivated_refresh_error_as_banned() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
             "error": "access_denied",
-            "error_description": "account is banned"
+            "error_description": "account has been deactivated"
         })))
         .mount(&server)
         .await;
@@ -66,6 +81,51 @@ async fn openai_token_client_should_treat_explicit_banned_signal_as_banned() {
     let failure = client.refresh("refresh-secret").await.unwrap_err();
 
     assert_eq!(failure, RefreshFailure::Banned);
+}
+
+#[tokio::test]
+async fn openai_token_client_should_retry_non_permanent_http_refresh_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("account disabled"))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::Transport);
+}
+
+#[tokio::test]
+async fn openai_token_client_should_treat_quota_refresh_error_as_temporary() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("quota exceeded"))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::Transport);
+}
+
+#[tokio::test]
+async fn openai_token_client_should_treat_token_revoked_without_invalid_grant_as_temporary() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("token_revoked"))
+        .mount(&server)
+        .await;
+    let client = test_token_client(&server);
+
+    let failure = client.refresh("refresh-secret").await.unwrap_err();
+
+    assert_eq!(failure, RefreshFailure::Transport);
 }
 
 fn test_token_client(server: &MockServer) -> OpenAiTokenClient {

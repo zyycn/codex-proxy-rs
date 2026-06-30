@@ -117,6 +117,51 @@ pub struct UpdatedAccountStatus {
     pub status: AcctStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminAccountRefreshOutcome {
+    Alive,
+    Dead,
+    Skipped,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminAccountRefreshResult {
+    pub id: String,
+    pub email: Option<String>,
+    pub previous_status: AcctStatus,
+    pub outcome: AdminAccountRefreshOutcome,
+    pub error: Option<String>,
+    pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AdminAccountHealthCheck {
+    pub results: Vec<AdminAccountRefreshResult>,
+}
+
+impl AdminAccountHealthCheck {
+    pub fn alive(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|result| result.outcome == AdminAccountRefreshOutcome::Alive)
+            .count()
+    }
+
+    pub fn dead(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|result| result.outcome == AdminAccountRefreshOutcome::Dead)
+            .count()
+    }
+
+    pub fn skipped(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|result| result.outcome == AdminAccountRefreshOutcome::Skipped)
+            .count()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AdminAccountUpdate {
     pub label: Option<Option<String>>,
@@ -280,6 +325,11 @@ pub(super) fn import_status_from_usage_error(error: &CodexClientError) -> Option
 }
 
 pub(super) fn parse_account_status(status: &str) -> Result<AcctStatus, AdminAccountError> {
-    crate::upstream::accounts::importing::parse_account_status(status)
-        .map_err(|_| AdminAccountError::InvalidStatus(status.trim().to_ascii_lowercase()))
+    match status.trim().to_ascii_lowercase().as_str() {
+        "active" => Ok(AcctStatus::Active),
+        "disabled" => Ok(AcctStatus::Disabled),
+        _ => Err(AdminAccountError::InvalidStatus(
+            status.trim().to_ascii_lowercase(),
+        )),
+    }
 }

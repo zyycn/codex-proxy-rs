@@ -11,7 +11,7 @@ mod types;
 
 use std::sync::Arc as StdArc;
 
-use chrono::{DateTime, Duration};
+use chrono::DateTime;
 
 use crate::{
     upstream::accounts::{
@@ -25,9 +25,9 @@ use crate::{
 };
 
 pub use types::{
-    AdminAccountError, AdminAccountMetadata, AdminAccountUpdate, BatchDeleteAccounts,
-    ExportedAccounts, ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
-    UpdatedAccountStatus,
+    AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata, AdminAccountRefreshOutcome,
+    AdminAccountRefreshResult, AdminAccountUpdate, BatchDeleteAccounts, ExportedAccounts,
+    ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput, UpdatedAccountStatus,
 };
 
 #[derive(Clone)]
@@ -72,13 +72,14 @@ impl AdminAccountService {
 
     pub(crate) fn next_refresh_at_for_expires_at(
         &self,
+        account_id: &str,
         expires_at: DateTime<chrono::Utc>,
     ) -> DateTime<chrono::Utc> {
-        let margin_seconds = self
-            .refresh_policy
-            .refresh_margin_seconds()
-            .min(i64::MAX as u64) as i64;
-        expires_at - Duration::seconds(margin_seconds)
+        crate::upstream::accounts::token_refresh::jittered_refresh_at(
+            account_id,
+            expires_at,
+            self.refresh_policy.refresh_margin_seconds(),
+        )
     }
 
     pub(crate) async fn sync_account_pool(

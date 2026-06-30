@@ -56,6 +56,7 @@ use crate::{
     upstream::accounts::{
         model::{Account, AccountStatus},
         pool::{AccountAcquireRequest, RuntimeAccountPoolService},
+        token_refresh::RuntimeTokenRefreshService,
     },
     upstream::{
         models::ModelCatalog,
@@ -71,6 +72,7 @@ use crate::{
                 encode_sse_event, parse_sse_events, sse_body_has_done, SseError, DONE_SSE_FRAME,
             },
         },
+        token_client::OpenAiTokenClient,
         transport::{
             backend_transport_for_response_request, is_banned_auth_signal,
             is_banned_upstream_error, CodexBackendClient, CodexBackendResponse,
@@ -107,6 +109,7 @@ pub struct ResponseDispatchService {
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     usage_records: Arc<AdminUsageRecordService>,
+    token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -154,6 +157,7 @@ impl ResponseDispatchService {
         codex: Arc<CodexBackendClient>,
         session_affinity: Arc<RuntimeSessionAffinityService>,
         usage_records: Arc<AdminUsageRecordService>,
+        token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
         installation_id: Option<String>,
         cloudflare: CloudflareRecovery,
     ) -> Self {
@@ -166,9 +170,28 @@ impl ResponseDispatchService {
                 DEFAULT_REASONING_REPLAY_TTL_SECS,
             )))),
             usage_records,
+            token_refresh,
             installation_id,
             cloudflare,
         }
+    }
+
+    fn trigger_refresh_after_auth_failure(&self, account_id: &str, status: AccountStatus) {
+        if status != AccountStatus::Expired {
+            return;
+        }
+
+        let token_refresh = self.token_refresh.clone();
+        let account_id = account_id.to_string();
+        tokio::spawn(async move {
+            if let Err(error) = token_refresh.trigger_account_refresh_now(&account_id).await {
+                tracing::warn!(
+                    account_id = %account_id,
+                    error = %error,
+                    "reactive token refresh after upstream auth failure failed"
+                );
+            }
+        });
     }
 
     async fn prepare_response_session(
@@ -711,6 +734,10 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
+                            self.trigger_refresh_after_auth_failure(
+                                &release_account_id,
+                                account_status,
+                            );
                             excluded_account_ids.push(release_account_id);
                             continue;
                         }
@@ -771,6 +798,7 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
+                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1338,6 +1366,10 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
+                            self.trigger_refresh_after_auth_failure(
+                                &release_account_id,
+                                account_status,
+                            );
                             excluded_account_ids.push(release_account_id);
                             self.account_pool.release(&account.id).await;
                             continue;
@@ -1447,6 +1479,7 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
+                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1837,6 +1870,7 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
+                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {

@@ -840,7 +840,7 @@ async fn chat_completions_should_mark_banned_after_403_and_fallback() {
         .and(path("/codex/responses"))
         .and(header("authorization", "Bearer access-primary"))
         .respond_with(ResponseTemplate::new(403).set_body_json(json!({
-            "error": {"message": "account banned"}
+            "error": {"message": "request forbidden"}
         })))
         .expect(1)
         .mount(&server)

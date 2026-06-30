@@ -1,8 +1,9 @@
 //! 运行时 token refresh 业务服务。
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     future::Future,
+    hash::{Hash, Hasher},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -22,8 +23,9 @@ use crate::upstream::accounts::{
         StoredAccount,
     },
     token_refresh::{
-        jwt_expiration, RefreshError, RefreshLeaseStore, RefreshLeaseStoreError, RefreshPolicy,
-        RefreshScheduler, RefreshTrigger, RuntimeRefreshPolicy, TokenRefresher,
+        jittered_refresh_at, jwt_expiration, RefreshError, RefreshLeaseStore,
+        RefreshLeaseStoreError, RefreshPolicy, RefreshScheduler, RefreshTrigger,
+        RuntimeRefreshPolicy, TokenRefresher,
     },
 };
 
@@ -33,6 +35,8 @@ const REFRESH_RETRY_BASE_DELAY_MILLIS: u64 = 5_000;
 const REFRESH_RETRY_MAX_DELAY_MILLIS: u64 = 300_000;
 const PERMANENT_FAILURE_CONFIRMATION_THRESHOLD: usize = 2;
 const RECOVERY_DELAY_SECONDS: i64 = 10 * 60;
+const RETRY_DELAY_JITTER: f64 = 0.30;
+const RECOVERY_DELAY_JITTER: f64 = 0.20;
 
 /// 运行时 token refresh 服务。
 pub struct RuntimeTokenRefreshService<C>
@@ -226,6 +230,32 @@ where
         self.timers.lock().await.len()
     }
 
+    /// 立即刷新被上游认证失败命中的账号。
+    pub async fn trigger_account_refresh_now(
+        &self,
+        account_id: &str,
+    ) -> TokenRefreshServiceResult<()> {
+        let Some(account) = self.store.get(account_id).await? else {
+            return Err(TokenRefreshServiceError::AccountNotFound(
+                account_id.to_string(),
+            ));
+        };
+        if account.refresh_token.is_none()
+            || matches!(
+                account.status,
+                AccountStatus::Disabled | AccountStatus::Banned
+            )
+        {
+            return Ok(());
+        }
+
+        self.clear_scheduled_timer(account_id).await;
+        persist_next_refresh_at(&self.store, account_id, None).await?;
+        self.refresh_scheduled_account(account_id, RefreshTrigger::Unauthorized, Utc::now())
+            .await
+            .map(|_| ())
+    }
+
     /// 在指定时间点执行一次到期刷新扫描。
     pub async fn refresh_due_accounts_once_at(
         &self,
@@ -310,8 +340,11 @@ where
         let expires_at = account
             .access_token_expires_at
             .or_else(|| jwt_expiration(&account.access_token))?;
-        let margin_seconds = self.policy.refresh_margin_seconds().min(i64::MAX as u64) as i64;
-        Some(expires_at - chrono::Duration::seconds(margin_seconds))
+        Some(jittered_refresh_at(
+            &account.id,
+            expires_at,
+            self.policy.refresh_margin_seconds(),
+        ))
     }
 
     async fn persist_next_refresh_at_if_changed(
@@ -521,7 +554,7 @@ where
                     if is_permanent_refresh_status(updated.status) {
                         permanent_failures += 1;
                         if permanent_failures < PERMANENT_FAILURE_CONFIRMATION_THRESHOLD
-                            && self.sleep_before_retry(attempt_index).await
+                            && self.sleep_before_retry(&attempt.id, attempt_index).await
                         {
                             continue;
                         }
@@ -532,11 +565,17 @@ where
                     return Ok(TokenRefreshOutcome::StatusUpdated);
                 }
                 Ok(_) => return Ok(TokenRefreshOutcome::Skipped),
-                Err(RefreshError::RetryableTransport)
-                    if self.sleep_before_retry(attempt_index).await => {}
+                Err(RefreshError::RetryableTransport | RefreshError::Transport)
+                    if self.sleep_before_retry(&attempt.id, attempt_index).await => {}
                 Err(RefreshError::RetryableTransport | RefreshError::Transport) => {
                     persist_status(&self.store, &attempt.id, AccountStatus::Active).await?;
-                    let next_refresh_at = now + chrono::Duration::seconds(RECOVERY_DELAY_SECONDS);
+                    let recovery_delay = stable_jittered_duration(
+                        &attempt.id,
+                        Duration::from_secs(RECOVERY_DELAY_SECONDS as u64),
+                        RECOVERY_DELAY_JITTER,
+                        "recovery",
+                    );
+                    let next_refresh_at = scheduled_at_from_delay(now, recovery_delay);
                     persist_next_refresh_at(&self.store, &attempt.id, Some(next_refresh_at))
                         .await?;
                     return Ok(TokenRefreshOutcome::Failed);
@@ -576,11 +615,17 @@ where
         Ok(Some(attempt))
     }
 
-    async fn sleep_before_retry(&self, attempt_index: usize) -> bool {
+    async fn sleep_before_retry(&self, account_id: &str, attempt_index: usize) -> bool {
         let Some(delay) = self.retry_delays.get(attempt_index).copied() else {
             return false;
         };
 
+        let delay = stable_jittered_duration(
+            account_id,
+            delay,
+            RETRY_DELAY_JITTER,
+            &format!("retry:{attempt_index}"),
+        );
         if !delay.is_zero() {
             sleep(delay).await;
         }
@@ -790,6 +835,27 @@ fn default_refresh_retry_delays() -> Vec<Duration> {
             Duration::from_millis(millis)
         })
         .collect()
+}
+
+fn stable_jittered_duration(
+    account_id: &str,
+    base: Duration,
+    variance: f64,
+    salt: &str,
+) -> Duration {
+    if base.is_zero() {
+        return Duration::ZERO;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    account_id.hash(&mut hasher);
+    salt.hash(&mut hasher);
+    let unit = hasher.finish() as f64 / u64::MAX as f64;
+    let factor = (1.0 - variance) + unit * variance * 2.0;
+    let millis = (base.as_millis() as f64 * factor)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64;
+    Duration::from_millis(millis)
 }
 
 fn scheduled_at_from_delay(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {

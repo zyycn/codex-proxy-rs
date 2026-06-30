@@ -465,7 +465,10 @@ set
   refresh_token = ?,
   access_token_expires_at = ?,
   next_refresh_at = ?,
-  status = ?,
+  status = case
+    when status in ('disabled', 'banned') then status
+    else ?
+  end,
   updated_at = ?
 where id = ?";
 
@@ -479,7 +482,10 @@ set
   access_token = ?,
   access_token_expires_at = ?,
   next_refresh_at = ?,
-  status = ?,
+  status = case
+    when status in ('disabled', 'banned') then status
+    else ?
+  end,
   updated_at = ?
 where id = ?";
 

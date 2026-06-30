@@ -255,7 +255,8 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
         .await
         .unwrap();
     let body = response_json(response).await;
-    let stored = SqliteAccountStore::new(pool)
+    let store = SqliteAccountStore::new(pool);
+    let stored = store
         .list_metadata_page(1, 10, None)
         .await
         .unwrap()
@@ -283,6 +284,68 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
         list_body["data"]["items"][0]["accountId"],
         "wham-account-from-rt"
     );
+}
+
+#[tokio::test]
+async fn admin_accounts_import_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated(
+) {
+    let server = MockServer::start().await;
+    let access_token = test_jwt(
+        "rt-import-no-rotation-account",
+        Some("rt-import-no-rotation-user"),
+        Some("rt-import-no-rotation@example.com"),
+        Some("plus"),
+    );
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": access_token,
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-accounts-import-rt-no-rotation.sqlite",
+        126,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_rt_no_rotation")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{ "refreshToken": "rt-import-no-rotation-source" }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let store = SqliteAccountStore::new(pool);
+    let stored = store
+        .list_metadata_page(1, 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .next()
+        .unwrap();
+
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(
+        stored.account_id.as_deref(),
+        Some("rt-import-no-rotation-account")
+    );
+    let account = store.get(&stored.id).await.unwrap().unwrap();
+    assert!(account.refresh_token.is_none());
 }
 
 #[tokio::test]

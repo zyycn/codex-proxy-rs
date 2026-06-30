@@ -37,6 +37,14 @@ where
         }
     }
 
+    /// 使用已创建的运行时刷新服务构造后台任务。
+    pub fn from_service(service: RuntimeTokenRefreshService<C>) -> Self {
+        Self {
+            service,
+            interval_secs: DEFAULT_INTERVAL_SECS,
+        }
+    }
+
     /// 使用刷新租约存储保护账号刷新。
     pub fn with_refresh_lease_store(mut self, refresh_leases: RefreshLeaseStore) -> Self {
         self.service = self.service.with_refresh_lease_store(refresh_leases);

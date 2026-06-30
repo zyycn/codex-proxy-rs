@@ -10,8 +10,8 @@ use crate::runtime::state::AppState;
 use super::{
     accounts::routes::{
         account_models, account_quota, accounts, batch_delete_accounts, create_account,
-        export_accounts, import_accounts, oauth_authorize_account, oauth_exchange_account,
-        refresh_account, test_account_connection, update_account,
+        export_accounts, health_check_accounts, import_accounts, oauth_authorize_account,
+        oauth_exchange_account, refresh_account, test_account_connection, update_account,
     },
     auth::session::{login, logout, session_status},
     keys::routes::{api_keys, batch_delete_api_keys, create_api_key, update_api_key},
@@ -62,6 +62,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/accounts/delete", post(batch_delete_accounts))
         .route("/api/admin/accounts/update", post(update_account))
         .route("/api/admin/accounts/refresh", post(refresh_account))
+        .route(
+            "/api/admin/accounts/health-check",
+            post(health_check_accounts),
+        )
         .route("/api/admin/accounts/quota", get(account_quota))
         .route("/api/admin/usage/records", get(usage_records))
         .route(
