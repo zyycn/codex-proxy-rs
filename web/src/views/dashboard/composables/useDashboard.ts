@@ -253,6 +253,7 @@ export function useDashboard(): any {
           label: item.label,
           value: formatLatency(item.value),
           tone: trendSummaryTone(item.label),
+          colorVar: trendSummaryColorVar(trend.kind, item.label),
         }
       }
       if (item.ratio !== null && item.ratio !== undefined) {
@@ -260,11 +261,17 @@ export function useDashboard(): any {
           label: item.label,
           value: `${item.ratio.toFixed(1)}%`,
           tone: trendSummaryTone(item.label),
+          colorVar: trendSummaryColorVar(trend.kind, item.label),
         }
       }
       const formatter =
         trend.kind === 'usage' && item.label !== '总请求' ? formatTokens : formatNumber
-      return { label: item.label, value: formatter(item.value), tone: trendSummaryTone(item.label) }
+      return {
+        label: item.label,
+        value: formatter(item.value),
+        tone: trendSummaryTone(item.label),
+        colorVar: trendSummaryColorVar(trend.kind, item.label),
+      }
     })
   }
 
@@ -325,6 +332,22 @@ export function useDashboard(): any {
     if (label.includes('输出') || label.includes('最低') || label.includes('成功')) return 'success'
     if (label.includes('缓存')) return 'normal'
     return 'info'
+  }
+
+  function trendSummaryColorVar(kind: string, label: string) {
+    if (kind === 'latency') {
+      if (label.includes('最高')) return '--cp-warning'
+      if (label.includes('最低')) return '--cp-success'
+      return '--cp-normal'
+    }
+    if (kind === 'errors') {
+      if (label.includes('错误')) return '--cp-danger'
+      if (label.includes('成功')) return '--cp-success'
+      return '--cp-info'
+    }
+    if (label.includes('输出')) return '--cp-success'
+    if (label.includes('缓存')) return '--cp-text-tertiary'
+    return '--cp-info'
   }
 
   function accountTone(status: string) {

@@ -749,7 +749,9 @@ fn account_usage_data(
         .iter()
         .map(|account| (account.id.as_str(), account))
         .collect::<HashMap<_, _>>();
-    let mut rows = usage_records
+    let mut records = usage_records.iter().collect::<Vec<_>>();
+    records.sort_by_key(|record| Reverse((record.last_used_at, record.account_id.clone())));
+    let mut rows = records
         .iter()
         .map(|usage| {
             let account = account_by_id.get(usage.account_id.as_str()).copied();
@@ -786,7 +788,6 @@ fn account_usage_data(
             }
         })
         .collect::<Vec<_>>();
-    rows.sort_by_key(|row| Reverse(row.requests));
     rows.truncate(4);
     rows
 }
@@ -796,7 +797,7 @@ async fn account_quota_used_percent_by_id(
     usage_records: &[AdminUsageRecord],
 ) -> HashMap<String, f64> {
     let mut records = usage_records.iter().collect::<Vec<_>>();
-    records.sort_by_key(|record| Reverse(record.request_count));
+    records.sort_by_key(|record| Reverse((record.last_used_at, record.account_id.clone())));
     records.truncate(4);
 
     let mut quota_used_by_account = HashMap::with_capacity(records.len());

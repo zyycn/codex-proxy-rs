@@ -30,6 +30,7 @@ export function useUsageRecordsTable(options: {
   const endpointDistributionSource = ref('inbound')
   let modelDistributionRequestId = 0
   let endpointDistributionRequestId = 0
+  const scopedParams = () => ({ ...options.timeRangeParams.value })
   const filterParams = () => ({
     level: options.filterStatus.value || undefined,
     search: options.searchQuery.value || undefined,
@@ -42,7 +43,7 @@ export function useUsageRecordsTable(options: {
         analyticsLoading.value = true
       }
 
-      const globalParams = options.timeRangeParams.value
+      const globalParams = scopedParams()
       const tableParams = {
         ...globalParams,
         ...filterParams(),
@@ -86,7 +87,7 @@ export function useUsageRecordsTable(options: {
     }
   }
 
-  async function loadUsageAnalytics(globalParams = options.timeRangeParams.value) {
+  async function loadUsageAnalytics(globalParams = scopedParams()) {
     const [nextSummary, modelDistribution, endpointDistribution, tokenTrend, latencyTrend] =
       await Promise.all([
         getUsageRecordSummary(globalParams),
@@ -118,7 +119,7 @@ export function useUsageRecordsTable(options: {
     const requestId = ++modelDistributionRequestId
     try {
       const modelDistribution = await getUsageRecordModelDistribution({
-        ...options.timeRangeParams.value,
+        ...scopedParams(),
         source: modelDistributionSource.value,
       })
       if (requestId !== modelDistributionRequestId) return
@@ -135,7 +136,7 @@ export function useUsageRecordsTable(options: {
     const requestId = ++endpointDistributionRequestId
     try {
       const endpointDistribution = await getUsageRecordEndpointDistribution({
-        ...options.timeRangeParams.value,
+        ...scopedParams(),
         source: endpointDistributionSource.value,
       })
       if (requestId !== endpointDistributionRequestId) return

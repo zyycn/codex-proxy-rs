@@ -1,15 +1,18 @@
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 
 import { getUsageRecordDetail } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
-export function useUsageRecordDetail() {
+export function useUsageRecordDetail(options?: { timeRangeParams?: Ref<Record<string, string>> }) {
   const showDetailModal = ref(false)
   const selectedUsageRecord = ref<any>(null)
 
   async function handleViewDetail(record: any) {
     try {
-      const detail = await getUsageRecordDetail({ id: record.id })
+      const detail = await getUsageRecordDetail({
+        ...(options?.timeRangeParams?.value ?? {}),
+        id: record.id,
+      })
       selectedUsageRecord.value = detail
       showDetailModal.value = true
     } catch (error: any) {

@@ -666,7 +666,7 @@ async fn usage_trend(
 ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordTrendPoint>> {
     let mut builder = QueryBuilder::<Sqlite>::new(
         "select
-            substr(created_at, 1, 10) as date,
+            substr(datetime(created_at, '+8 hours'), 1, 10) as date,
             coalesce(cast(json_extract(metadata_json, '$.usage.inputTokens') as integer), cast(json_extract(metadata_json, '$.inputTokens') as integer), 0) as input_tokens,
             coalesce(cast(json_extract(metadata_json, '$.usage.outputTokens') as integer), cast(json_extract(metadata_json, '$.outputTokens') as integer), 0) as output_tokens,
             coalesce(cast(json_extract(metadata_json, '$.usage.cacheCreationTokens') as integer), cast(json_extract(metadata_json, '$.cacheCreationTokens') as integer), cast(json_extract(metadata_json, '$.usage.cache_creation_tokens') as integer), cast(json_extract(metadata_json, '$.cache_creation_tokens') as integer), 0) as cache_creation_tokens,

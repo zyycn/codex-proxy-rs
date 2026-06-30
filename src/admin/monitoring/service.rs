@@ -93,6 +93,13 @@ pub struct AdminUsageRecord {
     pub image_output_tokens: i64,
     pub image_request_count: i64,
     pub image_request_failed_count: i64,
+    pub window_request_count: i64,
+    pub window_input_tokens: i64,
+    pub window_output_tokens: i64,
+    pub window_cached_tokens: i64,
+    pub window_started_at: Option<DateTime<Utc>>,
+    pub window_reset_at: Option<DateTime<Utc>>,
+    pub limit_window_seconds: Option<u64>,
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
@@ -190,6 +197,13 @@ impl From<UsageListRecord> for AdminUsageRecord {
             image_output_tokens: usage.image_output_tokens,
             image_request_count: usage.image_request_count,
             image_request_failed_count: usage.image_request_failed_count,
+            window_request_count: usage.window_request_count,
+            window_input_tokens: usage.window_input_tokens,
+            window_output_tokens: usage.window_output_tokens,
+            window_cached_tokens: usage.window_cached_tokens,
+            window_started_at: usage.window_started_at,
+            window_reset_at: usage.window_reset_at,
+            limit_window_seconds: usage.limit_window_seconds,
             last_used_at: usage.last_used_at,
         }
     }

@@ -69,10 +69,10 @@ async fn account_models_should_return_database_snapshot_models() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(requests.is_empty(), "model list should be loaded from DB");
     let body = response_json(response).await;
-    assert_eq!(body["data"]["models"][0]["id"], "gpt-5.4");
-    assert_eq!(body["data"]["models"][0]["label"], "GPT 5.4");
-    assert_eq!(body["data"]["models"][1]["id"], "gpt-5.5");
-    assert_eq!(body["data"]["models"][1]["label"], "GPT 5.5");
+    assert_eq!(body["data"]["models"][0]["id"], "gpt-5.5");
+    assert_eq!(body["data"]["models"][0]["label"], "GPT 5.5");
+    assert_eq!(body["data"]["models"][1]["id"], "gpt-5.4");
+    assert_eq!(body["data"]["models"][1]["label"], "GPT 5.4");
 }
 
 async fn seed_model_snapshot(pool: &SqlitePool, plan_type: &str) {

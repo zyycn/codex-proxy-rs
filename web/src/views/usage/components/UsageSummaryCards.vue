@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Activity, CircleAlert, FileText, Timer } from '@lucide/vue'
 
-import { formatUsageMetric } from '../constants'
+import { formatCompactUsageMetric, formatUsageMetric } from '../constants'
 
 const props = defineProps<{
   summary: any
@@ -20,9 +20,9 @@ const items = [
     key: 'tokens',
     label: '总 Token',
     icon: FileText,
-    value: () => formatUsageMetric(props.summary.totalTokens),
+    value: () => formatCompactUsageMetric(props.summary.totalTokens),
     detail: () =>
-      `输入 ${formatUsageMetric(props.summary.inputTokens)} / 输出 ${formatUsageMetric(
+      `输入 ${formatCompactUsageMetric(props.summary.inputTokens)} / 输出 ${formatCompactUsageMetric(
         props.summary.outputTokens,
       )}`,
     tone: 'text-(--cp-success-text) bg-(--cp-success-bg)',
@@ -40,7 +40,7 @@ const items = [
     label: '平均耗时',
     icon: Timer,
     value: () => props.summary.averageLatencyMsDisplay || '—',
-    detail: () => `缓存 ${formatUsageMetric(props.summary.cachedTokens)}`,
+    detail: () => `缓存 ${formatCompactUsageMetric(props.summary.cachedTokens)}`,
     tone: 'text-(--cp-normal-text) bg-(--cp-normal-bg)',
   },
 ]

@@ -439,6 +439,71 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
 }
 
 #[tokio::test]
+async fn admin_usage_record_trends_should_bucket_by_china_calendar_day() {
+    let (app, store, _pool, _dir) =
+        admin_usage_records_test_app_with_pool("admin-usage-records-china-day-trend.sqlite").await;
+    let mut june_29 = UsageRecord::new("request", UsageRecordLevel::Info, "china-day trend");
+    june_29.id = "usage_china_day_29".to_string();
+    june_29.created_at = chrono::DateTime::parse_from_rfc3339("2026-06-29T15:30:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    june_29.latency_ms = Some(100);
+    june_29.metadata = json!({
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 1
+        }
+    });
+    store.append(&june_29).await.unwrap();
+
+    let mut june_30 = UsageRecord::new("request", UsageRecordLevel::Info, "china-day trend");
+    june_30.id = "usage_china_day_30".to_string();
+    june_30.created_at = chrono::DateTime::parse_from_rfc3339("2026-06-29T16:30:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    june_30.latency_ms = Some(300);
+    june_30.metadata = json!({
+        "usage": {
+            "inputTokens": 20,
+            "outputTokens": 2
+        }
+    });
+    store.append(&june_30).await.unwrap();
+
+    let token_trend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/token-trend?search=china-day")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token_body = response_json(token_trend).await;
+    assert_eq!(token_body["data"][0]["date"], "2026-06-29");
+    assert_eq!(token_body["data"][1]["date"], "2026-06-30");
+    assert_eq!(token_body["data"][1]["inputTokens"], 20);
+
+    let latency_trend = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/usage/records/insights/latency-trend?search=china-day")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let latency_body = response_json(latency_trend).await;
+    assert_eq!(latency_body["data"][1]["date"], "2026-06-30");
+    assert_eq!(latency_body["data"][1]["averageLatencyMs"], 300.0);
+}
+
+#[tokio::test]
 async fn admin_usage_records_insight_card_endpoints_should_return_source_specific_data() {
     let (app, store, _pool, _dir) =
         admin_usage_records_test_app_with_pool("admin-usage-records-insight-cards.sqlite").await;

@@ -88,7 +88,9 @@ const {
   totalRecords,
 })
 
-const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
+const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail({
+  timeRangeParams,
+})
 
 bindUsageRecordLoader(loadUsageRecords)
 

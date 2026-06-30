@@ -23,6 +23,13 @@ select
   au.image_output_tokens,
   au.image_request_count,
   au.image_request_failed_count,
+  au.window_request_count,
+  au.window_input_tokens,
+  au.window_output_tokens,
+  au.window_cached_tokens,
+  au.window_started_at,
+  au.window_reset_at,
+  au.limit_window_seconds,
   au.last_used_at
 from account_usage au
 left join accounts a on a.id = au.account_id
@@ -48,6 +55,13 @@ select
   au.image_output_tokens,
   au.image_request_count,
   au.image_request_failed_count,
+  au.window_request_count,
+  au.window_input_tokens,
+  au.window_output_tokens,
+  au.window_cached_tokens,
+  au.window_started_at,
+  au.window_reset_at,
+  au.limit_window_seconds,
   au.last_used_at
 from account_usage au
 left join accounts a on a.id = au.account_id
@@ -108,7 +122,7 @@ pub enum SqliteUsageStoreError {
 /// SQLite 用量存储结果。
 pub type SqliteUsageStoreResult<T> = Result<T, SqliteUsageStoreError>;
 
-/// 账号用量列表记录（不含窗口用量）。
+/// 账号用量列表记录。
 #[derive(Debug, Clone)]
 pub struct UsageListRecord {
     /// 账号 ID。
@@ -141,6 +155,20 @@ pub struct UsageListRecord {
     pub image_request_count: i64,
     /// 累计图片请求失败次数。
     pub image_request_failed_count: i64,
+    /// 当前额度窗口请求数。
+    pub window_request_count: i64,
+    /// 当前额度窗口输入 token。
+    pub window_input_tokens: i64,
+    /// 当前额度窗口输出 token。
+    pub window_output_tokens: i64,
+    /// 当前额度窗口缓存 token。
+    pub window_cached_tokens: i64,
+    /// 当前额度窗口开始时间。
+    pub window_started_at: Option<DateTime<Utc>>,
+    /// 当前额度窗口重置时间。
+    pub window_reset_at: Option<DateTime<Utc>>,
+    /// 当前额度窗口大小（秒）。
+    pub limit_window_seconds: Option<u64>,
     /// 最近使用时间。
     pub last_used_at: Option<DateTime<Utc>>,
 }
@@ -297,6 +325,19 @@ fn usage_list_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageListRecor
         image_output_tokens: row.get("image_output_tokens"),
         image_request_count: row.get("image_request_count"),
         image_request_failed_count: row.get("image_request_failed_count"),
+        window_request_count: row.get("window_request_count"),
+        window_input_tokens: row.get("window_input_tokens"),
+        window_output_tokens: row.get("window_output_tokens"),
+        window_cached_tokens: row.get("window_cached_tokens"),
+        window_started_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("window_started_at").as_deref(),
+        )?,
+        window_reset_at: parse_optional_rfc3339(
+            row.get::<Option<String>, _>("window_reset_at").as_deref(),
+        )?,
+        limit_window_seconds: row
+            .get::<Option<i64>, _>("limit_window_seconds")
+            .and_then(|value| u64::try_from(value).ok()),
         last_used_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("last_used_at").as_deref(),
         )?,
