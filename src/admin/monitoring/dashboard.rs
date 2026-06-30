@@ -25,9 +25,15 @@ use crate::{
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
-    infra::time::{
-        china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour, china_hour_start,
-        china_quarter_hour_start, china_relative_time,
+    infra::{
+        format::{
+            format_compact_number, format_cost, format_duration_ms, format_percent, format_rate,
+            format_tokens, nonnegative_i64_to_u64,
+        },
+        time::{
+            china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour,
+            china_hour_start, china_quarter_hour_start, china_relative_time,
+        },
     },
     runtime::state::AppState,
     upstream::accounts::model::{Account, AccountStatus},
@@ -90,40 +96,51 @@ struct DashboardCardsData {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardAccountsCardData {
-    total: u64,
-    enabled: u64,
-    abnormal: u64,
+    total: String,
+    total_value: u64,
+    enabled: String,
+    enabled_value: u64,
+    abnormal: String,
+    abnormal_value: u64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardTrafficCardData {
-    today_requests: u64,
-    yesterday_requests: u64,
-    total_requests: u64,
-    rpm: u64,
-    tpm: u64,
+    today_requests: String,
+    today_requests_value: u64,
+    yesterday_requests: String,
+    yesterday_requests_value: u64,
+    total_requests: String,
+    rpm: String,
+    tpm: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardTokenCardData {
-    today_tokens: u64,
-    yesterday_tokens: u64,
-    total_tokens: u64,
-    today_cost_usd: Option<f64>,
-    total_cost_usd: Option<f64>,
+    today_tokens: String,
+    today_tokens_value: u64,
+    yesterday_tokens: String,
+    yesterday_tokens_value: u64,
+    total_tokens: String,
+    today_cost_usd: String,
+    today_cost_usd_value: f64,
+    total_cost_usd: String,
+    total_cost_usd_value: f64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardCacheCardData {
-    today_hit_rate: Option<f64>,
-    yesterday_hit_rate: Option<f64>,
-    total_hit_rate: Option<f64>,
-    total_cached_tokens: u64,
-    first_token_latency_ms: Option<u64>,
-    completion_latency_ms: Option<u64>,
+    today_hit_rate: String,
+    today_hit_rate_value: Option<f64>,
+    yesterday_hit_rate: String,
+    yesterday_hit_rate_value: Option<f64>,
+    total_hit_rate: String,
+    total_cached_tokens: String,
+    first_token_latency_ms: String,
+    completion_latency_ms: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,24 +155,34 @@ struct DashboardTrendData {
 #[serde(rename_all = "camelCase")]
 struct DashboardTrendPointData {
     time: String,
-    requests: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    tokens: u64,
-    errors: u64,
-    latency: u64,
-    max_latency: u64,
-    min_latency: u64,
-    success_rate: f64,
+    requests: String,
+    requests_value: u64,
+    input_tokens: String,
+    input_tokens_value: u64,
+    output_tokens: String,
+    output_tokens_value: u64,
+    cached_tokens: String,
+    cached_tokens_value: u64,
+    tokens: String,
+    tokens_value: u64,
+    errors: String,
+    errors_value: u64,
+    latency: String,
+    latency_value: u64,
+    max_latency: String,
+    max_latency_value: u64,
+    min_latency: String,
+    min_latency_value: u64,
+    success_rate: String,
+    success_rate_value: f64,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardTrendSummaryData {
     label: String,
-    value: u64,
-    ratio: Option<f64>,
+    value: String,
+    ratio: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,8 +191,8 @@ struct DashboardAccountUsageData {
     name: String,
     email: String,
     plan: String,
-    requests: u64,
-    tokens: u64,
+    requests: String,
+    tokens: String,
     quota_used_percent: Option<f64>,
     last_used: String,
     status: String,
@@ -324,54 +351,79 @@ fn dashboard_cards_at(
 
     let total_input = nonnegative_i64_to_u64(summary.input_tokens);
     let total_cached = nonnegative_i64_to_u64(summary.cached_tokens);
+    let total_accounts = accounts.len() as u64;
+    let enabled_accounts = accounts
+        .iter()
+        .filter(|account| account.status == AccountStatus::Active)
+        .count() as u64;
+    let abnormal_accounts = accounts
+        .iter()
+        .filter(|account| {
+            matches!(
+                account.status,
+                AccountStatus::Expired
+                    | AccountStatus::QuotaExhausted
+                    | AccountStatus::Disabled
+                    | AccountStatus::Banned
+            )
+        })
+        .count() as u64;
+    let total_requests = nonnegative_i64_to_u64(summary.request_count);
+    let total_tokens = nonnegative_i64_to_u64(summary.input_tokens + summary.output_tokens);
+    let total_hit_rate = if total_input > 0 {
+        Some(total_cached as f64 / total_input as f64)
+    } else {
+        None
+    };
 
     DashboardCardsData {
         accounts: DashboardAccountsCardData {
-            total: accounts.len() as u64,
-            enabled: accounts
-                .iter()
-                .filter(|account| account.status == AccountStatus::Active)
-                .count() as u64,
-            abnormal: accounts
-                .iter()
-                .filter(|account| {
-                    matches!(
-                        account.status,
-                        AccountStatus::Expired
-                            | AccountStatus::QuotaExhausted
-                            | AccountStatus::Disabled
-                            | AccountStatus::Banned
-                    )
-                })
-                .count() as u64,
+            total: format_compact_number(total_accounts),
+            total_value: total_accounts,
+            enabled: format_compact_number(enabled_accounts),
+            enabled_value: enabled_accounts,
+            abnormal: format_compact_number(abnormal_accounts),
+            abnormal_value: abnormal_accounts,
         },
         traffic: DashboardTrafficCardData {
-            today_requests: today.requests,
-            yesterday_requests: yesterday.requests,
-            total_requests: nonnegative_i64_to_u64(summary.request_count),
-            rpm: today.requests,
-            tpm: today.tokens(),
+            today_requests: format_compact_number(today.requests),
+            today_requests_value: today.requests,
+            yesterday_requests: format_compact_number(yesterday.requests),
+            yesterday_requests_value: yesterday.requests,
+            total_requests: format_compact_number(total_requests),
+            rpm: format_compact_number(today.requests),
+            tpm: format_tokens(today.tokens()),
         },
         tokens: DashboardTokenCardData {
-            today_tokens: today.tokens(),
-            yesterday_tokens: yesterday.tokens(),
-            total_tokens: nonnegative_i64_to_u64(summary.input_tokens + summary.output_tokens),
-            today_cost_usd: Some(today_cost),
-            total_cost_usd: Some(total_cost),
+            today_tokens: format_tokens(today.tokens()),
+            today_tokens_value: today.tokens(),
+            yesterday_tokens: format_tokens(yesterday.tokens()),
+            yesterday_tokens_value: yesterday.tokens(),
+            total_tokens: format_tokens(total_tokens),
+            today_cost_usd: format_optional_cost(Some(today_cost)),
+            today_cost_usd_value: today_cost,
+            total_cost_usd: format_optional_cost(Some(total_cost)),
+            total_cost_usd_value: total_cost,
         },
         cache: DashboardCacheCardData {
-            today_hit_rate: today.cache_hit_rate(),
-            yesterday_hit_rate: yesterday.cache_hit_rate(),
-            total_hit_rate: if total_input > 0 {
-                Some(total_cached as f64 / total_input as f64)
-            } else {
-                None
-            },
-            total_cached_tokens: total_cached,
-            first_token_latency_ms: today.avg_first_token_latency(),
-            completion_latency_ms: today.avg_latency(),
+            today_hit_rate: format_rate(today.cache_hit_rate()),
+            today_hit_rate_value: today.cache_hit_rate(),
+            yesterday_hit_rate: format_rate(yesterday.cache_hit_rate()),
+            yesterday_hit_rate_value: yesterday.cache_hit_rate(),
+            total_hit_rate: format_rate(total_hit_rate),
+            total_cached_tokens: format_tokens(total_cached),
+            first_token_latency_ms: format_optional_duration_ms(today.avg_first_token_latency()),
+            completion_latency_ms: format_optional_duration_ms(today.avg_latency()),
         },
     }
+}
+
+fn format_optional_cost(value: Option<f64>) -> String {
+    value.map_or_else(|| "-".to_string(), format_cost)
+}
+
+fn format_optional_duration_ms(value: Option<u64>) -> String {
+    format_duration_ms(value.and_then(|value| i64::try_from(value).ok()))
 }
 
 async fn dashboard_time_buckets(
@@ -427,24 +479,35 @@ fn dashboard_trend_data_at(
         .iter()
         .map(|(bucket_start, bucket)| {
             let latency = bucket.avg_latency().unwrap_or(0);
+            let tokens = bucket.tokens();
+            let success_rate = if bucket.requests > 0 {
+                ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0).round()
+                    / 10.0
+            } else {
+                0.0
+            };
             DashboardTrendPointData {
                 time: format!("{:02}", china_hour(bucket_start)),
-                requests: bucket.requests,
-                input_tokens: bucket.input_tokens,
-                output_tokens: bucket.output_tokens,
-                cached_tokens: bucket.cached_tokens,
-                tokens: bucket.tokens(),
-                errors: bucket.errors,
-                latency,
-                max_latency: bucket.max_latency,
-                min_latency: bucket.min_latency,
-                success_rate: if bucket.requests > 0 {
-                    ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0)
-                        .round()
-                        / 10.0
-                } else {
-                    0.0
-                },
+                requests: format_compact_number(bucket.requests),
+                requests_value: bucket.requests,
+                input_tokens: format_tokens(bucket.input_tokens),
+                input_tokens_value: bucket.input_tokens,
+                output_tokens: format_tokens(bucket.output_tokens),
+                output_tokens_value: bucket.output_tokens,
+                cached_tokens: format_tokens(bucket.cached_tokens),
+                cached_tokens_value: bucket.cached_tokens,
+                tokens: format_tokens(tokens),
+                tokens_value: tokens,
+                errors: format_compact_number(bucket.errors),
+                errors_value: bucket.errors,
+                latency: format_optional_duration_ms(Some(latency)),
+                latency_value: latency,
+                max_latency: format_optional_duration_ms(Some(bucket.max_latency)),
+                max_latency_value: bucket.max_latency,
+                min_latency: format_optional_duration_ms(Some(bucket.min_latency)),
+                min_latency_value: bucket.min_latency,
+                success_rate: format_percent(success_rate),
+                success_rate_value: success_rate,
             }
         })
         .collect::<Vec<_>>();
@@ -546,84 +609,96 @@ fn trend_summary(
 ) -> Vec<DashboardTrendSummaryData> {
     match kind {
         DashboardTrendKind::Usage => vec![
-            DashboardTrendSummaryData {
-                label: "输入".to_string(),
-                value: points.iter().map(|point| point.input_tokens).sum(),
-                ratio: None,
-            },
-            DashboardTrendSummaryData {
-                label: "输出".to_string(),
-                value: points.iter().map(|point| point.output_tokens).sum(),
-                ratio: None,
-            },
-            DashboardTrendSummaryData {
-                label: "缓存".to_string(),
-                value: points.iter().map(|point| point.cached_tokens).sum(),
-                ratio: None,
-            },
+            trend_summary_item(
+                kind,
+                "输入",
+                points.iter().map(|point| point.input_tokens_value).sum(),
+                None,
+            ),
+            trend_summary_item(
+                kind,
+                "输出",
+                points.iter().map(|point| point.output_tokens_value).sum(),
+                None,
+            ),
+            trend_summary_item(
+                kind,
+                "缓存",
+                points.iter().map(|point| point.cached_tokens_value).sum(),
+                None,
+            ),
         ],
         DashboardTrendKind::Latency => {
             let samples = points
                 .iter()
-                .filter(|point| point.latency > 0)
+                .filter(|point| point.latency_value > 0)
                 .collect::<Vec<_>>();
             let avg = if samples.is_empty() {
                 0
             } else {
-                samples.iter().map(|point| point.latency).sum::<u64>() / samples.len() as u64
+                samples.iter().map(|point| point.latency_value).sum::<u64>() / samples.len() as u64
             };
             vec![
-                DashboardTrendSummaryData {
-                    label: "平均".to_string(),
-                    value: avg,
-                    ratio: None,
-                },
-                DashboardTrendSummaryData {
-                    label: "最高".to_string(),
-                    value: samples
+                trend_summary_item(kind, "平均", avg, None),
+                trend_summary_item(
+                    kind,
+                    "最高",
+                    samples
                         .iter()
-                        .map(|point| point.max_latency)
+                        .map(|point| point.max_latency_value)
                         .max()
                         .unwrap_or(0),
-                    ratio: None,
-                },
-                DashboardTrendSummaryData {
-                    label: "最低".to_string(),
-                    value: samples
+                    None,
+                ),
+                trend_summary_item(
+                    kind,
+                    "最低",
+                    samples
                         .iter()
-                        .filter_map(|point| (point.min_latency > 0).then_some(point.min_latency))
+                        .filter_map(|point| {
+                            (point.min_latency_value > 0).then_some(point.min_latency_value)
+                        })
                         .min()
                         .unwrap_or(0),
-                    ratio: None,
-                },
+                    None,
+                ),
             ]
         }
         DashboardTrendKind::Errors => {
-            let errors = points.iter().map(|point| point.errors).sum::<u64>();
-            let requests = points.iter().map(|point| point.requests).sum::<u64>();
+            let errors = points.iter().map(|point| point.errors_value).sum::<u64>();
+            let requests = points.iter().map(|point| point.requests_value).sum::<u64>();
             let success_rate = if requests > 0 {
                 Some(((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0)
             } else {
                 None
             };
             vec![
-                DashboardTrendSummaryData {
-                    label: "错误数".to_string(),
-                    value: errors,
-                    ratio: None,
-                },
-                DashboardTrendSummaryData {
-                    label: "成功率".to_string(),
-                    value: 0,
-                    ratio: success_rate,
-                },
-                DashboardTrendSummaryData {
-                    label: "总请求".to_string(),
-                    value: requests,
-                    ratio: None,
-                },
+                trend_summary_item(kind, "错误数", errors, None),
+                trend_summary_item(kind, "成功率", 0, success_rate),
+                trend_summary_item(kind, "总请求", requests, None),
             ]
         }
+    }
+}
+
+fn trend_summary_item(
+    kind: DashboardTrendKind,
+    label: &str,
+    value: u64,
+    ratio: Option<f64>,
+) -> DashboardTrendSummaryData {
+    DashboardTrendSummaryData {
+        label: label.to_string(),
+        value: trend_summary_value_display(kind, value),
+        ratio: ratio.map(format_percent),
+    }
+}
+
+fn trend_summary_value_display(kind: DashboardTrendKind, value: u64) -> String {
+    match kind {
+        DashboardTrendKind::Usage => format_tokens(value),
+        DashboardTrendKind::Latency => format_optional_duration_ms(Some(value)),
+        DashboardTrendKind::Errors => format_compact_number(value),
     }
 }
 
@@ -773,6 +848,8 @@ fn account_usage_data(
                 .get(&usage.account_id)
                 .copied()
                 .or_else(|| (status == "quota_exhausted").then_some(100.0));
+            let requests = nonnegative_i64_to_u64(usage.request_count);
+            let tokens = nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens);
             DashboardAccountUsageData {
                 name,
                 email: usage.email.clone().unwrap_or_else(|| "-".to_string()),
@@ -780,8 +857,8 @@ fn account_usage_data(
                     .plan_type
                     .clone()
                     .unwrap_or_else(|| "free".to_string()),
-                requests: nonnegative_i64_to_u64(usage.request_count),
-                tokens: nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens),
+                requests: format_compact_number(requests),
+                tokens: format_tokens(tokens),
                 quota_used_percent,
                 last_used: china_relative_time(usage.last_used_at, Utc::now()),
                 status,
@@ -847,10 +924,6 @@ fn percent_value(value: &Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))?;
     percent.is_finite().then_some(percent.clamp(0.0, 100.0))
-}
-
-fn nonnegative_i64_to_u64(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
 }
 
 fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
@@ -947,10 +1020,10 @@ mod tests {
 
         let cards = dashboard_cards_at(&[], &empty_usage_summary(), &buckets, now);
 
-        assert_eq!(cards.traffic.today_requests, 1);
-        assert_eq!(cards.traffic.yesterday_requests, 1);
-        assert_eq!(cards.tokens.today_tokens, 10);
-        assert_eq!(cards.tokens.yesterday_tokens, 20);
+        assert_eq!(cards.traffic.today_requests_value, 1);
+        assert_eq!(cards.traffic.yesterday_requests_value, 1);
+        assert_eq!(cards.tokens.today_tokens_value, 10);
+        assert_eq!(cards.tokens.yesterday_tokens_value, 20);
     }
 
     #[test]
@@ -962,7 +1035,7 @@ mod tests {
         let last = trend.points.last().expect("trend should contain points");
 
         assert_eq!(last.time, "02");
-        assert_eq!(last.requests, 1);
+        assert_eq!(last.requests_value, 1);
     }
 
     fn usage_bucket_at(created_at: &str, input_tokens: i64) -> AdminUsageTimeBucketRecord {

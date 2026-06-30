@@ -29,6 +29,9 @@ use crate::{
         monitoring::{billing, service::AdminUsageRecord},
     },
     infra::{
+        format::{
+            format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
+        },
         json::{clamp_limit, clamp_page, total_pages, Page},
         time::{china_datetime, china_relative_time, china_rfc3339},
     },
@@ -248,7 +251,7 @@ impl AdminAccountUsageData {
 
         Self {
             request_count,
-            request_count_display: format_count(nonnegative_i64_to_u64(request_count)),
+            request_count_display: format_plain_number(nonnegative_i64_to_u64(request_count)),
             empty_response_count,
             input_tokens,
             input_tokens_display: format_tokens(nonnegative_i64_to_u64(input_tokens)),
@@ -1033,7 +1036,7 @@ fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountModelUsageDat
     AdminAccountModelUsageData {
         model: usage.model,
         request_count,
-        request_count_display: format_count(request_count),
+        request_count_display: format_plain_number(request_count),
         success_rate,
         success_rate_display: format_percent(success_rate),
         input_tokens,
@@ -1370,32 +1373,6 @@ fn is_review_limit_label(value: Option<&str>) -> bool {
         || normalized == "codex_code_review"
         || normalized.contains("code_review")
         || normalized.contains("codex_review")
-}
-
-fn nonnegative_i64_to_u64(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
-}
-
-fn format_count(value: u64) -> String {
-    value.to_string()
-}
-
-fn format_tokens(value: u64) -> String {
-    if value >= 1_000_000 {
-        format!("{:.1}M", value as f64 / 1_000_000.0)
-    } else if value >= 1_000 {
-        format!("{:.1}K", value as f64 / 1_000.0)
-    } else {
-        value.to_string()
-    }
-}
-
-fn format_percent(value: f64) -> String {
-    format!("{value:.1}%")
-}
-
-fn format_cost(value: f64) -> String {
-    format!("${value:.2}")
 }
 
 struct ParsedAccountUpdate {

@@ -26,6 +26,11 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     },
     infra::{
+        format::{
+            format_compact_number, format_duration_ms, format_duration_ms_f64, format_multiplier,
+            format_number, format_percent, format_precise_cost, format_rate, format_token_price,
+            format_tokens,
+        },
         json::{clamp_limit, clamp_page, NumberedPage, Page},
         time::china_datetime,
     },
@@ -141,50 +146,55 @@ pub(crate) struct UsageRecordCostDetailsData {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageRecordSummaryData {
-    total_requests: u64,
-    error_requests: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    total_tokens: u64,
-    average_latency_ms: Option<f64>,
-    average_latency_ms_display: String,
+    total_requests: String,
+    error_requests: String,
+    error_rate: String,
+    input_tokens: String,
+    output_tokens: String,
+    cached_tokens: String,
+    total_tokens: String,
+    average_latency_ms: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageRecordBreakdownData {
     name: String,
-    request_count: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    total_tokens: u64,
-    cost: f64,
-    actual_cost: f64,
-    account_cost: f64,
-    cost_display: String,
-    actual_cost_display: String,
-    account_cost_display: String,
-    average_latency_ms: Option<f64>,
-    average_latency_ms_display: String,
+    request_count: String,
+    request_count_value: u64,
+    input_tokens: String,
+    output_tokens: String,
+    cached_tokens: String,
+    total_tokens: String,
+    total_tokens_value: u64,
+    total_tokens_total: String,
+    total_tokens_total_value: u64,
+    cost: String,
+    actual_cost: String,
+    account_cost: String,
+    average_latency_ms: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageRecordTrendPointData {
     date: String,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_creation_tokens: u64,
-    cached_tokens: u64,
-    total_tokens: u64,
-    cost: f64,
-    actual_cost: f64,
-    cost_display: String,
-    actual_cost_display: String,
-    average_latency_ms: Option<f64>,
-    average_latency_ms_display: String,
+    input_tokens: String,
+    input_tokens_value: u64,
+    output_tokens: String,
+    output_tokens_value: u64,
+    cache_creation_tokens: String,
+    cache_creation_tokens_value: u64,
+    cached_tokens: String,
+    cached_tokens_value: u64,
+    total_tokens: String,
+    total_tokens_value: u64,
+    cache_hit_rate: String,
+    cache_hit_rate_value: f64,
+    cost: String,
+    actual_cost: String,
+    average_latency_ms: String,
+    average_latency_ms_value: Option<f64>,
 }
 
 /// `GET /api/admin/usage/records`
@@ -279,12 +289,7 @@ pub(crate) async fn usage_records_model_distribution(
     {
         Ok(items) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                items
-                    .into_iter()
-                    .map(UsageRecordBreakdownData::from)
-                    .collect::<Vec<_>>(),
-            ),
+            AdminEnvelope::ok(usage_record_breakdown_items(items)),
         )),
         Err(error) => Err(log_error(&error)),
     }
@@ -307,12 +312,7 @@ pub(crate) async fn usage_records_endpoint_distribution(
     {
         Ok(items) => Ok(AdminResponse::new(
             StatusCode::OK,
-            AdminEnvelope::ok(
-                items
-                    .into_iter()
-                    .map(UsageRecordBreakdownData::from)
-                    .collect::<Vec<_>>(),
-            ),
+            AdminEnvelope::ok(usage_record_breakdown_items(items)),
         )),
         Err(error) => Err(log_error(&error)),
     }
@@ -674,16 +674,16 @@ fn usage_cost_details(
             .map(format_service_tier)
             .unwrap_or_else(|| "Default".to_string()),
         multiplier: breakdown.tier_multiplier,
-        input_cost_display: format_cost(breakdown.input_cost),
-        output_cost_display: format_cost(breakdown.output_cost),
-        cache_read_cost_display: format_cost(breakdown.cache_read_cost),
-        total_cost_display: format_cost(breakdown.total_cost),
-        billed_cost_display: format_cost(breakdown.total_cost),
-        original_cost_display: format_cost(original_cost),
+        input_cost_display: format_precise_cost(breakdown.input_cost),
+        output_cost_display: format_precise_cost(breakdown.output_cost),
+        cache_read_cost_display: format_precise_cost(breakdown.cache_read_cost),
+        total_cost_display: format_precise_cost(breakdown.total_cost),
+        billed_cost_display: format_precise_cost(breakdown.total_cost),
+        original_cost_display: format_precise_cost(original_cost),
         input_price_display: format_token_price(breakdown.input_price_per_mtoken),
         output_price_display: format_token_price(breakdown.output_price_per_mtoken),
         cache_read_price_display: format_token_price(breakdown.cache_read_price_per_mtoken),
-        multiplier_display: format!("{:.2}x", breakdown.tier_multiplier),
+        multiplier_display: format_multiplier(breakdown.tier_multiplier),
     })
 }
 
@@ -730,82 +730,6 @@ fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
         .filter(|value| *value >= 0)
 }
 
-fn format_duration_ms(value: Option<i64>) -> String {
-    let Some(value) = value.filter(|value| *value >= 0) else {
-        return "—".to_string();
-    };
-
-    if value < 1_000 {
-        return format!("{value} ms");
-    }
-
-    if value < 60_000 {
-        let seconds = value as f64 / 1_000.0;
-        return if seconds >= 10.0 {
-            format!("{seconds:.1} s")
-        } else {
-            format!("{seconds:.2} s")
-        };
-    }
-
-    format!("{:.1} min", value as f64 / 60_000.0)
-}
-
-fn format_duration_ms_f64(value: Option<f64>) -> String {
-    let Some(value) = value.filter(|value| value.is_finite() && *value >= 0.0) else {
-        return "—".to_string();
-    };
-    format_duration_ms(Some(value.round() as i64))
-}
-
-fn format_number(value: u64) -> String {
-    let text = value.to_string();
-    let mut output = String::with_capacity(text.len() + text.len() / 3);
-    for (index, ch) in text.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            output.push(',');
-        }
-        output.push(ch);
-    }
-    output.chars().rev().collect()
-}
-
-fn format_compact_number(value: u64) -> String {
-    if value < 1_000 {
-        return format_number(value);
-    }
-
-    if value < 1_000_000 {
-        let value = value as f64 / 1_000.0;
-        return if value >= 100.0 {
-            format!("{value:.0}K")
-        } else {
-            format!("{value:.1}K")
-        };
-    }
-
-    let value = value as f64 / 1_000_000.0;
-    if value >= 100.0 {
-        format!("{value:.0}M")
-    } else {
-        format!("{value:.1}M")
-    }
-}
-
-fn format_cost(value: f64) -> String {
-    if !value.is_finite() {
-        return "—".to_string();
-    }
-    format!("${value:.6}")
-}
-
-fn format_token_price(value: f64) -> String {
-    if !value.is_finite() {
-        return "—".to_string();
-    }
-    format!("${value:.4} / 1M Token")
-}
-
 fn format_service_tier(value: &str) -> String {
     match value {
         "priority" | "fast" => "Fast".to_string(),
@@ -818,54 +742,91 @@ fn format_service_tier(value: &str) -> String {
 impl From<UsageRecordSummary> for UsageRecordSummaryData {
     fn from(summary: UsageRecordSummary) -> Self {
         Self {
-            total_requests: summary.total_requests,
-            error_requests: summary.error_requests,
-            input_tokens: summary.input_tokens,
-            output_tokens: summary.output_tokens,
-            cached_tokens: summary.cached_tokens,
-            total_tokens: summary.total_tokens,
-            average_latency_ms: summary.average_latency_ms,
-            average_latency_ms_display: format_duration_ms_f64(summary.average_latency_ms),
+            total_requests: format_compact_number(summary.total_requests),
+            error_requests: format_compact_number(summary.error_requests),
+            error_rate: if summary.total_requests > 0 {
+                format_rate(Some(
+                    summary.error_requests as f64 / summary.total_requests as f64,
+                ))
+            } else {
+                "—".to_string()
+            },
+            input_tokens: format_tokens(summary.input_tokens),
+            output_tokens: format_tokens(summary.output_tokens),
+            cached_tokens: format_tokens(summary.cached_tokens),
+            total_tokens: format_tokens(summary.total_tokens),
+            average_latency_ms: format_duration_ms_f64(summary.average_latency_ms),
         }
     }
 }
 
 impl From<UsageRecordBreakdown> for UsageRecordBreakdownData {
     fn from(item: UsageRecordBreakdown) -> Self {
+        UsageRecordBreakdownData::from_item(item, 0)
+    }
+}
+
+impl UsageRecordBreakdownData {
+    fn from_item(item: UsageRecordBreakdown, total_tokens_total: u64) -> Self {
         Self {
             name: item.name,
-            request_count: item.request_count,
-            input_tokens: item.input_tokens,
-            output_tokens: item.output_tokens,
-            cached_tokens: item.cached_tokens,
-            total_tokens: item.total_tokens,
-            cost: item.cost,
-            actual_cost: item.actual_cost,
-            account_cost: item.account_cost,
-            cost_display: format_cost(item.cost),
-            actual_cost_display: format_cost(item.actual_cost),
-            account_cost_display: format_cost(item.account_cost),
-            average_latency_ms: item.average_latency_ms,
-            average_latency_ms_display: format_duration_ms_f64(item.average_latency_ms),
+            request_count: format_compact_number(item.request_count),
+            request_count_value: item.request_count,
+            input_tokens: format_tokens(item.input_tokens),
+            output_tokens: format_tokens(item.output_tokens),
+            cached_tokens: format_tokens(item.cached_tokens),
+            total_tokens: format_tokens(item.total_tokens),
+            total_tokens_value: item.total_tokens,
+            total_tokens_total: format_tokens(total_tokens_total),
+            total_tokens_total_value: total_tokens_total,
+            cost: format_precise_cost(item.cost),
+            actual_cost: format_precise_cost(item.actual_cost),
+            account_cost: format_precise_cost(item.account_cost),
+            average_latency_ms: format_duration_ms_f64(item.average_latency_ms),
         }
     }
 }
 
+fn usage_record_breakdown_items(items: Vec<UsageRecordBreakdown>) -> Vec<UsageRecordBreakdownData> {
+    let total_tokens_total = items
+        .iter()
+        .map(|item| item.total_tokens)
+        .fold(0_u64, u64::saturating_add);
+    items
+        .into_iter()
+        .map(|item| UsageRecordBreakdownData::from_item(item, total_tokens_total))
+        .collect()
+}
+
 impl From<UsageRecordTrendPoint> for UsageRecordTrendPointData {
     fn from(point: UsageRecordTrendPoint) -> Self {
+        let prompt_tokens = point
+            .input_tokens
+            .saturating_add(point.cache_creation_tokens)
+            .saturating_add(point.cached_tokens);
+        let cache_hit_rate_value = if prompt_tokens > 0 {
+            (point.cached_tokens as f64 / prompt_tokens as f64 * 100.0).round()
+        } else {
+            0.0
+        };
         Self {
             date: point.date,
-            input_tokens: point.input_tokens,
-            output_tokens: point.output_tokens,
-            cache_creation_tokens: point.cache_creation_tokens,
-            cached_tokens: point.cached_tokens,
-            total_tokens: point.total_tokens,
-            cost: point.cost,
-            actual_cost: point.actual_cost,
-            cost_display: format_cost(point.cost),
-            actual_cost_display: format_cost(point.actual_cost),
-            average_latency_ms: point.average_latency_ms,
-            average_latency_ms_display: format_duration_ms_f64(point.average_latency_ms),
+            input_tokens: format_tokens(point.input_tokens),
+            input_tokens_value: point.input_tokens,
+            output_tokens: format_tokens(point.output_tokens),
+            output_tokens_value: point.output_tokens,
+            cache_creation_tokens: format_tokens(point.cache_creation_tokens),
+            cache_creation_tokens_value: point.cache_creation_tokens,
+            cached_tokens: format_tokens(point.cached_tokens),
+            cached_tokens_value: point.cached_tokens,
+            total_tokens: format_tokens(point.total_tokens),
+            total_tokens_value: point.total_tokens,
+            cache_hit_rate: format_percent(cache_hit_rate_value),
+            cache_hit_rate_value,
+            cost: format_precise_cost(point.cost),
+            actual_cost: format_precise_cost(point.actual_cost),
+            average_latency_ms: format_duration_ms_f64(point.average_latency_ms),
+            average_latency_ms_value: point.average_latency_ms,
         }
     }
 }

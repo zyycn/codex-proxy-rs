@@ -93,23 +93,21 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(body["data"]["cards"]["traffic"]["rpm"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["tpm"], 30);
-    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["yesterdayRequests"], 1);
-    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], 30);
-    assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokens"], 30);
+    assert_eq!(body["data"]["cards"]["traffic"]["rpm"], "2");
+    assert_eq!(body["data"]["cards"]["traffic"]["tpm"], "30");
+    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "2");
+    assert_eq!(body["data"]["cards"]["traffic"]["todayRequestsValue"], 2);
+    assert_eq!(body["data"]["cards"]["traffic"]["yesterdayRequests"], "1");
+    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "30");
+    assert_eq!(body["data"]["cards"]["tokens"]["todayTokensValue"], 30);
+    assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokens"], "30");
     assert_eq!(
-        body["data"]["cards"]["cache"]["firstTokenLatencyMs"]
-            .as_u64()
-            .unwrap(),
-        300
+        body["data"]["cards"]["cache"]["firstTokenLatencyMs"],
+        "300 ms"
     );
     assert_eq!(
-        body["data"]["cards"]["cache"]["completionLatencyMs"]
-            .as_u64()
-            .unwrap(),
-        1_500
+        body["data"]["cards"]["cache"]["completionLatencyMs"],
+        "1.50 s"
     );
 }
 
@@ -128,14 +126,14 @@ async fn dashboard_summary_should_keep_trend_after_usage_records_are_cleared() {
     let body = dashboard_summary(app).await;
 
     assert_eq!(body["data"]["usageRecords"].as_array().unwrap().len(), 0);
-    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], 1);
-    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], 12);
+    assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "1");
+    assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "12");
     assert_eq!(
         body["data"]["trend"]["points"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|point| point["requests"].as_u64().unwrap())
+            .map(|point| point["requestsValue"].as_u64().unwrap())
             .sum::<u64>(),
         1
     );
@@ -226,7 +224,7 @@ async fn dashboard_summary_should_not_price_usage_summary_without_model_dimensio
     let body = dashboard_summary(app).await;
 
     assert_f64_eq(
-        body["data"]["cards"]["tokens"]["totalCostUsd"]
+        body["data"]["cards"]["tokens"]["totalCostUsdValue"]
             .as_f64()
             .unwrap(),
         0.0,
@@ -288,7 +286,7 @@ async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
         body["data"]["accountUsage"][0]["email"],
         "recent-light@example.com"
     );
-    assert_eq!(body["data"]["accountUsage"][0]["requests"], 660_000);
+    assert_eq!(body["data"]["accountUsage"][0]["requests"], "660K");
     assert_eq!(
         body["data"]["accountUsage"][1]["email"],
         "old-heavy@example.com"
@@ -335,7 +333,7 @@ async fn dashboard_summary_total_cost_for_usage_record(
         .unwrap();
 
     let body = dashboard_summary(app).await;
-    body["data"]["cards"]["tokens"]["totalCostUsd"]
+    body["data"]["cards"]["tokens"]["totalCostUsdValue"]
         .as_f64()
         .unwrap()
 }

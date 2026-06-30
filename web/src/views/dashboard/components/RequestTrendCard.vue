@@ -29,11 +29,11 @@ const { themeRevision } = storeToRefs(useUiStore())
 const hasSamples = computed(() =>
   props.points.some(
     (point) =>
-      point.requests > 0 ||
-      point.errors > 0 ||
-      point.latency > 0 ||
-      point.tokens > 0 ||
-      point.cachedTokens > 0,
+      point.requestsValue > 0 ||
+      point.errorsValue > 0 ||
+      point.latencyValue > 0 ||
+      point.tokensValue > 0 ||
+      point.cachedTokensValue > 0,
   ),
 )
 
@@ -92,19 +92,31 @@ function themeColor(name: string, fallback: string) {
 function formatTooltip(params: unknown) {
   const rows = Array.isArray(params) ? params : [params]
   const title = tooltipValue(rows[0], 'axisValueLabel')
+  const point = props.points[tooltipIndex(rows[0])]
   const lines = rows.map((row) => {
     const name = tooltipValue(row, 'seriesName')
     const value = tooltipValue(row, 'value')
     const marker = tooltipValue(row, 'marker')
-    const unitValue = tooltipDisplayValue(name, value)
+    const unitValue = tooltipDisplayValue(point, name, value)
     return `${marker}${name}: ${unitValue}`
   })
   return [title, ...lines].filter(Boolean).join('<br/>')
 }
 
-function tooltipDisplayValue(name: string, value: string): string {
-  if (name === '成功率') return `${value}%`
-  if (activeTab.value === '延迟') return formatLatency(Number(value))
+function tooltipDisplayValue(point: any, name: string, value: string): string {
+  if (activeTab.value === '用量') {
+    if (name === '输入') return point?.inputTokens ?? value
+    if (name === '输出') return point?.outputTokens ?? value
+    if (name === '缓存') return point?.cachedTokens ?? value
+  }
+  if (activeTab.value === '延迟') {
+    if (name === '平均') return point?.latency ?? value
+    if (name === '最高') return point?.maxLatency ?? value
+    if (name === '最低') return point?.minLatency ?? value
+  }
+  if (name === '错误数') return point?.errors ?? value
+  if (name === '成功率') return point?.successRate ?? value
+  if (name === '总请求') return point?.requests ?? value
   return value
 }
 
@@ -114,23 +126,29 @@ function tooltipValue(source: unknown, key: string): string {
   return typeof value === 'number' || typeof value === 'string' ? String(value) : ''
 }
 
+function tooltipIndex(source: unknown) {
+  if (typeof source !== 'object' || source === null || !('dataIndex' in source)) return -1
+  const value = (source as Record<string, unknown>).dataIndex
+  return typeof value === 'number' ? value : -1
+}
+
 function getSeries() {
   if (activeTab.value === '用量') {
     return [
       lineSeries(
         '输入',
-        props.points.map((p) => p.inputTokens),
+        props.points.map((p) => p.inputTokensValue),
         themeColor('--cp-info', '#2563EB'),
         true,
       ),
       lineSeries(
         '输出',
-        props.points.map((p) => p.outputTokens),
+        props.points.map((p) => p.outputTokensValue),
         themeColor('--cp-success', '#10B981'),
       ),
       lineSeries(
         '缓存',
-        props.points.map((p) => p.cachedTokens),
+        props.points.map((p) => p.cachedTokensValue),
         themeColor('--cp-text-tertiary', '#94A3B8'),
       ),
     ]
@@ -139,18 +157,18 @@ function getSeries() {
     return [
       lineSeries(
         '平均',
-        props.points.map((p) => p.latency),
+        props.points.map((p) => p.latencyValue),
         themeColor('--cp-normal', '#0F9F9A'),
         true,
       ),
       lineSeries(
         '最高',
-        props.points.map((p) => p.maxLatency),
+        props.points.map((p) => p.maxLatencyValue),
         themeColor('--cp-warning', '#F59E0B'),
       ),
       lineSeries(
         '最低',
-        props.points.map((p) => p.minLatency),
+        props.points.map((p) => p.minLatencyValue),
         themeColor('--cp-success', '#10B981'),
       ),
     ]
@@ -158,20 +176,20 @@ function getSeries() {
   return [
     lineSeries(
       '错误数',
-      props.points.map((p) => p.errors),
+      props.points.map((p) => p.errorsValue),
       themeColor('--cp-danger', '#EF4444'),
       true,
     ),
     lineSeries(
       '成功率',
-      props.points.map((p) => p.successRate),
+      props.points.map((p) => p.successRateValue),
       themeColor('--cp-success', '#10B981'),
       false,
       1,
     ),
     lineSeries(
       '总请求',
-      props.points.map((p) => p.requests),
+      props.points.map((p) => p.requestsValue),
       themeColor('--cp-info', '#2563EB'),
     ),
   ]
@@ -203,12 +221,6 @@ function lineSeries(name: string, data: number[], color: string, area = false, y
         }
       : undefined,
   }
-}
-
-function formatLatency(ms: number): string {
-  if (!ms) return '—'
-  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`
-  return `${ms}ms`
 }
 
 function summaryMarkerStyle(item: any) {

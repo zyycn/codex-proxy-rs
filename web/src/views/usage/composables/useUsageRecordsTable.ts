@@ -187,13 +187,14 @@ export function useUsageRecordsTable(options: {
 
 function emptySummary() {
   return {
-    totalRequests: 0,
-    errorRequests: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cachedTokens: 0,
-    totalTokens: 0,
-    averageLatencyMs: null,
+    totalRequests: '0',
+    errorRequests: '0',
+    errorRate: '—',
+    inputTokens: '0',
+    outputTokens: '0',
+    cachedTokens: '0',
+    totalTokens: '0',
+    averageLatencyMs: '—',
   }
 }
 

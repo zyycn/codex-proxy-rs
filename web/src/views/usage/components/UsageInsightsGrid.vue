@@ -7,7 +7,6 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUiStore } from '@/stores/modules/ui'
-import { formatCostMetric } from '../constants'
 import UsageDistributionPanel from './UsageDistributionPanel.vue'
 
 const props = defineProps<{
@@ -42,14 +41,14 @@ const latencyPoints = computed(() => props.insights?.latencyTrend ?? [])
 const hasTrend = computed(() =>
   trendPoints.value.some(
     (point: any) =>
-      point.totalTokens > 0 ||
-      point.cacheCreationTokens > 0 ||
-      point.cachedTokens > 0 ||
-      point.averageLatencyMs > 0,
+      point.totalTokensValue > 0 ||
+      point.cacheCreationTokensValue > 0 ||
+      point.cachedTokensValue > 0 ||
+      point.averageLatencyMsValue > 0,
   ),
 )
 const hasLatencyTrend = computed(() =>
-  latencyPoints.value.some((point: any) => Number(point.averageLatencyMs || 0) > 0),
+  latencyPoints.value.some((point: any) => Number(point.averageLatencyMsValue || 0) > 0),
 )
 
 const trendOption = computed<EChartsOption>(() => ({
@@ -163,7 +162,7 @@ const latencyOption = computed<EChartsOption>(() => ({
   series: [
     lineSeries(
       '平均延迟',
-      latencyPoints.value.map((point: any) => Number(point.averageLatencyMs || 0)),
+      latencyPoints.value.map((point: any) => Number(point.averageLatencyMsValue || 0)),
       themeColor('--cp-warning', '#D97706'),
       true,
     ),
@@ -174,28 +173,28 @@ function trendSeries() {
   return [
     lineSeries(
       '输入',
-      trendPoints.value.map((point: any) => point.inputTokens),
+      trendPoints.value.map((point: any) => point.inputTokensValue),
       themeColor('--cp-info', '#2563EB'),
       true,
     ),
     lineSeries(
       '输出',
-      trendPoints.value.map((point: any) => point.outputTokens),
+      trendPoints.value.map((point: any) => point.outputTokensValue),
       themeColor('--cp-success', '#10B981'),
     ),
     lineSeries(
       '缓存写入',
-      trendPoints.value.map((point: any) => point.cacheCreationTokens),
+      trendPoints.value.map((point: any) => point.cacheCreationTokensValue),
       themeColor('--cp-warning', '#D97706'),
     ),
     lineSeries(
       '缓存读取',
-      trendPoints.value.map((point: any) => point.cachedTokens),
+      trendPoints.value.map((point: any) => point.cachedTokensValue),
       themeColor('--cp-info-text', '#0EA5E9'),
     ),
     lineSeries(
       '缓存命中率',
-      trendPoints.value.map((point: any) => cacheHitRate(point)),
+      trendPoints.value.map((point: any) => point.cacheHitRateValue),
       themeColor('--cp-focus-ring', '#8B5CF6'),
       false,
       1,
@@ -232,39 +231,25 @@ function lineSeries(name: string, data: number[], color: string, area = false, y
   }
 }
 
-function cacheHitRate(point: any) {
-  const inputTokens = Number(point.inputTokens || 0)
-  const cacheCreationTokens = Number(point.cacheCreationTokens || 0)
-  const cachedTokens = Number(point.cachedTokens || 0)
-  const promptTokens = inputTokens + cacheCreationTokens + cachedTokens
-  if (!promptTokens) return 0
-  return Math.round((cachedTokens / promptTokens) * 100)
-}
-
 function formatTooltip(params: unknown) {
   const rows = Array.isArray(params) ? params : [params]
   const title = tooltipValue(rows[0], 'axisValueLabel')
   const point = trendPoints.value[tooltipIndex(rows[0])]
   const lines = rows.map((row) => {
     const name = tooltipValue(row, 'seriesName')
-    const value = Number(tooltipValue(row, 'value') || 0)
     const marker = tooltipValue(row, 'marker')
-    const display = name === '缓存命中率' ? `${value}%` : formatCompactNumber(value)
+    const display = trendPointDisplay(point, name)
     return `${marker}${name}: ${display}`
   })
-  const costLine = point
-    ? `实际: ${point.actualCostDisplay || formatCostMetric(point.actualCost)} ｜ 标准: ${
-        point.costDisplay || formatCostMetric(point.cost)
-      }`
-    : ''
+  const costLine = point ? `实际: ${point.actualCost} ｜ 标准: ${point.cost}` : ''
   return [title, ...lines, costLine].filter(Boolean).join('<br/>')
 }
 
 function formatLatencyTooltip(params: unknown) {
   const rows = Array.isArray(params) ? params : [params]
   const title = tooltipValue(rows[0], 'axisValueLabel')
-  const value = Number(tooltipValue(rows[0], 'value') || 0)
-  return [title, `平均延迟: ${Math.round(value)} ms`].filter(Boolean).join('<br/>')
+  const point = latencyPoints.value[tooltipIndex(rows[0])]
+  return [title, `平均延迟: ${point?.averageLatencyMs}`].filter(Boolean).join('<br/>')
 }
 
 function tooltipValue(source: unknown, key: string): string {
@@ -279,10 +264,13 @@ function tooltipIndex(source: unknown) {
   return typeof value === 'number' ? value : -1
 }
 
-function formatCompactNumber(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
-  return new Intl.NumberFormat('zh-CN').format(value || 0)
+function trendPointDisplay(point: any, name: string) {
+  if (name === '输入') return point?.inputTokens
+  if (name === '输出') return point?.outputTokens
+  if (name === '缓存写入') return point?.cacheCreationTokens
+  if (name === '缓存读取') return point?.cachedTokens
+  if (name === '缓存命中率') return point?.cacheHitRate
+  return ''
 }
 
 function chartGridLineColor() {

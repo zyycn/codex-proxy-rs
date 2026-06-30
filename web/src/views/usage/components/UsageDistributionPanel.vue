@@ -6,7 +6,6 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import { formatCostMetric, formatUsageMetric } from '../constants'
 
 const props = defineProps<{
   title: string
@@ -27,6 +26,7 @@ const sortedItems = computed(() =>
 const totalMetric = computed(() =>
   sortedItems.value.reduce((sum, item) => sum + metricValue(item), 0),
 )
+const totalMetricText = computed(() => sortedItems.value[0]?.totalTokensTotal ?? '0')
 
 const tableGridClass = computed(() =>
   props.showCostColumn === false
@@ -40,7 +40,7 @@ const tableWidthClass = computed(() =>
 
 const hasData = computed(() =>
   sortedItems.value.some(
-    (item) => Number(item.requestCount || 0) > 0 || Number(item.totalTokens || 0) > 0,
+    (item) => Number(item.requestCountValue || 0) > 0 || Number(item.totalTokensValue || 0) > 0,
   ),
 )
 
@@ -74,30 +74,7 @@ const donutStyle = computed(() => {
 })
 
 function metricValue(item: any) {
-  return Number(item.totalTokens || 0)
-}
-
-function formatCompactUsage(value: number) {
-  const number = Number(value || 0)
-  if (number >= 1_000_000_000) return `${trimFixed(number / 1_000_000_000, 1)}B`
-  if (number >= 1_000_000) return `${trimFixed(number / 1_000_000, 1)}M`
-  if (number >= 10_000) return `${trimFixed(number / 1_000, 1)}K`
-  if (number >= 1_000) return `${trimFixed(number / 1_000, 2)}K`
-  return new Intl.NumberFormat('zh-CN').format(number)
-}
-
-function formatCompactCost(value: number) {
-  const number = Number(value || 0)
-  if (!number) return '$0'
-  if (number >= 1_000_000) return `$${trimFixed(number / 1_000_000, 2)}M`
-  if (number >= 1_000) return `$${trimFixed(number / 1_000, 2)}K`
-  if (number >= 1) return `$${trimFixed(number, 2)}`
-  if (number >= 0.01) return `$${trimFixed(number, 4)}`
-  return `$${number.toFixed(6)}`
-}
-
-function trimFixed(value: number, digits: number) {
-  return value.toFixed(digits).replace(/\.?0+$/, '')
+  return Number(item.totalTokensValue || 0)
 }
 
 function distributionNameParts(name: unknown) {
@@ -144,9 +121,9 @@ function distributionNameParts(name: unknown) {
               <span class="text-[11px] font-bold text-(--cp-text-muted)">Token</span>
               <strong
                 class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary) lg:text-[18px]"
-                :title="formatUsageMetric(totalMetric)"
+                :title="totalMetricText"
               >
-                {{ formatCompactUsage(totalMetric) }}
+                {{ totalMetricText }}
               </strong>
             </div>
           </div>
@@ -203,32 +180,32 @@ function distributionNameParts(name: unknown) {
                     </div>
                   </div>
                   <span class="text-center font-mono tabular-nums text-(--cp-text-primary)">
-                    {{ formatCompactUsage(item.requestCount) }}
+                    {{ item.requestCount }}
                   </span>
                   <span
                     class="text-center font-mono tabular-nums text-(--cp-text-secondary)"
-                    :title="formatUsageMetric(item.totalTokens)"
+                    :title="item.totalTokens"
                   >
-                    {{ formatCompactUsage(item.totalTokens) }}
+                    {{ item.totalTokens }}
                   </span>
                   <span
                     class="text-center font-mono tabular-nums text-(--cp-success-text)"
-                    :title="item.actualCostDisplay || formatCostMetric(item.actualCost)"
+                    :title="item.actualCost"
                   >
-                    {{ formatCompactCost(item.actualCost) }}
+                    {{ item.actualCost }}
                   </span>
                   <span
                     v-if="showCostColumn !== false"
                     class="text-center font-mono tabular-nums text-(--cp-warning-text)"
-                    :title="item.accountCostDisplay || formatCostMetric(item.accountCost)"
+                    :title="item.accountCost"
                   >
-                    {{ formatCompactCost(item.accountCost) }}
+                    {{ item.accountCost }}
                   </span>
                   <span
                     class="text-center font-mono tabular-nums text-(--cp-text-secondary)"
-                    :title="item.costDisplay || formatCostMetric(item.cost)"
+                    :title="item.cost"
                   >
-                    {{ formatCompactCost(item.cost) }}
+                    {{ item.cost }}
                   </span>
                 </div>
               </div>
