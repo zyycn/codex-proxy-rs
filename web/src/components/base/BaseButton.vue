@@ -52,14 +52,14 @@ const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-7 gap-1.5 px-3 text-xs',
   default: 'h-9 gap-2 px-4 text-[13px]',
   md: 'h-11 gap-2 px-4 text-[13px]',
-  lg: 'h-10.5 gap-2.5 px-5 text-[15px]',
+  lg: 'h-11.5 gap-2.5 px-5 text-[15px]',
 }
 
 const iconOnlySizeClasses: Record<ButtonSize, string> = {
   sm: 'size-8 rounded-(--cp-icon-button-radius)',
   default: 'size-9 rounded-(--cp-icon-button-radius)',
   md: 'size-11 rounded-(--cp-icon-button-radius)',
-  lg: 'size-10.5 rounded-(--cp-icon-button-radius)',
+  lg: 'size-11.5 rounded-(--cp-icon-button-radius)',
 }
 
 const loadingIconSize: Record<ButtonSize, number> = {
