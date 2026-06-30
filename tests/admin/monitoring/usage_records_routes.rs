@@ -273,13 +273,13 @@ async fn admin_usage_records_summary_should_aggregate_filtered_usage() {
     let body = response_json(response).await;
 
     assert_eq!(body["code"], 200);
-    assert_eq!(body["data"]["totalRequests"], 2);
-    assert_eq!(body["data"]["errorRequests"], 1);
-    assert_eq!(body["data"]["inputTokens"], 107);
-    assert_eq!(body["data"]["outputTokens"], 43);
-    assert_eq!(body["data"]["cachedTokens"], 20);
-    assert_eq!(body["data"]["totalTokens"], 150);
-    assert_eq!(body["data"]["averageLatencyMs"], 900.0);
+    assert_eq!(body["data"]["totalRequests"], "2");
+    assert_eq!(body["data"]["errorRequests"], "1");
+    assert_eq!(body["data"]["inputTokens"], "107");
+    assert_eq!(body["data"]["outputTokens"], "43");
+    assert_eq!(body["data"]["cachedTokens"], "20");
+    assert_eq!(body["data"]["totalTokens"], "150");
+    assert_eq!(body["data"]["averageLatencyMs"], "900 ms");
 }
 
 #[tokio::test]
@@ -339,8 +339,11 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
     let requested_body = response_json(requested_models).await;
     assert_eq!(requested_body["code"], 200);
     assert_eq!(requested_body["data"][0]["name"], "client-alias");
-    assert_eq!(requested_body["data"][0]["totalTokens"], 42);
-    assert_eq!(requested_body["data"][0]["actualCostDisplay"], "$0.000483");
+    assert_eq!(requested_body["data"][0]["totalTokens"], "42");
+    assert_eq!(requested_body["data"][0]["totalTokensValue"], 42);
+    assert_eq!(requested_body["data"][0]["totalTokensTotal"], "48");
+    assert_eq!(requested_body["data"][0]["totalTokensTotalValue"], 48);
+    assert_eq!(requested_body["data"][0]["actualCost"], "$0.000483");
 
     let upstream_models = app
         .clone()
@@ -414,12 +417,13 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
         .await
         .unwrap();
     let token_body = response_json(token_trend).await;
-    assert_eq!(token_body["data"][0]["inputTokens"], 35);
-    assert_eq!(token_body["data"][0]["outputTokens"], 13);
-    assert_eq!(token_body["data"][0]["cacheCreationTokens"], 0);
-    assert_eq!(token_body["data"][0]["cachedTokens"], 6);
-    assert_eq!(token_body["data"][0]["actualCostDisplay"], "$0.000538");
-    assert_eq!(token_body["data"][0]["costDisplay"], "$0.000538");
+    assert_eq!(token_body["data"][0]["inputTokens"], "35");
+    assert_eq!(token_body["data"][0]["inputTokensValue"], 35);
+    assert_eq!(token_body["data"][0]["outputTokens"], "13");
+    assert_eq!(token_body["data"][0]["cacheCreationTokens"], "0");
+    assert_eq!(token_body["data"][0]["cachedTokens"], "6");
+    assert_eq!(token_body["data"][0]["actualCost"], "$0.000538");
+    assert_eq!(token_body["data"][0]["cost"], "$0.000538");
 
     let latency_trend = app
         .oneshot(
@@ -434,7 +438,7 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
         .unwrap();
     assert_eq!(
         response_json(latency_trend).await["data"][0]["averageLatencyMs"],
-        180.0
+        "180 ms"
     );
 }
 
@@ -485,7 +489,8 @@ async fn admin_usage_record_trends_should_bucket_by_china_calendar_day() {
     let token_body = response_json(token_trend).await;
     assert_eq!(token_body["data"][0]["date"], "2026-06-29");
     assert_eq!(token_body["data"][1]["date"], "2026-06-30");
-    assert_eq!(token_body["data"][1]["inputTokens"], 20);
+    assert_eq!(token_body["data"][1]["inputTokens"], "20");
+    assert_eq!(token_body["data"][1]["inputTokensValue"], 20);
 
     let latency_trend = app
         .oneshot(
@@ -500,7 +505,7 @@ async fn admin_usage_record_trends_should_bucket_by_china_calendar_day() {
         .unwrap();
     let latency_body = response_json(latency_trend).await;
     assert_eq!(latency_body["data"][1]["date"], "2026-06-30");
-    assert_eq!(latency_body["data"][1]["averageLatencyMs"], 300.0);
+    assert_eq!(latency_body["data"][1]["averageLatencyMs"], "300 ms");
 }
 
 #[tokio::test]
@@ -557,7 +562,8 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
     let upstream_body = response_json(upstream_models).await;
     assert_eq!(upstream_body["code"], 200);
     assert_eq!(upstream_body["data"][0]["name"], "gpt-5.5");
-    assert_eq!(upstream_body["data"][0]["totalTokens"], 42);
+    assert_eq!(upstream_body["data"][0]["totalTokens"], "42");
+    assert_eq!(upstream_body["data"][0]["totalTokensValue"], 42);
 
     let mappings = app
         .clone()
@@ -611,8 +617,8 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
         .await
         .unwrap();
     let token_body = response_json(token_trend).await;
-    assert_eq!(token_body["data"][0]["inputTokens"], 35);
-    assert_eq!(token_body["data"][0]["cachedTokens"], 6);
+    assert_eq!(token_body["data"][0]["inputTokens"], "35");
+    assert_eq!(token_body["data"][0]["cachedTokens"], "6");
 
     let latency_trend = app
         .clone()
@@ -628,7 +634,7 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
         .unwrap();
     assert_eq!(
         response_json(latency_trend).await["data"][0]["averageLatencyMs"],
-        180.0
+        "180 ms"
     );
 
     let invalid_source = app
@@ -695,7 +701,7 @@ async fn admin_usage_records_should_filter_summary_and_table_by_time_range() {
         )
         .await
         .unwrap();
-    assert_eq!(response_json(summary).await["data"]["totalRequests"], 1);
+    assert_eq!(response_json(summary).await["data"]["totalRequests"], "1");
 }
 
 #[tokio::test]

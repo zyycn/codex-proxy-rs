@@ -96,31 +96,42 @@ export function useDashboard(): any {
     return {
       cards: {
         accounts: {
-          total: 0,
-          enabled: 0,
-          abnormal: 0,
+          total: '0',
+          totalValue: 0,
+          enabled: '0',
+          enabledValue: 0,
+          abnormal: '0',
+          abnormalValue: 0,
         },
         traffic: {
-          todayRequests: 0,
-          yesterdayRequests: 0,
-          totalRequests: 0,
-          rpm: 0,
-          tpm: 0,
+          todayRequests: '0',
+          todayRequestsValue: 0,
+          yesterdayRequests: '0',
+          yesterdayRequestsValue: 0,
+          totalRequests: '0',
+          rpm: '0',
+          tpm: '0',
         },
         tokens: {
-          todayTokens: 0,
-          yesterdayTokens: 0,
-          totalTokens: 0,
-          todayCostUsd: null,
-          totalCostUsd: null,
+          todayTokens: '0',
+          todayTokensValue: 0,
+          yesterdayTokens: '0',
+          yesterdayTokensValue: 0,
+          totalTokens: '0',
+          todayCostUsd: '—',
+          todayCostUsdValue: 0,
+          totalCostUsd: '—',
+          totalCostUsdValue: 0,
         },
         cache: {
-          todayHitRate: null,
-          yesterdayHitRate: null,
-          totalHitRate: null,
-          totalCachedTokens: 0,
-          firstTokenLatencyMs: null,
-          completionLatencyMs: null,
+          todayHitRate: '—',
+          todayHitRateValue: null,
+          yesterdayHitRate: '—',
+          yesterdayHitRateValue: null,
+          totalHitRate: '—',
+          totalCachedTokens: '0',
+          firstTokenLatencyMs: '—',
+          completionLatencyMs: '—',
         },
       },
       trend: {
@@ -165,75 +176,75 @@ export function useDashboard(): any {
     return [
       {
         title: '账号',
-        value: formatNumber(accounts.total),
+        value: accounts.total,
         icon: Users,
         tone: 'normal',
         details: [
           {
             label: '启用',
-            value: formatNumber(accounts.enabled),
-            tone: accounts.enabled > 0 ? 'success' : 'normal',
+            value: accounts.enabled,
+            tone: accounts.enabledValue > 0 ? 'success' : 'normal',
           },
           {
             label: '异常',
-            value: formatNumber(accounts.abnormal),
-            tone: accounts.abnormal > 0 ? 'danger' : 'normal',
+            value: accounts.abnormal,
+            tone: accounts.abnormalValue > 0 ? 'danger' : 'normal',
           },
         ],
       },
       {
         title: '今日请求',
-        value: formatNumber(traffic.todayRequests),
+        value: traffic.todayRequests,
         icon: Activity,
         tone: 'info',
         sparkline: sparkline(
-          points.map((point) => point.requests),
+          points.map((point) => point.requestsValue),
           'info',
         ),
-        trend: trendState(traffic.todayRequests, traffic.yesterdayRequests, 'info'),
+        trend: trendState(traffic.todayRequestsValue, traffic.yesterdayRequestsValue, 'info'),
         details: [
-          { label: '总请求', value: formatNumber(traffic.totalRequests), tone: 'info' },
+          { label: '总请求', value: traffic.totalRequests, tone: 'info' },
           {
             label: '首 Token',
-            value: formatLatency(cache.firstTokenLatencyMs),
+            value: cache.firstTokenLatencyMs,
             tone: 'info',
           },
         ],
       },
       {
         title: '今日 Token',
-        value: formatTokens(tokens.todayTokens),
+        value: tokens.todayTokens,
         icon: FileText,
         tone: 'success',
         sparkline: sparkline(
-          points.map((point) => point.tokens),
+          points.map((point) => point.tokensValue),
           'success',
         ),
-        trend: trendState(tokens.todayTokens, tokens.yesterdayTokens, 'success'),
+        trend: trendState(tokens.todayTokensValue, tokens.yesterdayTokensValue, 'success'),
         details: [
-          { label: '总 Token', value: formatTokens(tokens.totalTokens), tone: 'success' },
+          { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
             label: '计费',
-            value: `${formatCost(tokens.totalCostUsd)} / ${formatCost(tokens.todayCostUsd)}`,
+            value: `${tokens.totalCostUsd} / ${tokens.todayCostUsd}`,
             tone: 'success',
           },
         ],
       },
       {
         title: '今日缓存命中',
-        value: formatRate(cache.todayHitRate),
+        value: cache.todayHitRate,
         icon: Timer,
-        tone: cache.todayHitRate && cache.todayHitRate > 0 ? 'warning' : 'normal',
+        tone: cache.todayHitRateValue && cache.todayHitRateValue > 0 ? 'warning' : 'normal',
         sparkline: sparkline(
-          points.map((point) => point.cachedTokens),
+          points.map((point) => point.cachedTokensValue),
           'warning',
         ),
-        trend: trendState(cache.todayHitRate ?? 0, cache.yesterdayHitRate ?? 0, 'warning'),
+        trend: trendState(cache.todayHitRateValue ?? 0, cache.yesterdayHitRateValue ?? 0, 'warning'),
         details: [
-          { label: '总缓存命中', value: formatRate(cache.totalHitRate), tone: 'warning' },
+          { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
           {
             label: '缓存 Token',
-            value: formatTokens(cache.totalCachedTokens),
+            value: cache.totalCachedTokens,
             tone: 'warning',
           },
         ],
@@ -251,7 +262,7 @@ export function useDashboard(): any {
       if (trend.kind === 'latency') {
         return {
           label: item.label,
-          value: formatLatency(item.value),
+          value: item.value,
           tone: trendSummaryTone(item.label),
           colorVar: trendSummaryColorVar(trend.kind, item.label),
         }
@@ -259,16 +270,14 @@ export function useDashboard(): any {
       if (item.ratio !== null && item.ratio !== undefined) {
         return {
           label: item.label,
-          value: `${item.ratio.toFixed(1)}%`,
+          value: item.ratio,
           tone: trendSummaryTone(item.label),
           colorVar: trendSummaryColorVar(trend.kind, item.label),
         }
       }
-      const formatter =
-        trend.kind === 'usage' && item.label !== '总请求' ? formatTokens : formatNumber
       return {
         label: item.label,
-        value: formatter(item.value),
+        value: item.value,
         tone: trendSummaryTone(item.label),
         colorVar: trendSummaryColorVar(trend.kind, item.label),
       }
@@ -282,8 +291,8 @@ export function useDashboard(): any {
       name: item.name,
       email: item.email || '-',
       plan: item.plan || 'free',
-      requests: formatNumber(item.requests),
-      tokens: formatTokens(item.tokens),
+      requests: item.requests,
+      tokens: item.tokens,
       lastUsed: item.lastUsed || '-',
       tone,
       quotaPercent,
@@ -356,42 +365,6 @@ export function useDashboard(): any {
     if (status === 'banned' || status === 'disabled') return 'danger'
     if (status === 'refreshing') return 'info'
     return 'normal'
-  }
-
-  function formatNumber(num: number): string {
-    if (num >= 1_000_000_000) return `${formatCompact(num / 1_000_000_000)}B`
-    if (num >= 1_000_000) return `${formatCompact(num / 1_000_000)}M`
-    if (num >= 1_000) return `${formatCompact(num / 1_000)}K`
-    return String(num)
-  }
-
-  function formatTokens(tokens: number): string {
-    return formatNumber(tokens)
-  }
-
-  function formatCompact(value: number): string {
-    const rounded =
-      value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)
-    return rounded.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
-  }
-
-  function formatRate(value: number | null | undefined): string {
-    if (value === null || value === undefined) return '-'
-    return `${(value * 100).toFixed(1)}%`
-  }
-
-  function formatCost(value: number | null | undefined): string {
-    if (value === null || value === undefined) return '-'
-    if (Math.abs(value) >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`
-    if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`
-    if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(2)}K`
-    return `$${value.toFixed(2)}`
-  }
-
-  function formatLatency(ms: number | null | undefined): string {
-    if (!ms) return '-'
-    if (ms >= 1000) return `${formatCompact(ms / 1000)}s`
-    return `${ms}ms`
   }
 
   onMounted(() => {

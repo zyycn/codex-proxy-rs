@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { Activity, CircleAlert, FileText, Timer } from '@lucide/vue'
 
-import { formatCompactUsageMetric, formatUsageMetric } from '../constants'
-
 const props = defineProps<{
   summary: any
 }>()
@@ -12,7 +10,7 @@ const items = [
     key: 'requests',
     label: '总请求',
     icon: Activity,
-    value: () => formatUsageMetric(props.summary.totalRequests),
+    value: () => props.summary.totalRequests,
     detail: () => '筛选范围内',
     tone: 'text-(--cp-info-text) bg-(--cp-info-bg)',
   },
@@ -20,38 +18,27 @@ const items = [
     key: 'tokens',
     label: '总 Token',
     icon: FileText,
-    value: () => formatCompactUsageMetric(props.summary.totalTokens),
-    detail: () =>
-      `输入 ${formatCompactUsageMetric(props.summary.inputTokens)} / 输出 ${formatCompactUsageMetric(
-        props.summary.outputTokens,
-      )}`,
+    value: () => props.summary.totalTokens,
+    detail: () => `输入 ${props.summary.inputTokens} / 输出 ${props.summary.outputTokens}`,
     tone: 'text-(--cp-success-text) bg-(--cp-success-bg)',
   },
   {
     key: 'errors',
     label: '错误请求',
     icon: CircleAlert,
-    value: () => formatUsageMetric(props.summary.errorRequests),
-    detail: () => errorRateText(props.summary),
+    value: () => props.summary.errorRequests,
+    detail: () => `错误率 ${props.summary.errorRate}`,
     tone: 'text-(--cp-danger-text) bg-(--cp-danger-bg)',
   },
   {
     key: 'latency',
     label: '平均耗时',
     icon: Timer,
-    value: () => props.summary.averageLatencyMsDisplay || '—',
-    detail: () => `缓存 ${formatCompactUsageMetric(props.summary.cachedTokens)}`,
+    value: () => props.summary.averageLatencyMs,
+    detail: () => `缓存 ${props.summary.cachedTokens}`,
     tone: 'text-(--cp-normal-text) bg-(--cp-normal-bg)',
   },
 ]
-
-function errorRateText(summary: any) {
-  if (!summary.totalRequests) {
-    return '错误率 0%'
-  }
-
-  return `错误率 ${((summary.errorRequests / summary.totalRequests) * 100).toFixed(1)}%`
-}
 </script>
 
 <template>

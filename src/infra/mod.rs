@@ -4,6 +4,8 @@
 
 /// 数据库连接与 SQLite 管理。
 pub mod database;
+/// 展示格式化辅助。
+pub mod format;
 /// 身份验证原语（管理员密码、API Key 哈希）。
 pub mod identity;
 /// JSON 序列化和分页原语。
