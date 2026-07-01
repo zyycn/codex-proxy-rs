@@ -1043,7 +1043,7 @@ fn replace_release_files(
             AdminError::internal(format!("Failed to remove old binary backup: {error}"))
         })?;
     }
-    if let Err(error) = fs::rename(exe_path, &binary_backup) {
+    if let Err(error) = move_file(exe_path, &binary_backup) {
         if web_replaced {
             let _ = restore_dir(web_dist_dir, &web_backup);
         }
@@ -1051,8 +1051,9 @@ fn replace_release_files(
             "Binary backup failed: {error}"
         )));
     }
-    if let Err(error) = fs::rename(&extracted.binary_path, exe_path) {
-        let _ = fs::rename(&binary_backup, exe_path);
+    if let Err(error) = move_file(&extracted.binary_path, exe_path) {
+        let _ = fs::remove_file(exe_path);
+        let _ = move_file(&binary_backup, exe_path);
         if web_replaced {
             let _ = restore_dir(web_dist_dir, &web_backup);
         }
@@ -1070,12 +1071,19 @@ fn replace_dir(current: &Path, backup: &Path, replacement: &Path) -> Result<(), 
         })?;
     }
     if current.exists() {
-        fs::rename(current, backup).map_err(|error| {
+        move_dir(current, backup).map_err(|error| {
             AdminError::internal(format!("Failed to backup web assets: {error}"))
         })?;
     }
-    fs::rename(replacement, current)
-        .map_err(|error| AdminError::internal(format!("Failed to replace web assets: {error}")))
+    if let Err(error) = move_dir(replacement, current) {
+        if backup.exists() {
+            let _ = restore_dir(current, backup);
+        }
+        return Err(AdminError::internal(format!(
+            "Failed to replace web assets: {error}"
+        )));
+    }
+    Ok(())
 }
 
 fn restore_dir(current: &Path, backup: &Path) -> io::Result<()> {
@@ -1083,9 +1091,56 @@ fn restore_dir(current: &Path, backup: &Path) -> io::Result<()> {
         fs::remove_dir_all(current)?;
     }
     if backup.exists() {
-        fs::rename(backup, current)?;
+        move_dir(backup, current)?;
     }
     Ok(())
+}
+
+fn move_file(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(error) if is_cross_device_link(&error) => {
+            fs::copy(from, to)?;
+            fs::remove_file(from)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn move_dir(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(error) if is_cross_device_link(&error) => {
+            copy_dir_all(from, to)?;
+            fs::remove_dir_all(from)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &target)?;
+            fs::set_permissions(&target, entry.metadata()?.permissions())?;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("unsupported file type in {}", entry.path().display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_cross_device_link(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::CrossesDevices
 }
 
 fn backup_path_for(path: &Path) -> PathBuf {

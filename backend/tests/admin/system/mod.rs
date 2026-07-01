@@ -191,6 +191,51 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
 }
 
 #[tokio::test]
+async fn update_should_replace_web_assets_across_filesystems() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let Ok(web_root) = tempfile::tempdir_in("/dev/shm") else {
+        return;
+    };
+    let repository = "zyycn/codex-proxy-rs-cross-device-update-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = web_root.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-cross-device-update.sqlite").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_cross_device_update")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let status = wait_for_operation_status(&app, "succeeded").await;
+
+    assert!(
+        body["data"]["targetVersion"] == "0.4.0"
+            && status["operation"]["status"] == "succeeded"
+            && std::fs::read_to_string(&exe_path).unwrap() == "new-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "new-web"
+            && std::fs::read_to_string(web_root.path().join("web/dist.backup/index.html")).unwrap()
+                == "old-web"
+    );
+}
+
+#[tokio::test]
 async fn update_status_should_read_local_update_state() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let deploy = tempfile::tempdir().unwrap();
