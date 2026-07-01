@@ -326,7 +326,7 @@ function themeColor(name: string, fallback: string) {
             v-else
             compact
             title="暂无趋势数据"
-            description="当前筛选范围还没有可绘制的 Token 趋势。"
+            description="当前范围暂无 Token 数据。"
             class="min-h-50 place-content-center bg-transparent"
           />
         </div>
@@ -347,7 +347,7 @@ function themeColor(name: string, fallback: string) {
             v-else
             compact
             title="暂无延迟数据"
-            description="当前时间范围还没有可绘制的延迟趋势。"
+            description="当前范围暂无延迟数据。"
             class="min-h-50 place-content-center bg-transparent"
           />
         </div>

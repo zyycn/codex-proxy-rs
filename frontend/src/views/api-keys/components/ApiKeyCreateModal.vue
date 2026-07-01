@@ -39,7 +39,7 @@ const label = formField('label')
   <BaseModal
     v-model="open"
     title="创建 API Key"
-    description="为当前代理管理端生成一个新的访问密钥。创建后请立即保存。"
+    description="创建后只显示一次，请立即保存。"
     variant="info"
     width="540px"
     :close-disabled="saving"

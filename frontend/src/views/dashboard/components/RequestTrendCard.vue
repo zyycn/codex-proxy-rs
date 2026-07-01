@@ -249,7 +249,7 @@ function summaryMarkerStyle(item: any) {
             v-if="!hasSamples"
             compact
             title="暂无趋势数据"
-            description="最近 24 小时还没有可用于绘制趋势的请求日志。"
+            description="最近 24 小时暂无请求日志。"
             class="h-full place-content-center bg-transparent"
           />
         </div>
