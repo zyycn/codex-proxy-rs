@@ -14,6 +14,7 @@
 # Local configuration.
 /local.yaml
 /local.yml
+/.env
 
 # Local workspaces and tooling state.
 /.worktrees/

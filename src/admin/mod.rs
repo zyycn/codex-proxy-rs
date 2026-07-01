@@ -14,3 +14,5 @@ pub mod response;
 pub mod router;
 /// 设置处理器。
 pub mod settings;
+/// 系统版本与在线更新处理器。
+pub mod system;

@@ -27,6 +27,7 @@ use super::{
         admin_api_key_status, delete_admin_api_key, regenerate_admin_api_key, settings,
         update_settings,
     },
+    system::routes::{check_updates, perform_update, restart, rollback, version},
 };
 
 /// 构造管理端路由。
@@ -44,6 +45,11 @@ pub fn router() -> Router<AppState> {
             "/api/admin/settings/admin-api-key/regenerate",
             post(regenerate_admin_api_key),
         )
+        .route("/api/admin/system/version", get(version))
+        .route("/api/admin/system/check-updates", get(check_updates))
+        .route("/api/admin/system/update", post(perform_update))
+        .route("/api/admin/system/rollback", post(rollback))
+        .route("/api/admin/system/restart", post(restart))
         .route("/api/admin/dashboard/summary", get(dashboard_summary))
         .route("/api/admin/dashboard/trend", get(dashboard_trend))
         .route("/api/admin/accounts", get(accounts).post(create_account))

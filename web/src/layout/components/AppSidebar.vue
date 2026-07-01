@@ -13,6 +13,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  PackageCheck,
   Settings,
   Sun,
   Users,
@@ -21,6 +22,8 @@ import {
 import BaseButton from '@/components/base/BaseButton.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useUiStore } from '@/stores/modules/ui'
+
+import SystemUpdateModal from './SystemUpdateModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,6 +71,7 @@ defineEmits<{
 const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
 const brandLabelVisible = shallowRef(!props.collapsed)
+const systemUpdateOpen = shallowRef(false)
 const themeToggleLabel = computed(() =>
   effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
 )
@@ -283,6 +287,16 @@ watch(
             icon-only
             variant="ghost"
             :size="collapsed ? 'default' : 'sm'"
+            label="系统更新"
+            @click="systemUpdateOpen = true"
+          >
+            <PackageCheck :size="collapsed ? 19 : 18" />
+          </BaseButton>
+
+          <BaseButton
+            icon-only
+            variant="ghost"
+            :size="collapsed ? 'default' : 'sm'"
             label="退出登录"
             class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
             @click="handleLogout"
@@ -316,4 +330,6 @@ watch(
       </div>
     </div>
   </aside>
+
+  <SystemUpdateModal v-model="systemUpdateOpen" />
 </template>

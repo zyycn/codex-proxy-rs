@@ -114,6 +114,17 @@ pub struct ResponseDispatchService {
     cloudflare: CloudflareRecovery,
 }
 
+pub(crate) struct ResponseDispatchServiceParts {
+    pub account_pool: Arc<RuntimeAccountPoolService>,
+    pub models: Arc<crate::upstream::models::ModelService>,
+    pub codex: Arc<CodexBackendClient>,
+    pub session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub usage_records: Arc<AdminUsageRecordService>,
+    pub token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
+    pub installation_id: Option<String>,
+    pub cloudflare: CloudflareRecovery,
+}
+
 /// 默认 reasoning replay TTL 秒数。
 const DEFAULT_REASONING_REPLAY_TTL_SECS: i64 = 55 * 60;
 const IMPLICIT_RESUME_MAX_AGE_SECS: i64 = DEFAULT_REASONING_REPLAY_TTL_SECS;
@@ -151,28 +162,19 @@ impl Stream for MpscResponseBodyStream {
 use axum::body::Bytes;
 
 impl ResponseDispatchService {
-    pub(crate) fn new(
-        account_pool: Arc<RuntimeAccountPoolService>,
-        models: Arc<crate::upstream::models::ModelService>,
-        codex: Arc<CodexBackendClient>,
-        session_affinity: Arc<RuntimeSessionAffinityService>,
-        usage_records: Arc<AdminUsageRecordService>,
-        token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
-        installation_id: Option<String>,
-        cloudflare: CloudflareRecovery,
-    ) -> Self {
+    pub(crate) fn new(parts: ResponseDispatchServiceParts) -> Self {
         Self {
-            account_pool,
-            models,
-            codex,
-            session_affinity,
+            account_pool: parts.account_pool,
+            models: parts.models,
+            codex: parts.codex,
+            session_affinity: parts.session_affinity,
             reasoning_replay: Arc::new(Mutex::new(ReasoningReplayCache::new(Duration::seconds(
                 DEFAULT_REASONING_REPLAY_TTL_SECS,
             )))),
-            usage_records,
-            token_refresh,
-            installation_id,
-            cloudflare,
+            usage_records: parts.usage_records,
+            token_refresh: parts.token_refresh,
+            installation_id: parts.installation_id,
+            cloudflare: parts.cloudflare,
         }
     }
 
