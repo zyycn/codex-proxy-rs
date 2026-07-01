@@ -78,9 +78,6 @@ jobs:
           tar -czf "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" -C dist-package codex-proxy-rs
           sha256sum "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" > checksums.txt
 
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -97,7 +94,7 @@ jobs:
           context: .
           file: deploy/Dockerfile
           target: runtime
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           build-args: |
             CPR_VERSION=${{ steps.version.outputs.version }}
