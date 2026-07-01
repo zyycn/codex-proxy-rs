@@ -718,8 +718,8 @@ impl AccountPool {
         account.request_count = account.request_count.saturating_add(1);
         account.window_request_count = account.window_request_count.saturating_add(1);
         if account.window_started_at.is_none() {
+            account.window_started_at = Some(now);
             if let Some(seconds) = account.limit_window_seconds {
-                account.window_started_at = Some(now);
                 let seconds = i64::try_from(seconds).unwrap_or(i64::MAX);
                 account.window_reset_at = Some(now + Duration::seconds(seconds));
             }

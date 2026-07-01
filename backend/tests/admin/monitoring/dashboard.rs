@@ -322,7 +322,7 @@ async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_return_seven_day_health_timeline() {
+async fn dashboard_summary_should_return_today_health_timeline() {
     let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-health-timeline.sqlite",
         crate::support::fingerprint::test_fingerprint(),
@@ -344,8 +344,12 @@ async fn dashboard_summary_should_return_seven_day_health_timeline() {
     let points = body["data"]["healthTimeline"]["points"].as_str().unwrap();
 
     assert_eq!(body["data"]["healthTimeline"]["title"], "请求健康时间线");
-    assert_eq!(points.len(), 672);
-    assert_eq!(points.matches('1').count(), 1);
+    assert_eq!(
+        body["data"]["healthTimeline"]["description"],
+        "今日请求可靠性"
+    );
+    assert_eq!(points.len(), 96);
+    assert_eq!(points.matches('4').count(), 1);
 }
 
 async fn dashboard_summary_total_cost_for_usage_record(

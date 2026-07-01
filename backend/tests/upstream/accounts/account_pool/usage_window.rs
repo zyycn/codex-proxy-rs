@@ -117,6 +117,26 @@ fn release_should_mark_runtime_usage_window() {
 }
 
 #[test]
+fn release_should_start_usage_window_without_known_reset() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    pool.release(&acquired.account.id);
+    let released = pool.get(&acquired.account.id).unwrap();
+
+    assert!(released.window_started_at.is_some());
+    assert!(released.window_reset_at.is_none());
+}
+
+#[test]
 fn release_should_mark_usage_after_stale_slot_cleanup() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {

@@ -252,10 +252,21 @@ async fn account_repository_should_accumulate_usage_counters() {
     .await
     .unwrap();
 
-    let usage: (i64, i64, i64, i64, i64, i64, i64, Option<String>) = sqlx::query_as(
+    let usage: (
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
         r"
         select request_count, input_tokens, output_tokens, cached_tokens,
-               reasoning_tokens, total_tokens, empty_response_count, last_used_at
+               reasoning_tokens, total_tokens, empty_response_count,
+               window_started_at, last_used_at
         from account_usage
         where account_id = ?
         ",
@@ -272,6 +283,7 @@ async fn account_repository_should_accumulate_usage_counters() {
     assert_eq!(usage.5, 24);
     assert_eq!(usage.6, 1);
     assert!(usage.7.is_some());
+    assert!(usage.8.is_some());
 }
 
 #[tokio::test]

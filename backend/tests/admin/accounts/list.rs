@@ -253,6 +253,140 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
 }
 
 #[tokio::test]
+async fn admin_accounts_list_should_require_current_window_start_for_model_stats() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-model-window-start.sqlite", 69).await;
+    sqlx::query("insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, 'active', ?, ?)")
+        .bind("acct_no_window_start")
+        .bind("stats@example.com")
+        .bind("access-token")
+        .bind("2026-06-11T00:00:00Z")
+        .bind("2026-06-11T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into account_usage (
+            account_id,
+            request_count,
+            window_request_count,
+            window_input_tokens,
+            window_output_tokens,
+            window_cached_tokens,
+            window_reset_at,
+            limit_window_seconds,
+            last_used_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_no_window_start")
+    .bind(3)
+    .bind(3)
+    .bind(120)
+    .bind(40)
+    .bind(20)
+    .bind("2026-06-27T00:00:00Z")
+    .bind(604_800)
+    .bind("2026-06-23T08:50:13Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-23T08:45:00+00:00")
+    .bind("acct_no_window_start")
+    .bind("gpt-5.5")
+    .bind(3)
+    .bind(120)
+    .bind(40)
+    .bind(20)
+    .bind("2026-06-23T08:45:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_model_window_start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn admin_accounts_list_should_include_bucket_containing_window_start_for_model_stats() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-model-window-bucket-start.sqlite", 70).await;
+    seed_usage_account(
+        &pool,
+        UsageAccountSeed {
+            id: "acct_bucket_start",
+            email: "bucket@example.com",
+            label: "bucket",
+            plan_type: "free",
+            request_count: 2,
+            empty_response_count: 0,
+            input_tokens: 120,
+            output_tokens: 40,
+            cached_tokens: 20,
+            window_request_count: 2,
+            window_input_tokens: 120,
+            window_output_tokens: 40,
+            window_cached_tokens: 20,
+            window_started_at: "2026-06-29T12:56:15.098980168+00:00",
+            window_reset_at: "2026-07-29T12:56:15.098980168+00:00",
+            limit_window_seconds: 2_592_000,
+            last_used_at: "2026-06-29T12:59:42.044220420+00:00",
+        },
+    )
+    .await;
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-29T12:45:00+00:00")
+    .bind("acct_bucket_start")
+    .bind("gpt-5.5")
+    .bind(2)
+    .bind(120)
+    .bind(40)
+    .bind(20)
+    .bind("2026-06-29T12:59:42.044220420+00:00")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_model_window_bucket_start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["usage"]["models"][0]["model"], "gpt-5.5");
+    assert_eq!(item["usage"]["models"][0]["requestCount"], 2);
+}
+
+#[tokio::test]
 async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
     let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-numbered.sqlite", 67).await;

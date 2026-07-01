@@ -229,13 +229,7 @@ function summaryMarkerStyle(item: any) {
 </script>
 
 <template>
-  <BaseCard
-    as="article"
-    variant="dashboard"
-    title="使用趋势"
-    description="最近 24 小时"
-    class="min-h-95 w-full"
-  >
+  <BaseCard as="article" variant="dashboard" title="使用趋势" class="min-h-95 w-full">
     <template #actions>
       <BaseSegmented
         v-model="activeTab"

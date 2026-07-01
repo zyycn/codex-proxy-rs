@@ -41,7 +41,9 @@ use crate::{
 
 const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 1000;
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
-const HEALTH_TIMELINE_SLOTS: i64 = 7 * 24 * 4;
+const DASHBOARD_TIME_BUCKET_SLOTS: i64 = 7 * 24 * 4;
+const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
+const HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD: u64 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -432,7 +434,7 @@ async fn dashboard_time_buckets(
 ) -> Vec<AdminUsageTimeBucketRecord> {
     let current_slot = china_quarter_hour_start(now);
     let start = current_slot
-        - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (HEALTH_TIMELINE_SLOTS - 1));
+        - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (DASHBOARD_TIME_BUCKET_SLOTS - 1));
     state
         .services
         .usage
@@ -530,8 +532,7 @@ fn dashboard_health_timeline_data_at(
     now: DateTime<Utc>,
 ) -> DashboardHealthTimelineData {
     let current_slot = china_quarter_hour_start(now);
-    let start = current_slot
-        - Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * (HEALTH_TIMELINE_SLOTS - 1));
+    let start = china_day_start(now);
     let mut buckets = (0..HEALTH_TIMELINE_SLOTS)
         .map(|index| {
             let bucket_start = start + Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES * index);
@@ -554,52 +555,121 @@ fn dashboard_health_timeline_data_at(
 
     let requests = buckets
         .iter()
+        .filter(|(bucket_start, _)| *bucket_start <= current_slot)
         .map(|(_, bucket)| bucket.requests)
         .sum::<u64>();
-    let errors = buckets.iter().map(|(_, bucket)| bucket.errors).sum::<u64>();
+    let errors = buckets
+        .iter()
+        .filter(|(bucket_start, _)| *bucket_start <= current_slot)
+        .map(|(_, bucket)| bucket.errors)
+        .sum::<u64>();
+    let successes = requests.saturating_sub(errors);
     let reliability = if requests > 0 {
-        ((requests - errors) as f64 / requests as f64 * 1000.0).round() / 10.0
+        (successes as f64 / requests as f64 * 1000.0).round() / 10.0
     } else {
         0.0
     };
-    let end = current_slot + Duration::minutes(HEALTH_TIMELINE_SLOT_MINUTES);
-
     DashboardHealthTimelineData {
         title: "请求健康时间线".to_string(),
-        description: "最近 7 天请求可靠性".to_string(),
-        range_display: format!("{} - {}", china_datetime(&start), china_datetime(&end)),
+        description: "今日请求可靠性".to_string(),
+        range_display: format!("{} - {}", china_datetime(&start), china_datetime(&now)),
         reliability_display: if requests > 0 {
             format!("{reliability:.1}%")
         } else {
             "-".to_string()
         },
-        oldest_label: "最早".to_string(),
-        newest_label: "最新".to_string(),
+        oldest_label: "00:00".to_string(),
+        newest_label: "24:00".to_string(),
         points: buckets
             .into_iter()
-            .map(|(_, bucket)| {
+            .map(|(bucket_start, bucket)| {
                 let success_rate = if bucket.requests > 0 {
-                    ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0)
+                    (bucket.requests.saturating_sub(bucket.errors) as f64 / bucket.requests as f64
+                        * 1000.0)
                         .round()
                         / 10.0
                 } else {
                     0.0
                 };
-                health_tone(bucket, success_rate)
+                health_tone(bucket, success_rate, bucket_start > current_slot)
             })
             .collect(),
     }
 }
 
-fn health_tone(bucket: UsageWindow, success_rate: f64) -> char {
-    if bucket.requests == 0 {
+fn health_tone(bucket: UsageWindow, success_rate: f64, is_future: bool) -> char {
+    let successes = bucket.requests.saturating_sub(bucket.errors);
+    if is_future {
         '0'
-    } else if bucket.errors == 0 {
+    } else if bucket.requests == 0 {
         '1'
-    } else if success_rate >= 90.0 {
+    } else if successes == 0 {
         '2'
-    } else {
+    } else if success_rate < 90.0 {
         '3'
+    } else if successes < HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD {
+        '4'
+    } else {
+        '5'
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{health_tone, UsageWindow};
+
+    #[test]
+    fn health_tone_should_classify_availability_levels() {
+        assert_eq!(health_tone(UsageWindow::default(), 0.0, true), '0');
+        assert_eq!(health_tone(UsageWindow::default(), 0.0, false), '1');
+        assert_eq!(
+            health_tone(
+                UsageWindow {
+                    requests: 2,
+                    errors: 2,
+                    ..UsageWindow::default()
+                },
+                0.0,
+                false,
+            ),
+            '2'
+        );
+        assert_eq!(
+            health_tone(
+                UsageWindow {
+                    requests: 10,
+                    errors: 2,
+                    ..UsageWindow::default()
+                },
+                80.0,
+                false,
+            ),
+            '3'
+        );
+        assert_eq!(
+            health_tone(
+                UsageWindow {
+                    requests: 2,
+                    errors: 0,
+                    ..UsageWindow::default()
+                },
+                100.0,
+                false,
+            ),
+            '4'
+        );
+        assert_eq!(
+            health_tone(
+                UsageWindow {
+                    requests: 3,
+                    errors: 0,
+                    ..UsageWindow::default()
+                },
+                100.0,
+                false,
+            ),
+            '5'
+        );
     }
 }
 
