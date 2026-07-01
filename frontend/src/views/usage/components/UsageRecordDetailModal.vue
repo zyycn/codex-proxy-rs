@@ -213,7 +213,7 @@ function themeColor(name: string, fallback: string) {
   <BaseModal
     v-model="open"
     title="使用记录详情"
-    description="查看单次网关请求的模型、链路、Token、费用与上游响应。"
+    description="单次请求的完整链路信息"
     variant="info"
     width="960px"
     scrollable

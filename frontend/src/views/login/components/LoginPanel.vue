@@ -94,8 +94,8 @@ function togglePasswordVisible(): void {
       >
         控制台登录
       </h1>
-      <p class="m-0 text-sm leading-[1.45] font-normal text-(--login-description)">
-        使用管理员账号进入 Codex Proxy RS，管理路由、密钥、账号池与链路观测。
+      <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--login-description)">
+       「 欢迎回来，登录以开始您的数据之旅。 」
       </p>
     </section>
 

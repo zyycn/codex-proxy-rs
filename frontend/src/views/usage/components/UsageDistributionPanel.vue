@@ -219,7 +219,7 @@ function distributionNameParts(name: unknown) {
         compact
         plain
         title="暂无分布数据"
-        description="当前筛选范围还没有可聚合的使用记录。"
+        description="当前范围暂无使用记录。"
         class="h-70 place-content-center lg:h-64"
       />
     </template>

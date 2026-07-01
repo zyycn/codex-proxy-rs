@@ -287,7 +287,7 @@ onMounted(loadSettings)
       <BaseCard
         :padded="false"
         title="管理员 API Key"
-        description="用于外部系统集成的全局 API Key，拥有完整管理员权限。"
+        description="用于外部系统集成，具有管理员权限。"
         header-class="px-5 pt-4"
         body-class="px-5 py-5"
       >
