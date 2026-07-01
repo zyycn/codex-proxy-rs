@@ -1,20 +1,37 @@
 server:
+  # 容器内监听地址。Docker 部署保持 0.0.0.0。
   host: '0.0.0.0'
+  # 容器内服务端口，需与 docker-compose.yml 的 target port 一致。
   port: 8080
+
 api:
+  # ChatGPT / Codex 上游 API 地址。
   base_url: 'https://chatgpt.com/backend-api'
+
 database:
-  url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
+  # Docker 部署默认写入 /app/data，由 Compose 挂载到宿主机 deploy/data。
+  url: 'sqlite:///app/data/codex-proxy-rs.sqlite'
+
 quota:
+  # 账号额度刷新间隔，单位分钟。
   refresh_interval_minutes: 5
+  # 调度时跳过已耗尽账号。
   skip_exhausted: true
+
 tls:
+  # 某些网络环境下可强制 HTTP/1.1；默认使用自动协商。
   force_http11: false
+
 ws_pool:
+  # 上游 WebSocket 连接池。
   enabled: true
+  # 单个连接最大存活时间，单位毫秒。
   max_age_ms: 3300000
+  # 每个账号最多保留的连接数。
   max_per_account: 8
+
 fingerprint:
+  # 上游请求指纹。通常保持默认，除非需要模拟其他客户端版本。
   originator: Codex Desktop
   app_version: '26.623.42026'
   build_number: '4514'
@@ -38,6 +55,7 @@ fingerprint:
     - name: sec-fetch-dest
       value: empty
   header_order:
+    # 上游请求头顺序。通常保持默认。
     - authorization
     - chatgpt-account-id
     - originator
@@ -58,12 +76,19 @@ fingerprint:
     - content-type
     - accept
     - cookie
+
 admin:
+  # 管理端登录会话有效期，单位分钟。
   session_ttl_minutes: 1440
+  # 过期会话清理间隔，单位秒。
   session_cleanup_interval_secs: 3600
-  default_username: admin
-  default_password: admin
+  # 首次启动创建的默认管理员账号。生产部署前必须修改默认密码。
+  default_username: admin@cpr.local
+  default_password: 123456
+
 logging:
-  directory: .runtime/logs
+  # Docker 部署默认写入 /app/logs，由 Compose 挂载到宿主机 deploy/logs。
+  directory: /app/logs
+  # 日志保留天数。
   retention_days: 14
   enabled: true

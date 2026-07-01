@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 publish = false
 rust-version = "1.95"
-description = "Codex/OpenAI proxy backed by ChatGPT accounts."
+build = "build/build.rs"
 
 [dependencies]
 argon2 = "0.5.3"

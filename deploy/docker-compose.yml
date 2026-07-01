@@ -1,14 +1,23 @@
 services:
   codex-proxy-rs:
     image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runtime
+      args:
+        CPR_VERSION: ${CPR_VERSION:-}
+        CPR_GIT_SHA: ${CPR_GIT_SHA:-unknown}
+        CPR_BUILD_TIME: ${CPR_BUILD_TIME:-unknown}
+        CPR_BUILD_TYPE: ${CPR_BUILD_TYPE:-release}
     container_name: codex-proxy-rs
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - ${CPR_CONFIG_FILE:-./config.yaml}:/app/config.yaml:ro
+      - ${CPR_DATA_DIR:-./data}:/app/data
+      - ${CPR_LOG_DIR:-./logs}:/app/logs
     environment:
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
