@@ -25,6 +25,7 @@ export const useUiStore = defineStore(
     let themeApplied = false
     let themeTransitionOrigin: ThemeTransitionOrigin | undefined
     let themeTransitionRequested = false
+    let themeTransitioning = false
     const { start: startFallbackTransitionTimer, stop: stopFallbackTransitionTimer } = useTimeoutFn(
       () => {
         document.documentElement.classList.remove('theme-fallback-transition')
@@ -82,6 +83,8 @@ export const useUiStore = defineStore(
         return
       }
 
+      themeTransitioning = true
+
       const origin = themeTransitionOrigin ?? {
         x: window.innerWidth - 44,
         y: 44,
@@ -120,6 +123,7 @@ export const useUiStore = defineStore(
         )
       })
       transition.finished.finally(() => {
+        themeTransitioning = false
         requestAnimationFrame(() => {
           document.documentElement.classList.remove('theme-view-transition-reverse')
         })
@@ -144,6 +148,7 @@ export const useUiStore = defineStore(
     }
 
     function toggleTheme(event?: MouseEvent) {
+      if (themeTransitioning) return
       if (event) {
         themeTransitionOrigin = {
           x: event.clientX,
