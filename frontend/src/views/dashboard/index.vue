@@ -38,7 +38,7 @@ const {
           系统概览
         </h1>
         <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          生产环境 · 自动刷新 30s
+          今日统计 · 自动刷新 30s
         </p>
       </div>
 

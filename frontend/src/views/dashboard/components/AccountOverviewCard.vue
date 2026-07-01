@@ -138,61 +138,56 @@ const quotaToneClasses: Record<string, string> = {
     <div
       class="grid px-4 pt-5 pb-6 lg:px-7 lg:pt-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7 xl:pb-0"
     >
-      <section
-        class="min-w-0 w-full shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:h-100.5 xl:pb-0 xl:shadow-none"
-      >
+      <section class="min-w-0 w-full pb-6 xl:h-100.5 xl:pb-0">
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">账号调度</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           容量、并发与分配策略
         </p>
 
-        <div class="mt-7.75 h-30.5 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-4.5">
+        <div class="mt-7.75 grid h-30.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4">
           <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
             >槽位占用</span
           >
-          <div class="mt-3 grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
-            <strong
-              class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
-              >{{ usedRatio }}</strong
-            >
-            <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >{{ usedPercent }}% 已占用</span
-            >
-          </div>
-          <div class="mt-4.5 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
-            <i
-              class="block h-2.5 rounded-full bg-(--cp-success)"
-              :style="{ width: `${usedPercent}%` }"
-            />
+          <div>
+            <div class="grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+              <strong
+                class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
+                >{{ usedRatio }}</strong
+              >
+              <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
+                >{{ usedPercent }}% 已占用</span
+              >
+            </div>
+            <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
+              <i
+                class="block h-2.5 rounded-full bg-(--cp-success)"
+                :style="{ width: `${usedPercent}%` }"
+              />
+            </div>
           </div>
         </div>
 
-        <div
-          class="mt-4 grid h-22.5 grid-cols-3 gap-4 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-5"
-        >
-          <div v-for="stat in scheduleStats" :key="stat.label">
+        <div class="mt-4 grid h-22.5 grid-cols-3 gap-4 rounded-[14px] bg-(--cp-bg-subtle) p-4">
+          <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
             <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{
               stat.label
             }}</span>
             <strong
-              class="mt-3.25 block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-(--cp-text-primary)"
+              class="block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-(--cp-text-primary)"
               >{{ stat.value }}</strong
             >
           </div>
         </div>
 
-        <div class="mt-4 h-20.5 rounded-[14px] bg-(--cp-bg-subtle) px-4 pt-4.25">
+        <div class="mt-4 grid h-20.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4">
           <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">分配策略</span>
-          <strong
-            class="mt-2.5 block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)"
-            >{{ strategyLabel }}</strong
-          >
+          <strong class="block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{
+            strategyLabel
+          }}</strong>
         </div>
       </section>
 
-      <section
-        class="min-w-0 w-full py-6 shadow-[inset_0_-1px_0_var(--cp-default-border)] xl:py-0 xl:shadow-none"
-      >
+      <section class="min-w-0 w-full">
         <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">活跃账号用量</h2>
         <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
           最近使用排序

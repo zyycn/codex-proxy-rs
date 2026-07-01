@@ -7,12 +7,31 @@ const props = defineProps<{
   timeline: any
 }>()
 
-const points = computed(() => props.timeline.points.split(''))
+const healthLegend = [
+  { code: '0', label: '未来' },
+  { code: '1', label: '无请求' },
+  { code: '2', label: '不可达' },
+  { code: '3', label: '不稳定' },
+  { code: '4', label: '低样本' },
+  { code: '5', label: '稳定' },
+]
+
+const points = computed(() => String(props.timeline.points ?? '').split(''))
+const pointGroups = computed(() => {
+  const groups: string[][] = []
+  for (let index = 0; index < points.value.length; index += 4) {
+    groups.push(points.value.slice(index, index + 4))
+  }
+  return groups
+})
 
 function cellClass(point: string) {
-  if (point === '1') return 'bg-(--cp-success)'
-  if (point === '2') return 'bg-(--cp-warning)'
-  if (point === '3') return 'bg-(--cp-danger)'
+  if (point === '0') return 'bg-(--cp-disabled-bg) opacity-60'
+  if (point === '1') return 'bg-(--cp-default-border-hover)'
+  if (point === '2') return 'bg-(--cp-danger)'
+  if (point === '3') return 'bg-(--cp-warning)'
+  if (point === '4') return 'bg-(--cp-normal)'
+  if (point === '5') return 'bg-(--cp-success)'
   return 'bg-(--cp-default-border-hover)'
 }
 </script>
@@ -27,35 +46,46 @@ function cellClass(point: string) {
     class="w-full"
   >
     <template #actions>
-      <div class="grid gap-2 lg:justify-items-end">
-        <span class="font-mono text-xs leading-none font-[650] text-(--cp-text-secondary)">
-          {{ timeline.rangeDisplay }}
-        </span>
-        <strong class="font-mono text-sm leading-none font-[760] text-(--cp-success-text)">
+      <div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div
+          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-[650] text-(--cp-text-muted)"
+        >
+          <span
+            v-for="item in healthLegend"
+            :key="item.code"
+            class="inline-flex h-3.5 items-center gap-1 align-middle leading-none"
+          >
+            <span
+              aria-hidden="true"
+              class="block size-2 shrink-0 rounded-xs"
+              :class="cellClass(item.code)"
+            />
+            <span class="block leading-none">{{ item.label }}</span>
+          </span>
+        </div>
+        <strong
+          class="shrink-0 font-mono text-sm leading-none font-[760] tabular-nums text-(--cp-success-text)"
+        >
           {{ timeline.reliabilityDisplay }}
         </strong>
-        <div
-          class="flex items-center gap-2 text-[11px] leading-none font-[650] text-(--cp-text-muted)"
-        >
-          <span>{{ timeline.oldestLabel }}</span>
-          <i class="size-2 rounded-xs bg-(--cp-default-border-hover)" />
-          <i class="size-2 rounded-xs bg-(--cp-danger)" />
-          <i class="size-2 rounded-xs bg-(--cp-warning)" />
-          <i class="size-2 rounded-xs bg-(--cp-success)" />
-          <span>{{ timeline.newestLabel }}</span>
-        </div>
       </div>
     </template>
 
     <template #body>
       <div class="mt-4.25">
-        <div class="flex flex-wrap gap-1">
-          <i
-            v-for="(point, index) in points"
-            :key="index"
-            class="size-2.5 rounded-[3px]"
-            :class="cellClass(point)"
-          />
+        <div class="grid w-full grid-cols-[repeat(24,minmax(0,1fr))] items-end gap-[3px]">
+          <div
+            v-for="(group, groupIndex) in pointGroups"
+            :key="groupIndex"
+            class="grid grid-cols-4 items-end gap-[2px]"
+          >
+            <i
+              v-for="(point, pointIndex) in group"
+              :key="groupIndex * 4 + pointIndex"
+              class="h-3.5 min-w-[2px] rounded-[2px]"
+              :class="cellClass(point)"
+            />
+          </div>
         </div>
       </div>
     </template>

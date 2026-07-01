@@ -141,7 +141,7 @@ export function useDashboard(): any {
       },
       healthTimeline: {
         title: '请求健康时间线',
-        description: '最近 7 天请求可靠性',
+        description: '今日请求可靠性',
         rangeDisplay: '-',
         reliabilityDisplay: '-',
         oldestLabel: '最早',

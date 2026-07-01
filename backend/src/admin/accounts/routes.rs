@@ -12,7 +12,7 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -37,7 +37,7 @@ use crate::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
         },
         json::{clamp_limit, clamp_page, total_pages, Page},
-        time::{china_datetime, china_relative_time, china_rfc3339},
+        time::{china_datetime, china_quarter_hour_start, china_relative_time, china_rfc3339},
     },
     runtime::state::AppState,
     upstream::accounts::model::AccountStatus,
@@ -1029,10 +1029,11 @@ async fn list_current_window_model_usage(
         if index > 0 {
             builder.push(" or ");
         }
+        let bucket_start = china_quarter_hour_start(*start);
         builder.push("(account_id = ");
         builder.push_bind(account_id);
         builder.push(" and bucket_start >= ");
-        builder.push_bind(start.to_rfc3339());
+        builder.push_bind(bucket_start.to_rfc3339());
         builder.push(" and bucket_start <= ");
         builder.push_bind(end.to_rfc3339());
         builder.push(")");
@@ -1095,11 +1096,7 @@ fn current_usage_window(
     usage: &AdminUsageRecord,
     now: DateTime<Utc>,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    let start = usage.window_started_at.or_else(|| {
-        let reset_at = usage.window_reset_at?;
-        let seconds = i64::try_from(usage.limit_window_seconds?).ok()?;
-        Some(reset_at - Duration::seconds(seconds))
-    })?;
+    let start = usage.window_started_at?;
     let end = usage.window_reset_at.unwrap_or(now);
     (start <= end).then_some((start, end))
 }

@@ -293,8 +293,9 @@ insert into account_usage (
   window_image_output_tokens,
   window_image_request_count,
   window_image_request_failed_count,
+  window_started_at,
   last_used_at
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 on conflict(account_id) do update set
   request_count = request_count + excluded.request_count,
   empty_response_count = empty_response_count + excluded.empty_response_count,
@@ -315,13 +316,8 @@ on conflict(account_id) do update set
   window_image_output_tokens = window_image_output_tokens + excluded.window_image_output_tokens,
   window_image_request_count = window_image_request_count + excluded.window_image_request_count,
   window_image_request_failed_count = window_image_request_failed_count + excluded.window_image_request_failed_count,
-  window_started_at = case
-    when account_usage.window_started_at is null
-      and (account_usage.window_reset_at is not null or account_usage.limit_window_seconds is not null)
-    then excluded.last_used_at
-    else account_usage.window_started_at
-  end,
-	  last_used_at = excluded.last_used_at";
+  window_started_at = coalesce(account_usage.window_started_at, excluded.window_started_at),
+  last_used_at = excluded.last_used_at";
 
 const RECORD_MODEL_USAGE_SQL: &str = r"
 insert into account_model_usage (
@@ -1292,6 +1288,7 @@ impl SqliteAccountStore {
             .bind(delta.window_image_output_tokens)
             .bind(delta.window_image_request_count)
             .bind(delta.window_image_request_failed_count)
+            .bind(&last_used_at)
             .bind(&last_used_at)
             .execute(&self.pool)
             .await?;
