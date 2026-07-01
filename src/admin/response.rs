@@ -7,6 +7,7 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use std::fmt;
 
 pub(crate) const ADMIN_OK_CODE: u32 = 200;
 pub(crate) const ADMIN_OK_MESSAGE: &str = "OK";
@@ -145,6 +146,12 @@ impl IntoResponse for AdminError {
             })),
         )
             .into_response()
+    }
+}
+
+impl fmt::Display for AdminError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
     }
 }
 

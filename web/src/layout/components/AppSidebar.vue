@@ -7,19 +7,20 @@ import { storeToRefs } from 'pinia'
 import {
   Cat,
   ChartNoAxesColumn,
+  ArrowUpCircle,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  PackageCheck,
   Settings,
   Sun,
   Users,
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useUiStore } from '@/stores/modules/ui'
 
@@ -32,6 +33,7 @@ const uiStore = useUiStore()
 const { effectiveTheme } = storeToRefs(uiStore)
 const { toggleTheme } = uiStore
 const preferredMotion = usePreferredReducedMotion()
+const { version, hasUpdate, loadSystem } = useSystemUpdate()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -74,6 +76,10 @@ const brandLabelVisible = shallowRef(!props.collapsed)
 const systemUpdateOpen = shallowRef(false)
 const themeToggleLabel = computed(() =>
   effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
+)
+const versionLabel = computed(() => `v${version.value?.version || '...'}`)
+const updateButtonLabel = computed(() =>
+  hasUpdate.value ? '发现新版本，打开系统更新' : '打开系统更新',
 )
 
 function prefersReducedMotion() {
@@ -194,6 +200,7 @@ onMounted(() => {
     })
   }
   animateSidebarLabels(Boolean(props.collapsed))
+  void loadSystem(false).catch(() => undefined)
 })
 
 watch(
@@ -222,11 +229,11 @@ watch(
     :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
   >
     <div
-      class="mt-5 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
+      class="mt-6 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
       :class="collapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
       <span
-        class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
+        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
       >
         <Cat :size="27" stroke-width="2" />
       </span>
@@ -235,10 +242,28 @@ watch(
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-base leading-[1.1] font-[760] text-(--cp-text-primary)">Codex</strong>
-        <span class="mt-1 text-xs leading-[1.1] font-semibold text-(--cp-text-secondary)"
-          >Proxy RS · v0.1.0</span
-        >
+        <strong class="text-base leading-[1.1] font-[760] text-(--cp-text-primary)">
+          Codex Proxy
+        </strong>
+        <span class="mt-1.5 flex min-w-0 items-center gap-2">
+          <span class="shrink-0 text-xs leading-none font-[650] text-(--cp-text-secondary)">
+            Rust build
+          </span>
+          <button
+            type="button"
+            class="inline-flex h-4.5 min-w-0 items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-[720] cursor-pointer transition-colors"
+            :class="
+              hasUpdate
+                ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
+                : 'bg-(--cp-bg-subtle) text-(--cp-text-muted) hover:bg-(--cp-bg-muted) hover:text-(--cp-text-secondary)'
+            "
+            :title="updateButtonLabel"
+            @click="systemUpdateOpen = true"
+          >
+            <span>{{ versionLabel }}</span>
+            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-(--cp-success)" />
+          </button>
+        </span>
       </span>
     </div>
 
@@ -284,13 +309,14 @@ watch(
 
         <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
           <BaseButton
+            v-if="collapsed && hasUpdate"
             icon-only
-            variant="ghost"
-            :size="collapsed ? 'default' : 'sm'"
-            label="系统更新"
+            :variant="hasUpdate ? 'success' : 'ghost'"
+            size="default"
+            :label="updateButtonLabel"
             @click="systemUpdateOpen = true"
           >
-            <PackageCheck :size="collapsed ? 19 : 18" />
+            <ArrowUpCircle :size="19" />
           </BaseButton>
 
           <BaseButton
