@@ -41,7 +41,9 @@ jobs:
           node-version: 24
 
       - name: Enable pnpm
-        run: corepack enable
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
 
       - name: Install frontend dependencies
         run: pnpm --dir frontend install --frozen-lockfile
