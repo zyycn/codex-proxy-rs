@@ -26,6 +26,9 @@ export default defineConfig({
     assetsDir: 'assets',
     chunkSizeWarningLimit: 600,
     rolldownOptions: {
+      treeshake: {
+        annotations: false,
+      },
       output: {
         codeSplitting: {
           groups: [

@@ -7,8 +7,7 @@
 /frontend/dist/
 
 # Application runtime state.
-/backend/.runtime/
-/logs/
+*.runtime
 *.sqlite
 *.sqlite3
 *.db
