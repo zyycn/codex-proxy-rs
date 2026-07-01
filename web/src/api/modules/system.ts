@@ -1,11 +1,14 @@
-import request, { type ApiPayload } from '../request'
+import request from '../request'
+import { API_BASE_URL } from '../constants'
+
+export const SYSTEM_UPDATE_EVENTS_URL = `${API_BASE_URL}/api/admin/system/update-events`
 
 export interface SystemVersion {
   version: string
   gitSha: string
   buildTime: string
   deploymentMode: string
-  image?: string
+  deploymentModeLabel: string
   updateChannel: string
 }
 
@@ -14,13 +17,14 @@ export interface SystemUpdateInfo {
   latestVersion: string
   hasUpdate: boolean
   deploymentMode: string
+  deploymentModeLabel: string
+  buildType: string
+  buildTypeLabel: string
   releaseUrl?: string
   notes?: string
   cached: boolean
   updateSupported: boolean
   unsupportedReason?: string
-  targetImage?: string
-  requiresBackup: boolean
   warning?: string
 }
 
@@ -28,9 +32,14 @@ export interface SystemUpdateStarted {
   operationId: string
   deploymentMode: string
   message: string
-  needReconnect: boolean
+  needRestart: boolean
   targetVersion: string
-  targetImage?: string
+}
+
+export interface SystemOperationStarted {
+  operationId?: string
+  message: string
+  needRestart?: boolean
 }
 
 export function getSystemVersion() {
@@ -48,23 +57,15 @@ export function checkSystemUpdates(force = false) {
   })
 }
 
-export function performSystemUpdate(data: ApiPayload = {}) {
+export function performSystemUpdate() {
   return request<SystemUpdateStarted>({
     url: '/api/admin/system/update',
-    method: 'POST',
-    data,
-  })
-}
-
-export function rollbackSystemUpdate() {
-  return request({
-    url: '/api/admin/system/rollback',
     method: 'POST',
   })
 }
 
 export function restartSystem() {
-  return request({
+  return request<SystemOperationStarted>({
     url: '/api/admin/system/restart',
     method: 'POST',
   })

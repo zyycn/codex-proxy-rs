@@ -12,7 +12,6 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: zyycn/codex-proxy-rs
-  UPDATER_IMAGE_NAME: zyycn/codex-proxy-rs-updater
 
 jobs:
   release:
@@ -32,6 +31,10 @@ jobs:
           echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
           echo "git_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Write VERSION file
+        shell: bash
+        run: printf '%s\n' '${{ steps.version.outputs.version }}' > VERSION
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -47,7 +50,7 @@ jobs:
         run: pnpm --dir web build
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -57,17 +60,17 @@ jobs:
           CPR_VERSION: ${{ steps.version.outputs.version }}
           CPR_GIT_SHA: ${{ steps.version.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ steps.version.outputs.build_time }}
-        run: cargo build --release --locked --bins
+          CPR_BUILD_TYPE: release
+        run: cargo build --release --locked --bin codex-proxy-rs
 
       - name: Package release assets
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           PACKAGE_DIR="dist-package/codex-proxy-rs"
-          mkdir -p "${PACKAGE_DIR}"
+          mkdir -p "${PACKAGE_DIR}/web"
           cp target/release/codex-proxy-rs "${PACKAGE_DIR}/"
-          cp target/release/codex-proxy-rs-updater "${PACKAGE_DIR}/"
-          cp -r web/dist "${PACKAGE_DIR}/web-dist"
+          cp -r web/dist "${PACKAGE_DIR}/web/dist"
           tar -czf "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" -C dist-package codex-proxy-rs
           sha256sum "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" > checksums.txt
 
@@ -95,6 +98,7 @@ jobs:
             CPR_VERSION=${{ steps.version.outputs.version }}
             CPR_GIT_SHA=${{ steps.version.outputs.git_sha }}
             CPR_BUILD_TIME=${{ steps.version.outputs.build_time }}
+            CPR_BUILD_TYPE=release
           labels: |
             org.opencontainers.image.title=Codex Proxy RS
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -104,27 +108,6 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-
-      - name: Build and push updater image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: updater-runtime
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            CPR_VERSION=${{ steps.version.outputs.version }}
-            CPR_GIT_SHA=${{ steps.version.outputs.git_sha }}
-            CPR_BUILD_TIME=${{ steps.version.outputs.build_time }}
-          labels: |
-            org.opencontainers.image.title=Codex Proxy RS Updater
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.version.outputs.git_sha }}
-            org.opencontainers.image.source=https://github.com/zyycn/codex-proxy-rs
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.UPDATER_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.UPDATER_IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.UPDATER_IMAGE_NAME }}:sha-${{ github.sha }}
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
