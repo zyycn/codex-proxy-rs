@@ -1,7 +1,9 @@
 use std::{env, fs};
 
+const VERSION_FILE: &str = "build/VERSION";
+
 fn main() {
-    println!("cargo:rerun-if-changed=VERSION");
+    println!("cargo:rerun-if-changed={VERSION_FILE}");
     println!("cargo:rerun-if-env-changed=CPR_VERSION");
     println!("cargo:rerun-if-env-changed=CPR_GIT_SHA");
     println!("cargo:rerun-if-env-changed=CPR_BUILD_TIME");
@@ -34,7 +36,7 @@ fn version_env_value(key: &str) -> Option<String> {
 }
 
 fn version_file() -> Option<String> {
-    fs::read_to_string("VERSION")
+    fs::read_to_string(VERSION_FILE)
         .ok()
         .map(|value| value.trim().trim_start_matches('v').to_string())
         .filter(|value| !value.is_empty())

@@ -1,16 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS web-builder
+FROM node:24-bookworm-slim AS frontend-builder
 
-WORKDIR /app/web
-COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
-COPY web ./
+COPY frontend ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm AS rust-builder
+FROM rust:1.95-bookworm AS backend-builder
 
-WORKDIR /app
+WORKDIR /app/backend
 ARG CPR_VERSION=
 ARG CPR_GIT_SHA=unknown
 ARG CPR_BUILD_TIME=unknown
@@ -19,14 +19,15 @@ ENV CPR_VERSION=${CPR_VERSION}
 ENV CPR_GIT_SHA=${CPR_GIT_SHA}
 ENV CPR_BUILD_TIME=${CPR_BUILD_TIME}
 ENV CPR_BUILD_TYPE=${CPR_BUILD_TYPE}
-COPY Cargo.toml Cargo.lock build.rs VERSION ./
-COPY src ./src
-COPY --from=web-builder /app/web/dist ./web/dist
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/build ./build
+COPY backend/src ./src
+COPY --from=frontend-builder /app/frontend/dist ./web/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/app/backend/target \
     cargo build --release --locked --bin codex-proxy-rs \
-    && cp /app/target/release/codex-proxy-rs /tmp/codex-proxy-rs
+    && cp /app/backend/target/release/codex-proxy-rs /tmp/codex-proxy-rs
 
 FROM debian:bookworm-slim AS runtime
 
@@ -36,8 +37,8 @@ RUN apt-get update \
 
 WORKDIR /app
 ENV CPR_DEPLOYMENT_MODE=docker
-COPY --from=rust-builder /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
-COPY --from=web-builder /app/web/dist ./web/dist
+COPY --from=backend-builder /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
+COPY --from=frontend-builder /app/frontend/dist ./web/dist
 
 EXPOSE 8080
 

@@ -1,8 +1,13 @@
 # Rust build output.
+/backend/target/
 /target/
 
+# Frontend dependencies and build output.
+/frontend/node_modules/
+/frontend/dist/
+
 # Application runtime state.
-/.runtime/
+/backend/.runtime/
 /logs/
 *.sqlite
 *.sqlite3
@@ -15,6 +20,9 @@
 /local.yaml
 /local.yml
 /.env
+/config.yaml
+/backend/config.yaml
+/deploy/.env
 
 # Local workspaces and tooling state.
 /.worktrees/
@@ -28,7 +36,3 @@
 /.agents/
 /.cargo/
 /.reasonix/
-
-# Frontend dependencies and build output.
-node_modules/
-dist/

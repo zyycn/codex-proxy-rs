@@ -33,7 +33,7 @@ jobs:
 
       - name: Write VERSION file
         shell: bash
-        run: printf '%s\n' '${{ steps.version.outputs.version }}' > VERSION
+        run: printf '%s\n' '${{ steps.version.outputs.version }}' > backend/build/VERSION
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -44,16 +44,18 @@ jobs:
         run: corepack enable
 
       - name: Install frontend dependencies
-        run: pnpm --dir web install --frozen-lockfile
+        run: pnpm --dir frontend install --frozen-lockfile
 
       - name: Build frontend
-        run: pnpm --dir web build
+        run: pnpm --dir frontend build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
 
       - name: Build release binaries
         env:
@@ -61,7 +63,7 @@ jobs:
           CPR_GIT_SHA: ${{ steps.version.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ steps.version.outputs.build_time }}
           CPR_BUILD_TYPE: release
-        run: cargo build --release --locked --bin codex-proxy-rs
+        run: cargo build --manifest-path backend/Cargo.toml --release --locked --bin codex-proxy-rs
 
       - name: Package release assets
         shell: bash
@@ -69,8 +71,8 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           PACKAGE_DIR="dist-package/codex-proxy-rs"
           mkdir -p "${PACKAGE_DIR}/web"
-          cp target/release/codex-proxy-rs "${PACKAGE_DIR}/"
-          cp -r web/dist "${PACKAGE_DIR}/web/dist"
+          cp backend/target/release/codex-proxy-rs "${PACKAGE_DIR}/"
+          cp -r frontend/dist "${PACKAGE_DIR}/web/dist"
           tar -czf "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" -C dist-package codex-proxy-rs
           sha256sum "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" > checksums.txt
 
@@ -91,6 +93,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/Dockerfile
           target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
