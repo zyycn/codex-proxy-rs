@@ -436,9 +436,8 @@ impl AdminAccountService {
                 ids.as_ref()
                     .is_none_or(|ids| ids.contains(account.id.as_str()))
             })
-            .map(|account| account.id)
-            .collect::<Vec<_>>();
-        let results = stream::iter(candidate_ids.into_iter().enumerate().map(
+            .map(|account| account.id);
+        let results = stream::iter(candidate_ids.enumerate().map(
             |(index, account_id)| async move {
                 if index > 0 && stagger_ms > 0 {
                     let base_delay = stagger_ms.saturating_mul(index.min(concurrency) as u64);

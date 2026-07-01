@@ -25,7 +25,7 @@ use crate::{
     },
     proxy::dispatch::{
         chat::ChatDispatchService,
-        responses::ResponseDispatchService,
+        responses::{ResponseDispatchService, ResponseDispatchServiceParts},
         session_affinity::{RuntimeSessionAffinityService, SqliteSessionAffinityStore},
     },
     upstream::accounts::{
@@ -264,16 +264,16 @@ impl Services {
             installation_id.clone(),
             cloudflare_recovery.clone(),
         ));
-        let responses = StdArc::new(ResponseDispatchService::new(
-            account_pool.clone(),
-            models.clone(),
-            codex.clone(),
-            session_affinity.clone(),
-            usage_records.clone(),
-            token_refresh.clone(),
-            installation_id.clone(),
-            cloudflare_recovery,
-        ));
+        let responses = StdArc::new(ResponseDispatchService::new(ResponseDispatchServiceParts {
+            account_pool: account_pool.clone(),
+            models: models.clone(),
+            codex: codex.clone(),
+            session_affinity: session_affinity.clone(),
+            usage_records: usage_records.clone(),
+            token_refresh: token_refresh.clone(),
+            installation_id: installation_id.clone(),
+            cloudflare: cloudflare_recovery,
+        }));
 
         Ok(Self {
             models,

@@ -1,8 +1,39 @@
 services:
   codex-proxy-rs:
-    build: .
+    image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
+    container_name: codex-proxy-rs
+    restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
+      - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
       - ./logs:/app/logs
+    environment:
+      CPR_DEPLOYMENT_MODE: docker
+      CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
+      CPR_UPDATE_CHANNEL: stable
+      CPR_IMAGE_REPOSITORY: ghcr.io/zyycn/codex-proxy-rs
+      CPR_IMAGE_TAG: latest
+      CPR_UPDATER_URL: http://codex-proxy-rs-updater:8090
+      CPR_UPDATER_TOKEN: ${CPR_UPDATER_TOKEN:?CPR_UPDATER_TOKEN is required}
+    depends_on:
+      - codex-proxy-rs-updater
+
+  codex-proxy-rs-updater:
+    image: ghcr.io/zyycn/codex-proxy-rs-updater:latest
+    container_name: codex-proxy-rs-updater
+    restart: unless-stopped
+    working_dir: ${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}:${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}
+    environment:
+      CPR_UPDATER_TOKEN: ${CPR_UPDATER_TOKEN:?CPR_UPDATER_TOKEN is required}
+      CPR_ALLOWED_IMAGE_REPOSITORY: ghcr.io/zyycn/codex-proxy-rs
+      CPR_COMPOSE_FILE: ${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}/docker-compose.yml
+      CPR_COMPOSE_ENV_FILE: ${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}/.env
+      CPR_COMPOSE_IMAGE_ENV: CPR_IMAGE
+      CPR_COMPOSE_SERVICE: codex-proxy-rs
+      CPR_DOCKER_COMPOSE_BIN: docker-compose
+      CPR_UPDATER_STATE_FILE: ${CPR_DEPLOY_DIR:?CPR_DEPLOY_DIR is required}/.runtime/updater-state.json

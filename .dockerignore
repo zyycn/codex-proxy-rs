@@ -1,10 +1,13 @@
 target
 web/node_modules
 web/dist
+.runtime
 data
 logs
 local.yaml
 local.yml
+.env
+config.yaml
 .git
 .codegraph
 .worktrees
