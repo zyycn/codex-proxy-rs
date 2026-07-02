@@ -89,6 +89,7 @@ docker compose -f deploy/docker-compose.yml up -d
 
 - Release workflow：`.github/workflows/release.yml`。
 - `v*` tag 触发发布。
+- 日常发布入口：`release/publish <version>`。该命令会更新 `release/version.yaml`、提交版本变更、创建 tag，并 push 分支和 tag 触发 workflow。
 - 产品版本来源是 `release/version.yaml`；workflow 会校验触发 tag 等于 `tagPrefix + version`，并通过 `CPR_VERSION` build arg 写入编译期元数据。
 - 发布平台来源是 `release/platforms.yaml`；新增/删除 Release asset 平台时优先改这个文件。
 - 运行时版本接口展示编译期元数据：`CPR_VERSION`、`CPR_GIT_SHA`、`CPR_BUILD_TIME`。
