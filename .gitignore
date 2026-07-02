@@ -5,6 +5,7 @@
 /package/
 /checksums.txt
 /codex-proxy-rs_*.tar.gz
+/codex-proxy-rs_*.zip
 
 # Frontend dependencies and build output.
 /frontend/node_modules/

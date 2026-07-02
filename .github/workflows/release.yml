@@ -112,12 +112,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - os: linux
+            arch: amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - arch: arm64
+            binary: codex-proxy-rs
+          - os: linux
+            arch: arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            binary: codex-proxy-rs
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: codex-proxy-rs
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            binary: codex-proxy-rs
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: codex-proxy-rs.exe
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -148,10 +167,11 @@ jobs:
         working-directory: backend
 
       - name: Build binary
+        shell: bash
         run: |
           cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
-          mkdir -p "../dist/binaries/linux-${{ matrix.arch }}"
-          cp "target/${{ matrix.target }}/release/codex-proxy-rs" "../dist/binaries/linux-${{ matrix.arch }}/codex-proxy-rs"
+          mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
         working-directory: backend
         env:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
@@ -162,8 +182,8 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
-          name: codex-proxy-rs-linux-${{ matrix.arch }}
-          path: dist/binaries/linux-${{ matrix.arch }}/codex-proxy-rs
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 1
 
@@ -190,6 +210,27 @@ jobs:
           name: codex-proxy-rs-linux-arm64
           path: dist/binaries/linux-arm64
 
+      - name: Download darwin amd64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-darwin-amd64
+          path: dist/binaries/darwin-amd64
+
+      - name: Download darwin arm64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-darwin-arm64
+          path: dist/binaries/darwin-arm64
+
+      - name: Download windows amd64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-windows-amd64
+          path: dist/binaries/windows-amd64
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y zip
+
       - name: Package release assets
         shell: bash
         env:
@@ -199,17 +240,28 @@ jobs:
 
           rm -rf package checksums.txt
 
-          for arch in amd64 arm64; do
+          for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            os="${platform%-*}"
+            arch="${platform#*-}"
             rm -rf package/codex-proxy-rs
             mkdir -p package/codex-proxy-rs/web/dist
-            cp "dist/binaries/linux-${arch}/codex-proxy-rs" package/codex-proxy-rs/codex-proxy-rs
+            cp "dist/binaries/${platform}/codex-proxy-rs" package/codex-proxy-rs/codex-proxy-rs
             chmod +x package/codex-proxy-rs/codex-proxy-rs
             cp -R dist/frontend/. package/codex-proxy-rs/web/dist/
-            tar -czf "codex-proxy-rs_${VERSION}_linux_${arch}.tar.gz" -C package codex-proxy-rs
+            tar -czf "codex-proxy-rs_${VERSION}_${os}_${arch}.tar.gz" -C package codex-proxy-rs
           done
 
+          rm -rf package/codex-proxy-rs
+          mkdir -p package/codex-proxy-rs/web/dist
+          cp "dist/binaries/windows-amd64/codex-proxy-rs.exe" package/codex-proxy-rs/codex-proxy-rs.exe
+          cp -R dist/frontend/. package/codex-proxy-rs/web/dist/
+          (cd package && zip -qr "../codex-proxy-rs_${VERSION}_windows_amd64.zip" codex-proxy-rs)
+
           sha256sum "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" > checksums.txt
+            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" \
+            "codex-proxy-rs_${VERSION}_darwin_amd64.tar.gz" \
+            "codex-proxy-rs_${VERSION}_darwin_arm64.tar.gz" \
+            "codex-proxy-rs_${VERSION}_windows_amd64.zip" > checksums.txt
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
@@ -218,6 +270,9 @@ jobs:
           path: |
             codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
             codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
+            codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_amd64.tar.gz
+            codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_arm64.tar.gz
+            codex-proxy-rs_${{ needs.release-info.outputs.version }}_windows_amd64.zip
             checksums.txt
           if-no-files-found: error
           retention-days: 1
@@ -315,4 +370,7 @@ jobs:
           files: |
             dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
             dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
+            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_amd64.tar.gz
+            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_arm64.tar.gz
+            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_windows_amd64.zip
             dist/release/checksums.txt
