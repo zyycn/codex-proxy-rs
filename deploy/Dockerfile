@@ -24,6 +24,7 @@ ENV CPR_BUILD_TYPE=${CPR_BUILD_TYPE}
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/build ./build
 COPY backend/src ./src
+COPY release/version.yaml /app/release/version.yaml
 COPY --from=frontend-builder /app/frontend/dist ./web/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
