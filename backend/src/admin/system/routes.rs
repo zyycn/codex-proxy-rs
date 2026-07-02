@@ -815,8 +815,8 @@ fn select_release_archive<'a>(
     release: &'a GitHubRelease,
     version: &str,
 ) -> Result<&'a GitHubAsset, AdminError> {
-    let os = env::consts::OS;
-    let arch = env::consts::ARCH;
+    let os_aliases = platform_os_aliases();
+    let arch_aliases = platform_arch_aliases();
     let normalized = normalize_version_tag(version);
     release
         .assets
@@ -825,21 +825,45 @@ fn select_release_archive<'a>(
             let name = asset.name.as_str();
             name.contains(APP_BINARY_NAME)
                 && name.contains(&normalized)
-                && name.contains(os)
-                && name.contains(arch)
+                && asset_matches_current_platform(name, os_aliases, arch_aliases)
                 && !name.ends_with(".txt")
         })
         .or_else(|| {
             release.assets.iter().find(|asset| {
                 let name = asset.name.as_str();
-                name.contains(os) && name.contains(arch) && !name.ends_with(".txt")
+                asset_matches_current_platform(name, os_aliases, arch_aliases)
+                    && !name.ends_with(".txt")
             })
         })
         .ok_or_else(|| {
             AdminError::conflict(format!(
-                "No compatible release archive found for {os}/{arch}"
+                "No compatible release archive found for {}/{}",
+                env::consts::OS,
+                env::consts::ARCH
             ))
         })
+}
+
+fn platform_os_aliases() -> &'static [&'static str] {
+    match env::consts::OS {
+        "macos" => &["macos", "darwin"],
+        "windows" => &["windows", "win32"],
+        "linux" => &["linux"],
+        _ => &[env::consts::OS],
+    }
+}
+
+fn platform_arch_aliases() -> &'static [&'static str] {
+    match env::consts::ARCH {
+        "x86_64" => &["x86_64", "amd64"],
+        "aarch64" => &["aarch64", "arm64"],
+        _ => &[env::consts::ARCH],
+    }
+}
+
+fn asset_matches_current_platform(name: &str, os_aliases: &[&str], arch_aliases: &[&str]) -> bool {
+    os_aliases.iter().any(|os| name.contains(os))
+        && arch_aliases.iter().any(|arch| name.contains(arch))
 }
 
 async fn download_file(

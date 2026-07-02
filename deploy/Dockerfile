@@ -11,10 +11,12 @@ RUN pnpm build
 FROM rust:1.95-bookworm AS backend-builder
 
 WORKDIR /app/backend
+ARG TARGETARCH
 ARG CPR_VERSION=
 ARG CPR_GIT_SHA=unknown
 ARG CPR_BUILD_TIME=unknown
 ARG CPR_BUILD_TYPE=release
+ENV CARGO_TARGET_DIR=/app/backend/target/${TARGETARCH}
 ENV CPR_VERSION=${CPR_VERSION}
 ENV CPR_GIT_SHA=${CPR_GIT_SHA}
 ENV CPR_BUILD_TIME=${CPR_BUILD_TIME}
@@ -27,7 +29,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/backend/target \
     cargo build --release --locked --bin codex-proxy-rs \
-    && cp /app/backend/target/release/codex-proxy-rs /tmp/codex-proxy-rs
+    && cp "${CARGO_TARGET_DIR}/release/codex-proxy-rs" /tmp/codex-proxy-rs
+
+FROM backend-builder AS release-asset-builder
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /out
+RUN mkdir -p /tmp/release/codex-proxy-rs/web \
+    && cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
+    && cp -r /app/backend/web/dist /tmp/release/codex-proxy-rs/web/dist \
+    && tar -czf "/out/codex-proxy-rs_${CPR_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
+        -C /tmp/release codex-proxy-rs
+
+FROM scratch AS release-asset
+
+COPY --from=release-asset-builder /out /
 
 FROM debian:bookworm-slim AS runtime
 

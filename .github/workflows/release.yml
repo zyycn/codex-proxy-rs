@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, for example v0.1.0'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,88 +25,97 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Derive version
         id: version
         shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
-          echo "git_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Write VERSION file
-        shell: bash
-        run: printf '%s\n' '${{ steps.version.outputs.version }}' > backend/build/VERSION
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.7.0 --activate
-
-      - name: Install frontend dependencies
-        run: pnpm --dir frontend install --frozen-lockfile
-
-      - name: Build frontend
-        run: pnpm --dir frontend build
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend -> target
-
-      - name: Build release binaries
         env:
-          CPR_VERSION: ${{ steps.version.outputs.version }}
-          CPR_GIT_SHA: ${{ steps.version.outputs.git_sha }}
-          CPR_BUILD_TIME: ${{ steps.version.outputs.build_time }}
-          CPR_BUILD_TYPE: release
-        run: cargo build --manifest-path backend/Cargo.toml --release --locked --bin codex-proxy-rs
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          GIT_SHA="$(git rev-parse HEAD)"
+          {
+            echo "tag=${RELEASE_TAG}"
+            echo "version=${VERSION}"
+            echo "build_time=${BUILD_TIME}"
+            echo "git_sha=${GIT_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify Cargo package version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          PACKAGE_VERSION="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          manifest = tomllib.loads(pathlib.Path("backend/Cargo.toml").read_text())
+          print(manifest["package"]["version"])
+          PY
+          )"
+
+          if [ "${PACKAGE_VERSION}" != "${RELEASE_VERSION}" ]; then
+            echo "Tag version ${RELEASE_VERSION} does not match backend/Cargo.toml package version ${PACKAGE_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Package release assets
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          PACKAGE_DIR="dist-package/codex-proxy-rs"
-          mkdir -p "${PACKAGE_DIR}/web"
-          cp backend/target/release/codex-proxy-rs "${PACKAGE_DIR}/"
-          cp -r frontend/dist "${PACKAGE_DIR}/web/dist"
-          tar -czf "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" -C dist-package codex-proxy-rs
-          sha256sum "codex-proxy-rs_${VERSION}_linux_x86_64.tar.gz" > checksums.txt
+          rm -rf dist-package checksums.txt
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+          docker buildx build \
+            --file deploy/Dockerfile \
+            --target release-asset \
+            --platform linux/amd64,linux/arm64 \
+            --output type=local,dest=dist-package \
+            --cache-from type=gha,scope=release \
+            --cache-to type=gha,mode=max,scope=release \
+            --build-arg CPR_VERSION="${VERSION}" \
+            --build-arg CPR_GIT_SHA="${{ steps.version.outputs.git_sha }}" \
+            --build-arg CPR_BUILD_TIME="${{ steps.version.outputs.build_time }}" \
+            --build-arg CPR_BUILD_TYPE=release \
+            .
+
+          find dist-package -type f -name 'codex-proxy-rs_*.tar.gz' -exec cp {} . \;
+          test -f "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz"
+          test -f "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz"
+          sha256sum "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz" \
+            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" > checksums.txt
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push app image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/Dockerfile
           target: runtime
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
             CPR_VERSION=${{ steps.version.outputs.version }}
             CPR_GIT_SHA=${{ steps.version.outputs.git_sha }}
             CPR_BUILD_TIME=${{ steps.version.outputs.build_time }}
             CPR_BUILD_TYPE=release
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
           labels: |
             org.opencontainers.image.title=Codex Proxy RS
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -109,12 +124,30 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.version.outputs.git_sha }}
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+          body: |
+            ## Installation
+
+            **Docker:**
+            ```bash
+            # GitHub Container Registry
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ```
+
+            **Manual download:**
+            Download the appropriate archive for your platform from the assets below.
+
+            ## Documentation
+
+            - [GitHub Repository](https://github.com/${{ github.repository }})
+            - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
           files: |
-            codex-proxy-rs_${{ steps.version.outputs.version }}_linux_x86_64.tar.gz
+            codex-proxy-rs_${{ steps.version.outputs.version }}_linux_amd64.tar.gz
+            codex-proxy-rs_${{ steps.version.outputs.version }}_linux_arm64.tar.gz
             checksums.txt

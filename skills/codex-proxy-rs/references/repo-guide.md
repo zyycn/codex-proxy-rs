@@ -14,11 +14,11 @@
 ## 仓库结构
 
 - `backend/`：Rust 1.95 Axum 后端，包含 SQLite 存储、代理调度、管理端 API、web 静态资源托管、在线更新逻辑。
-- `backend/build/`：构建脚本和 `VERSION`；release workflow 会写入 `backend/build/VERSION`。
+- `backend/build/`：Cargo 构建脚本，负责把版本、Git SHA、构建时间写入编译期环境变量。
 - `backend/tests/`：集成测试和 fixtures。测试代码只放这里，禁止放进 `backend/src`。
 - `frontend/`：Vue 3 管理端 SPA，使用 Vite 8、Tailwind v4、Pinia、Vue Router、Axios、lucide icons、ECharts。
 - `deploy/`：Dockerfile、Dockerfile 专用 ignore 文件、Compose 文件、`config.example.yaml`。
-- `docs/`：只在用户要求时放设计说明或迁移文档。
+- `docs/`：只放长期维护文档，例如架构说明；不要保留过程型迁移文档作为开发约束。
 - `skills/`：项目本地 Codex skills。
 
 ## 后端规范
@@ -89,13 +89,15 @@ docker compose -f deploy/docker-compose.yml up -d
 
 - Release workflow：`.github/workflows/release.yml`。
 - `v*` tag 触发发布。
-- release 时版本来源是去掉 `v` 前缀的 Git tag；workflow 会写入 `backend/build/VERSION`。
+- release 时版本来源是去掉 `v` 前缀的 Git tag；workflow 通过 `CPR_VERSION` build arg 写入编译期元数据。
+- 源码默认版本使用 `backend/Cargo.toml` 的 `[package].version`；不要重新引入独立 `VERSION` 文件。
 - 运行时版本接口展示编译期元数据：`CPR_VERSION`、`CPR_GIT_SHA`、`CPR_BUILD_TIME`。
-- 当前发布的 Docker 平台是 `linux/amd64`，因为 release asset 目前只有 `linux_x86_64`。
+- 当前发布的 Docker 镜像平台是 `linux/amd64` 和 `linux/arm64`。
 - Release asset 命名必须匹配在线更新选择器：
 
 ```text
-codex-proxy-rs_<version>_linux_x86_64.tar.gz
+codex-proxy-rs_<version>_linux_amd64.tar.gz
+codex-proxy-rs_<version>_linux_arm64.tar.gz
 checksums.txt
 ```
 
@@ -173,4 +175,4 @@ docker compose -f deploy/docker-compose.yml config
 - README、docs、发布和更新说明要和真实命令、真实行为一致。
 - UI 保持当前安静、偏运维控制台的风格；避免营销式布局、卡片套卡片、图标过大、信息重复。
 - 版本统一从发布 tag 到编译期元数据再到前端显示；不要引入第二个运行时版本源。
-- 历史迁移文档可能包含阶段性方案；实现和 README、workflow、Dockerfile 不一致时，以当前代码和真实命令为准。
+- 架构说明、README、workflow、Dockerfile 需要和当前代码和真实命令保持一致。

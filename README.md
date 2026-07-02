@@ -103,24 +103,7 @@ logging:
 
 ## 架构
 
-```mermaid
-flowchart LR
-    Client["客户端 / SDK"] -->|OpenAI API| Proxy["/v1/*"]
-    Browser["浏览器"] -->|Web| Admin["/api/admin/*"]
-
-    subgraph Gateway["codex-proxy-rs"]
-        Proxy --> Auth["API Key 鉴权"]
-        Auth --> Dispatch["调度层<br/>选账号 · 限并发 · 亲和性"]
-        Dispatch --> Transport["上游传输<br/>HTTP SSE / WebSocket"]
-        Dispatch --> Pool["账号池<br/>内存状态 + SQLite"]
-        Admin --> SQLite[("SQLite")]
-        Pool --> SQLite
-    end
-
-    Transport --> Upstream["ChatGPT / Codex API"]
-    Proxy -.->|静态资源| SPA["Vue 3 管理端"]
-    Admin -.-> SPA
-```
+Codex Proxy RS 是单主服务架构：Rust 后端同时承载 OpenAI 兼容代理、管理端 API、SQLite 持久化、前端静态资源托管和在线更新。详细模块边界、请求链路、发布和更新流程见 [架构说明](docs/architecture.md)。
 
 ## 项目结构
 
@@ -131,7 +114,7 @@ backend/
   build/      构建脚本
 frontend/     Vue 3 管理控制台
 deploy/       Dockerfile、Compose、示例配置
-docs/         设计与迁移文档
+docs/         架构与维护文档
 ```
 
 ## 开发
