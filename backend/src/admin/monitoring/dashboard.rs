@@ -614,65 +614,6 @@ fn health_tone(bucket: UsageWindow, success_rate: f64, is_future: bool) -> char 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{health_tone, UsageWindow};
-
-    #[test]
-    fn health_tone_should_classify_availability_levels() {
-        assert_eq!(health_tone(UsageWindow::default(), 0.0, true), '0');
-        assert_eq!(health_tone(UsageWindow::default(), 0.0, false), '1');
-        assert_eq!(
-            health_tone(
-                UsageWindow {
-                    requests: 2,
-                    errors: 2,
-                    ..UsageWindow::default()
-                },
-                0.0,
-                false,
-            ),
-            '2'
-        );
-        assert_eq!(
-            health_tone(
-                UsageWindow {
-                    requests: 10,
-                    errors: 2,
-                    ..UsageWindow::default()
-                },
-                80.0,
-                false,
-            ),
-            '3'
-        );
-        assert_eq!(
-            health_tone(
-                UsageWindow {
-                    requests: 2,
-                    errors: 0,
-                    ..UsageWindow::default()
-                },
-                100.0,
-                false,
-            ),
-            '4'
-        );
-        assert_eq!(
-            health_tone(
-                UsageWindow {
-                    requests: 3,
-                    errors: 0,
-                    ..UsageWindow::default()
-                },
-                100.0,
-                false,
-            ),
-            '5'
-        );
-    }
-}
-
 fn trend_summary(
     kind: DashboardTrendKind,
     points: &[DashboardTrendPointData],

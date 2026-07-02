@@ -364,7 +364,7 @@ async fn mount_latest_release_with_archive(
     let archive_name = format!(
         "codex-proxy-rs_{version}_{}_{}.tar.gz",
         std::env::consts::OS,
-        std::env::consts::ARCH
+        release_arch()
     );
     let archive = release_archive(binary, index);
     let checksum = format!(
@@ -404,6 +404,14 @@ async fn mount_latest_release_with_archive(
         .respond_with(ResponseTemplate::new(200).set_body_string(checksum))
         .mount(server)
         .await;
+}
+
+fn release_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        arch => arch,
+    }
 }
 
 fn release_archive(binary: &str, index: &str) -> Vec<u8> {
