@@ -27,6 +27,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       build_time: ${{ steps.version.outputs.build_time }}
       git_sha: ${{ steps.version.outputs.git_sha }}
+      platform_matrix: ${{ steps.version.outputs.platform_matrix }}
+      docker_platforms: ${{ steps.version.outputs.docker_platforms }}
 
     steps:
       - name: Checkout
@@ -34,39 +36,79 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - name: Derive version
+      - name: Read release metadata
         id: version
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          VERSION="${RELEASE_TAG#v}"
-          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          GIT_SHA="$(git rev-parse HEAD)"
-          {
-            echo "tag=${RELEASE_TAG}"
-            echo "version=${VERSION}"
-            echo "build_time=${BUILD_TIME}"
-            echo "git_sha=${GIT_SHA}"
-          } >> "$GITHUB_OUTPUT"
+          ruby <<'RUBY' >> "$GITHUB_OUTPUT"
+          require "json"
+          require "open3"
+          require "time"
+          require "yaml"
 
-      - name: Verify Cargo package version
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          PACKAGE_VERSION="$(python3 - <<'PY'
-          import pathlib
-          import tomllib
+          APP_NAME = "codex-proxy-rs"
+          SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z/
 
-          manifest = tomllib.loads(pathlib.Path("backend/Cargo.toml").read_text())
-          print(manifest["package"]["version"])
-          PY
-          )"
+          def fail(message)
+            warn(message)
+            exit(1)
+          end
 
-          if [ "${PACKAGE_VERSION}" != "${RELEASE_VERSION}" ]; then
-            echo "Tag version ${RELEASE_VERSION} does not match backend/Cargo.toml package version ${PACKAGE_VERSION}" >&2
-            exit 1
-          fi
+          def require_string(data, key, path)
+            value = data[key]
+            fail("#{path}: #{key} must be a non-empty string") unless value.is_a?(String) && !value.strip.empty?
+            value.strip
+          end
+
+          version_path = "release/version.yaml"
+          platforms_path = "release/platforms.yaml"
+          version_data = YAML.load_file(version_path)
+          platforms_data = YAML.load_file(platforms_path)
+
+          version = require_string(version_data, "version", version_path).delete_prefix("v")
+          tag_prefix = require_string(version_data, "tagPrefix", version_path)
+          expected_tag = "#{tag_prefix}#{version}"
+          release_tag = ENV.fetch("RELEASE_TAG")
+          fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
+          fail("#{version_path}: version #{version} is not a valid semver") unless version.match?(SEMVER)
+
+          platforms = platforms_data["platforms"]
+          fail("#{platforms_path}: platforms must be a non-empty array") unless platforms.is_a?(Array) && !platforms.empty?
+
+          required_platform_keys = %w[os arch runner target binary archive]
+          seen_platforms = {}
+          docker_platforms = []
+          platforms.each_with_index do |platform, index|
+            fail("#{platforms_path}: platforms[#{index}] must be a table") unless platform.is_a?(Hash)
+            required_platform_keys.each do |key|
+              require_string(platform, key, "#{platforms_path}: platforms[#{index}]")
+            end
+            archive = platform["archive"]
+            fail("#{platforms_path}: platforms[#{index}].archive must be tar.gz or zip") unless ["tar.gz", "zip"].include?(archive)
+            platform_key = "#{platform["os"]}-#{platform["arch"]}"
+            fail("#{platforms_path}: duplicate platform #{platform_key}") if seen_platforms[platform_key]
+            seen_platforms[platform_key] = true
+            platform["artifact"] = "#{APP_NAME}-#{platform_key}"
+            if platform["docker"] == true
+              docker_platforms << require_string(platform, "dockerPlatform", "#{platforms_path}: platforms[#{index}]")
+            end
+          end
+
+          fail("#{platforms_path}: at least one platform must set docker = true") if docker_platforms.empty?
+
+          git_sha, status = Open3.capture2("git", "rev-parse", "HEAD")
+          fail("failed to resolve git sha") unless status.success?
+          matrix = JSON.generate({ "include" => platforms })
+
+          puts "tag=#{release_tag}"
+          puts "version=#{version}"
+          puts "build_time=#{Time.now.utc.iso8601}"
+          puts "git_sha=#{git_sha.strip}"
+          puts "platform_matrix=#{matrix}"
+          puts "docker_platforms=#{docker_platforms.join(",")}"
+          RUBY
 
   build-frontend:
     needs: [release-info]
@@ -110,33 +152,7 @@ jobs:
     needs: [release-info, build-frontend]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            binary: codex-proxy-rs
-          - os: linux
-            arch: arm64
-            runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            binary: codex-proxy-rs
-          - os: darwin
-            arch: amd64
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            binary: codex-proxy-rs
-          - os: darwin
-            arch: arm64
-            runner: macos-15
-            target: aarch64-apple-darwin
-            binary: codex-proxy-rs
-          - os: windows
-            arch: amd64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: codex-proxy-rs.exe
+      matrix: ${{ fromJson(needs.release-info.outputs.platform_matrix) }}
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -183,7 +199,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}
+          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
           if-no-files-found: error
           retention-days: 1
 
@@ -192,44 +208,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
       - name: Download frontend artifact
         uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: dist/frontend
 
-      - name: Download amd64 binary
+      - name: Download binary artifacts
         uses: actions/download-artifact@v8
         with:
-          name: codex-proxy-rs-linux-amd64
-          path: dist/binaries/linux-amd64
-
-      - name: Download arm64 binary
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-proxy-rs-linux-arm64
-          path: dist/binaries/linux-arm64
-
-      - name: Download darwin amd64 binary
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-proxy-rs-darwin-amd64
-          path: dist/binaries/darwin-amd64
-
-      - name: Download darwin arm64 binary
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-proxy-rs-darwin-arm64
-          path: dist/binaries/darwin-arm64
-
-      - name: Download windows amd64 binary
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-proxy-rs-windows-amd64
-          path: dist/binaries/windows-amd64
-
-      - name: Install packaging tools
-        run: sudo apt-get update && sudo apt-get install -y zip
+          pattern: codex-proxy-rs-*
+          path: dist/binaries
 
       - name: Package release assets
         shell: bash
@@ -237,43 +231,84 @@ jobs:
           VERSION: ${{ needs.release-info.outputs.version }}
         run: |
           set -euo pipefail
+          ruby <<'RUBY' > release-platforms.json
+          require "json"
+          require "yaml"
 
-          rm -rf package checksums.txt
+          print JSON.generate(YAML.load_file("release/platforms.yaml"))
+          RUBY
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import tarfile
+          import zipfile
 
-          for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-            os="${platform%-*}"
-            arch="${platform#*-}"
-            rm -rf package/codex-proxy-rs
-            mkdir -p package/codex-proxy-rs/web/dist
-            cp "dist/binaries/${platform}/codex-proxy-rs" package/codex-proxy-rs/codex-proxy-rs
-            chmod +x package/codex-proxy-rs/codex-proxy-rs
-            cp -R dist/frontend/. package/codex-proxy-rs/web/dist/
-            tar -czf "codex-proxy-rs_${VERSION}_${os}_${arch}.tar.gz" -C package codex-proxy-rs
-          done
+          APP_NAME = "codex-proxy-rs"
 
-          rm -rf package/codex-proxy-rs
-          mkdir -p package/codex-proxy-rs/web/dist
-          cp "dist/binaries/windows-amd64/codex-proxy-rs.exe" package/codex-proxy-rs/codex-proxy-rs.exe
-          cp -R dist/frontend/. package/codex-proxy-rs/web/dist/
-          (cd package && zip -qr "../codex-proxy-rs_${VERSION}_windows_amd64.zip" codex-proxy-rs)
+          def sha256(path: pathlib.Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as file:
+                  for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
 
-          sha256sum "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_darwin_amd64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_darwin_arm64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_windows_amd64.zip" > checksums.txt
+          version = os.environ["VERSION"]
+          platforms = json.loads(pathlib.Path("release-platforms.json").read_text())["platforms"]
+          frontend_dir = pathlib.Path("dist/frontend")
+          binary_artifacts_dir = pathlib.Path("dist/binaries")
+          release_dir = pathlib.Path("dist/release")
+          package_dir = pathlib.Path("package")
+
+          shutil.rmtree(release_dir, ignore_errors=True)
+          release_dir.mkdir(parents=True)
+          archives = []
+
+          for platform in platforms:
+              platform_name = f"{platform['os']}-{platform['arch']}"
+              artifact_name = f"{APP_NAME}-{platform_name}"
+              binary_src = binary_artifacts_dir / artifact_name / platform["binary"]
+              if not binary_src.is_file():
+                  raise SystemExit(f"Missing binary artifact: {binary_src}")
+
+              shutil.rmtree(package_dir, ignore_errors=True)
+              package_root = package_dir / APP_NAME
+              web_dist = package_root / "web" / "dist"
+              web_dist.mkdir(parents=True)
+
+              binary_dest = package_root / platform["binary"]
+              shutil.copy2(binary_src, binary_dest)
+              if platform["os"] != "windows":
+                  binary_dest.chmod(0o755)
+              shutil.copytree(frontend_dir, web_dist, dirs_exist_ok=True)
+
+              archive_name = f"{APP_NAME}_{version}_{platform['os']}_{platform['arch']}.{platform['archive']}"
+              archive_path = release_dir / archive_name
+              if platform["archive"] == "tar.gz":
+                  with tarfile.open(archive_path, "w:gz") as archive:
+                      archive.add(package_root, arcname=APP_NAME)
+              elif platform["archive"] == "zip":
+                  with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                      for path in sorted(package_root.rglob("*")):
+                          if path.is_file():
+                              archive.write(path, path.relative_to(package_dir))
+              else:
+                  raise SystemExit(f"Unsupported archive format: {platform['archive']}")
+              archives.append(archive_path)
+
+          checksum_path = release_dir / "checksums.txt"
+          with checksum_path.open("w", encoding="utf-8") as file:
+              for archive in archives:
+                  file.write(f"{sha256(archive)}  {archive.name}\n")
+          PY
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
           name: release-assets
-          path: |
-            codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
-            codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
-            codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_amd64.tar.gz
-            codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_arm64.tar.gz
-            codex-proxy-rs_${{ needs.release-info.outputs.version }}_windows_amd64.zip
-            checksums.txt
+          path: dist/release
           if-no-files-found: error
           retention-days: 1
 
@@ -293,23 +328,53 @@ jobs:
           name: frontend-dist
           path: dist/docker/web/dist
 
-      - name: Download amd64 binary
+      - name: Download Docker binary artifacts
         uses: actions/download-artifact@v8
         with:
-          name: codex-proxy-rs-linux-amd64
-          path: dist/docker/linux-amd64
-
-      - name: Download arm64 binary
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-proxy-rs-linux-arm64
-          path: dist/docker/linux-arm64
+          pattern: codex-proxy-rs-linux-*
+          path: dist/docker-artifacts
 
       - name: Download release assets
         uses: actions/download-artifact@v8
         with:
           name: release-assets
           path: dist/release
+
+      - name: Prepare Docker prebuilt assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby <<'RUBY' > release-platforms.json
+          require "json"
+          require "yaml"
+
+          print JSON.generate(YAML.load_file("release/platforms.yaml"))
+          RUBY
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import shutil
+
+          APP_NAME = "codex-proxy-rs"
+          platforms = json.loads(pathlib.Path("release-platforms.json").read_text())["platforms"]
+          source_root = pathlib.Path("dist/docker-artifacts")
+          target_root = pathlib.Path("dist/docker")
+
+          for platform in platforms:
+              if platform.get("docker") is not True:
+                  continue
+              platform_name = f"{platform['os']}-{platform['arch']}"
+              artifact_name = f"{APP_NAME}-{platform_name}"
+              binary_src = source_root / artifact_name / platform["binary"]
+              if not binary_src.is_file():
+                  raise SystemExit(f"Missing Docker binary artifact: {binary_src}")
+
+              target_dir = target_root / platform_name
+              target_dir.mkdir(parents=True, exist_ok=True)
+              binary_dest = target_dir / APP_NAME
+              shutil.copy2(binary_src, binary_dest)
+              binary_dest.chmod(0o755)
+          PY
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
@@ -330,7 +395,7 @@ jobs:
           context: .
           file: deploy/Dockerfile
           target: runtime-prebuilt
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ needs.release-info.outputs.docker_platforms }}
           push: true
           build-args: |
             CPR_PREBUILT_DIR=dist/docker
@@ -368,9 +433,4 @@ jobs:
             - [GitHub Repository](https://github.com/${{ github.repository }})
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
           files: |
-            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
-            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
-            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_amd64.tar.gz
-            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_darwin_arm64.tar.gz
-            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_windows_amd64.zip
-            dist/release/checksums.txt
+            dist/release/*

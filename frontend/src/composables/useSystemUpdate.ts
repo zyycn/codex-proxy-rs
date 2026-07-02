@@ -156,7 +156,8 @@ async function checkUpdates(force = true) {
 }
 
 async function updateNow() {
-  if (!canUpdate.value || !updateInfo.value || updating.value) return null
+  const currentInfo = updateInfo.value
+  if (!canUpdate.value || !currentInfo || updating.value) return null
 
   clearUpdateLogs()
   connectUpdateEvents()
@@ -167,6 +168,11 @@ async function updateNow() {
     const result = await performSystemUpdate()
     updateSuccess.value = true
     needRestart.value = result.needRestart
+    updateInfo.value = {
+      ...currentInfo,
+      latestVersion: result.targetVersion,
+      hasUpdate: false,
+    }
     return result
   } catch (error: any) {
     updateError.value = error.message || '更新失败'

@@ -51,7 +51,7 @@ docker compose -f deploy/docker-compose.yml build
 需要注入版本信息时：
 
 ```bash
-CPR_VERSION=0.1.1 \
+CPR_VERSION="$(ruby -ryaml -e 'puts YAML.load_file("release/version.yaml").fetch("version").delete_prefix("v")')" \
 CPR_GIT_SHA="$(git rev-parse HEAD)" \
 CPR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 docker compose -f deploy/docker-compose.yml build

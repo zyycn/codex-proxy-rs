@@ -98,20 +98,23 @@ flowchart LR
 
 ## 版本和发布
 
-版本只有两个来源层级：
+版本和平台发布契约集中在 `release/`：
 
-- 源码默认版本：`backend/Cargo.toml` 的 `[package].version`。
-- 发布版本：Git tag 去掉 `v` 前缀后得到的版本。
+- `release/version.yaml`：产品版本和 tag 前缀。
+- `release/platforms.yaml`：Release asset 构建平台、归档格式和 Docker 平台。
 
-发布 workflow 会校验 tag 版本必须等于 `backend/Cargo.toml` 的 package version。发布构建时通过 `CPR_VERSION`、`CPR_GIT_SHA`、`CPR_BUILD_TIME` 和 `CPR_BUILD_TYPE=release` 注入编译期元数据。
+发布 workflow 会校验触发 tag 必须等于 `tagPrefix + version`。发布构建时通过 `CPR_VERSION`、`CPR_GIT_SHA`、`CPR_BUILD_TIME` 和 `CPR_BUILD_TYPE=release` 注入编译期元数据。
 
-`backend/build/build.rs` 负责把这些值写入二进制。没有 `CPR_VERSION` 时，版本回落到 Cargo 的 `CARGO_PKG_VERSION`。不要重新引入独立 `VERSION` 文件。
+`backend/build/build.rs` 负责把这些值写入二进制。没有 `CPR_VERSION` 时，版本回落到 `release/version.yaml`，最后才回落到 Cargo 的 `CARGO_PKG_VERSION`。
 
 GitHub Release 产物：
 
 ```text
 codex-proxy-rs_<version>_linux_amd64.tar.gz
 codex-proxy-rs_<version>_linux_arm64.tar.gz
+codex-proxy-rs_<version>_darwin_amd64.tar.gz
+codex-proxy-rs_<version>_darwin_arm64.tar.gz
+codex-proxy-rs_<version>_windows_amd64.zip
 checksums.txt
 ```
 
