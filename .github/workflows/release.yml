@@ -297,7 +297,7 @@ jobs:
           tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
           body: |
-            ## Installation
+            ## 📥 Installation
 
             **Docker:**
             ```bash
@@ -308,7 +308,7 @@ jobs:
             **Manual download:**
             Download the appropriate archive for your platform from the assets below.
 
-            ## Documentation
+            ## 📚 Documentation
 
             - [GitHub Repository](https://github.com/${{ github.repository }})
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
