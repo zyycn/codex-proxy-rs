@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="codex-proxy-rs"
+VERSION_FILE="release/version.yaml"
+SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+SIGNATURE="Co-authored-by: Codex <noreply@openai.com>"
+
+usage() {
+  cat <<USAGE
+Usage:
+  release/publish <version>
+
+Example:
+  release/publish 0.1.4
+USAGE
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+}
+
+read_version_key() {
+  local key="$1"
+  ruby -ryaml -e '
+    path, key = ARGV
+    data = YAML.load_file(path)
+    value = data[key] if data.is_a?(Hash)
+    unless value.is_a?(String) && !value.strip.empty?
+      warn "#{path}: #{key} must be a non-empty string"
+      exit 1
+    end
+    puts value.strip
+  ' "$VERSION_FILE" "$key"
+}
+
+update_version_file() {
+  local version="$1"
+  ruby - "$VERSION_FILE" "$version" <<'RUBY'
+path, version = ARGV
+content = File.read(path)
+
+unless content.match?(/^version:/)
+  warn "#{path}: missing version key"
+  exit 1
+end
+
+content = content.sub(/^version:\s*.*$/, %(version: "#{version}"))
+File.write(path, content)
+RUBY
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+[[ "$#" -eq 1 ]] || {
+  usage >&2
+  exit 2
+}
+
+require_command git
+require_command ruby
+
+version="${1#v}"
+[[ "$version" =~ $SEMVER ]] || die "version must be semver, for example 0.1.4"
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+cd "$repo_root"
+
+git ls-files --error-unmatch "$VERSION_FILE" >/dev/null 2>&1 || die "$VERSION_FILE is not tracked"
+
+branch="$(git symbolic-ref --quiet --short HEAD)" || die "publishing from detached HEAD is not supported"
+remote="$(git config --get "branch.$branch.remote" || true)"
+merge_ref="$(git config --get "branch.$branch.merge" || true)"
+[[ -n "$remote" && -n "$merge_ref" ]] || die "current branch has no upstream"
+remote_branch="${merge_ref#refs/heads/}"
+[[ "$remote_branch" != "$merge_ref" && -n "$remote_branch" ]] || die "unsupported upstream ref: $merge_ref"
+
+if ! git diff --quiet --ignore-submodules --; then
+  die "tracked files have unstaged changes; commit or stash them first"
+fi
+if ! git diff --cached --quiet --ignore-submodules --; then
+  die "index has staged changes; commit or unstage them first"
+fi
+
+current_version="$(read_version_key version)"
+current_version="${current_version#v}"
+[[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
+
+tag_prefix="$(read_version_key tagPrefix)"
+tag="${tag_prefix}${version}"
+
+if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
+  die "local tag already exists: $tag"
+fi
+
+git fetch "$remote"
+
+upstream="$remote/$remote_branch"
+local_head="$(git rev-parse HEAD)"
+upstream_head="$(git rev-parse "$upstream")"
+merge_base="$(git merge-base HEAD "$upstream")"
+
+if [[ "$local_head" != "$upstream_head" && "$merge_base" != "$upstream_head" ]]; then
+  if [[ "$merge_base" == "$local_head" ]]; then
+    die "branch is behind $upstream; pull or rebase first"
+  fi
+  die "branch has diverged from $upstream"
+fi
+
+if git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null 2>&1; then
+  die "remote tag already exists: $tag"
+fi
+
+update_version_file "$version"
+
+git add "$VERSION_FILE"
+git commit \
+  -m "chore: bump version to $version" \
+  -m "$SIGNATURE"
+
+git tag -a "$tag" -m "$tag"
+git push --atomic "$remote" "HEAD:$remote_branch" "refs/tags/$tag"
+
+cat <<DONE
+Published $APP_NAME $version
+Commit: $(git rev-parse --short HEAD)
+Tag:    $tag
+DONE
