@@ -47,7 +47,7 @@ FROM scratch AS release-asset
 
 COPY --from=release-asset-builder /out /
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -55,9 +55,21 @@ RUN apt-get update \
 
 WORKDIR /app
 ENV CPR_DEPLOYMENT_MODE=docker
-COPY --from=backend-builder /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
-COPY --from=frontend-builder /app/frontend/dist ./web/dist
 
 EXPOSE 8080
 
 CMD ["codex-proxy-rs"]
+
+FROM runtime-base AS runtime
+
+COPY --from=backend-builder /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
+COPY --from=frontend-builder /app/frontend/dist ./web/dist
+
+FROM runtime-base AS runtime-prebuilt
+
+ARG TARGETARCH
+ARG CPR_PREBUILT_DIR=dist/docker
+
+COPY ${CPR_PREBUILT_DIR}/linux-${TARGETARCH}/codex-proxy-rs /usr/local/bin/codex-proxy-rs
+COPY ${CPR_PREBUILT_DIR}/web/dist ./web/dist
+RUN chmod +x /usr/local/bin/codex-proxy-rs

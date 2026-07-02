@@ -20,8 +20,13 @@ env:
   IMAGE_NAME: zyycn/codex-proxy-rs
 
 jobs:
-  release:
+  release-info:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      build_time: ${{ steps.version.outputs.build_time }}
+      git_sha: ${{ steps.version.outputs.git_sha }}
 
     steps:
       - name: Checkout
@@ -63,36 +68,199 @@ jobs:
             exit 1
           fi
 
+  build-frontend:
+    needs: [release-info]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Build frontend
+        run: pnpm build
+        working-directory: frontend
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  build-binary:
+    needs: [release-info, build-frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: backend/web/dist
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+        working-directory: backend
+
+      - name: Build binary
+        run: |
+          cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
+          mkdir -p "../dist/binaries/linux-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/codex-proxy-rs" "../dist/binaries/linux-${{ matrix.arch }}/codex-proxy-rs"
+        working-directory: backend
+        env:
+          CPR_VERSION: ${{ needs.release-info.outputs.version }}
+          CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
+          CPR_BUILD_TYPE: release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-proxy-rs-linux-${{ matrix.arch }}
+          path: dist/binaries/linux-${{ matrix.arch }}/codex-proxy-rs
+          if-no-files-found: error
+          retention-days: 1
+
+  package-assets:
+    needs: [release-info, build-frontend, build-binary]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: dist/frontend
+
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-linux-amd64
+          path: dist/binaries/linux-amd64
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-linux-arm64
+          path: dist/binaries/linux-arm64
+
+      - name: Package release assets
+        shell: bash
+        env:
+          VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          rm -rf package checksums.txt
+
+          for arch in amd64 arm64; do
+            rm -rf package/codex-proxy-rs
+            mkdir -p package/codex-proxy-rs/web/dist
+            cp "dist/binaries/linux-${arch}/codex-proxy-rs" package/codex-proxy-rs/codex-proxy-rs
+            chmod +x package/codex-proxy-rs/codex-proxy-rs
+            cp -R dist/frontend/. package/codex-proxy-rs/web/dist/
+            tar -czf "codex-proxy-rs_${VERSION}_linux_${arch}.tar.gz" -C package codex-proxy-rs
+          done
+
+          sha256sum "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz" \
+            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" > checksums.txt
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: |
+            codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
+            codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
+            checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [release-info, build-frontend, build-binary, package-assets]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: dist/docker/web/dist
+
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-linux-amd64
+          path: dist/docker/linux-amd64
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-proxy-rs-linux-arm64
+          path: dist/docker/linux-arm64
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist/release
+
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
-
-      - name: Package release assets
-        shell: bash
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          rm -rf dist-package checksums.txt
-
-          docker buildx build \
-            --file deploy/Dockerfile \
-            --target release-asset \
-            --platform linux/amd64,linux/arm64 \
-            --output type=local,dest=dist-package \
-            --cache-from type=gha,scope=release \
-            --cache-to type=gha,mode=max,scope=release \
-            --build-arg CPR_VERSION="${VERSION}" \
-            --build-arg CPR_GIT_SHA="${{ steps.version.outputs.git_sha }}" \
-            --build-arg CPR_BUILD_TIME="${{ steps.version.outputs.build_time }}" \
-            --build-arg CPR_BUILD_TYPE=release \
-            .
-
-          find dist-package -type f -name 'codex-proxy-rs_*.tar.gz' -exec cp {} . \;
-          test -f "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz"
-          test -f "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz"
-          sha256sum "codex-proxy-rs_${VERSION}_linux_amd64.tar.gz" \
-            "codex-proxy-rs_${VERSION}_linux_arm64.tar.gz" > checksums.txt
 
       - name: Login to GHCR
         uses: docker/login-action@v4
@@ -106,30 +274,27 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
-          target: runtime
+          target: runtime-prebuilt
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            CPR_VERSION=${{ steps.version.outputs.version }}
-            CPR_GIT_SHA=${{ steps.version.outputs.git_sha }}
-            CPR_BUILD_TIME=${{ steps.version.outputs.build_time }}
-            CPR_BUILD_TYPE=release
-          cache-from: type=gha,scope=release
-          cache-to: type=gha,mode=max,scope=release
+            CPR_PREBUILT_DIR=dist/docker
+          cache-from: type=gha,scope=runtime-prebuilt
+          cache-to: type=gha,mode=max,scope=runtime-prebuilt
           labels: |
             org.opencontainers.image.title=Codex Proxy RS
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.version.outputs.git_sha }}
+            org.opencontainers.image.version=${{ needs.release-info.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release-info.outputs.git_sha }}
             org.opencontainers.image.source=https://github.com/zyycn/codex-proxy-rs
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.version.outputs.git_sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
           body: |
             ## Installation
@@ -137,7 +302,7 @@ jobs:
             **Docker:**
             ```bash
             # GitHub Container Registry
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
             ```
 
             **Manual download:**
@@ -148,6 +313,6 @@ jobs:
             - [GitHub Repository](https://github.com/${{ github.repository }})
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
           files: |
-            codex-proxy-rs_${{ steps.version.outputs.version }}_linux_amd64.tar.gz
-            codex-proxy-rs_${{ steps.version.outputs.version }}_linux_arm64.tar.gz
-            checksums.txt
+            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_amd64.tar.gz
+            dist/release/codex-proxy-rs_${{ needs.release-info.outputs.version }}_linux_arm64.tar.gz
+            dist/release/checksums.txt

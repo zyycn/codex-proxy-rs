@@ -1,6 +1,10 @@
 # Rust build output.
 /backend/target/
 /target/
+/dist/
+/package/
+/checksums.txt
+/codex-proxy-rs_*.tar.gz
 
 # Frontend dependencies and build output.
 /frontend/node_modules/
