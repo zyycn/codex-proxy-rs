@@ -11,7 +11,7 @@ api:
   base_url: 'https://chatgpt.com/backend-api'
 
 database:
-  # Docker 部署默认写入 /app/data，由 Compose 挂载到宿主机 deploy/data。
+  # Docker 部署默认写入 /app/data，由 Compose 挂载到仓库 .runtime/data。
   url: 'sqlite:///app/data/codex-proxy-rs.sqlite'
 
 quota:
@@ -89,7 +89,7 @@ admin:
   default_password: ''
 
 logging:
-  # Docker 部署默认写入 /app/logs，由 Compose 挂载到宿主机 deploy/logs。
+  # Docker 部署默认写入 /app/logs，由 Compose 挂载到仓库 .runtime/logs。
   directory: /app/logs
   # 日志保留天数。
   retention_days: 14

@@ -4,6 +4,7 @@ import {
   ArrowUpCircle,
   CheckCircle2,
   Circle,
+  ExternalLink,
   Power,
   RefreshCw,
   Terminal,
@@ -15,6 +16,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useSystemUpdate, type SystemUpdateLogLevel } from '@/composables/useSystemUpdate'
+import { renderMarkdown } from '@/utils/markdown'
 
 const open = defineModel<boolean>({ default: false })
 
@@ -89,21 +91,26 @@ const statusView = computed(() => {
 
 const summaryItems = computed(() => [
   {
+    key: 'current',
     label: '当前版本',
     value: loading.value ? '...' : version.value?.version ? `v${version.value.version}` : '-',
     title: version.value?.version,
   },
   {
+    key: 'latest',
     label: '最新版本',
     value: updateInfo.value?.latestVersion ? `v${updateInfo.value.latestVersion}` : '-',
     title: updateInfo.value?.latestVersion,
+    releaseUrl: updateInfo.value?.releaseUrl,
   },
   {
+    key: 'build',
     label: '构建',
     value: displayValue(updateInfo.value?.buildTypeLabel),
     title: updateInfo.value?.buildType,
   },
   {
+    key: 'deployment',
     label: '部署',
     value: displayValue(version.value?.deploymentModeLabel),
     title: version.value?.deploymentMode,
@@ -120,6 +127,7 @@ const updateLogRows = computed(() =>
 const showUpdateProgress = computed(
   () => hasUpdate.value || updating.value || updateSuccess.value || updateLogRows.value.length > 0,
 )
+const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.notes))
 
 const streamStatusLabel = computed(() => {
   if (updateStreaming.value) return '实时'
@@ -228,7 +236,7 @@ onUnmounted(() => {
             </p>
           </div>
           <span
-            class="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-[760]"
+            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-[760]"
             :class="statusView.badge"
           >
             <component :is="statusView.icon" class="size-3.5" :class="statusView.iconClass" />
@@ -239,12 +247,24 @@ onUnmounted(() => {
         <div class="grid gap-2.5 sm:grid-cols-4">
           <div
             v-for="item in summaryItems"
-            :key="item.label"
+            :key="item.key"
             class="min-w-0 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5"
           >
-            <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">
-              {{ item.label }}
-            </p>
+            <div class="flex min-w-0 items-center justify-between gap-2">
+              <p class="m-0 truncate text-[11px] leading-none font-[760] text-(--cp-text-muted)">
+                {{ item.label }}
+              </p>
+              <a
+                v-if="item.releaseUrl"
+                :href="item.releaseUrl"
+                target="_blank"
+                rel="noreferrer"
+                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-[720] text-(--cp-info-text) transition-colors hover:text-(--cp-info)"
+              >
+                发布页
+                <ExternalLink class="size-3" />
+              </a>
+            </div>
             <p
               class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-[720] text-(--cp-text-primary)"
               :title="item.title || item.value"
@@ -253,6 +273,13 @@ onUnmounted(() => {
             </p>
           </div>
         </div>
+
+        <p
+          v-if="updateError || updateInfo?.warning"
+          class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-danger-bg) px-3 py-2 text-[12px] leading-normal font-[720] text-(--cp-danger-text)"
+        >
+          {{ updateError || updateInfo?.warning }}
+        </p>
       </section>
 
       <section
@@ -302,7 +329,7 @@ onUnmounted(() => {
       </section>
 
       <section
-        v-if="updateInfo?.notes"
+        v-if="renderedReleaseNotes"
         class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
         <div class="flex items-center justify-between gap-3">
@@ -311,10 +338,8 @@ onUnmounted(() => {
             {{ displayValue(updateInfo?.latestVersion) }}
           </span>
         </div>
-        <BaseScrollbar max-height="160px" view-class="pr-2">
-          <pre
-            class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-[620] text-(--cp-text-primary)"
-            >{{ updateInfo.notes }}</pre>
+        <BaseScrollbar class="-mx-4" max-height="160px" view-class="px-4 pr-5" track-inset="none">
+          <div class="release-notes" v-html="renderedReleaseNotes" />
         </BaseScrollbar>
       </section>
     </div>
@@ -358,3 +383,89 @@ onUnmounted(() => {
     </template>
   </BaseModal>
 </template>
+
+<style scoped>
+.release-notes {
+  color: var(--cp-text-primary);
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.release-notes :deep(*) {
+  max-width: 100%;
+}
+
+.release-notes :deep(:first-child) {
+  margin-top: 0;
+}
+
+.release-notes :deep(:last-child) {
+  margin-bottom: 0;
+}
+
+.release-notes :deep(h1),
+.release-notes :deep(h2),
+.release-notes :deep(h3),
+.release-notes :deep(h4) {
+  margin: 12px 0 6px;
+  color: var(--cp-text-primary);
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.4;
+}
+
+.release-notes :deep(p) {
+  margin: 0 0 8px;
+}
+
+.release-notes :deep(ul),
+.release-notes :deep(ol) {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.release-notes :deep(li) {
+  margin: 3px 0;
+}
+
+.release-notes :deep(a) {
+  color: var(--cp-info-text);
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.release-notes :deep(a:hover) {
+  color: var(--cp-info);
+}
+
+.release-notes :deep(code) {
+  border-radius: 5px;
+  background: var(--cp-bg-muted);
+  color: var(--cp-text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+}
+
+.release-notes :deep(pre) {
+  margin: 8px 0;
+  overflow-x: auto;
+  border-radius: var(--cp-input-radius-base);
+  background: var(--cp-bg-surface);
+  padding: 8px 10px;
+}
+
+.release-notes :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.release-notes :deep(blockquote) {
+  margin: 8px 0;
+  border-left: 3px solid var(--cp-divider-subtle);
+  color: var(--cp-text-secondary);
+  padding-left: 10px;
+}
+</style>

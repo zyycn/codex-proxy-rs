@@ -7,126 +7,197 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-1.95-000?style=flat-square&logo=rust" />
   <img src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" />
-  <img src="https://img.shields.io/badge/Vue-3-42b883?style=flat-square&logo=vuedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vuedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white" />
   <img src="https://img.shields.io/badge/SQLite-local-003b57?style=flat-square&logo=sqlite" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" />
 </p>
 
+## 概览
+
+Codex Proxy RS 是一个单进程服务：
+
+- Rust/Axum 后端提供 OpenAI 兼容 `/v1/*` 代理、管理端 API、SQLite 持久化和静态前端托管。
+- Vue 管理端用于账号导入、API Key、用量统计、请求记录、运行参数、模型映射和系统更新。
+- 运行数据默认收敛到仓库 `.runtime/`，Docker 也使用同一套宿主机目录做 bind mount。
+
 ## 环境
 
-- Rust ≥ 1.95
-- Node ≥ 20，pnpm ≥ 9（仅开发管理端前端时需要）
+- Rust 1.95
+- Node 24 或兼容版本，pnpm 11（只在开发前端或构建镜像时需要）
+- Docker / Docker Compose（部署或验证镜像时需要）
 
-## 快速开始
+## 本地运行
 
-```bash
-cargo run --manifest-path backend/Cargo.toml
-```
-
-启动后监听 `http://0.0.0.0:8080`，默认配置从运行目录下的 `config.yaml` 读取，也可以用 `CPR_CONFIG_FILE=/path/to/config.yaml` 显式指定。首次启动会自动创建管理端账号；`admin.default_password` 必须显式设置为至少 12 位的非默认密码。
-
-Docker 部署：
+本地直接运行后端时，配置文件由 `CPR_CONFIG_FILE` 指定；未指定时读取当前工作目录下的 `config.yaml`。
 
 ```bash
-cp deploy/config.example.yaml deploy/config.yaml
-# 编辑 deploy/config.yaml，设置 admin.default_password
-docker compose -f deploy/docker-compose.yml build
-docker compose -f deploy/docker-compose.yml up -d
+cp deploy/config.example.yaml .runtime/config.yaml
 ```
 
-默认只监听宿主机 `127.0.0.1:8080`。挂载关系：`deploy/config.yaml` → `/app/config.yaml`，数据和日志写入 Compose 命名卷 `cpr-data`、`cpr-logs`。
-
-## API
-
-所有接口通过 Authorization Bearer header 鉴权，API Key 在管理端创建和管理。
-
-| 端点 | 说明 |
-| --- | --- |
-| `POST /v1/responses` | OpenAI responses 接口 |
-| `POST /v1/chat/completions` | Chat completions 接口 |
-| `GET /v1/models` | 模型列表 |
-| `GET /v1/models/catalog` | 模型目录 |
-| `/api/admin/*` | 管理端 API（前端调用） |
-
-```bash
-curl http://127.0.0.1:8080/v1/responses \
-  -H 'Authorization: Bearer <your-api-key>' \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "gpt-5.5", "input": "Say hello", "stream": true}'
-```
-
-## 管理控制台
-
-前端是 Vue 3 单页应用，源码在 `frontend/`。开发时：
-
-```bash
-pnpm --dir frontend dev
-```
-
-生产构建后由后端直接托管：
-
-```bash
-pnpm --dir frontend build
-cargo run --manifest-path backend/Cargo.toml
-```
-
-管理端功能包括账号管理、API Key 管理、用量仪表盘、请求记录和运行时设置。账号、Key、模型路由等运行时配置在管理端操作，不写在 YAML 里。
-
-## 配置
-
-最小 `config.yaml`：
+如果直接用本地二进制而不是 Docker，确保 `.runtime/config.yaml` 里的路径是宿主机路径：
 
 ```yaml
-server:
-  host: '0.0.0.0'
-  port: 8080
-
-api:
-  base_url: 'https://chatgpt.com/backend-api'
-
 database:
   url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
 
 logging:
   directory: .runtime/logs
-  retention_days: 14
 
 admin:
   default_password: '<set-a-long-random-password>'
 ```
 
-完整配置项见 `deploy/config.example.yaml`，包括 TLS、WebSocket 连接池、请求指纹、账号额度策略等。
+启动：
 
-运行数据目录：
-
-```text
-.runtime/data/   # SQLite 数据库
-.runtime/logs/   # 日志文件
+```bash
+mkdir -p .runtime/data .runtime/logs
+CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
 ```
 
-## 架构
+服务默认监听 `http://0.0.0.0:8080`。
 
-Codex Proxy RS 是单主服务架构：Rust 后端同时承载 OpenAI 兼容代理、管理端 API、SQLite 持久化、前端静态资源托管和在线更新。详细模块边界、请求链路、发布和更新流程见 [架构说明](docs/architecture.md)。
+## Docker 部署
+
+Compose 默认把宿主机 `.runtime` 映射进容器：
+
+- `.runtime/config.yaml` -> `/app/config.yaml`
+- `.runtime/data` -> `/app/data`
+- `.runtime/logs` -> `/app/logs`
+
+初始化配置：
+
+```bash
+mkdir -p .runtime/data .runtime/logs
+cp deploy/config.example.yaml .runtime/config.yaml
+# 编辑 .runtime/config.yaml，设置 admin.default_password
+```
+
+Docker 配置文件里路径保持容器路径：
+
+```yaml
+database:
+  url: 'sqlite:///app/data/codex-proxy-rs.sqlite'
+
+logging:
+  directory: /app/logs
+```
+
+构建并启动：
+
+```bash
+docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+默认只绑定宿主机 `127.0.0.1:8080`。如需覆盖路径：
+
+```bash
+CPR_CONFIG_FILE=/path/to/config.yaml \
+CPR_DATA_DIR=/path/to/data \
+CPR_LOG_DIR=/path/to/logs \
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+## API
+
+客户端 API Key 在管理端创建。OpenAI 兼容接口通过 `Authorization: Bearer <key>` 鉴权。
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /v1/responses` | OpenAI Responses 兼容接口 |
+| `POST /v1/chat/completions` | Chat Completions 兼容接口 |
+| `GET /v1/models` | 模型列表 |
+| `GET /v1/models/{id}` | 模型详情 |
+| `GET /v1/models/catalog` | 管理端可见模型目录 |
+| `/api/admin/*` | 管理端 API |
+
+示例：
+
+```bash
+curl http://127.0.0.1:8080/v1/responses \
+  -H 'Authorization: Bearer <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-5.5","input":"Say hello","stream":true}'
+```
+
+## 管理端
+
+生产环境前端由后端直接托管，不需要单独 Node 服务。开发前端时：
+
+```bash
+pnpm --dir frontend install
+pnpm --dir frontend dev
+```
+
+生产构建：
+
+```bash
+pnpm --dir frontend build
+CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
+```
+
+管理端主要功能：
+
+- 账号导入、OAuth 授权、连接测试、quota 刷新、token 刷新。
+- 客户端 API Key 管理。
+- 请求记录、Token 用量、模型用量和账号额度。
+- 运行参数、模型别名、账号选择策略。
+- 版本检查、在线更新、更新日志、重启和回滚。
+
+## 配置与运行数据
+
+配置文件只承载启动必需项。账号、API Key、模型映射、账号选择策略和多数运行参数由管理端写入 SQLite。
+
+`.runtime` 约定：
+
+```text
+.runtime/config.yaml                # 本地或 Docker 启动配置，按实际运行环境写路径
+.runtime/data/codex-proxy-rs.sqlite # SQLite 数据库
+.runtime/data/update-state.json     # 在线更新状态
+.runtime/data/update.lock           # 在线更新锁
+.runtime/logs/                      # 日志
+```
+
+## 发布与更新
+
+版本信息在 `release/version.yaml`，发布平台在 `release/platforms.yaml`。
+
+发布命令：
+
+```bash
+release/publish 0.1.5
+```
+
+该命令会更新版本文件、生成版本提交、创建 `v<version>` tag 并推送，随后 GitHub Actions 构建 Release 归档和 GHCR 多平台镜像。
+
+在线更新由主服务处理，管理端调用 `/api/admin/system/*`：
+
+- 检查 GitHub Release。
+- 下载匹配当前平台的归档和 `checksums.txt`。
+- 校验 checksum。
+- 替换二进制和 `web/dist`。
+- Docker 模式下依赖 `restart: unless-stopped` 和自重启重新拉起服务。
 
 ## 项目结构
 
 ```text
-backend/
-  src/        Rust 源码
-  tests/      集成测试
-  build/      构建脚本
-frontend/     Vue 3 管理控制台
-deploy/       Dockerfile、Compose、示例配置
-docs/         架构与维护文档
+backend/       Rust/Axum 后端、SQLite migration、集成测试
+frontend/      Vue 3 管理端
+deploy/        Dockerfile、Compose、部署配置模板
+docs/          架构、审计和维护文档
+release/       版本、平台和发布脚本
+skills/        项目本地 Codex skill
 ```
 
-## 开发
+## 开发检查
 
 ```bash
 cargo fmt --manifest-path backend/Cargo.toml --check
 cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path backend/Cargo.toml --test main
+cargo test --manifest-path backend/Cargo.toml --test main --locked
 pnpm --dir frontend build
+docker compose -f deploy/docker-compose.yml config
 ```
 
 ## License
