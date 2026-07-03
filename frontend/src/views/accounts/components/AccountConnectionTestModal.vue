@@ -47,7 +47,7 @@ function connectionLogClass(tone: string) {
       <section
         class="flex items-center justify-between gap-4 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3"
       >
-        <AccountIdentityCell :account="account" size="lg" />
+        <AccountIdentityCell :account="account" size="lg" show-plan />
         <AccountStatusBadge :status="account.status" variant="pill" />
       </section>
 

@@ -90,7 +90,7 @@ function quotaWindowBarClass(window?: any) {
         </div>
       </div>
 
-      <div v-if="quotaWindows('shortTerm').length > 0" class="grid gap-2 sm:grid-cols-2">
+      <div v-if="quotaWindows('shortTerm').length > 0" class="grid gap-2">
         <div
           v-for="window in quotaWindows('shortTerm')"
           :key="window.key"
@@ -107,7 +107,9 @@ function quotaWindowBarClass(window?: any) {
               :style="quotaWindowBarStyle(window)"
             />
           </div>
-          <div class="mt-3 flex flex-col gap-1 text-[12px] font-[620] text-(--cp-text-secondary)">
+          <div
+            class="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+          >
             <span>重置时间: {{ window.resetAtDisplay }}</span>
             <span>窗口已用: {{ window.windowUsedDisplay }}</span>
           </div>

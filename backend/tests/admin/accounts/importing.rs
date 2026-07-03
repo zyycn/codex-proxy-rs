@@ -82,6 +82,256 @@ async fn admin_accounts_import_should_store_cpr_account_tokens() {
 }
 
 #[tokio::test]
+async fn admin_accounts_import_should_store_cpr_access_token_from_at_field() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "cpr-at-account",
+            "user_id": "cpr-at-user",
+            "email": "cpr-at@example.com",
+            "plan_type": "k12",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 9,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-accounts-import-cpr-at.sqlite",
+        129,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    let access_token = unsigned_jwt(&json!({
+        "exp": 4_102_444_800i64,
+        "https://api.openai.com/auth": {},
+        "https://api.openai.com/profile": {},
+    }));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_cpr_at")
+                .body(Body::from(
+                    json!({
+                        "accounts": [{
+                            "id": "acct_import_cpr_at",
+                            "at": access_token.clone(),
+                            "status": "active"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_import_cpr_at")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["sourceFormat"], "cpr");
+    assert_eq!(stored.account_id.as_deref(), Some("cpr-at-account"));
+    assert_eq!(stored.user_id.as_deref(), Some("cpr-at-user"));
+    assert_eq!(stored.email.as_deref(), Some("cpr-at@example.com"));
+    assert_eq!(stored.plan_type.as_deref(), Some("k12"));
+    assert_eq!(stored.access_token.expose_secret(), access_token);
+    assert!(stored.refresh_token.is_none());
+    assert!(stored.next_refresh_at.is_none());
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_read_sub2api_backup_access_token_only_accounts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "sub2api-at-account",
+            "user_id": "sub2api-at-user",
+            "email": "sub2api-at@example.com",
+            "plan_type": "k12",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 7,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-accounts-import-sub2api-backup-at.sqlite",
+        127,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    let access_token = unsigned_jwt(&json!({
+        "exp": 4_102_444_800i64,
+        "https://api.openai.com/auth": {},
+        "https://api.openai.com/profile": {},
+    }));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_sub2api_backup_at")
+                .body(Body::from(
+                    json!({
+                        "sourceFormat": "sub2api",
+                        "exported_at": "2026-07-03T15:46:38.717Z",
+                        "proxies": [],
+                        "accounts": [{
+                            "name": "sub2api-at@example.com",
+                            "platform": "openai",
+                            "type": "oauth",
+                            "credentials": {
+                                "at": access_token.clone(),
+                                "refresh_token": "",
+                                "expires_at": 4_102_444_800i64
+                            },
+                            "extra": {},
+                            "concurrency": 3,
+                            "priority": 50,
+                            "rate_multiplier": null,
+                            "auto_pause_on_expired": true
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let store = SqliteAccountStore::new(pool);
+    let stored_metadata = store
+        .list_metadata_page(1, 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .next()
+        .unwrap();
+    let stored = store.get(&stored_metadata.id).await.unwrap().unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["sourceFormat"], "sub2api");
+    assert_eq!(stored.account_id.as_deref(), Some("sub2api-at-account"));
+    assert_eq!(stored.user_id.as_deref(), Some("sub2api-at-user"));
+    assert_eq!(stored.email.as_deref(), Some("sub2api-at@example.com"));
+    assert_eq!(stored.plan_type.as_deref(), Some("k12"));
+    assert_eq!(stored.access_token.expose_secret(), access_token);
+    assert!(stored.refresh_token.is_none());
+    assert!(stored.next_refresh_at.is_none());
+}
+
+#[tokio::test]
+async fn admin_accounts_import_should_read_cliproxyapi_codex_auth_files() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "cliproxyapi-account",
+            "user_id": "cliproxyapi-user",
+            "email": "cliproxyapi@example.com",
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 3,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-accounts-import-cliproxyapi.sqlite",
+        128,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    let access_token = unsigned_jwt(&json!({
+        "exp": 4_102_444_800i64,
+        "https://api.openai.com/auth": {},
+        "https://api.openai.com/profile": {},
+    }));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/import")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_import_cliproxyapi")
+                .body(Body::from(
+                    json!({
+                        "sourceFormat": "cliproxyapi",
+                        "accounts": [{
+                            "type": "codex",
+                            "access_token": access_token.clone(),
+                            "refresh_token": "cliproxyapi-refresh",
+                            "expired": "2100-01-01T00:00:00Z",
+                            "email": "cliproxyapi@example.com",
+                            "label": "CLIProxyAPI"
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .list_metadata_page(1, 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .next()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["imported"], 1);
+    assert_eq!(body["data"]["sourceFormat"], "cliproxyapi");
+    assert_eq!(stored.account_id.as_deref(), Some("cliproxyapi-account"));
+    assert_eq!(stored.user_id.as_deref(), Some("cliproxyapi-user"));
+    assert_eq!(stored.email.as_deref(), Some("cliproxyapi@example.com"));
+    assert_eq!(stored.plan_type.as_deref(), Some("plus"));
+}
+
+#[tokio::test]
 async fn admin_accounts_import_should_fetch_wham_usage_for_current_openai_token_identity() {
     const CURRENT_IMPORT_ACCOUNT_ID: &str = "acct_import_current_token";
     const CURRENT_IMPORT_EMAIL: &str = "current-import@example.test";
@@ -346,6 +596,7 @@ async fn admin_accounts_import_from_refresh_token_should_not_store_consumed_refr
     );
     let account = store.get(&stored.id).await.unwrap().unwrap();
     assert!(account.refresh_token.is_none());
+    assert!(account.next_refresh_at.is_none());
 }
 
 #[tokio::test]

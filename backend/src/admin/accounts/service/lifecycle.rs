@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::time::sleep;
@@ -147,8 +147,12 @@ impl AdminAccountService {
                             .refresh_token_for_existing
                             .map(|token| SecretString::new(token.into())),
                         access_token_expires_at: Some(claims.expires_at),
-                        next_refresh_at: Some(
-                            self.next_refresh_at_for_expires_at(&existing.id, claims.expires_at),
+                        next_refresh_at: create_next_refresh_at(
+                            self,
+                            &existing.id,
+                            claims.expires_at,
+                            tokens.refresh_token_for_new.is_some()
+                                || existing.refresh_token.is_some(),
                         ),
                         status: crate::upstream::accounts::model::AccountStatus::Active,
                     },
@@ -458,6 +462,15 @@ impl AdminAccountService {
 
         Ok(AdminAccountHealthCheck { results })
     }
+}
+
+fn create_next_refresh_at(
+    service: &AdminAccountService,
+    account_id: &str,
+    expires_at: DateTime<Utc>,
+    has_refresh_token: bool,
+) -> Option<DateTime<Utc>> {
+    has_refresh_token.then(|| service.next_refresh_at_for_expires_at(account_id, expires_at))
 }
 
 fn stable_jittered_millis(account_id: &str, base_millis: u64, variance: f64) -> u64 {

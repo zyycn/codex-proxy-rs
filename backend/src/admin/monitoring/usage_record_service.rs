@@ -277,12 +277,6 @@ impl AdminUsageRecordService {
         self.append_with_settings(event, settings).await
     }
 
-    /// 记录安全审计事件，不受普通使用记录开关影响。
-    pub async fn record_audit(&self, event: UsageRecord) -> Result<(), AdminUsageRecordError> {
-        let settings = *self.settings.read().await;
-        self.append_with_settings(event, settings).await
-    }
-
     async fn append_with_settings(
         &self,
         mut event: UsageRecord,

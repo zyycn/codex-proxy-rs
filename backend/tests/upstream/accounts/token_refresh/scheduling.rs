@@ -342,6 +342,88 @@ async fn token_refresh_task_should_skip_unauthorized_refresh_without_refresh_tok
 }
 
 #[tokio::test]
+async fn token_refresh_task_should_clear_stale_refresh_time_without_refresh_token() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-no-rt-clear-next.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool);
+    let now = Utc::now();
+    let old_access_token = test_jwt((now + Duration::minutes(10)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-no-rt-clear-next".to_string(),
+            email: Some("no-rt-clear-next@example.com".to_string()),
+            account_id: Some("chatgpt-no-rt-clear-next".to_string()),
+            user_id: Some("user-no-rt-clear-next".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(old_access_token.clone().into()),
+            refresh_token: None,
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::minutes(10)),
+            status: AccountStatus::Active,
+        })
+        .await
+        .expect("account should be inserted");
+    store
+        .set_next_refresh_at(
+            "acct-refresh-no-rt-clear-next",
+            Some(now + Duration::minutes(5)),
+        )
+        .await
+        .expect("stale future refresh time should persist");
+    let refresher = CountingTokenRefresher::default();
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher.clone(),
+    );
+
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
+        .await
+        .expect("timer scheduling should skip account without refresh token");
+    let after_timer_scan = store
+        .get("acct-refresh-no-rt-clear-next")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+    store
+        .set_next_refresh_at(
+            "acct-refresh-no-rt-clear-next",
+            Some(now - Duration::minutes(1)),
+        )
+        .await
+        .expect("stale due refresh time should persist");
+
+    let due_summary = task
+        .refresh_due_accounts_once_at(now)
+        .await
+        .expect("due refresh scan should skip account without refresh token");
+    let stored = store
+        .get("acct-refresh-no-rt-clear-next")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(timer_summary.skipped, 1);
+    assert_eq!(due_summary.skipped, 1);
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
+    assert!(after_timer_scan.next_refresh_at.is_none());
+    assert!(stored.next_refresh_at.is_none());
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        old_access_token.as_str()
+    );
+}
+
+#[tokio::test]
 async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-per-account-timer.sqlite");

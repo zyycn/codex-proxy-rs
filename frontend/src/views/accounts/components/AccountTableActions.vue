@@ -1,14 +1,5 @@
 <script setup lang="ts">
-import {
-  KeyRound,
-  LoaderCircle,
-  MoreHorizontal,
-  Pencil,
-  Power,
-  RefreshCw,
-  Trash2,
-  Wifi,
-} from '@lucide/vue'
+import { KeyRound, LoaderCircle, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
@@ -23,7 +14,6 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  edit: [account: any]
   delete: [account: any]
   test: [account: any]
   refresh: [accountId: string]
@@ -34,16 +24,6 @@ const emit = defineEmits<{
 
 <template>
   <div class="relative flex items-center justify-end gap-1">
-    <BaseButton
-      icon-only
-      variant="ghost"
-      size="sm"
-      title="编辑账号"
-      @click.stop="emit('edit', account)"
-    >
-      <Pencil class="size-3.5" />
-    </BaseButton>
-
     <BaseButton
       icon-only
       variant="ghost"

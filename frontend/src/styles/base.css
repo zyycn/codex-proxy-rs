@@ -34,11 +34,11 @@ html.theme-fallback-transition body {
   z-index: 2;
 }
 
-html.theme-view-transition-reverse::view-transition-old(root) {
+html.theme-view-transition-shrink::view-transition-old(root) {
   z-index: 2;
 }
 
-html.theme-view-transition-reverse::view-transition-new(root) {
+html.theme-view-transition-shrink::view-transition-new(root) {
   z-index: 1;
 }
 
@@ -49,6 +49,37 @@ button {
 
 button:disabled {
   cursor: not-allowed;
+}
+
+.cp-scrollbar {
+  scrollbar-color: var(--cp-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.cp-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.cp-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cp-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--cp-scrollbar-thumb);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.cp-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--cp-scrollbar-thumb-hover);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.cp-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -7,12 +7,14 @@ const props = withDefaults(
   defineProps<{
     viewClass?: string
     maxHeight?: string
+    height?: string
     horizontal?: boolean
     vertical?: boolean
   }>(),
   {
     viewClass: '',
     maxHeight: undefined,
+    height: undefined,
     horizontal: false,
     vertical: true,
   },
@@ -60,7 +62,7 @@ const horizontalThumbStyle = computed(() => ({
 }))
 const rootClasses = computed(() => [
   'relative min-h-0 overflow-hidden',
-  props.maxHeight ? undefined : 'h-full',
+  props.maxHeight || props.height ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
   'min-h-0 overflow-auto max-h-[inherit] [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:bg-transparent',
@@ -200,6 +202,15 @@ async function scrollToTop() {
   horizontalDragging.value = false
   visible.value = false
   clearHideTimer()
+  await nextTick()
+  update()
+}
+
+async function scrollToBottom() {
+  const wrap = wrapRef.value
+  if (wrap) {
+    wrap.scrollTop = wrap.scrollHeight
+  }
   await nextTick()
   update()
 }
@@ -357,6 +368,7 @@ useEventListener(document, 'pointerup', handleHorizontalThumbPointerUp)
 defineExpose({
   update,
   scrollToTop,
+  scrollToBottom,
   wrapRef,
 })
 </script>
@@ -364,7 +376,7 @@ defineExpose({
 <template>
   <div
     :class="rootClasses"
-    :style="{ maxHeight }"
+    :style="{ maxHeight, height }"
     @mouseenter="activateScrollbar"
     @mousemove="activateScrollbar"
     @mouseleave="hideScrollbar"

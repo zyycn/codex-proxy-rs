@@ -15,7 +15,6 @@ import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsTable } from './composables/useAccountsTable'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal.vue'
-import AccountEditModal from './components/AccountEditModal.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell.vue'
@@ -63,8 +62,6 @@ const {
   showCreateModal,
   showDeleteModal,
   showSingleDeleteModal,
-  showEditModal,
-  editingAccount,
   pendingDeleteAccount,
   refreshingAccountIds,
   refreshingQuotaAccountIds,
@@ -72,20 +69,15 @@ const {
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
-  savingAccount,
   batchDeleting,
   exportingAccounts,
   reauthorizingAccount,
   createForm,
-  editForm,
-  editStatusModel,
   loadAccounts,
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
   openReauthorizeAccount,
-  openEditAccount,
-  handleSaveAccount,
   requestDeleteAccount,
   handleDelete,
   handleBatchDelete,
@@ -282,7 +274,6 @@ function quotaTokenDisplay(account: any) {
               :testing="testingConnectionIds.has(row.id)"
               :updating-status="updatingStatusAccountIds.has(row.id)"
               @delete="requestDeleteAccount"
-              @edit="openEditAccount"
               @reauthorize="openReauthorizeAccount"
               @refresh="handleRefresh"
               @test="openConnectionTest"
@@ -330,15 +321,6 @@ function quotaTokenDisplay(account: any) {
       :saving="creatingAccount"
       @create="handleCreate"
       @generate-oauth="handleAuthorizeOAuth"
-    />
-
-    <AccountEditModal
-      v-model="showEditModal"
-      v-model:form="editForm"
-      v-model:status="editStatusModel"
-      :account="editingAccount"
-      :saving="savingAccount"
-      @save="handleSaveAccount"
     />
 
     <BaseConfirmModal

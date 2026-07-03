@@ -27,7 +27,7 @@ const sizeClasses: Record<TextareaSize, string> = {
 }
 
 const textareaClasses = computed(() => [
-  'w-full resize-none rounded-(--cp-input-radius-base) border-0 bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] px-3.5 py-3 text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-(--cp-text-muted)',
+  'cp-scrollbar w-full resize-none rounded-(--cp-input-radius-base) border-0 bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] px-3.5 py-3 text-(--cp-text-primary) shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-(--cp-text-muted)',
   'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-(--cp-shadow-input-hover) focus:bg-(--cp-input-soft-bg-focus) focus:shadow-(--cp-shadow-input-focus)',
   'disabled:cursor-not-allowed disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none',
   sizeClasses[props.size],

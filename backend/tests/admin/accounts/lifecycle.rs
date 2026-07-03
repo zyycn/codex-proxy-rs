@@ -866,6 +866,7 @@ async fn admin_account_manual_create_from_refresh_token_should_not_store_consume
 
     assert_eq!(status, StatusCode::OK);
     assert!(stored.refresh_token.is_none());
+    assert!(stored.next_refresh_at.is_none());
 }
 
 #[tokio::test]
