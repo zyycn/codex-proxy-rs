@@ -100,6 +100,51 @@ async fn responses_should_honor_explicit_http_sse_transport() {
 }
 
 #[tokio::test]
+async fn responses_stream_should_treat_incomplete_as_terminal() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_INCOMPLETE_USAGE_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": true,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_text(response).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("event: response.incomplete"));
+    assert!(body.contains(r#""reason":"max_output_tokens""#));
+    assert!(!body.contains("event: response.failed"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test]
 async fn responses_should_stagger_same_account_requests_before_sending_upstream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

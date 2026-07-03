@@ -168,6 +168,10 @@ const RESPONSES_STREAM_USAGE_SSE: &str = concat!(
     include_str!("../../../fixtures/responses/http_sse/stream_usage.sse"),
     "\n"
 );
+const RESPONSES_INCOMPLETE_USAGE_SSE: &str = concat!(
+    include_str!("../../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse"),
+    "\n"
+);
 const RESPONSES_STREAM_AFTER_429_SSE: &str = concat!(
     include_str!("../../../fixtures/responses/http_sse/stream_after_429.sse"),
     "\n"

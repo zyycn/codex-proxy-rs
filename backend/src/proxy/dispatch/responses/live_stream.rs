@@ -16,7 +16,8 @@ use crate::{
     upstream::{
         protocol::{
             responses::{
-                reconvert_responses_sse_event_tuple_values, update_first_response_event_ms,
+                reconvert_responses_sse_event_tuple_values, response_sse_event_is_terminal,
+                update_first_response_event_ms,
             },
             sse::{
                 encode_sse_event, parse_sse_events, sse_body_has_done, sse_frame_end,
@@ -292,14 +293,7 @@ async fn send_live_response_stream_tail(
 }
 
 fn sse_body_has_terminal_event(body: &str) -> bool {
-    parse_sse_events(body).is_ok_and(|events| {
-        events.iter().any(|event| {
-            matches!(
-                event.event.as_deref(),
-                Some("response.completed" | "response.failed" | "error")
-            )
-        })
-    })
+    parse_sse_events(body).is_ok_and(|events| events.iter().any(response_sse_event_is_terminal))
 }
 
 fn missing_sse_event_separator(body: &str) -> Option<&'static str> {

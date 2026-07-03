@@ -12,7 +12,7 @@ use axum::{
 use chrono::Utc;
 use futures::{stream as futures_stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::convert::Infallible;
 use thiserror::Error;
 use uuid::Uuid;
@@ -211,32 +211,27 @@ impl ChatCompletionStreamTranslator {
             Some("response.output_text.delta") => {
                 self.push_text_delta(&value, output);
             }
-            Some("response.reasoning_summary_text.delta") if self.include_reasoning => {
-                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    self.has_content = true;
-                    output.push_str(&self.frame(json!({
-                        "choices": [{
-                            "delta": {"reasoning_content": delta},
-                            "finish_reason": Value::Null,
-                            "index": 0,
-                        }],
-                    })));
-                }
+            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta")
+                if self.include_reasoning =>
+            {
+                self.push_reasoning_delta(&value, output);
             }
             Some("response.output_item.added") => {
                 self.push_function_call_start(&value, output);
             }
-            Some("response.function_call_arguments.delta") => {
+            Some(
+                "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta",
+            ) => {
                 self.push_function_call_delta(&value, output);
             }
             Some("response.function_call_arguments.done") => {
                 self.push_function_call_done(&value, output);
             }
             Some("response.output_item.done") => {
-                self.push_image_generation_done(&value, output);
+                self.push_output_item_done(&value, output);
             }
-            Some("response.completed") => {
-                self.push_completed(&value, output);
+            Some("response.completed" | "response.incomplete") => {
+                self.push_terminal_response(&value, output);
             }
             _ => {}
         }
@@ -262,21 +257,47 @@ impl ChatCompletionStreamTranslator {
         })));
     }
 
+    fn push_reasoning_delta(&mut self, value: &Value, output: &mut String) {
+        let Some(delta) = value.get("delta").and_then(Value::as_str) else {
+            return;
+        };
+        self.has_content = true;
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {"reasoning_content": delta},
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
     fn push_function_call_start(&mut self, value: &Value, output: &mut String) {
         let Some((item_id, call_id, name)) = function_call_item(value.get("item")) else {
             return;
         };
+        self.ensure_function_call_started(item_id, call_id, name, output);
+    }
+
+    fn ensure_function_call_started(
+        &mut self,
+        item_id: String,
+        call_id: String,
+        name: String,
+        output: &mut String,
+    ) {
+        self.function_call_items
+            .entry(item_id)
+            .or_insert_with(|| FunctionCallInfo {
+                call_id: call_id.clone(),
+                name: name.clone(),
+            });
+        if self.tool_call_indices.contains_key(&call_id) {
+            return;
+        }
         self.has_tool_calls = true;
         self.has_content = true;
         let index = self.next_tool_call_index;
         self.next_tool_call_index += 1;
-        self.function_call_items.insert(
-            item_id,
-            FunctionCallInfo {
-                call_id: call_id.clone(),
-                name: name.clone(),
-            },
-        );
         self.tool_call_indices.insert(call_id.clone(), index);
         output.push_str(&self.frame(json!({
             "choices": [{
@@ -336,12 +357,19 @@ impl ChatCompletionStreamTranslator {
         })));
     }
 
-    fn push_image_generation_done(&mut self, value: &Value, output: &mut String) {
-        let Some(item) = value.get("item") else {
+    fn push_output_item_done(&mut self, value: &Value, output: &mut String) {
+        if self.push_image_generation_done(value, output) {
             return;
+        }
+        self.push_function_call_output_item_done(value, output);
+    }
+
+    fn push_image_generation_done(&mut self, value: &Value, output: &mut String) -> bool {
+        let Some(item) = value.get("item") else {
+            return false;
         };
         if item.get("type").and_then(Value::as_str) != Some("image_generation_call") {
-            return;
+            return false;
         }
         self.has_tool_calls = true;
         self.has_content = true;
@@ -380,9 +408,35 @@ impl ChatCompletionStreamTranslator {
                 "index": 0,
             }],
         })));
+        true
     }
 
-    fn push_completed(&mut self, value: &Value, output: &mut String) {
+    fn push_function_call_output_item_done(&mut self, value: &Value, output: &mut String) {
+        let Some((item_id, call_id, name, arguments)) =
+            tool_call_output_item(value.get("item"), &self.function_call_items)
+        else {
+            return;
+        };
+        self.ensure_function_call_started(item_id, call_id.clone(), name, output);
+        if self.call_ids_with_deltas.contains(&call_id) {
+            return;
+        }
+        let index = self.tool_call_indices.get(&call_id).copied().unwrap_or(0);
+        output.push_str(&self.frame(json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "function": {"arguments": arguments},
+                        "index": index,
+                    }],
+                },
+                "finish_reason": Value::Null,
+                "index": 0,
+            }],
+        })));
+    }
+
+    fn push_terminal_response(&mut self, value: &Value, output: &mut String) {
         self.flush_tuple_text(output);
         if !self.has_content {
             output.push_str(&self.frame(json!({
@@ -394,10 +448,11 @@ impl ChatCompletionStreamTranslator {
             })));
         }
         let response = value.get("response");
+        let finish_reason = openai_finish_reason_for_response(response, self.has_tool_calls);
         output.push_str(&self.frame(json!({
             "choices": [{
                 "delta": {},
-                "finish_reason": if self.has_tool_calls { "tool_calls" } else { "stop" },
+                "finish_reason": finish_reason,
                 "index": 0,
             }],
             "usage": openai_stream_usage(response.and_then(|response| response.get("usage"))),
@@ -498,7 +553,7 @@ pub fn translate_chat_to_codex(
         text: prepared.text,
         tuple_schema: prepared.tuple_schema,
         tools: codex_tools(request.tools, request.functions),
-        tool_choice: request.tool_choice,
+        tool_choice: codex_tool_choice(request.tool_choice),
         parallel_tool_calls: request.parallel_tool_calls,
         reasoning: request.reasoning_effort.map(|effort| {
             json!({
@@ -676,18 +731,57 @@ fn reconvert_tuple_text(text: &str, tuple_schema: &Value) -> Option<String> {
 }
 
 fn codex_tools(tools: Option<Vec<Value>>, functions: Option<Vec<Value>>) -> Option<Vec<Value>> {
-    if let Some(tools) = tools.filter(|tools| !tools.is_empty()) {
-        return Some(tools);
+    let mut codex_tools = Vec::new();
+    if let Some(tools) = tools {
+        codex_tools.extend(tools.into_iter().map(codex_tool));
     }
+    if let Some(functions) = functions {
+        codex_tools.extend(functions.into_iter().map(codex_function_tool));
+    }
+    (!codex_tools.is_empty()).then_some(codex_tools)
+}
 
-    functions
-        .filter(|functions| !functions.is_empty())
-        .map(|functions| {
-            functions
-                .into_iter()
-                .map(|function| json!({"type": "function", "function": function}))
-                .collect()
-        })
+fn codex_tool(tool: Value) -> Value {
+    if tool.get("type").and_then(Value::as_str) != Some("function") {
+        return tool;
+    }
+    if let Some(function) = tool.get("function").filter(|value| value.is_object()) {
+        return codex_function_tool(function.clone());
+    }
+    codex_function_tool(tool)
+}
+
+fn codex_function_tool(function: Value) -> Value {
+    let mut object = Map::new();
+    object.insert("type".to_string(), Value::String("function".to_string()));
+    for field in ["name", "description", "parameters", "strict"] {
+        if let Some(value) = function.get(field) {
+            object.insert(field.to_string(), value.clone());
+        }
+    }
+    Value::Object(object)
+}
+
+fn codex_tool_choice(tool_choice: Option<Value>) -> Option<Value> {
+    tool_choice.map(codex_tool_choice_value)
+}
+
+fn codex_tool_choice_value(choice: Value) -> Value {
+    if choice.get("type").and_then(Value::as_str) != Some("function") {
+        return choice;
+    }
+    let name = choice
+        .get("name")
+        .or_else(|| choice.pointer("/function/name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty());
+    let Some(name) = name else {
+        return choice;
+    };
+    json!({
+        "type": "function",
+        "name": name,
+    })
 }
 
 struct PreparedResponseFormat {
@@ -830,7 +924,7 @@ pub fn chat_completion_from_codex_sse(
                     tool_calls.push(tool_call);
                 }
             }
-            Some("response.completed") => {
+            Some("response.completed" | "response.incomplete") => {
                 completed_response = value.get("response").cloned();
             }
             _ => {}
@@ -851,6 +945,7 @@ pub fn chat_completion_from_codex_sse(
     };
 
     let mut choices = Vec::new();
+    let finish_reason = openai_finish_reason_for_response(Some(&response), !tool_calls.is_empty());
     if !tool_calls.is_empty() {
         choices.push(json!({
             "index": 0,
@@ -859,7 +954,7 @@ pub fn chat_completion_from_codex_sse(
                 "content": output_text_value,
                 "tool_calls": tool_calls,
             },
-            "finish_reason": "tool_calls",
+            "finish_reason": finish_reason,
         }));
     } else {
         choices.push(json!({
@@ -868,7 +963,7 @@ pub fn chat_completion_from_codex_sse(
                 "role": "assistant",
                 "content": output_text_value,
             },
-            "finish_reason": "stop",
+            "finish_reason": finish_reason,
         }));
     }
 
@@ -1054,15 +1149,64 @@ fn output_text_from_item(item: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+fn openai_finish_reason_for_response(
+    response: Option<&Value>,
+    has_tool_calls: bool,
+) -> &'static str {
+    let Some(response) = response else {
+        return openai_default_finish_reason(has_tool_calls);
+    };
+    if response.get("status").and_then(Value::as_str) != Some("incomplete") {
+        return openai_default_finish_reason(has_tool_calls);
+    }
+
+    match response_incomplete_reason(response) {
+        Some("max_output_tokens") => "length",
+        Some("content_filter") => "content_filter",
+        _ => openai_default_finish_reason(has_tool_calls),
+    }
+}
+
+fn response_incomplete_reason(response: &Value) -> Option<&str> {
+    response
+        .pointer("/incomplete_details/reason")
+        .or_else(|| response.get("reason"))
+        .and_then(Value::as_str)
+}
+
+fn openai_default_finish_reason(has_tool_calls: bool) -> &'static str {
+    if has_tool_calls {
+        "tool_calls"
+    } else {
+        "stop"
+    }
+}
+
 fn function_call_item(item: Option<&Value>) -> Option<(String, String, String)> {
     let item = item?;
-    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+    let item_type = item.get("type").and_then(Value::as_str)?;
+    if !matches!(item_type, "function_call" | "custom_tool_call") {
         return None;
     }
     let item_id = item.get("id").and_then(Value::as_str)?;
-    let call_id = item.get("call_id").and_then(Value::as_str)?;
-    let name = item.get("name").and_then(Value::as_str)?;
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .unwrap_or(item_id);
+    let name = item
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(item_type);
     Some((item_id.to_string(), call_id.to_string(), name.to_string()))
+}
+
+fn tool_arguments_from_value(value: &Value) -> &str {
+    value
+        .get("arguments")
+        .or_else(|| value.get("input"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 fn tool_call_from_done_event(
@@ -1087,11 +1231,32 @@ fn tool_call_from_done_event(
         .filter(|name| !name.is_empty())
         .or_else(|| info.map(|info| info.name.as_str()))
         .unwrap_or("unknown");
-    let arguments = event
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let arguments = tool_arguments_from_value(event);
     Some(openai_tool_call(&call_id, name, arguments))
+}
+
+fn tool_call_output_item(
+    item: Option<&Value>,
+    function_call_items: &BTreeMap<String, FunctionCallInfo>,
+) -> Option<(String, String, String, String)> {
+    let item = item?;
+    let (item_id, call_id, name) = function_call_item(Some(item))?;
+    let info = function_call_items.get(&item_id);
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .or_else(|| info.map(|info| info.call_id.as_str()))
+        .unwrap_or(&call_id)
+        .to_string();
+    let name = item
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .or_else(|| info.map(|info| info.name.as_str()))
+        .unwrap_or(&name)
+        .to_string();
+    let arguments = tool_arguments_from_value(item).to_string();
+    Some((item_id, call_id, name, arguments))
 }
 
 fn tool_call_from_output_item(
@@ -1099,31 +1264,11 @@ fn tool_call_from_output_item(
     function_call_items: &BTreeMap<String, FunctionCallInfo>,
     finished_call_ids: &mut BTreeSet<String>,
 ) -> Option<Value> {
-    let item = item?;
-    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+    let (_, call_id, name, arguments) = tool_call_output_item(item, function_call_items)?;
+    if !finished_call_ids.insert(call_id.clone()) {
         return None;
     }
-    let item_id = item.get("id").and_then(Value::as_str);
-    let info = item_id.and_then(|item_id| function_call_items.get(item_id));
-    let call_id = item
-        .get("call_id")
-        .and_then(Value::as_str)
-        .or_else(|| info.map(|info| info.call_id.as_str()))
-        .or(item_id)?;
-    if !finished_call_ids.insert(call_id.to_string()) {
-        return None;
-    }
-    let name = item
-        .get("name")
-        .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
-        .or_else(|| info.map(|info| info.name.as_str()))
-        .unwrap_or("unknown");
-    let arguments = item
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    Some(openai_tool_call(call_id, name, arguments))
+    Some(openai_tool_call(&call_id, &name, &arguments))
 }
 
 fn openai_tool_call(call_id: &str, name: &str, arguments: &str) -> Value {

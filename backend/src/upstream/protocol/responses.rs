@@ -219,11 +219,11 @@ fn complete_sse_body_prefix(body: &str) -> Option<&str> {
 /// 从 Codex SSE 收集出的非流式 Responses 结果。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectedResponse {
-    /// 收集到 `response.completed`。
+    /// 收集到 `response.completed` 或 `response.incomplete`。
     Completed(Value),
     /// 收集到 `response.failed` 或 `error`。
     Failed(ResponsesSseFailure),
-    /// SSE 未包含 `response.completed`。
+    /// SSE 未包含成功终止响应。
     MissingCompleted,
     /// 完成响应为空。
     Empty,
@@ -269,7 +269,7 @@ pub fn response_from_codex_sse(
     let events = parse_sse_events(body)?;
     let mut output_text = String::new();
     let mut output_items = Vec::new();
-    let mut completed_response = None;
+    let mut terminal_response = None;
     let mut failed_response = None;
 
     for event in events {
@@ -287,8 +287,8 @@ pub fn response_from_codex_sse(
                     output_items.push(item.clone());
                 }
             }
-            Some("response.completed") => {
-                completed_response = value.get("response").cloned();
+            Some("response.completed" | "response.incomplete") => {
+                terminal_response = value.get("response").cloned();
             }
             Some(event_name @ ("error" | "response.failed")) if failed_response.is_none() => {
                 failed_response = Some(ResponsesSseFailure::from_event(event_name, &value));
@@ -300,7 +300,7 @@ pub fn response_from_codex_sse(
     if let Some(failure) = failed_response {
         return Ok(CollectedResponse::Failed(failure));
     }
-    let Some(mut response) = completed_response else {
+    let Some(mut response) = terminal_response else {
         return Ok(CollectedResponse::MissingCompleted);
     };
     if is_empty_response(&response, &output_text, &output_items) {
@@ -335,7 +335,7 @@ pub fn completed_response_metadata(
                     function_call_ids.insert(call_id.to_string());
                 }
             }
-            Some("response.completed") => {
+            Some("response.completed" | "response.incomplete") => {
                 response_id = value
                     .pointer("/response/id")
                     .and_then(Value::as_str)
@@ -364,7 +364,7 @@ pub fn reconvert_responses_sse_event_tuple_values(
     mut data: Value,
     tuple_schema: &Value,
 ) -> Value {
-    match responses_event_type(event_name, &data) {
+    match responses_event_type(event_name, Some(&data)) {
         Some("response.output_text.delta") => {
             reconvert_output_text_delta_tuple_values(&mut data, tuple_schema);
         }
@@ -373,7 +373,7 @@ pub fn reconvert_responses_sse_event_tuple_values(
                 reconvert_output_item_tuple_values(item, tuple_schema);
             }
         }
-        Some("response.completed") => {
+        Some("response.completed" | "response.incomplete") => {
             if let Some(response) = data.get_mut("response") {
                 reconvert_completed_response_tuple_values(response, Some(tuple_schema));
                 sync_output_text_from_output(response);
@@ -384,8 +384,23 @@ pub fn reconvert_responses_sse_event_tuple_values(
     data
 }
 
-fn responses_event_type<'a>(event_name: Option<&'a str>, data: &'a Value) -> Option<&'a str> {
-    event_name.or_else(|| data.get("type").and_then(Value::as_str))
+/// 判断 Responses SSE 事件是否为终止事件。
+pub fn response_sse_event_is_terminal(event: &SseEvent) -> bool {
+    let value = serde_json::from_str::<Value>(&event.data).ok();
+    matches!(
+        responses_event_type(event.event.as_deref(), value.as_ref()),
+        Some("response.completed" | "response.incomplete" | "response.failed" | "error")
+    )
+}
+
+fn responses_event_type<'a>(
+    event_name: Option<&'a str>,
+    data: Option<&'a Value>,
+) -> Option<&'a str> {
+    event_name.or_else(|| {
+        data.and_then(|data| data.get("type"))
+            .and_then(Value::as_str)
+    })
 }
 
 fn reconvert_output_text_delta_tuple_values(data: &mut Value, tuple_schema: &Value) {
@@ -401,6 +416,9 @@ fn reconvert_output_text_delta_tuple_values(data: &mut Value, tuple_schema: &Val
 
 fn is_empty_response(response: &Value, output_text: &str, output_items: &[Value]) -> bool {
     if !output_text.trim().is_empty() || !output_items.is_empty() {
+        return false;
+    }
+    if response.get("status").and_then(Value::as_str) == Some("incomplete") {
         return false;
     }
 
@@ -432,9 +450,13 @@ fn ensure_completed_response_output(
         return;
     }
 
+    let item_status = response
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
     response["output"] = json!([{
         "type": "message",
-        "status": "completed",
+        "status": item_status,
         "role": "assistant",
         "content": [{
             "type": "output_text",

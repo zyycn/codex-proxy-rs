@@ -9,8 +9,8 @@ use codex_proxy_rs::upstream::protocol::events::{
 };
 use codex_proxy_rs::upstream::protocol::responses::{
     apply_response_model_options, http_sse_fallback_allowed, response_body_has_first_event,
-    response_from_codex_sse, transport_for_request, CodexResponsesRequest, CodexTransport,
-    CollectedResponse,
+    response_from_codex_sse, response_sse_event_is_terminal, transport_for_request,
+    CodexResponsesRequest, CodexTransport, CollectedResponse,
 };
 use codex_proxy_rs::upstream::protocol::sse::{
     parse_sse_events, sse_body_has_done, DONE_SSE_FRAME,

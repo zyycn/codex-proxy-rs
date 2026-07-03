@@ -14,6 +14,7 @@
 
 1. **desktop bundle 基准（强）**：从当日最新官方 `Codex.dmg`（`persistent.oaistatic.com/codex-app-prod/Codex.dmg`，构建时间 2026-07-03）解包出的 Electron `app.asar`，提取 `.vite/build/{main,src,worker}.js` 中的协议字符串。`worker.js` 是核心流处理器。
 2. **OpenAI 官方契约基准（中）**：我知识内的 OpenAI API 契约，用于错误体、Models 端点等 bundle 未覆盖处。
+3. **开源实现对照（辅助）**：本轮补充对照 `/home/zyy/桌面/Codes/sub2api` 与 `/home/zyy/桌面/Codes/CLIProxyAPI` 的 codegraph 结果。二者不能替代官方抓包，但可用于验证社区常见的 Chat Completions ⇄ Responses/Codex 转换形状。
 
 ### 基准的关键局限（务必先读）
 
@@ -53,27 +54,30 @@ response.output_item.done
 - **`/v1/responses` 直通**（`TupleSseEventTransformer`）：无 schema 时逐字节透传，接近官方透传语义，保真度高。
 - **`/v1/chat/completions` 转换**（`ChatCompletionStreamTranslator`）：主动把 Codex Responses SSE 转成 `chat.completion.chunk`，`match` 未命中的事件 `_ => {}` 丢弃。**偏差集中在此路径。**
 
-官方 11 个核心事件中本项目识别 10 个。
+官方 11 个核心事件中本项目当前已识别 11 个；`response.incomplete` 已在本轮补齐。
 
 ### 🔴 严重（已读代码核实）
 
-**1. `response.incomplete` 全路径未处理** — 可信度最高（基准硬 + 已核实）
+**1. `response.incomplete` 全路径终止处理（已修复）** — 可信度最高（基准硬 + 已核实）
 
 - 基准：`response.incomplete` 在官方 `nh` 事件全集内，是合法终止事件（命中 `max_output_tokens`、内容策略等），官方按 `response.status` 采集 finishReasons 并原样透传。
-- 项目自身 `upstream/protocol/websocket.rs:235,725` 已在 **WebSocket 路径**完整识别该事件（能取 `incomplete_details/reason`），但 **HTTP SSE 路径漏了它**：
+- 项目自身 `upstream/protocol/websocket.rs:235,725` 已在 **WebSocket 路径**完整识别该事件（能取 `incomplete_details/reason`），修复前 **HTTP SSE 路径漏了它**：
   - `proxy/openai/chat.rs` push_event 的 match 无 `response.incomplete` 分支 → 落入 `_ => {}` 丢弃。唯一发 `finish_reason` 和 `[DONE]` 的 `push_completed` 只在 `response.completed` 触发。
   - `proxy/dispatch/responses.rs:2389` `sse_body_has_terminal_event` 只认 `completed|failed|error`。
 - 触发场景：任意"未完成但正常终止"的响应（尤其 `max_output_tokens` 截断）。
-- 后果：
+- 修复前后果：
   - chat 客户端：流无终止 chunk、无 `[DONE]`，流悬挂到超时。
   - responses 客户端：在合法 `response.incomplete` 后被追加一个伪造的 `response.failed`(stream_disconnected)，出现双终止事件；后台把成功的截断响应误记为 502，污染用量/账号健康统计。
-- 修复方向：SSE 两条路径把 `response.incomplete` 纳入终止事件集，复用 WebSocket 路径已有的 `websocket_incomplete_response_reason` 逻辑。
+- 修复状态（2026-07-03）：已将 `response.incomplete` 纳入 Responses SSE 终止事件集；Chat Completions 流式/非流式转换会把 `max_output_tokens` 映射为 `finish_reason=length`，并正常输出终止 chunk / `[DONE]`；Responses live stream 不再为合法 incomplete 追加伪造 `response.failed`。
 
-**2. Chat Completions 工具定义未从嵌套转扁平** — 方向可信，需实测确认
+**2. Chat Completions 工具定义未从嵌套转扁平（已修复）** — 方向可信，已用开源实现辅助确认
 
-- 基准：Codex 上游是 Responses API，函数工具应为扁平 `{type:"function", name, description, parameters}`；Chat 输入是嵌套 `{type:"function", function:{...}}`。二者不可互换。**注意**：工具 schema 的官方真实取值属"基准不确定"（不在 bundle 内），此条依据"Codex = Responses API"推断，方向可信但建议真实抓包确认后再改。
-- 项目：`proxy/openai/chat.rs:676` `codex_tools()` 的 `tools` 分支 `return Some(tools)` 原样透传嵌套结构；legacy `functions` 还额外包一层 `{type:"function","function":function}`。
-- 后果：若上游确实要扁平结构，`name`/`parameters` 在顶层缺失 → 上游报 400 或忽略工具 → `/v1/chat/completions` 工具调用整体失效。其余流式/非流式解析逻辑都写得完整，唯独请求方向的工具定义可能从一开始就错。
+- 基准：Codex 上游是 Responses API，函数工具应为扁平 `{type:"function", name, description, parameters}`；Chat 输入是嵌套 `{type:"function", function:{...}}`。二者不可互换。**注意**：工具 schema 的官方真实取值属"基准不确定"（不在 bundle 内），此条依据"Codex = Responses API"和开源实现对照修复，后续仍可用真实抓包复核。
+- 开源对照：
+  - `sub2api` `convertChatToolsToResponses()`：把 Chat `tools[].function` 和 legacy `functions[]` 转为 Responses 扁平 `{type:"function", name, description, parameters, strict}`。
+  - `CLIProxyAPI` `ConvertOpenAIRequestToCodex()`：把 Chat 函数工具扁平化，内置工具原样透传；函数型 `tool_choice` 从 `{type:"function", function:{name}}` 转为 `{type:"function", name}`。
+- 项目修复前：`proxy/openai/chat.rs` `codex_tools()` 的 `tools` 分支原样透传嵌套结构；legacy `functions` 还额外包一层 `{type:"function","function":function}`。
+- 修复状态（2026-07-03）：Chat `tools[].function`、legacy `functions[]` 已转为 Responses 扁平函数工具，非 function 内置工具继续透传；函数型 `tool_choice` 已转为 `{type:"function", name}`。
 
 ### 🟡 中等
 
@@ -88,11 +92,11 @@ response.output_item.done
 
 SSE / chat 转换：
 
-- chat `finish_reason` 恒为 `stop`/`tool_calls`（`chat.rs:398`），**永不产生 `length`/`content_filter`**；叠加 incomplete 未处理，截断响应既无 `length` 也无终止帧。
-- chat 转换丢弃 `response.reasoning_text.delta`（只映射 `reasoning_summary_text.delta`）与 `custom_tool_call_input.delta`；若模型只发原始 reasoning_text 或 custom tool 增量，在 chat 路径被静默丢弃。两者在 `/v1/responses` 直通路径均正常透传。
-- chat 路径 `tool_choice` 命名工具格式未转换（`chat.rs:499`）：Responses 期望 `{type:function, name}`，透传 Chat 的 `{type:function, function:{name}}` 会被上游忽略。
+- chat `response.incomplete` 已映射 `length`/`content_filter`；其它终止状态仍只有 `stop`/`tool_calls`，若上游未来在 `response.completed` 中携带非 stop 终止语义，需要继续扩展。
+- chat 转换 `response.reasoning_text.delta` 与 `response.custom_tool_call_input.delta` 已补齐；custom tool 增量按普通 function tool arguments delta 转为 Chat `tool_calls`。
+- chat 路径函数型 `tool_choice` 命名工具格式已转换为 Responses 期望的 `{type:function, name}`。
 - legacy `function_call` 回传 call_id 用 `fc_{name}` 伪造（`chat.rs:595`），与真实 call_id 对不上，多轮工具对话无法关联结果。
-- 流式 `output_item.done` 无 function_call 兜底（`chat.rs:337` 仅处理 `image_generation_call`）；非流式有双来源兜底。边缘风险。
+- 流式 `output_item.done` 已补 function/custom tool 兜底；若上游没有单独发送 arguments delta，也能从完整 output item 生成 Chat `tool_calls` 参数。
 
 Models 端点（结构层面与 OpenAI 契约高度一致）：
 
@@ -106,17 +110,18 @@ Models 端点（结构层面与 OpenAI 契约高度一致）：
 
 - `store` 默认 false 且始终序列化（`responses.rs:624`）。
 - `include` 自动注入 `reasoning.encrypted_content`（`responses.rs:585`）— 符合公开 Codex 惯例但 bundle 无字面量命中。
-- 不构造 `max_output_tokens`：客户端传入会被静默丢弃。
+- 不构造 `max_output_tokens`：客户端传入会被静默丢弃。本轮对照结论分裂：`sub2api` 会把 Chat `max_tokens`/`max_completion_tokens` 映射到 Responses `max_output_tokens`；`CLIProxyAPI` 明确注释 Codex 不支持并禁用该映射。暂不改，仍需真实抓包或产品决策。
 - `service_tier` 的 `fast`→`priority` 归一化（`responses.rs:597`）为本项目自定义。
 - 两条 reasoning 构造路径（`proxy/openai/responses.rs:358` vs `responses.rs:544`）在 effort 缺失时行为不完全一致。
 - `function_call_output` 无专门净化分支，靠 `_ => Some(object)` 原样透传。
 
 ## 优先级建议
 
-1. **修 `response.incomplete`（🔴，基准硬）** — 两条 SSE 路径纳入终止事件集，复用 WebSocket 已有逻辑。收益最大、证据最硬、改动可控。
-2. **确认 chat 工具定义转扁平（🔴，需实测）** — 先对官方 `codex` CLI 抓一次带 tools 的请求确认扁平结构，再改 `codex_tools()`。
-3. **决策 quota→402 vs 429（🟡，产品权衡）** — 明确是要 OpenAI SDK 兼容还是语义化 HTTP 码。
-4. 补 chat `finish_reason=length`、聚合错误 type 语义映射等中等项。
+1. **修 `response.incomplete`（🔴，基准硬，已完成）** — 两条 SSE 路径已纳入终止事件集，Chat Completions 已补 `length` finish reason 和 `[DONE]`。
+2. **chat 工具定义/`tool_choice` 转扁平（🔴，已完成）** — 已参考 sub2api 与 CLIProxyAPI 的 common path，并补充请求转换测试。
+3. **chat reasoning/custom tool delta 与 `output_item.done` 兜底（🟡，已完成）** — 已补 Chat 流式/非流式转换测试。
+4. **决策 quota→402 vs 429（🟡，产品权衡）** — 明确是要 OpenAI SDK 兼容还是语义化 HTTP 码。
+5. 处理聚合错误 type 语义映射、Models 首拉为空/别名详情等中等项。
 
 ## 复现方法（解包基准）
 
