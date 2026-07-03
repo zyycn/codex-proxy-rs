@@ -18,40 +18,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@v7
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@1.95
         with:
           components: rustfmt,clippy
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: backend -> target
 
       - name: Rust format
-        run: cargo fmt --manifest-path backend/Cargo.toml --check
+        working-directory: backend
+        run: cargo fmt --check
 
       - name: Rust clippy
-        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
+        working-directory: backend
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Rust tests
-        run: cargo test --manifest-path backend/Cargo.toml --test main --locked
+        working-directory: backend
+        run: cargo test --test main --locked
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -70,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@v7
 
       - name: Validate Docker Compose
         run: docker compose -f deploy/docker-compose.yml config
