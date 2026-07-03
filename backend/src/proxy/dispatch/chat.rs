@@ -9,10 +9,11 @@ use thiserror::Error;
 
 use crate::{
     admin::monitoring::{
-        usage_record::{ResponseUsageRecord, UsageRecordLevel},
-        usage_record_store::AdminUsageRecordService,
+        usage_record_model::{ResponseUsageRecord, UsageRecordLevel},
+        usage_record_service::AdminUsageRecordService,
     },
     proxy::dispatch::{
+        auth_recovery::trigger_refresh_after_auth_failure,
         cloudflare::{
             cloudflare_challenge_error_message, cloudflare_path_block_error_message,
             is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
@@ -28,6 +29,10 @@ use crate::{
             create_response_with_account, verify_acquired_quota_if_required,
             QuotaVerificationContext, QuotaVerificationDecision,
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+        },
+        usage_events::{
+            reasoning_effort_from_request, record_dispatch_error_event, record_response_event,
+            DispatchErrorUsageRecord,
         },
     },
     proxy::openai::chat::ChatStreamTranslationError,
@@ -78,24 +83,6 @@ impl ChatDispatchService {
             installation_id,
             cloudflare,
         }
-    }
-
-    fn trigger_refresh_after_auth_failure(&self, account_id: &str, status: AccountStatus) {
-        if status != AccountStatus::Expired {
-            return;
-        }
-
-        let token_refresh = self.token_refresh.clone();
-        let account_id = account_id.to_string();
-        tokio::spawn(async move {
-            if let Err(error) = token_refresh.trigger_account_refresh_now(&account_id).await {
-                tracing::warn!(
-                    account_id = %account_id,
-                    error = %error,
-                    "reactive token refresh after upstream auth failure failed"
-                );
-            }
-        });
     }
 
     /// 调度非流式 Chat Completions 请求到 Codex Responses 上游。
@@ -311,7 +298,11 @@ impl ChatDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
+                    trigger_refresh_after_auth_failure(
+                        &self.token_refresh,
+                        &release_account_id,
+                        account_status,
+                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -554,8 +545,6 @@ struct ChatDispatchErrorEventRecord<'a> {
     error: &'a ChatDispatchError,
 }
 
-use crate::admin::monitoring::usage_record::UsageRecord;
-
 async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'_>) {
     let mut metadata = serde_json::json!({
         "route": record.route,
@@ -571,127 +560,18 @@ async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'
             object.insert("transport".to_string(), serde_json::json!(transport));
         }
     }
-    let mut event = UsageRecord::new("v1.chat", UsageRecordLevel::Error, "chat dispatch failed");
-    event.request_id = Some(record.request_id.to_string());
-    event.account_id = record.account_id.map(ToString::to_string);
-    event.route = Some(record.route.to_string());
-    event.model = Some(record.model.to_string());
-    event.status_code = Some(record.error.http_status_code() as i64);
-    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
-    event.metadata = metadata;
-    if let Err(error) = record.usage_records.record(event).await {
-        tracing::warn!(error = %error, "failed to record chat dispatch error event");
-    }
-}
-
-async fn record_response_event(record: ResponseUsageRecord<'_>) {
-    let mut event = UsageRecord::new("v1.chat", record.level, record.message);
-    event.request_id = Some(record.request_id.to_string());
-    event.account_id = Some(record.account_id.to_string());
-    event.route = Some(record.route.to_string());
-    event.model = Some(record.model.to_string());
-    event.status_code = Some(record.status_code);
-    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
-    event.metadata = record.metadata;
-    if let Some(object) = event.metadata.as_object_mut() {
-        object
-            .entry("route".to_string())
-            .or_insert_with(|| serde_json::json!(record.route));
-        object
-            .entry("apiKind".to_string())
-            .or_insert_with(|| serde_json::json!("chat"));
-        enrich_usage_record_identity(
-            object,
-            record.requested_model,
-            record.model,
-            record.client_ip,
-            record.client_user_agent,
-            record.reasoning_effort,
-            record.service_tier,
-        );
-    }
-    let rate_limit_headers = record.rate_limit_headers;
-    if !rate_limit_headers.is_empty() {
-        if let Some(object) = event.metadata.as_object_mut() {
-            object.insert(
-                "rateLimitHeaders".to_string(),
-                serde_json::json!(rate_limit_headers),
-            );
-        }
-    }
-    if let Err(error) = record.usage_records.record(event).await {
-        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
-    }
-}
-
-fn enrich_usage_record_identity(
-    object: &mut serde_json::Map<String, Value>,
-    requested_model: Option<&str>,
-    upstream_model: &str,
-    client_ip: Option<&str>,
-    client_user_agent: Option<&str>,
-    reasoning_effort: Option<&str>,
-    service_tier: Option<&str>,
-) {
-    let upstream_model = upstream_model.trim();
-    let requested_model = requested_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(upstream_model);
-    object.insert(
-        "requestedModel".to_string(),
-        Value::String(requested_model.to_string()),
-    );
-    object.insert(
-        "upstreamModel".to_string(),
-        Value::String(upstream_model.to_string()),
-    );
-
-    if let Some(client_ip) = client_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        object.insert("clientIp".to_string(), Value::String(client_ip.to_string()));
-    }
-
-    if let Some(user_agent) = client_user_agent
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "userAgent".to_string(),
-            Value::String(user_agent.to_string()),
-        );
-    }
-
-    if let Some(reasoning_effort) = reasoning_effort
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "reasoningEffort".to_string(),
-            Value::String(reasoning_effort.to_string()),
-        );
-    }
-
-    if let Some(service_tier) = service_tier
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "serviceTier".to_string(),
-            Value::String(service_tier.to_string()),
-        );
-    }
-}
-
-fn reasoning_effort_from_request(
-    request: &crate::upstream::protocol::responses::CodexResponsesRequest,
-) -> Option<&str> {
-    request
-        .reasoning
-        .as_ref()?
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    record_dispatch_error_event(DispatchErrorUsageRecord {
+        usage_records: record.usage_records,
+        request_id: record.request_id,
+        account_id: record.account_id,
+        route: record.route,
+        model: record.model,
+        started_at: record.started_at,
+        status_code: i64::from(record.error.http_status_code()),
+        message: "chat dispatch failed",
+        metadata,
+    })
+    .await;
 }
 
 fn enrich_chat_error_metadata(
@@ -788,8 +668,4 @@ fn enrich_chat_error_metadata(
     if let Some(status) = upstream_status {
         object.insert("upstreamStatus".to_string(), serde_json::json!(status));
     }
-}
-
-fn elapsed_millis_i64(started_at: Instant) -> i64 {
-    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
 }

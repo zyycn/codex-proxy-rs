@@ -1,6 +1,6 @@
 //! 调度层共享的账号级 Codex 上游调用。
 
-use std::time::Instant;
+use std::{future::Future, time::Instant};
 
 use serde_json::Value;
 
@@ -254,6 +254,108 @@ async fn create_compact_response_with_account(
 
 const MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT: usize = 2;
 
+async fn retry_upstream_5xx<T, F, Fut>(
+    request_id: &str,
+    account_id: &str,
+    endpoint: Option<&str>,
+    retry_message: &'static str,
+    failure_message: &'static str,
+    mut operation: F,
+) -> Result<T, CodexClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, CodexClientError>>,
+{
+    let mut retries = 0;
+    loop {
+        let result = operation().await;
+        match result {
+            Err(error)
+                if is_retryable_upstream_5xx_error(&error)
+                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
+            {
+                log_upstream_retry(
+                    request_id,
+                    account_id,
+                    endpoint,
+                    retries + 1,
+                    &error,
+                    retry_message,
+                );
+                retries += 1;
+            }
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                log_upstream_failure(
+                    request_id,
+                    account_id,
+                    endpoint,
+                    retries,
+                    &error,
+                    failure_message,
+                );
+                return Err(error);
+            }
+        }
+    }
+}
+
+fn log_upstream_retry(
+    request_id: &str,
+    account_id: &str,
+    endpoint: Option<&str>,
+    retry: usize,
+    error: &CodexClientError,
+    message: &'static str,
+) {
+    if let Some(endpoint) = endpoint {
+        tracing::warn!(
+            request_id,
+            account_id = %account_id,
+            endpoint,
+            retry,
+            error = %error,
+            message
+        );
+    } else {
+        tracing::warn!(
+            request_id,
+            account_id = %account_id,
+            retry,
+            error = %error,
+            message
+        );
+    }
+}
+
+fn log_upstream_failure(
+    request_id: &str,
+    account_id: &str,
+    endpoint: Option<&str>,
+    retries: usize,
+    error: &CodexClientError,
+    message: &'static str,
+) {
+    if let Some(endpoint) = endpoint {
+        tracing::warn!(
+            request_id,
+            account_id = %account_id,
+            endpoint,
+            retries,
+            error = %error,
+            message
+        );
+    } else {
+        tracing::warn!(
+            request_id,
+            account_id = %account_id,
+            retries,
+            error = %error,
+            message
+        );
+    }
+}
+
 pub(crate) async fn create_response_with_account_retrying_5xx(
     codex: &CodexBackendClient,
     installation_id: Option<&str>,
@@ -263,45 +365,25 @@ pub(crate) async fn create_response_with_account_retrying_5xx(
     account: &Account,
     started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_response_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-            started_at,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    retry = retries + 1,
-                    error = %error,
-                    "upstream response request failed with retryable 5xx"
-                );
-                retries += 1;
-            }
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    retries,
-                    error = %error,
-                    "upstream response request failed"
-                );
-                return Err(error);
-            }
-        }
-    }
+    retry_upstream_5xx(
+        request_id,
+        &account.id,
+        None,
+        "upstream response request failed with retryable 5xx",
+        "upstream response request failed",
+        || {
+            create_response_with_account(
+                codex,
+                installation_id,
+                cloudflare,
+                request,
+                request_id,
+                account,
+                started_at,
+            )
+        },
+    )
+    .await
 }
 
 pub(crate) async fn create_response_stream_with_account_retrying_5xx(
@@ -312,44 +394,24 @@ pub(crate) async fn create_response_stream_with_account_retrying_5xx(
     request_id: &str,
     account: &Account,
 ) -> Result<CodexBackendStreamingResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_response_stream_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    retry = retries + 1,
-                    error = %error,
-                    "upstream response stream request failed with retryable 5xx"
-                );
-                retries += 1;
-            }
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    retries,
-                    error = %error,
-                    "upstream response stream request failed"
-                );
-                return Err(error);
-            }
-        }
-    }
+    retry_upstream_5xx(
+        request_id,
+        &account.id,
+        None,
+        "upstream response stream request failed with retryable 5xx",
+        "upstream response stream request failed",
+        || {
+            create_response_stream_with_account(
+                codex,
+                installation_id,
+                cloudflare,
+                request,
+                request_id,
+                account,
+            )
+        },
+    )
+    .await
 }
 
 pub(crate) async fn create_compact_response_with_account_retrying_5xx(
@@ -360,44 +422,22 @@ pub(crate) async fn create_compact_response_with_account_retrying_5xx(
     request_id: &str,
     account: &Account,
 ) -> Result<CodexCompactResponse, CodexClientError> {
-    let mut retries = 0;
-    loop {
-        let result = create_compact_response_with_account(
-            codex,
-            installation_id,
-            cloudflare,
-            request,
-            request_id,
-            account,
-        )
-        .await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    endpoint = "compact",
-                    retry = retries + 1,
-                    error = %error,
-                    "upstream compact request failed with retryable 5xx"
-                );
-                retries += 1;
-            }
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                tracing::warn!(
-                    request_id,
-                    account_id = %account.id,
-                    endpoint = "compact",
-                    retries,
-                    error = %error,
-                    "upstream compact request failed"
-                );
-                return Err(error);
-            }
-        }
-    }
+    retry_upstream_5xx(
+        request_id,
+        &account.id,
+        Some("compact"),
+        "upstream compact request failed with retryable 5xx",
+        "upstream compact request failed",
+        || {
+            create_compact_response_with_account(
+                codex,
+                installation_id,
+                cloudflare,
+                request,
+                request_id,
+                account,
+            )
+        },
+    )
+    .await
 }

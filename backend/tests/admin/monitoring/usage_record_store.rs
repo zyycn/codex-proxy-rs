@@ -1,6 +1,6 @@
 use codex_proxy_rs::{
     admin::monitoring::{
-        usage_record::{UsageRecord, UsageRecordLevel},
+        usage_record_model::{UsageRecord, UsageRecordLevel},
         usage_record_store::{SqliteUsageRecordStore, UsageRecordFilter},
     },
     infra::database::connect_sqlite,

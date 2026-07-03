@@ -27,6 +27,16 @@ pub fn sse_body_has_done(body: &str) -> bool {
         .ends_with(DONE_SSE_FRAME.trim_end_matches(['\r', '\n']))
 }
 
+/// 返回下一个完整 SSE 帧分隔符位置与长度。
+pub fn sse_frame_separator(input: &str) -> Option<(usize, usize)> {
+    sse_frame_separator_bytes(input.as_bytes())
+}
+
+/// 返回下一个完整 SSE 帧结束位置（含分隔符）。
+pub fn sse_frame_end(bytes: &[u8]) -> Option<usize> {
+    sse_frame_separator_bytes(bytes).map(|(position, separator_len)| position + separator_len)
+}
+
 /// SSE 解析错误。
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SseError {
@@ -168,6 +178,22 @@ fn track_event_buffer_bytes(current_bytes: &mut usize, line: &str) -> Result<(),
         });
     }
     Ok(())
+}
+
+fn sse_frame_separator_bytes(bytes: &[u8]) -> Option<(usize, usize)> {
+    let lf = bytes
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|position| (position, 2));
+    let crlf = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| (position, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(found), None) | (None, Some(found)) => Some(found),
+        (None, None) => None,
+    }
 }
 
 fn is_sse_metadata_line(line: &str) -> bool {

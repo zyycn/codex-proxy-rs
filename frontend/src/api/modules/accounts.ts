@@ -1,5 +1,7 @@
 import request, { type ApiPayload } from '../request'
 
+const ACCOUNT_EXPORT_CONFIRMATION = 'export_sensitive_accounts'
+
 export function getAccounts(params?: any) {
   return request({
     url: '/api/admin/accounts',
@@ -20,7 +22,10 @@ export function exportAccounts(params?: any) {
   return request({
     url: '/api/admin/accounts/export',
     method: 'GET',
-    params,
+    params: {
+      ...params,
+      confirm: ACCOUNT_EXPORT_CONFIRMATION,
+    },
   })
 }
 

@@ -4,12 +4,13 @@ use std::sync::Arc as StdArc;
 
 use crate::{
     admin::monitoring::{
-        service::AdminUsageService,
+        account_usage_service::AdminUsageService,
+        account_usage_store::SqliteUsageStore,
+        usage_record_service::AdminUsageRecordService,
         usage_record_store::{
-            AdminUsageRecordService, SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPACITY,
+            SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPACITY,
             DEFAULT_USAGE_RECORD_CAPTURE_BODY,
         },
-        usage_store::SqliteUsageStore,
     },
     admin::{
         accounts::service::{AdminAccountService, AdminAccountServiceParts},
@@ -43,6 +44,7 @@ use crate::{
         token_client::{default_openai_token_client, OpenAiTokenClient, TokenClientConfig},
         transport::{
             build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
+            CodexWebSocketPool, CodexWebSocketPoolConfig,
         },
     },
 };
@@ -96,6 +98,7 @@ pub struct Services {
     pub responses: StdArc<ResponseDispatchService>,
     pub session_affinity: StdArc<RuntimeSessionAffinityService>,
     pub codex: StdArc<CodexBackendClient>,
+    pub websocket_pool: Option<StdArc<CodexWebSocketPool>>,
     pub fingerprint: Fingerprint,
     pub installation_id: Option<String>,
     pub background_tasks: BackgroundTaskStores,
@@ -158,23 +161,22 @@ impl Services {
         let installation_id = installation_id.filter(|id| !id.trim().is_empty());
         let account_store_trait =
             StdArc::new(stores.accounts.clone()) as StdArc<dyn AccountStoreTrait>;
+        let websocket_pool = config.ws_pool.enabled.then(|| {
+            StdArc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+                enabled: true,
+                max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
+                max_per_account: config.ws_pool.max_per_account,
+                ..CodexWebSocketPoolConfig::default()
+            }))
+        });
         let codex = {
             let client = CodexBackendClient::new(
                 build_reqwest_client(config.tls.force_http11)?,
                 config.api.base_url.clone(),
                 fingerprint.clone(),
             );
-            if config.ws_pool.enabled {
-                let pool =
-                    StdArc::new(crate::upstream::transport::CodexWebSocketPool::with_config(
-                        crate::upstream::transport::CodexWebSocketPoolConfig {
-                            enabled: config.ws_pool.enabled,
-                            max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
-                            max_per_account: config.ws_pool.max_per_account,
-                            ..crate::upstream::transport::CodexWebSocketPoolConfig::default()
-                        },
-                    ));
-                StdArc::new(client.with_websocket_pool(pool))
+            if let Some(pool) = &websocket_pool {
+                StdArc::new(client.with_websocket_pool(pool.clone()))
             } else {
                 StdArc::new(client)
             }
@@ -292,6 +294,7 @@ impl Services {
             responses,
             session_affinity,
             codex,
+            websocket_pool,
             fingerprint,
             installation_id,
             background_tasks: stores,

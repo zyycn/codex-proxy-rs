@@ -1,4 +1,9 @@
-use std::{io::Write, path::Path, sync::Arc};
+use std::{
+    io::Write,
+    path::Path,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use axum::{
     body::Body,
@@ -21,7 +26,7 @@ use flate2::{write::GzEncoder, Compression};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
-use tar::{Builder, Header};
+use tar::{Builder, EntryType, Header};
 use tokio::sync::Mutex;
 use tower::util::ServiceExt;
 use wiremock::{
@@ -142,6 +147,58 @@ async fn check_updates_should_report_source_build_as_unsupported() {
 }
 
 #[tokio::test]
+async fn check_updates_should_reject_untrusted_github_api_base() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    set_system_update_env(
+        "zyycn/codex-proxy-rs-untrusted-api-base-route",
+        "https://mirror.example",
+    );
+    let (app, _dir) = admin_system_test_app("system-untrusted-api-base.sqlite").await;
+
+    let info = get_check_updates(&app, true, "req_system_untrusted_api_base").await;
+
+    assert!(
+        info["hasUpdate"] == false
+            && info["updateSupported"] == false
+            && info["unsupportedReason"] == "GitHub API base must be https://api.github.com/repos"
+    );
+}
+
+#[tokio::test]
+async fn restart_should_request_graceful_shutdown() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    set_system_update_env("zyycn/codex-proxy-rs-restart-route", "http://127.0.0.1:9");
+    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
+    let (app, _dir) = admin_system_test_app("system-restart.sqlite").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/restart")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let shutdown = tokio::time::timeout(
+        Duration::from_secs(2),
+        codex_proxy_rs::runtime::shutdown::shutdown_signal(),
+    )
+    .await;
+
+    assert!(
+        body["data"]["operationId"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("sysop-restart-"))
+            && shutdown.is_ok()
+    );
+}
+
+#[tokio::test]
 async fn update_should_replace_local_release_files_with_latest_asset() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-update-route";
@@ -187,6 +244,310 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
                 == "old-binary"
             && std::fs::read_to_string(deploy.path().join("web/dist.backup/index.html")).unwrap()
                 == "old-web"
+    );
+}
+
+#[tokio::test]
+async fn update_should_reject_untrusted_github_api_base() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    set_system_update_env(
+        "zyycn/codex-proxy-rs-update-untrusted-api-base-route",
+        "https://mirror.example",
+    );
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-untrusted-api-base.sqlite").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_untrusted_api_base")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert!(
+        status == StatusCode::CONFLICT
+            && body["message"] == "GitHub API base must be https://api.github.com/repos"
+            && std::fs::read_to_string(&exe_path).unwrap() == "old-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "old-web"
+    );
+}
+
+#[tokio::test]
+async fn update_should_fail_when_release_checksum_is_missing() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-missing-checksum-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive_without_checksum(
+        &github,
+        repository,
+        "0.4.0",
+        "new-binary",
+        "new-web",
+    )
+    .await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-missing-checksum.sqlite").await;
+
+    assert_update_failure_preserves_files(
+        &app,
+        "req_system_update_missing_checksum",
+        StatusCode::BAD_GATEWAY,
+        "Release checksums.txt is required",
+        &exe_path,
+        &web_dist,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn update_should_fail_when_release_checksum_mismatches() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-bad-checksum-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive_bad_checksum(
+        &github,
+        repository,
+        "0.4.0",
+        "new-binary",
+        "new-web",
+    )
+    .await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-bad-checksum.sqlite").await;
+
+    assert_update_failure_preserves_files(
+        &app,
+        "req_system_update_bad_checksum",
+        StatusCode::BAD_GATEWAY,
+        "Checksum mismatch",
+        &exe_path,
+        &web_dist,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn update_should_reject_release_archive_from_untrusted_host() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-untrusted-download-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive_urls(
+        &github,
+        repository,
+        "0.4.0",
+        "https://evil.example/download/codex-proxy-rs.tar.gz",
+        "https://github.com/zyycn/codex-proxy-rs/releases/download/v0.4.0/checksums.txt",
+    )
+    .await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-untrusted-download.sqlite").await;
+
+    assert_update_failure_preserves_files(
+        &app,
+        "req_system_update_untrusted_download",
+        StatusCode::BAD_REQUEST,
+        "Download host is not allowed: evil.example",
+        &exe_path,
+        &web_dist,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn update_should_reject_insecure_release_archive_even_when_env_flag_is_set() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-insecure-download-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive_urls(
+        &github,
+        repository,
+        "0.4.0",
+        "http://github.com/zyycn/codex-proxy-rs/releases/download/v0.4.0/codex-proxy-rs.tar.gz",
+        "https://github.com/zyycn/codex-proxy-rs/releases/download/v0.4.0/checksums.txt",
+    )
+    .await;
+    set_system_update_env(repository, &github.uri());
+    std::env::set_var("CPR_UPDATE_ALLOW_INSECURE_DOWNLOADS", "true");
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-insecure-download.sqlite").await;
+
+    assert_update_failure_preserves_files(
+        &app,
+        "req_system_update_insecure_download",
+        StatusCode::BAD_REQUEST,
+        "Only HTTPS release downloads are allowed",
+        &exe_path,
+        &web_dist,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn update_should_reject_release_archive_with_unsafe_path() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-unsafe-archive-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_unsafe_archive(&github, repository, "0.4.0", "new-binary", "new-web")
+        .await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-unsafe-archive.sqlite").await;
+
+    assert_update_failure_preserves_files(
+        &app,
+        "req_system_update_unsafe_archive",
+        StatusCode::BAD_REQUEST,
+        "Unsafe archive path",
+        &exe_path,
+        &web_dist,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn update_should_restore_web_assets_when_binary_backup_fails() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-binary-backup-failure-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    std::fs::create_dir(deploy.path().join("codex-proxy-rs.backup")).unwrap();
+    mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-binary-backup-failure.sqlite").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_binary_backup_failure")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status_code = response.status();
+    let body = response_json(response).await;
+    let status = wait_for_operation_status(&app, "failed").await;
+    let message = body["message"].as_str().unwrap_or_default();
+    let state_error = status["operation"]["error"].as_str().unwrap_or_default();
+
+    assert!(
+        status_code == StatusCode::INTERNAL_SERVER_ERROR
+            && message.starts_with("Failed to remove old binary backup:")
+            && state_error.starts_with("Failed to remove old binary backup:")
+            && std::fs::read_to_string(&exe_path).unwrap() == "old-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "old-web"
+            && !deploy.path().join("web/dist.backup").exists(),
+        "status={status_code}, message={message}, state_error={state_error}, exe={}, web={}, web_backup_exists={}",
+        std::fs::read_to_string(&exe_path).unwrap_or_default(),
+        std::fs::read_to_string(web_dist.join("index.html")).unwrap_or_default(),
+        deploy.path().join("web/dist.backup").exists()
+    );
+}
+
+#[tokio::test]
+async fn update_should_remove_stale_file_lock_and_continue() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-stale-lock-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    let lock_path = deploy.path().join(".runtime/update.lock");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    std::fs::write(&lock_path, "pid=1\ncreated_at=stale\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&lock_path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(31 * 60))
+        .unwrap();
+    mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-stale-lock.sqlite").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_stale_lock")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let status = wait_for_operation_status(&app, "succeeded").await;
+
+    assert!(
+        body["data"]["targetVersion"] == "0.4.0"
+            && status["operation"]["status"] == "succeeded"
+            && std::fs::read_to_string(&exe_path).unwrap() == "new-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "new-web"
+            && !lock_path.exists()
     );
 }
 
@@ -339,6 +700,40 @@ async fn get_check_updates(app: &axum::Router, force: bool, request_id: &str) ->
     response_json(response).await["data"].clone()
 }
 
+async fn assert_update_failure_preserves_files(
+    app: &axum::Router,
+    request_id: &str,
+    expected_status: StatusCode,
+    expected_message: &str,
+    exe_path: &Path,
+    web_dist: &Path,
+) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", request_id)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status_code = response.status();
+    let body = response_json(response).await;
+    let status = wait_for_operation_status(app, "failed").await;
+
+    assert!(
+        status_code == expected_status
+            && body["message"] == expected_message
+            && status["operation"]["error"] == expected_message
+            && std::fs::read_to_string(exe_path).unwrap() == "old-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "old-web"
+    );
+}
+
 async fn mount_latest_release(server: &MockServer, repository: &str, version: &str) {
     Mock::given(method("GET"))
         .and(path(format!("/repos/{repository}/releases/latest")))
@@ -371,6 +766,73 @@ async fn mount_latest_release_with_archive(
         "{}  {archive_name}\n",
         hex::encode(Sha256::digest(&archive))
     );
+    mount_latest_release_archive(
+        server,
+        repository,
+        version,
+        archive_name,
+        archive,
+        Some(checksum),
+    )
+    .await;
+}
+
+async fn mount_latest_release_with_archive_without_checksum(
+    server: &MockServer,
+    repository: &str,
+    version: &str,
+    binary: &str,
+    index: &str,
+) {
+    let archive_name = format!(
+        "codex-proxy-rs_{version}_{}_{}.tar.gz",
+        std::env::consts::OS,
+        release_arch()
+    );
+    let archive = release_archive(binary, index);
+    mount_latest_release_archive(server, repository, version, archive_name, archive, None).await;
+}
+
+async fn mount_latest_release_with_archive_bad_checksum(
+    server: &MockServer,
+    repository: &str,
+    version: &str,
+    binary: &str,
+    index: &str,
+) {
+    let archive_name = format!(
+        "codex-proxy-rs_{version}_{}_{}.tar.gz",
+        std::env::consts::OS,
+        release_arch()
+    );
+    let archive = release_archive(binary, index);
+    let checksum = format!(
+        "{}  {archive_name}\n",
+        "0".repeat(Sha256::output_size() * 2)
+    );
+    mount_latest_release_archive(
+        server,
+        repository,
+        version,
+        archive_name,
+        archive,
+        Some(checksum),
+    )
+    .await;
+}
+
+async fn mount_latest_release_with_archive_urls(
+    server: &MockServer,
+    repository: &str,
+    version: &str,
+    archive_url: &str,
+    checksum_url: &str,
+) {
+    let archive_name = format!(
+        "codex-proxy-rs_{version}_{}_{}.tar.gz",
+        std::env::consts::OS,
+        release_arch()
+    );
     Mock::given(method("GET"))
         .and(path(format!("/repos/{repository}/releases/latest")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -382,15 +844,78 @@ async fn mount_latest_release_with_archive(
             "assets": [
                 {
                     "name": archive_name,
-                    "browser_download_url": format!("{}/download/{archive_name}", server.uri()),
-                    "size": archive.len()
+                    "browser_download_url": archive_url,
+                    "size": 128
                 },
                 {
                     "name": "checksums.txt",
-                    "browser_download_url": format!("{}/download/checksums.txt", server.uri()),
-                    "size": checksum.len()
+                    "browser_download_url": checksum_url,
+                    "size": 128
                 }
             ]
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_latest_release_with_unsafe_archive(
+    server: &MockServer,
+    repository: &str,
+    version: &str,
+    binary: &str,
+    index: &str,
+) {
+    let archive_name = format!(
+        "codex-proxy-rs_{version}_{}_{}.tar.gz",
+        std::env::consts::OS,
+        release_arch()
+    );
+    let archive = release_archive_with_extra_file(binary, index, "../escape", b"unsafe");
+    let checksum = format!(
+        "{}  {archive_name}\n",
+        hex::encode(Sha256::digest(&archive))
+    );
+    mount_latest_release_archive(
+        server,
+        repository,
+        version,
+        archive_name,
+        archive,
+        Some(checksum),
+    )
+    .await;
+}
+
+async fn mount_latest_release_archive(
+    server: &MockServer,
+    repository: &str,
+    version: &str,
+    archive_name: String,
+    archive: Vec<u8>,
+    checksum: Option<String>,
+) {
+    let mut assets = vec![json!({
+        "name": archive_name,
+        "browser_download_url": format!("{}/download/{archive_name}", server.uri()),
+        "size": archive.len()
+    })];
+    if let Some(checksum) = checksum.as_ref() {
+        assets.push(json!({
+            "name": "checksums.txt",
+            "browser_download_url": format!("{}/download/checksums.txt", server.uri()),
+            "size": checksum.len()
+        }));
+    }
+
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/{repository}/releases/latest")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tag_name": format!("v{version}"),
+            "name": format!("v{version}"),
+            "body": "## Changes\n- Update package",
+            "html_url": format!("https://github.com/{repository}/releases/tag/v{version}"),
+            "prerelease": false,
+            "assets": assets
         })))
         .mount(server)
         .await;
@@ -399,11 +924,13 @@ async fn mount_latest_release_with_archive(
         .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
         .mount(server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/download/checksums.txt"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(checksum))
-        .mount(server)
-        .await;
+    if let Some(checksum) = checksum {
+        Mock::given(method("GET"))
+            .and(path("/download/checksums.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(checksum))
+            .mount(server)
+            .await;
+    }
 }
 
 fn release_arch() -> &'static str {
@@ -415,12 +942,24 @@ fn release_arch() -> &'static str {
 }
 
 fn release_archive(binary: &str, index: &str) -> Vec<u8> {
+    release_archive_with_extra_file(binary, index, "", &[])
+}
+
+fn release_archive_with_extra_file(
+    binary: &str,
+    index: &str,
+    extra_path: &str,
+    extra_bytes: &[u8],
+) -> Vec<u8> {
     let mut data = Vec::new();
     {
         let encoder = GzEncoder::new(&mut data, Compression::default());
         let mut builder = Builder::new(encoder);
         append_tar_file(&mut builder, "codex-proxy-rs", binary.as_bytes());
         append_tar_file(&mut builder, "web/dist/index.html", index.as_bytes());
+        if !extra_path.is_empty() {
+            append_raw_tar_file(&mut builder, extra_path, extra_bytes);
+        }
         builder.finish().unwrap();
     }
     data
@@ -433,6 +972,17 @@ fn append_tar_file<W: Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8])
     builder.append_data(&mut header, path, bytes).unwrap();
 }
 
+fn append_raw_tar_file<W: Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8]) {
+    let mut header = Header::new_old();
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_entry_type(EntryType::Regular);
+    let name = path.as_bytes();
+    header.as_old_mut().name[..name.len()].copy_from_slice(name);
+    header.set_cksum();
+    builder.append(&header, bytes).unwrap();
+}
+
 fn set_system_update_env(repository: &str, github_api_base: &str) {
     std::env::set_var("CPR_VERSION", "0.1.0");
     std::env::set_var("CPR_DEPLOYMENT_MODE", "docker");
@@ -440,11 +990,12 @@ fn set_system_update_env(repository: &str, github_api_base: &str) {
     std::env::set_var("CPR_UPDATE_CHANNEL", "stable");
     std::env::set_var("CPR_UPDATE_REPOSITORY", repository);
     std::env::set_var("CPR_GITHUB_API_BASE", format!("{github_api_base}/repos"));
-    std::env::set_var("CPR_UPDATE_ALLOW_INSECURE_DOWNLOADS", "true");
+    std::env::remove_var("CPR_UPDATE_ALLOW_INSECURE_DOWNLOADS");
     std::env::remove_var("CPR_UPDATE_EXE_PATH");
     std::env::remove_var("CPR_WEB_DIST_DIR");
     std::env::remove_var("CPR_UPDATE_STATE_FILE");
     std::env::remove_var("CPR_UPDATE_LOCK_FILE");
+    std::env::remove_var("CPR_ENABLE_SELF_RESTART");
 }
 
 fn set_system_update_paths(root: &Path, exe_path: &Path, web_dist: &Path) {

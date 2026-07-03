@@ -5,6 +5,11 @@ pub fn nonnegative_i64_to_u64(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
+/// 将可空负数归零后转换为无符号展示数值。
+pub fn optional_nonnegative_i64_to_u64(value: Option<i64>) -> u64 {
+    value.map(nonnegative_i64_to_u64).unwrap_or_default()
+}
+
 /// 使用中文界面常用千分位格式展示整数。
 pub fn format_number(value: u64) -> String {
     let text = value.to_string();

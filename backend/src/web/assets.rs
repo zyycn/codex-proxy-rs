@@ -37,7 +37,7 @@ async fn serve_index(State(state): State<AssetState>) -> Response {
 }
 
 async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Response {
-    if uri.path() == "/api" || uri.path().starts_with("/api/") {
+    if is_api_path(uri.path()) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -50,6 +50,10 @@ async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Respon
     }
 
     serve_file(&state.dist_dir.join("index.html"), "/").await
+}
+
+fn is_api_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/") || path == "/v1" || path.starts_with("/v1/")
 }
 
 async fn serve_asset(

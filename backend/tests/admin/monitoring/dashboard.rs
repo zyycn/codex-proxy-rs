@@ -8,7 +8,7 @@ use codex_proxy_rs::{
         auth::service::SqliteAdminSessionStore,
         keys::service::SqliteClientKeyStore,
         monitoring::{
-            usage_record::{UsageRecord, UsageRecordLevel},
+            usage_record_model::{UsageRecord, UsageRecordLevel},
             usage_record_store::SqliteUsageRecordStore,
         },
     },

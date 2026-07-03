@@ -9,7 +9,10 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::time::sleep;
 
 use crate::{
-    infra::json::{NumberedPage, Page},
+    infra::{
+        json::{NumberedPage, Page},
+        time::elapsed_millis_i64,
+    },
     upstream::accounts::store::AccountStore,
 };
 
@@ -482,8 +485,4 @@ fn manual_refresh_failure_is_permanent(
         | crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
         | crate::upstream::accounts::token_refresh::RefreshFailure::Transport => false,
     }
-}
-
-fn elapsed_millis_i64(started_at: std::time::Instant) -> i64 {
-    i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
 }

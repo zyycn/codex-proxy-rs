@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use codex_proxy_rs::infra::database::connect_sqlite;
 
 #[tokio::test]
@@ -8,7 +10,7 @@ async fn sqlite_schema_should_create_current_tables() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name in ('admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
+        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -29,11 +31,65 @@ async fn sqlite_schema_should_create_current_tables() {
             "model_account_routes",
             "model_plan_snapshots",
             "runtime_settings",
+            "schema_migrations",
             "session_affinities",
             "usage_records",
             "usage_time_buckets",
         ]
     );
+}
+
+#[tokio::test]
+async fn sqlite_schema_should_record_applied_migrations() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("schema-migrations.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("select version, name from schema_migrations order by version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(rows, [(1, "initial".to_string())]);
+}
+
+#[test]
+fn initial_migration_should_not_use_idempotent_business_schema_ddl() {
+    let migration_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("infra")
+        .join("migrations")
+        .join("0001_initial.sql");
+    let migration = std::fs::read_to_string(migration_path).unwrap();
+
+    assert!(!migration.to_lowercase().contains("if not exists"));
+}
+
+#[tokio::test]
+async fn connect_sqlite_should_reject_unversioned_existing_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("unversioned.sqlite");
+    let url = format!("sqlite://{}", db.display());
+
+    std::fs::File::create(&db).unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query("create table admin_users (id text primary key)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let err = match connect_sqlite(&url).await {
+        Ok(pool) => {
+            pool.close().await;
+            panic!("unversioned sqlite schema should be rejected");
+        }
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("unversioned sqlite schema"));
 }
 
 #[tokio::test]

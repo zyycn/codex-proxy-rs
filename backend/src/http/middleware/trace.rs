@@ -36,20 +36,22 @@ pub fn http_trace_layer() -> HttpTraceLayer {
 
 fn make_http_span(request: &Request<Body>) -> Span {
     let request_id = request_id(request);
+    let uri = sanitized_uri(request);
     tracing::info_span!(
         "http",
         request_id = request_id.as_deref(),
         method = %request.method(),
-        uri = %request.uri()
+        uri = %uri
     )
 }
 
 fn on_http_request(request: &Request<Body>, _span: &Span) {
     let request_id = request_id(request);
+    let uri = sanitized_uri(request);
     info!(
         request_id = request_id.as_deref(),
         method = %request.method(),
-        uri = %request.uri(),
+        uri = %uri,
         "received HTTP request"
     );
 }
@@ -79,4 +81,35 @@ fn request_id(request: &Request<Body>) -> Option<String> {
         .extensions()
         .get::<RequestId>()
         .map(|rid| rid.as_str().to_string())
+}
+
+fn sanitized_uri(request: &Request<Body>) -> String {
+    let uri = request.uri();
+    let path = uri.path();
+    uri.query().map_or_else(
+        || path.to_string(),
+        |query| format!("{path}?{}", sanitized_query(query)),
+    )
+}
+
+fn sanitized_query(query: &str) -> String {
+    let mut redacted = String::new();
+    for (index, part) in query.split('&').enumerate() {
+        if index > 0 {
+            redacted.push('&');
+        }
+        redacted.push_str(&sanitized_query_part(part));
+    }
+    redacted
+}
+
+fn sanitized_query_part(part: &str) -> String {
+    let Some((key, _value)) = part.split_once('=') else {
+        return "<redacted>".to_string();
+    };
+    if key.is_empty() {
+        "<redacted>=<redacted>".to_string()
+    } else {
+        format!("{key}=<redacted>")
+    }
 }

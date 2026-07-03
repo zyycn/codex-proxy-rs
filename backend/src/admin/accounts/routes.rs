@@ -2,7 +2,7 @@
 
 use axum::{
     body::Body,
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::{
         header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
         HeaderMap, StatusCode,
@@ -14,24 +14,30 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::{QueryBuilder, Row, Sqlite};
-use validator::{Validate, ValidationError};
 
 use crate::{
-    admin::auth::session::require_admin_auth,
+    admin::auth::session::AdminAuth,
     admin::response::{
         AdminEnvelope, AdminError, AdminResponse, BatchDeleteData, CursorPageMeta,
         NumberedPageMeta, PageMeta, ADMIN_OK_CODE, ADMIN_OK_MESSAGE,
     },
+    admin::update_payload::{parse_editable_update, EditableUpdateMessages},
     admin::{
+        accounts::quota_view::{quota_data, AdminAccountQuotaData},
         accounts::service::{
             AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata,
             AdminAccountRefreshOutcome, AdminAccountRefreshResult, AdminAccountUpdate,
             OAuthExchangeInput,
         },
-        monitoring::{billing, service::AdminUsageRecord},
+        monitoring::{
+            account_usage_service::AdminUsageRecord,
+            billing,
+            usage_record_model::{UsageRecord, UsageRecordLevel},
+        },
     },
+    http::middleware::request_id::RequestId,
     infra::{
         format::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
@@ -44,9 +50,7 @@ use crate::{
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
-const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
-const WEEK_WINDOW_SECONDS: u64 = 604_800;
-const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
+const ACCOUNT_EXPORT_CONFIRMATION: &str = "export_sensitive_accounts";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +91,7 @@ pub(crate) struct AccountIdQuery {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AccountExportQuery {
     ids: Option<String>,
+    confirm: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,35 +175,6 @@ impl AdminAccountData {
             updated_at_display: china_datetime(&a.updated_at),
             quota: quota.unwrap_or_default(),
             usage: AdminAccountUsageData::from_usage(usage, models),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AdminAccountQuotaData {
-    refreshed_at_display: String,
-    windows: Vec<AdminAccountQuotaWindowData>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AdminAccountQuotaWindowData {
-    key: String,
-    group: String,
-    window_seconds: Option<u64>,
-    label_display: String,
-    used_percent: Option<f64>,
-    used_percent_display: String,
-    reset_at_display: String,
-    window_used_display: String,
-}
-
-impl Default for AdminAccountQuotaData {
-    fn default() -> Self {
-        Self {
-            refreshed_at_display: "-".to_string(),
-            windows: Vec::new(),
         }
     }
 }
@@ -494,10 +470,9 @@ struct AccountOAuthAuthorizeData {
 /// `GET /api/admin/accounts`
 pub(crate) async fn accounts(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(params): Query<AccountsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
     let stats = account_list_stats(&state).await;
@@ -557,10 +532,9 @@ pub(crate) async fn accounts(
 /// `POST /api/admin/accounts`
 pub(crate) async fn create_account(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<CreateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -578,32 +552,65 @@ pub(crate) async fn create_account(
 /// `GET /api/admin/accounts/export`
 pub(crate) async fn export_accounts(
     State(state): State<AppState>,
+    request_id: Option<Extension<RequestId>>,
+    _auth: AdminAuth,
     headers: HeaderMap,
     Query(query): Query<AccountExportQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
-    match state
-        .services
-        .admin_accounts
-        .export(account_export_ids(query.ids.as_deref()))
-        .await
-    {
-        Ok(result) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(result),
-        )),
-        Err(error) => Err(account_error(&error)),
+    let request_id = request_id.map(|Extension(request_id)| request_id.as_str().to_string());
+    let source = account_action_source(&headers);
+    let ids = account_export_ids(query.ids.as_deref());
+
+    if query.confirm.as_deref() != Some(ACCOUNT_EXPORT_CONFIRMATION) {
+        record_account_export_audit(
+            &state,
+            request_id.as_deref(),
+            &source,
+            &ids,
+            AccountExportAuditOutcome::MissingConfirmation,
+        )
+        .await;
+        return Err(AdminError::bad_request(
+            "account export requires confirm=export_sensitive_accounts",
+        ));
+    }
+
+    match state.services.admin_accounts.export(ids.clone()).await {
+        Ok(result) => {
+            record_account_export_audit(
+                &state,
+                request_id.as_deref(),
+                &source,
+                &ids,
+                AccountExportAuditOutcome::Success,
+            )
+            .await;
+            Ok(AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(result),
+            ))
+        }
+        Err(error) => {
+            record_account_export_audit(
+                &state,
+                request_id.as_deref(),
+                &source,
+                &ids,
+                AccountExportAuditOutcome::from_error(&error),
+            )
+            .await;
+            Err(account_error(&error))
+        }
     }
 }
 
 /// `POST /api/admin/accounts/refresh`
 pub(crate) async fn refresh_account(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
     let account_id = payload.id;
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -621,10 +628,9 @@ pub(crate) async fn refresh_account(
 /// `POST /api/admin/accounts/health-check`
 pub(crate) async fn health_check_accounts(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<AccountHealthCheckRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let stagger_ms = payload.stagger_ms.unwrap_or(3_000);
     if !(500..=30_000).contains(&stagger_ms) && stagger_ms != 0 {
         return Err(AdminError::bad_request(
@@ -655,11 +661,10 @@ pub(crate) async fn health_check_accounts(
 /// `GET /api/admin/accounts/quota`
 pub(crate) async fn account_quota(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     let account_id = query.id;
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -700,10 +705,9 @@ pub(crate) async fn account_quota(
 /// `POST /api/admin/accounts/import`
 pub(crate) async fn import_accounts(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state.services.admin_accounts.import(payload).await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -720,9 +724,8 @@ pub(crate) async fn import_accounts(
 /// `POST /api/admin/accounts/oauth/authorize`
 pub(crate) async fn oauth_authorize_account(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state.services.admin_accounts.oauth_authorize().await {
         Ok(result) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -740,10 +743,9 @@ pub(crate) async fn oauth_authorize_account(
 /// `POST /api/admin/accounts/oauth/exchange`
 pub(crate) async fn oauth_exchange_account(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<AccountOAuthExchangeRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -771,10 +773,9 @@ pub(crate) async fn oauth_exchange_account(
 pub(crate) async fn test_account_connection(
     State(state): State<AppState>,
     Query(query): Query<AccountTestQuery>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<Response, AdminError> {
     let account_id = query.id;
-    require_admin_auth(&state, &headers).await?;
 
     let model = query
         .model_id
@@ -804,10 +805,9 @@ pub(crate) async fn test_account_connection(
 pub(crate) async fn account_models(
     State(state): State<AppState>,
     Query(query): Query<AccountIdQuery>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
     let account_id = query.id;
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -833,10 +833,9 @@ pub(crate) async fn account_models(
 /// `POST /api/admin/accounts/delete`
 pub(crate) async fn batch_delete_accounts(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<BatchDeleteAccountsRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_accounts
@@ -857,11 +856,9 @@ pub(crate) async fn batch_delete_accounts(
 /// `POST /api/admin/accounts/update`
 pub(crate) async fn update_account(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
-
     let ParsedAccountUpdate { id, update } = parse_account_update(&payload)?;
 
     match state
@@ -962,10 +959,7 @@ async fn list_all_account_metadata(state: &AppState) -> Vec<AdminAccountMetadata
 }
 
 fn account_quota_has_high_usage(quota: &AdminAccountQuotaData) -> bool {
-    quota
-        .windows
-        .iter()
-        .any(|window| window.used_percent.is_some_and(|percent| percent >= 80.0))
+    quota.has_high_usage()
 }
 
 fn account_summary_needs_attention(status: AccountStatus) -> bool {
@@ -1165,356 +1159,21 @@ fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountModelUsageDat
     }
 }
 
-fn quota_data(quota_json: &str, fetched_at: Option<DateTime<Utc>>) -> AdminAccountQuotaData {
-    let quota = serde_json::from_str::<Value>(quota_json).unwrap_or(Value::Null);
-    let windows = quota_windows(&quota);
-
-    AdminAccountQuotaData {
-        refreshed_at_display: china_relative_time(fetched_at, Utc::now()),
-        windows,
-    }
-}
-
-fn quota_windows(quota: &Value) -> Vec<AdminAccountQuotaWindowData> {
-    let mut windows = Vec::new();
-
-    let has_monthly_limit = push_monthly_quota_window(&mut windows, quota.get("monthly_limit"));
-    if let Some(snapshots) = quota.get("snapshots").and_then(Value::as_array) {
-        for snapshot in snapshots {
-            push_snapshot_quota_windows(&mut windows, snapshot, has_monthly_limit);
-        }
-    }
-
-    windows.sort_by_key(quota_window_sort_key);
-    windows
-}
-
-fn push_monthly_quota_window(
-    windows: &mut Vec<AdminAccountQuotaWindowData>,
-    monthly_limit: Option<&Value>,
-) -> bool {
-    let Some(monthly_limit) = monthly_limit.filter(|value| !value.is_null()) else {
-        return false;
-    };
-    let used_percent = monthly_limit
-        .get("used_percent")
-        .and_then(number_value)
-        .map(|value| value.clamp(0.0, 100.0));
-    let reset_at = monthly_limit
-        .get("reset_at")
-        .and_then(Value::as_i64)
-        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0));
-    let window_seconds = monthly_limit
-        .get("window_minutes")
-        .and_then(Value::as_u64)
-        .and_then(|minutes| minutes.checked_mul(60))
-        .or(Some(MONTH_WINDOW_SECONDS));
-    if used_percent.is_none() && reset_at.is_none() {
-        return false;
-    }
-
-    let key = monthly_limit
-        .get("key")
-        .and_then(Value::as_str)
-        .unwrap_or("monthly");
-    windows.push(AdminAccountQuotaWindowData {
-        key: quota_key_segment(key),
-        group: "monthly".to_string(),
-        window_seconds,
-        label_display: "月限额".to_string(),
-        used_percent,
-        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
-        reset_at_display: reset_at
-            .as_ref()
-            .map_or_else(|| "-".to_string(), china_datetime),
-        window_used_display: quota_window_used_display(reset_at, window_seconds),
-    });
-    true
-}
-
-fn push_snapshot_quota_windows(
-    windows: &mut Vec<AdminAccountQuotaWindowData>,
-    snapshot: &Value,
-    skip_core_monthly: bool,
-) {
-    let source = snapshot
-        .get("source")
-        .and_then(Value::as_str)
-        .unwrap_or("quota");
-    let source_key = snapshot_source_key(source, snapshot);
-    let label_prefix = snapshot_label(snapshot);
-    for role in ["primary", "secondary"] {
-        let Some(window) = snapshot.get(role).filter(|value| !value.is_null()) else {
-            continue;
-        };
-        let window_seconds = window
-            .get("window_minutes")
-            .and_then(Value::as_u64)
-            .and_then(|minutes| minutes.checked_mul(60));
-        if skip_core_monthly
-            && source == "core"
-            && window_seconds
-                .is_some_and(|seconds| quota_window_matches(seconds, MONTH_WINDOW_SECONDS))
-        {
-            continue;
-        }
-        push_quota_window(
-            windows,
-            &source_key,
-            role,
-            label_prefix.as_deref(),
-            Some(window),
-        );
-    }
-}
-
-fn push_quota_window(
-    windows: &mut Vec<AdminAccountQuotaWindowData>,
-    source_key: &str,
-    role: &str,
-    label_prefix: Option<&str>,
-    window: Option<&Value>,
-) {
-    let Some(window) = window.filter(|value| !value.is_null()) else {
-        return;
-    };
-    let used_percent = window
-        .get("used_percent")
-        .and_then(number_value)
-        .map(|value| value.clamp(0.0, 100.0));
-    let reset_at = window
-        .get("reset_at")
-        .and_then(Value::as_i64)
-        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0));
-    let window_seconds = window
-        .get("window_minutes")
-        .and_then(Value::as_u64)
-        .and_then(|minutes| minutes.checked_mul(60));
-    let label_prefix = label_prefix
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if reset_at.is_none()
-        && window_seconds.is_none()
-        && (used_percent.is_none() || label_prefix.is_none())
-    {
-        return;
-    }
-    let base_label = quota_window_label_display(window_seconds);
-    let label_display = label_prefix
-        .map(|value| format!("{value} · {base_label}"))
-        .unwrap_or(base_label);
-
-    windows.push(AdminAccountQuotaWindowData {
-        key: unique_quota_window_key(windows, source_key, role, window_seconds),
-        group: quota_window_group(window_seconds).to_string(),
-        window_seconds,
-        label_display,
-        used_percent,
-        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
-        reset_at_display: reset_at
-            .as_ref()
-            .map_or_else(|| "-".to_string(), china_datetime),
-        window_used_display: quota_window_used_display(reset_at, window_seconds),
-    });
-}
-
-fn snapshot_source_key(source: &str, snapshot: &Value) -> String {
-    let label = snapshot
-        .get("limit_name")
-        .and_then(Value::as_str)
-        .or_else(|| snapshot.get("metered_feature").and_then(Value::as_str))
-        .unwrap_or(source);
-    format!("{}-{}", quota_key_segment(source), quota_key_segment(label))
-}
-
-fn snapshot_label(snapshot: &Value) -> Option<String> {
-    let source = snapshot.get("source").and_then(Value::as_str);
-    if source == Some("core") {
-        return None;
-    }
-    let label = snapshot
-        .get("limit_name")
-        .and_then(Value::as_str)
-        .or_else(|| snapshot.get("metered_feature").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if label.eq_ignore_ascii_case("codex") {
-        return None;
-    }
-    if is_review_limit_label(Some(label)) {
-        return Some("代码审查".to_string());
-    }
-    Some(label.to_string())
-}
-
-fn unique_quota_window_key(
-    windows: &[AdminAccountQuotaWindowData],
-    source_key: &str,
-    role: &str,
-    window_seconds: Option<u64>,
-) -> String {
-    let bucket = quota_window_key_part(window_seconds).unwrap_or(role);
-    let key = format!("{source_key}-{bucket}");
-    if windows.iter().any(|window| window.key == key) {
-        format!("{key}-{role}")
-    } else {
-        key
-    }
-}
-
-fn quota_window_key_part(window_seconds: Option<u64>) -> Option<&'static str> {
-    match window_seconds {
-        Some(seconds) if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
-            Some("five-hour")
-        }
-        Some(seconds) if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => Some("weekly"),
-        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => Some("monthly"),
-        _ => None,
-    }
-}
-
-fn quota_key_segment(value: &str) -> String {
-    let mut segment = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            segment.push(ch.to_ascii_lowercase());
-        } else if !segment.ends_with('-') {
-            segment.push('-');
-        }
-    }
-    let segment = segment.trim_matches('-');
-    if segment.is_empty() {
-        "quota".to_string()
-    } else {
-        segment.to_string()
-    }
-}
-
-fn quota_window_sort_key(window: &AdminAccountQuotaWindowData) -> (u8, u64, String) {
-    let group_order = match window.group.as_str() {
-        "monthly" => 0,
-        "shortTerm" => 1,
-        _ => 2,
-    };
-    (
-        group_order,
-        window.window_seconds.unwrap_or(0),
-        window.key.clone(),
-    )
-}
-
-fn quota_window_group(window_seconds: Option<u64>) -> &'static str {
-    match window_seconds {
-        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => "monthly",
-        Some(seconds)
-            if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS)
-                || quota_window_matches(seconds, WEEK_WINDOW_SECONDS) =>
-        {
-            "shortTerm"
-        }
-        _ => "other",
-    }
-}
-
-fn quota_window_matches(actual: u64, expected: u64) -> bool {
-    actual > 0 && actual.abs_diff(expected) <= expected / 20
-}
-
-fn quota_window_label_display(window_seconds: Option<u64>) -> String {
-    let Some(window_seconds) = window_seconds.filter(|seconds| *seconds > 0) else {
-        return "额度".to_string();
-    };
-    match window_seconds {
-        seconds if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
-            "5小时限额".to_string()
-        }
-        seconds if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => "周限额".to_string(),
-        seconds if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => "月限额".to_string(),
-        seconds if seconds % 86_400 == 0 => format!("{}天限额", seconds / 86_400),
-        seconds if seconds % 3_600 == 0 => format!("{}小时限额", seconds / 3_600),
-        seconds => format!("{}分钟限额", seconds.div_ceil(60)),
-    }
-}
-
-fn quota_window_used_display(
-    reset_at: Option<DateTime<Utc>>,
-    window_seconds: Option<u64>,
-) -> String {
-    let (Some(reset_at), Some(window_seconds)) = (reset_at, window_seconds) else {
-        return "-".to_string();
-    };
-    let remaining = reset_at
-        .signed_duration_since(Utc::now())
-        .num_seconds()
-        .max(0)
-        .cast_unsigned();
-    let used = window_seconds.saturating_sub(remaining);
-    format!(
-        "{} / {}",
-        format_duration_days(used),
-        format_duration_days(window_seconds)
-    )
-}
-
-fn format_duration_days(seconds: u64) -> String {
-    let days = seconds as f64 / 86_400.0;
-    if days >= 1.0 {
-        format!("{days:.1}d")
-    } else {
-        format!("{:.1}h", seconds as f64 / 3_600.0)
-    }
-}
-
-fn number_value(value: &Value) -> Option<f64> {
-    value
-        .as_f64()
-        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
-        .filter(|value| value.is_finite())
-}
-
-fn is_review_limit_label(value: Option<&str>) -> bool {
-    let normalized = value
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_");
-    normalized == "review"
-        || normalized == "code_review"
-        || normalized == "codex_review"
-        || normalized == "codex_code_review"
-        || normalized.contains("code_review")
-        || normalized.contains("codex_review")
-}
-
 struct ParsedAccountUpdate {
     id: String,
     update: AdminAccountUpdate,
 }
 
-#[derive(Debug, Deserialize, Validate)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AccountUpdateRequest {
-    #[validate(custom(function = "validate_non_empty_trimmed"))]
-    id: String,
-    label: Option<Option<String>>,
-    #[validate(custom(function = "validate_non_empty_trimmed"))]
-    status: Option<String>,
-}
-
 fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminError> {
-    let object = payload
-        .as_object()
-        .ok_or_else(|| AdminError::bad_request("Account update request must be an object"))?;
-    for field in object.keys() {
-        if !matches!(field.as_str(), "id" | "label" | "status") {
-            return Err(AdminError::bad_request(format!("{field} is not editable")));
-        }
-    }
-    let payload = serde_json::from_value::<AccountUpdateRequest>(payload.clone())
-        .map_err(|_| AdminError::bad_request("Invalid account update request"))?;
-    payload
-        .validate()
-        .map_err(|_| AdminError::bad_request("Invalid account update request"))?;
+    let payload = parse_editable_update(
+        payload,
+        EditableUpdateMessages {
+            object_required: "Account update request must be an object",
+            invalid: "Invalid account update request",
+            empty_update: "Account update request must include editable fields",
+            unknown_field_editable: true,
+        },
+    )?;
     let update = AdminAccountUpdate {
         label: payload.label.map(|label| {
             label.and_then(|value| {
@@ -1533,13 +1192,6 @@ fn parse_account_update(payload: &Value) -> Result<ParsedAccountUpdate, AdminErr
         id: payload.id,
         update,
     })
-}
-
-fn validate_non_empty_trimmed(value: &str) -> Result<(), ValidationError> {
-    if value.trim().is_empty() {
-        return Err(ValidationError::new("required"));
-    }
-    Ok(())
 }
 
 fn account_error(error: &AdminAccountError) -> AdminError {
@@ -1574,6 +1226,96 @@ fn account_refresh_outcome_str(outcome: AdminAccountRefreshOutcome) -> &'static 
 
 fn account_not_found() -> AdminError {
     AdminError::not_found("Account not found")
+}
+
+enum AccountExportAuditOutcome {
+    Success,
+    MissingConfirmation,
+    EmptyIds,
+    NotFound,
+    Failed,
+}
+
+impl AccountExportAuditOutcome {
+    fn from_error(error: &AdminAccountError) -> Self {
+        match error {
+            AdminAccountError::EmptyIds => Self::EmptyIds,
+            AdminAccountError::NotFound => Self::NotFound,
+            _ => Self::Failed,
+        }
+    }
+
+    fn level(&self) -> UsageRecordLevel {
+        match self {
+            Self::Success => UsageRecordLevel::Warn,
+            Self::MissingConfirmation | Self::EmptyIds | Self::NotFound => UsageRecordLevel::Warn,
+            Self::Failed => UsageRecordLevel::Error,
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Success => "Admin account export succeeded",
+            Self::MissingConfirmation => "Admin account export missing confirmation",
+            Self::EmptyIds => "Admin account export missing account ids",
+            Self::NotFound => "Admin account export account not found",
+            Self::Failed => "Admin account export failed",
+        }
+    }
+
+    fn status_code(&self) -> i64 {
+        match self {
+            Self::Success => i64::from(StatusCode::OK.as_u16()),
+            Self::MissingConfirmation | Self::EmptyIds => {
+                i64::from(StatusCode::BAD_REQUEST.as_u16())
+            }
+            Self::NotFound => i64::from(StatusCode::NOT_FOUND.as_u16()),
+            Self::Failed => i64::from(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
+        }
+    }
+
+    fn failure_class(&self) -> Option<&'static str> {
+        match self {
+            Self::Success => None,
+            Self::MissingConfirmation => Some("missing_confirmation"),
+            Self::EmptyIds => Some("empty_ids"),
+            Self::NotFound => Some("account_not_found"),
+            Self::Failed => Some("export_failed"),
+        }
+    }
+}
+
+async fn record_account_export_audit(
+    state: &AppState,
+    request_id: Option<&str>,
+    source: &str,
+    ids: &[String],
+    outcome: AccountExportAuditOutcome,
+) {
+    let mut record = UsageRecord::new("admin_account_export", outcome.level(), outcome.message());
+    record.request_id = request_id.map(ToString::to_string);
+    record.route = Some("/api/admin/accounts/export".to_string());
+    record.status_code = Some(outcome.status_code());
+    record.failure_class = outcome.failure_class().map(ToString::to_string);
+    record.metadata = json!({
+        "source": source,
+        "accountIds": ids,
+        "accountCount": ids.len(),
+    });
+
+    if let Err(error) = state.services.usage_records.record_audit(record).await {
+        tracing::warn!(%error, "failed to record account export audit event");
+    }
+}
+
+fn account_action_source(headers: &HeaderMap) -> String {
+    headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 fn account_export_ids(value: Option<&str>) -> Vec<String> {

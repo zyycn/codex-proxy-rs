@@ -9,7 +9,10 @@ use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::upstream::protocol::responses::CodexResponsesRequest;
+use crate::{
+    infra::time::parse_rfc3339_utc as parse_rfc3339,
+    upstream::protocol::responses::CodexResponsesRequest,
+};
 
 // ====================================================================
 // 亲和性核心类型
@@ -516,10 +519,6 @@ fn stored_session_affinity_from_row(
         },
         expires_at: parse_rfc3339(&row.get::<String, _>("expires_at"))?,
     })
-}
-
-fn parse_rfc3339(value: &str) -> SqliteSessionAffinityStoreResult<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
 }
 
 fn optional_nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {

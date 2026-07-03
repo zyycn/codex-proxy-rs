@@ -7,13 +7,18 @@ use serde_json::Value;
 use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
-use crate::infra::json::{decode_cursor, page_offset, NumberedPage, Page};
+use crate::infra::{
+    format::nonnegative_i64_to_u64,
+    json::{decode_cursor, page_offset, NumberedPage, Page},
+    time::parse_optional_rfc3339_utc as parse_optional_rfc3339,
+};
 use crate::upstream::accounts::model::{
     Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta,
 };
 use crate::upstream::accounts::quota::{
     quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
 };
+use crate::upstream::accounts::window::should_reset_usage_window;
 
 // ============================================================================
 // SQL 常量
@@ -1806,33 +1811,6 @@ fn sqlite_usage_delta(usage: AccountUsageDelta) -> UsageDelta {
     }
 }
 
-fn should_reset_usage_window(
-    existing_reset_at: Option<DateTime<Utc>>,
-    existing_limit_window_seconds: Option<u64>,
-    new_reset_at: DateTime<Utc>,
-    new_limit_window_seconds: Option<u64>,
-) -> bool {
-    let Some(existing_reset_at) = existing_reset_at else {
-        return false;
-    };
-    if existing_reset_at == new_reset_at {
-        return false;
-    }
-    let drift = existing_reset_at
-        .signed_duration_since(new_reset_at)
-        .num_seconds()
-        .unsigned_abs();
-    let window_seconds = new_limit_window_seconds
-        .or(existing_limit_window_seconds)
-        .unwrap_or(0);
-    let threshold = if window_seconds > 0 {
-        window_seconds / 2
-    } else {
-        3_600
-    };
-    drift >= threshold
-}
-
 fn quota_plan_type(quota_json: &str) -> Option<String> {
     serde_json::from_str::<Value>(quota_json)
         .ok()?
@@ -1902,18 +1880,6 @@ fn status_from_db(value: &str) -> SqliteAccountStoreResult<AccountStatus> {
     }
 }
 
-fn parse_optional_rfc3339(value: Option<&str>) -> SqliteAccountStoreResult<Option<DateTime<Utc>>> {
-    value.map(parse_rfc3339).transpose()
-}
-
-fn parse_rfc3339(value: &str) -> SqliteAccountStoreResult<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
-}
-
-fn nonnegative_i64_to_u64(value: i64) -> u64 {
-    value.max(0).cast_unsigned()
-}
-
 fn u64_to_i64_saturating(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
@@ -1931,7 +1897,7 @@ async fn count_account_metadata(
     let mut builder = QueryBuilder::<Sqlite>::new("select count(*) from accounts");
     push_account_metadata_search(&mut builder, search);
     let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
-    Ok(total.max(0).cast_unsigned())
+    Ok(nonnegative_i64_to_u64(total))
 }
 
 fn push_account_metadata_search(builder: &mut QueryBuilder<Sqlite>, search: Option<&str>) {

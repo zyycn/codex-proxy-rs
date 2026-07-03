@@ -1,11 +1,18 @@
 //! 管理员会话存储与认证领域逻辑。
 
+use std::{collections::HashMap, sync::Arc};
+
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::infra::identity::{hash_admin_password, verify_admin_password};
+
+const LOGIN_FAILURE_WINDOW: Duration = Duration::minutes(15);
+const LOGIN_LOCK_DURATION: Duration = Duration::minutes(15);
+const LOGIN_MAX_FAILURES: u32 = 5;
 
 /// 管理员登录成功后的会话。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +47,9 @@ pub enum AdminSessionError {
     /// 删除管理员会话失败。
     #[error("failed to delete admin session")]
     DeleteSession,
+    /// 管理员登录尝试过于频繁。
+    #[error("too many admin login attempts")]
+    LoginThrottled,
 }
 
 /// 管理员会话服务。
@@ -48,6 +58,14 @@ pub struct AdminSessionService {
     store: SqliteAdminSessionStore,
     default_username: String,
     session_ttl_minutes: u64,
+    login_failures: Arc<Mutex<HashMap<String, LoginFailureState>>>,
+}
+
+#[derive(Debug, Clone)]
+struct LoginFailureState {
+    failures: u32,
+    first_failed_at: DateTime<Utc>,
+    locked_until: Option<DateTime<Utc>>,
 }
 
 impl AdminSessionService {
@@ -61,6 +79,7 @@ impl AdminSessionService {
             store,
             default_username,
             session_ttl_minutes,
+            login_failures: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -88,11 +107,16 @@ impl AdminSessionService {
     /// 登录并创建管理员会话。
     pub async fn login(
         &self,
+        source: &str,
         username: Option<&str>,
         password: &str,
     ) -> Result<Option<AdminLoginSession>, AdminSessionError> {
+        let source = login_source_key(source);
+        self.ensure_login_allowed(&source).await?;
+
         let username = username.unwrap_or(&self.default_username);
         if username != self.default_username.as_str() {
+            self.record_failed_login(&source).await;
             return Ok(None);
         }
         let Some(admin) = self
@@ -101,13 +125,16 @@ impl AdminSessionService {
             .await
             .map_err(|_| AdminSessionError::LoadAdmin)?
         else {
+            self.record_failed_login(&source).await;
             return Ok(None);
         };
         let password_matches = verify_admin_password(password, &admin.password_hash)
             .map_err(|_| AdminSessionError::VerifyPassword)?;
         if !password_matches {
+            self.record_failed_login(&source).await;
             return Ok(None);
         }
+        self.clear_failed_login(&source).await;
         let session_id = format!("sess_{}", Uuid::new_v4().simple());
         let ttl_minutes = self.session_ttl_minutes.min(i64::MAX as u64) as i64;
         let expires_at = Utc::now() + Duration::minutes(ttl_minutes);
@@ -128,6 +155,67 @@ impl AdminSessionService {
             .await
             .map_err(|_| AdminSessionError::DeleteSession)
     }
+
+    async fn ensure_login_allowed(&self, source: &str) -> Result<(), AdminSessionError> {
+        let now = Utc::now();
+        let mut failures = self.login_failures.lock().await;
+        retain_active_login_failures(&mut failures, now);
+        if failures
+            .get(source)
+            .and_then(|state| state.locked_until)
+            .is_some_and(|locked_until| locked_until > now)
+        {
+            return Err(AdminSessionError::LoginThrottled);
+        }
+        Ok(())
+    }
+
+    async fn record_failed_login(&self, source: &str) {
+        let now = Utc::now();
+        let mut failures = self.login_failures.lock().await;
+        retain_active_login_failures(&mut failures, now);
+        let state = failures
+            .entry(source.to_string())
+            .or_insert_with(|| LoginFailureState {
+                failures: 0,
+                first_failed_at: now,
+                locked_until: None,
+            });
+        if now - state.first_failed_at > LOGIN_FAILURE_WINDOW {
+            state.failures = 0;
+            state.first_failed_at = now;
+            state.locked_until = None;
+        }
+        state.failures += 1;
+        if state.failures >= LOGIN_MAX_FAILURES {
+            state.locked_until = Some(now + LOGIN_LOCK_DURATION);
+        }
+    }
+
+    async fn clear_failed_login(&self, source: &str) {
+        self.login_failures.lock().await.remove(source);
+    }
+}
+
+fn login_source_key(source: &str) -> String {
+    let source = source.trim();
+    if source.is_empty() {
+        "unknown".to_string()
+    } else {
+        source.to_string()
+    }
+}
+
+fn retain_active_login_failures(
+    failures: &mut HashMap<String, LoginFailureState>,
+    now: DateTime<Utc>,
+) {
+    failures.retain(|_, state| {
+        state
+            .locked_until
+            .is_some_and(|locked_until| locked_until > now)
+            || now - state.first_failed_at <= LOGIN_FAILURE_WINDOW
+    });
 }
 
 // ---------------------------------------------------------------------------

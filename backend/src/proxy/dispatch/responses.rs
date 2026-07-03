@@ -7,26 +7,24 @@
 //! - 账号回退与错误恢复
 //! - 配额验证
 
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Instant,
-};
+use std::{pin::Pin, sync::Arc, time::Instant};
 
+use axum::body::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use futures::{stream::Stream, StreamExt};
 use serde_json::{json, Value};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::Mutex;
 use tracing;
 
 use crate::{
     admin::monitoring::{
-        usage_record::{ResponseUsageRecord, UsageRecord, UsageRecordLevel},
-        usage_record_store::AdminUsageRecordService,
+        usage_record_model::{ResponseUsageRecord, UsageRecord, UsageRecordLevel},
+        usage_record_service::AdminUsageRecordService,
     },
+    infra::time::elapsed_millis_i64,
     proxy::dispatch::{
+        auth_recovery::trigger_refresh_after_auth_failure,
         cloudflare::{
             cloudflare_challenge_error_message, cloudflare_path_block_error_message,
             is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
@@ -34,11 +32,10 @@ use crate::{
         },
         errors::{
             auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
-            is_history_recovery_signal, is_history_recovery_upstream_error,
-            is_invalid_encrypted_content_signal, is_model_unsupported_signal,
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
-            upstream_error_http_status, upstream_error_set_cookie_headers,
+            is_history_recovery_upstream_error, is_model_unsupported_upstream_error,
+            is_quota_exhausted_upstream_error, is_rate_limit_upstream_error,
+            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            upstream_error_set_cookie_headers,
         },
         reasoning_replay::ReasoningReplayCache,
         session_affinity::{
@@ -52,6 +49,12 @@ use crate::{
             QuotaVerificationContext, QuotaVerificationDecision,
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
+        usage_events::{
+            enrich_event_route_metadata, enrich_usage_record_identity,
+            event_kind as response_event_kind, reasoning_effort_from_compact_request,
+            reasoning_effort_from_request, record_dispatch_error_event, record_response_event,
+            DispatchErrorUsageRecord,
+        },
     },
     upstream::accounts::{
         model::{Account, AccountStatus},
@@ -63,20 +66,15 @@ use crate::{
         protocol::{
             events::{extract_sse_usage, extract_usage, TokenUsage},
             responses::{
-                apply_response_model_options, completed_response_metadata,
-                reconvert_responses_sse_event_tuple_values, response_body_has_first_event,
-                response_from_codex_sse, CodexCompactRequest, CodexResponsesRequest,
-                CollectedResponse, ResponsesSseFailure,
+                apply_response_model_options, completed_response_metadata, response_from_codex_sse,
+                CodexCompactRequest, CodexResponsesRequest, CollectedResponse, ResponsesSseFailure,
             },
-            sse::{
-                encode_sse_event, parse_sse_events, sse_body_has_done, SseError, DONE_SSE_FRAME,
-            },
+            sse::{parse_sse_events, sse_frame_end, SseError},
         },
         token_client::OpenAiTokenClient,
         transport::{
-            backend_transport_for_response_request, is_banned_auth_signal,
-            is_banned_upstream_error, CodexBackendClient, CodexBackendResponse,
-            CodexBackendSseStream, CodexBackendTransport, CodexClientError,
+            backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
+            CodexBackendResponse, CodexBackendSseStream, CodexBackendTransport, CodexClientError,
             CodexRateLimitHeaderUpdates, CodexTurnStateUpdate, WebSocketPoolDecision,
         },
     },
@@ -87,6 +85,18 @@ use super::implicit_resume::{
 };
 
 use crate::proxy::openai::responses::response_failed_sse_event_with_id;
+
+mod live_stream;
+use live_stream::spawn_live_response_stream;
+mod sse_failure;
+use sse_failure::{
+    auth_sse_failure_account_status, client_error_invalid_reasoning_replay, first_sse_failure,
+    is_auth_sse_failure, is_history_recovery_sse_failure, is_model_unsupported_sse_failure,
+    is_quota_exhausted_sse_failure, sse_failure_error_body, sse_failure_invalid_reasoning_replay,
+    status_code_for_stream_failure, stream_failure_http_status, stream_failure_metadata,
+    stream_failure_source, synthetic_stream_disconnected_detail, STREAM_DISCONNECTED_CODE,
+    STREAM_DISCONNECTED_MESSAGE,
+};
 
 #[derive(Clone, Copy)]
 enum ExhaustedAccountClass {
@@ -138,29 +148,6 @@ pub struct ResponseDispatchStream {
     pub body: ResponseBodyStream,
 }
 
-struct MpscResponseBodyStream {
-    receiver: mpsc::Receiver<Result<Bytes, ResponseDispatchStreamError>>,
-    cancel: Option<oneshot::Sender<()>>,
-}
-
-impl Drop for MpscResponseBodyStream {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
-    }
-}
-
-impl Stream for MpscResponseBodyStream {
-    type Item = Result<Bytes, ResponseDispatchStreamError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.receiver.poll_recv(cx)
-    }
-}
-
-use axum::body::Bytes;
-
 impl ResponseDispatchService {
     pub(crate) fn new(parts: ResponseDispatchServiceParts) -> Self {
         Self {
@@ -176,24 +163,6 @@ impl ResponseDispatchService {
             installation_id: parts.installation_id,
             cloudflare: parts.cloudflare,
         }
-    }
-
-    fn trigger_refresh_after_auth_failure(&self, account_id: &str, status: AccountStatus) {
-        if status != AccountStatus::Expired {
-            return;
-        }
-
-        let token_refresh = self.token_refresh.clone();
-        let account_id = account_id.to_string();
-        tokio::spawn(async move {
-            if let Err(error) = token_refresh.trigger_account_refresh_now(&account_id).await {
-                tracing::warn!(
-                    account_id = %account_id,
-                    error = %error,
-                    "reactive token refresh after upstream auth failure failed"
-                );
-            }
-        });
     }
 
     async fn prepare_response_session(
@@ -736,7 +705,8 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            self.trigger_refresh_after_auth_failure(
+                            trigger_refresh_after_auth_failure(
+                                &self.token_refresh,
                                 &release_account_id,
                                 account_status,
                             );
@@ -800,7 +770,11 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
+                    trigger_refresh_after_auth_failure(
+                        &self.token_refresh,
+                        &release_account_id,
+                        account_status,
+                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1368,7 +1342,8 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            self.trigger_refresh_after_auth_failure(
+                            trigger_refresh_after_auth_failure(
+                                &self.token_refresh,
                                 &release_account_id,
                                 account_status,
                             );
@@ -1481,7 +1456,11 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
+                    trigger_refresh_after_auth_failure(
+                        &self.token_refresh,
+                        &release_account_id,
+                        account_status,
+                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1872,7 +1851,11 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    self.trigger_refresh_after_auth_failure(&release_account_id, account_status);
+                    trigger_refresh_after_auth_failure(
+                        &self.token_refresh,
+                        &release_account_id,
+                        account_status,
+                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1964,91 +1947,6 @@ impl ResponseDispatchService {
     }
 }
 
-fn sse_failure_error_body(failure: &ResponsesSseFailure) -> String {
-    match failure.upstream_code.as_deref() {
-        Some(code) => serde_json::json!({
-            "error": {
-                "code": code,
-                "message": failure.message.as_str(),
-            }
-        })
-        .to_string(),
-        None => failure.message.clone(),
-    }
-}
-
-fn is_quota_exhausted_sse_failure(failure: &ResponsesSseFailure) -> bool {
-    failure
-        .upstream_code
-        .as_deref()
-        .is_some_and(|code| matches!(code, "quota_exceeded" | "insufficient_quota"))
-        || failure.message.to_ascii_lowercase().contains("quota")
-}
-
-fn is_auth_sse_failure(failure: &ResponsesSseFailure) -> bool {
-    failure.upstream_code.as_deref().is_some_and(|code| {
-        let code = code.to_ascii_lowercase();
-        matches!(
-            code.as_str(),
-            "token_invalid"
-                | "token_expired"
-                | "token_revoked"
-                | "account_deactivated"
-                | "unauthorized"
-                | "invalid_api_key"
-        )
-    }) || {
-        let message = failure.message.to_ascii_lowercase();
-        message.contains("token revoked")
-            || message.contains("token invalid")
-            || message.contains("token expired")
-    }
-}
-
-fn is_model_unsupported_sse_failure(failure: &ResponsesSseFailure) -> bool {
-    failure
-        .upstream_code
-        .as_deref()
-        .is_some_and(is_model_unsupported_signal)
-        || is_model_unsupported_signal(&failure.message)
-}
-
-fn is_history_recovery_sse_failure(failure: &ResponsesSseFailure) -> bool {
-    failure
-        .upstream_code
-        .as_deref()
-        .is_some_and(is_history_recovery_signal)
-        || is_history_recovery_signal(&failure.message)
-}
-
-fn sse_failure_invalid_reasoning_replay(failure: &ResponsesSseFailure) -> bool {
-    failure
-        .upstream_code
-        .as_deref()
-        .is_some_and(is_invalid_encrypted_content_signal)
-        || is_invalid_encrypted_content_signal(&failure.message)
-}
-
-fn client_error_invalid_reasoning_replay(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { body, .. } if is_invalid_encrypted_content_signal(body)
-    )
-}
-
-fn auth_sse_failure_account_status(failure: &ResponsesSseFailure) -> AccountStatus {
-    if failure
-        .upstream_code
-        .as_deref()
-        .is_some_and(is_banned_auth_signal)
-        || is_banned_auth_signal(&failure.message)
-    {
-        AccountStatus::Banned
-    } else {
-        AccountStatus::Expired
-    }
-}
-
 fn strip_request_history(request: &mut CodexResponsesRequest) {
     request.previous_response_id = None;
     request.turn_state = None;
@@ -2060,7 +1958,7 @@ async fn prefetch_first_sse_chunk(
     mut body: CodexBackendSseStream,
 ) -> Result<(Bytes, CodexBackendSseStream), ResponseDispatchError> {
     let mut prefetched = Vec::new();
-    while !contains_sse_event_separator(&prefetched) {
+    while sse_frame_end(&prefetched).is_none() {
         let Some(next) = body.next().await else {
             if prefetched.is_empty() {
                 return Err(ResponseDispatchError::EmptyUpstreamResponse);
@@ -2079,21 +1977,6 @@ async fn prefetch_first_sse_chunk(
     }
 
     Ok((Bytes::from(prefetched), body))
-}
-
-fn contains_sse_event_separator(bytes: &[u8]) -> bool {
-    bytes.windows(2).any(|window| window == b"\n\n")
-        || bytes.windows(4).any(|window| window == b"\r\n\r\n")
-}
-
-fn first_sse_failure(prefetched: &[u8]) -> Result<Option<ResponsesSseFailure>, SseError> {
-    let body = String::from_utf8_lossy(prefetched);
-    match response_from_codex_sse(&body, None)? {
-        CollectedResponse::Failed(failure) => Ok(Some(failure)),
-        CollectedResponse::Completed(_)
-        | CollectedResponse::MissingCompleted
-        | CollectedResponse::Empty => Ok(None),
-    }
 }
 
 struct LiveResponseStreamContext {
@@ -2121,296 +2004,6 @@ struct LiveResponseStreamContext {
     started_at: Instant,
 }
 
-fn spawn_live_response_stream(
-    context: LiveResponseStreamContext,
-    prefetched: Bytes,
-    mut body: CodexBackendSseStream,
-) -> ResponseDispatchStream {
-    let (sender, receiver) = mpsc::channel(8);
-    let (cancel_sender, mut cancel_receiver) = oneshot::channel();
-    tokio::spawn(async move {
-        let mut tuple_transformer = context
-            .tuple_schema
-            .clone()
-            .map(TupleSseEventTransformer::new);
-        let mut body_bytes = Vec::new();
-        let mut first_token_ms = None;
-        if !send_live_response_stream_chunk(
-            &sender,
-            &mut body_bytes,
-            tuple_transformer.as_mut(),
-            prefetched,
-        )
-        .await
-        {
-            context.account_pool.release(&context.account_id).await;
-            return;
-        }
-        update_first_token_ms(&context, &body_bytes, &mut first_token_ms);
-
-        loop {
-            let next = tokio::select! {
-                _ = &mut cancel_receiver => {
-                    context.account_pool.release(&context.account_id).await;
-                    return;
-                }
-                next = body.next() => next,
-            };
-            let Some(next) = next else {
-                break;
-            };
-            match next {
-                Ok(chunk) => {
-                    if !send_live_response_stream_chunk(
-                        &sender,
-                        &mut body_bytes,
-                        tuple_transformer.as_mut(),
-                        chunk,
-                    )
-                    .await
-                    {
-                        context.account_pool.release(&context.account_id).await;
-                        return;
-                    }
-                    update_first_token_ms(&context, &body_bytes, &mut first_token_ms);
-                }
-                Err(error) => {
-                    if !flush_live_response_stream_transformer(
-                        &sender,
-                        &mut body_bytes,
-                        tuple_transformer.as_mut(),
-                    )
-                    .await
-                    {
-                        context.account_pool.release(&context.account_id).await;
-                        return;
-                    }
-                    let detail = error.to_string();
-                    let Some(body_text) =
-                        send_live_response_stream_tail(&sender, &mut body_bytes, Some(&detail))
-                            .await
-                    else {
-                        context.account_pool.release(&context.account_id).await;
-                        return;
-                    };
-                    finalize_live_response_stream(context, body_text, first_token_ms).await;
-                    return;
-                }
-            }
-        }
-
-        if !flush_live_response_stream_transformer(
-            &sender,
-            &mut body_bytes,
-            tuple_transformer.as_mut(),
-        )
-        .await
-        {
-            context.account_pool.release(&context.account_id).await;
-            return;
-        }
-        let Some(body_text) = send_live_response_stream_tail(&sender, &mut body_bytes, None).await
-        else {
-            context.account_pool.release(&context.account_id).await;
-            return;
-        };
-
-        finalize_live_response_stream(context, body_text, first_token_ms).await;
-    });
-
-    ResponseDispatchStream {
-        body: Box::pin(MpscResponseBodyStream {
-            receiver,
-            cancel: Some(cancel_sender),
-        }),
-    }
-}
-
-fn update_first_token_ms(
-    context: &LiveResponseStreamContext,
-    body_bytes: &[u8],
-    first_token_ms: &mut Option<i64>,
-) {
-    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
-        *first_token_ms = Some(elapsed_millis_i64(context.started_at).max(1));
-    }
-}
-
-async fn send_live_response_stream_chunk(
-    sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
-    body_bytes: &mut Vec<u8>,
-    transformer: Option<&mut TupleSseEventTransformer>,
-    chunk: Bytes,
-) -> bool {
-    let chunks = match transformer {
-        Some(transformer) => transformer.push(&chunk),
-        None => vec![chunk],
-    };
-    send_live_response_stream_chunks(sender, body_bytes, chunks).await
-}
-
-async fn flush_live_response_stream_transformer(
-    sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
-    body_bytes: &mut Vec<u8>,
-    transformer: Option<&mut TupleSseEventTransformer>,
-) -> bool {
-    let Some(transformer) = transformer else {
-        return true;
-    };
-    send_live_response_stream_chunks(sender, body_bytes, transformer.finish()).await
-}
-
-async fn send_live_response_stream_chunks(
-    sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
-    body_bytes: &mut Vec<u8>,
-    chunks: Vec<Bytes>,
-) -> bool {
-    for chunk in chunks {
-        body_bytes.extend_from_slice(&chunk);
-        if sender.send(Ok(chunk)).await.is_err() {
-            return false;
-        }
-    }
-    true
-}
-
-struct TupleSseEventTransformer {
-    tuple_schema: Value,
-    pending: Vec<u8>,
-}
-
-impl TupleSseEventTransformer {
-    fn new(tuple_schema: Value) -> Self {
-        Self {
-            tuple_schema,
-            pending: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, chunk: &[u8]) -> Vec<Bytes> {
-        self.pending.extend_from_slice(chunk);
-        let mut chunks = Vec::new();
-        while let Some(frame_end) = next_sse_frame_end(&self.pending) {
-            let frame = self.pending.drain(..frame_end).collect::<Vec<_>>();
-            chunks.push(self.transform_frame(&frame));
-        }
-        chunks
-    }
-
-    fn finish(&mut self) -> Vec<Bytes> {
-        if self.pending.is_empty() {
-            return Vec::new();
-        }
-        let frame = std::mem::take(&mut self.pending);
-        vec![self.transform_frame(&frame)]
-    }
-
-    fn transform_frame(&self, frame: &[u8]) -> Bytes {
-        let frame_text = String::from_utf8_lossy(frame);
-        let Ok(events) = parse_sse_events(&frame_text) else {
-            return Bytes::copy_from_slice(frame);
-        };
-        let [event] = events.as_slice() else {
-            return Bytes::copy_from_slice(frame);
-        };
-        let Ok(data) = serde_json::from_str::<Value>(&event.data) else {
-            return Bytes::copy_from_slice(frame);
-        };
-        let transformed = reconvert_responses_sse_event_tuple_values(
-            event.event.as_deref(),
-            data,
-            &self.tuple_schema,
-        );
-        Bytes::from(encode_sse_event(
-            event.event.as_deref().unwrap_or_default(),
-            &transformed.to_string(),
-        ))
-    }
-}
-
-fn next_sse_frame_end(bytes: &[u8]) -> Option<usize> {
-    let lf_lf = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|position| position + 2);
-    let crlf_crlf = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|position| position + 4);
-    match (lf_lf, crlf_crlf) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(end), None) | (None, Some(end)) => Some(end),
-        (None, None) => None,
-    }
-}
-
-async fn send_live_response_stream_tail(
-    sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
-    body_bytes: &mut Vec<u8>,
-    failure_detail: Option<&str>,
-) -> Option<String> {
-    let mut body_text = String::from_utf8_lossy(body_bytes).to_string();
-    if !sse_body_has_terminal_event(&body_text) {
-        if let Some(separator) = missing_sse_event_separator(&body_text) {
-            body_text.push_str(separator);
-            body_bytes.extend_from_slice(separator.as_bytes());
-            if sender
-                .send(Ok(Bytes::copy_from_slice(separator.as_bytes())))
-                .await
-                .is_err()
-            {
-                return None;
-            }
-        }
-        let failure =
-            premature_close_failed_event(latest_response_id(&body_text).as_deref(), failure_detail);
-        body_text.push_str(&failure);
-        body_bytes.extend_from_slice(failure.as_bytes());
-        if sender.send(Ok(Bytes::from(failure))).await.is_err() {
-            return None;
-        }
-    }
-
-    if !sse_body_has_done(&body_text) {
-        body_text.push_str(DONE_SSE_FRAME);
-        body_bytes.extend_from_slice(DONE_SSE_FRAME.as_bytes());
-        if sender
-            .send(Ok(Bytes::from_static(DONE_SSE_FRAME.as_bytes())))
-            .await
-            .is_err()
-        {
-            return None;
-        }
-    }
-
-    Some(body_text)
-}
-
-fn sse_body_has_terminal_event(body: &str) -> bool {
-    parse_sse_events(body).is_ok_and(|events| {
-        events.iter().any(|event| {
-            matches!(
-                event.event.as_deref(),
-                Some("response.completed" | "response.failed" | "error")
-            )
-        })
-    })
-}
-
-fn missing_sse_event_separator(body: &str) -> Option<&'static str> {
-    if body.is_empty()
-        || body.ends_with("\n\n")
-        || body.ends_with("\r\n\r\n")
-        || body.ends_with("\r\r")
-    {
-        None
-    } else if body.ends_with('\n') || body.ends_with('\r') {
-        Some("\n")
-    } else {
-        Some("\n\n")
-    }
-}
-
 fn latest_response_id(body: &str) -> Option<String> {
     parse_sse_events(body).ok().and_then(|events| {
         events.iter().rev().find_map(|event| {
@@ -2425,9 +2018,6 @@ fn latest_response_id(body: &str) -> Option<String> {
         })
     })
 }
-
-const STREAM_DISCONNECTED_CODE: &str = "stream_disconnected";
-const STREAM_DISCONNECTED_MESSAGE: &str = "Upstream stream closed before response.completed";
 
 fn premature_close_failed_event(response_id: Option<&str>, detail: Option<&str>) -> String {
     let message = match detail.filter(|value| !value.trim().is_empty()) {
@@ -2660,26 +2250,18 @@ async fn record_response_dispatch_error_event(record: ResponseDispatchErrorEvent
         record.transport,
     );
     enrich_response_dispatch_error_metadata(&mut metadata, record.error);
-    enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = UsageRecord::new(
-        response_event_kind(record.route),
-        UsageRecordLevel::Error,
-        "v1 responses dispatch failed",
-    );
-    event.request_id = Some(record.request_id.to_string());
-    event.account_id = record.account_id.map(ToString::to_string);
-    event.route = Some(record.route.to_string());
-    event.model = Some(record.model.to_string());
-    event.status_code = Some(i64::from(record.error.http_status_code()));
-    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
-    event.metadata = metadata;
-    if let Err(error) = record.usage_records.record(event).await {
-        tracing::warn!(
-            account_id = record.account_id.unwrap_or(""),
-            error = %error,
-            "failed to record response dispatch error event"
-        );
-    }
+    record_dispatch_error_event(DispatchErrorUsageRecord {
+        usage_records: record.usage_records,
+        request_id: record.request_id,
+        account_id: record.account_id,
+        route: record.route,
+        model: record.model,
+        started_at: record.started_at,
+        status_code: i64::from(record.error.http_status_code()),
+        message: "v1 responses dispatch failed",
+        metadata,
+    })
+    .await;
 }
 
 async fn record_response_upstream_error_event(record: ResponseUpstreamErrorEventRecord<'_>) {
@@ -2755,150 +2337,6 @@ async fn record_prefetched_response_stream_failure_event(
         rate_limit_headers: record.rate_limit_headers,
     })
     .await;
-}
-
-async fn record_response_event(record: ResponseUsageRecord<'_>) {
-    let mut metadata = record.metadata;
-    enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = UsageRecord::new(
-        response_event_kind(record.route),
-        record.level,
-        record.message,
-    );
-    event.request_id = Some(record.request_id.to_string());
-    event.account_id = Some(record.account_id.to_string());
-    event.route = Some(record.route.to_string());
-    event.model = Some(record.model.to_string());
-    event.status_code = Some(record.status_code);
-    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
-    enrich_usage_record_identity(
-        &mut metadata,
-        record.requested_model,
-        record.model,
-        record.client_ip,
-        record.client_user_agent,
-        record.reasoning_effort,
-        record.service_tier,
-    );
-    event.metadata = metadata;
-    let rate_limit_headers = record.rate_limit_headers;
-    if !rate_limit_headers.is_empty() {
-        if let Some(object) = event.metadata.as_object_mut() {
-            object.insert(
-                "rateLimitHeaders".to_string(),
-                serde_json::json!(rate_limit_headers),
-            );
-        }
-    }
-    if let Err(error) = record.usage_records.record(event).await {
-        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
-    }
-}
-
-fn response_event_kind(route: &str) -> &'static str {
-    if route == "/v1/chat/completions" {
-        "v1.chat"
-    } else {
-        "v1.response"
-    }
-}
-
-fn response_api_kind(route: &str) -> &'static str {
-    if route == "/v1/chat/completions" {
-        "chat"
-    } else {
-        "responses"
-    }
-}
-
-fn enrich_event_route_metadata(metadata: &mut Value, route: &str) {
-    let Some(object) = metadata.as_object_mut() else {
-        return;
-    };
-    object
-        .entry("route".to_string())
-        .or_insert_with(|| Value::String(route.to_string()));
-    object
-        .entry("apiKind".to_string())
-        .or_insert_with(|| Value::String(response_api_kind(route).to_string()));
-}
-
-fn enrich_usage_record_identity(
-    metadata: &mut Value,
-    requested_model: Option<&str>,
-    upstream_model: &str,
-    client_ip: Option<&str>,
-    client_user_agent: Option<&str>,
-    reasoning_effort: Option<&str>,
-    service_tier: Option<&str>,
-) {
-    let Some(object) = metadata.as_object_mut() else {
-        return;
-    };
-
-    let upstream_model = upstream_model.trim();
-    let requested_model = requested_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(upstream_model);
-    object.insert(
-        "requestedModel".to_string(),
-        Value::String(requested_model.to_string()),
-    );
-    object.insert(
-        "upstreamModel".to_string(),
-        Value::String(upstream_model.to_string()),
-    );
-
-    if let Some(client_ip) = client_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        object.insert("clientIp".to_string(), Value::String(client_ip.to_string()));
-    }
-
-    if let Some(user_agent) = client_user_agent
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "userAgent".to_string(),
-            Value::String(user_agent.to_string()),
-        );
-    }
-
-    if let Some(reasoning_effort) = reasoning_effort
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "reasoningEffort".to_string(),
-            Value::String(reasoning_effort.to_string()),
-        );
-    }
-
-    if let Some(service_tier) = service_tier
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "serviceTier".to_string(),
-            Value::String(service_tier.to_string()),
-        );
-    }
-}
-
-fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
-    reasoning_effort_from_value(request.reasoning.as_ref())
-}
-
-fn reasoning_effort_from_compact_request(request: &CodexCompactRequest) -> Option<&str> {
-    reasoning_effort_from_value(request.reasoning.as_ref())
-}
-
-fn reasoning_effort_from_value(reasoning: Option<&Value>) -> Option<&str> {
-    reasoning?
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 fn ensure_stream_metadata_flag(metadata: &mut Value) {
@@ -3066,57 +2504,6 @@ async fn live_response_turn_state(context: &LiveResponseStreamContext) -> Option
     context.turn_state.clone()
 }
 
-fn stream_failure_metadata(failure: &ResponsesSseFailure, usage: Option<TokenUsage>) -> Value {
-    let mut metadata = serde_json::json!({
-        "stream": true,
-        "failed": true,
-        "failureEvent": failure.event,
-        "failureMessage": failure.message,
-        "upstreamCode": failure.upstream_code,
-        "usage": usage,
-    });
-    enrich_stream_failure_source_metadata(&mut metadata, failure);
-    metadata
-}
-
-fn enrich_stream_failure_source_metadata(metadata: &mut Value, failure: &ResponsesSseFailure) {
-    let Some(object) = metadata.as_object_mut() else {
-        return;
-    };
-    object.insert(
-        "failureSource".to_string(),
-        Value::String(stream_failure_source(failure).to_string()),
-    );
-    if let Some(detail) = synthetic_stream_disconnected_detail(failure) {
-        object.insert("synthetic".to_string(), Value::Bool(true));
-        if !detail.is_empty() {
-            object.insert("failureDetail".to_string(), Value::String(detail));
-        }
-    }
-}
-
-fn stream_failure_source(failure: &ResponsesSseFailure) -> &'static str {
-    if synthetic_stream_disconnected_detail(failure).is_some() {
-        "proxy"
-    } else {
-        "upstream"
-    }
-}
-
-fn synthetic_stream_disconnected_detail(failure: &ResponsesSseFailure) -> Option<String> {
-    if failure.upstream_code.as_deref() != Some(STREAM_DISCONNECTED_CODE) {
-        return None;
-    }
-    let detail = failure
-        .message
-        .strip_prefix(STREAM_DISCONNECTED_MESSAGE)?
-        .strip_prefix(": ")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    Some(detail)
-}
-
 fn insert_first_token_ms(metadata: &mut Value, first_token_ms: Option<i64>) {
     let Some(first_token_ms) = first_token_ms else {
         return;
@@ -3136,53 +2523,6 @@ fn insert_websocket_pool_decision(metadata: &mut Value, decision: Option<WebSock
     if let Some(object) = metadata.as_object_mut() {
         object.insert("websocketPool".to_string(), decision.metadata_value());
     }
-}
-
-fn status_code_for_stream_failure(failure: &ResponsesSseFailure) -> i64 {
-    let code = failure
-        .upstream_code
-        .as_deref()
-        .unwrap_or("error")
-        .to_ascii_lowercase();
-    if code.contains("model") && (code.contains("not_supported") || code.contains("not_available"))
-    {
-        return 400;
-    }
-    if code.contains("invalid_request") || code.contains("not_found") {
-        return 400;
-    }
-    if code.contains("context_window")
-        || code.contains("invalid_prompt")
-        || code.contains("cyber_policy")
-        || code.contains("bad_request")
-    {
-        return 400;
-    }
-    if code.contains("rate_limit") || code.contains("usage_limit") {
-        return 429;
-    }
-    if code.contains("unauthorized")
-        || code.contains("invalid_api_key")
-        || code == "token_invalid"
-        || code == "token_expired"
-        || code == "account_deactivated"
-    {
-        return 401;
-    }
-    if code.contains("forbidden") || code.contains("banned") {
-        return 403;
-    }
-    if code.contains("payment") || code.contains("quota") {
-        return 402;
-    }
-    if code.contains("server_overloaded") {
-        return 503;
-    }
-    502
-}
-
-fn stream_failure_http_status(failure: &ResponsesSseFailure) -> u16 {
-    u16::try_from(status_code_for_stream_failure(failure)).unwrap_or(502)
 }
 
 // ====================================================================
@@ -3493,8 +2833,4 @@ fn enrich_response_dispatch_error_metadata(metadata: &mut Value, error: &Respons
     if let Some(status) = upstream_status {
         object.insert("upstreamStatus".to_string(), json!(status));
     }
-}
-
-fn elapsed_millis_i64(started_at: Instant) -> i64 {
-    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
 }

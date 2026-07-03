@@ -29,7 +29,9 @@ use crate::{
         protocol::{
             responses::{apply_response_model_options, CodexResponsesRequest},
             schema::{prepare_schema, reconvert_tuple_values},
-            sse::{encode_sse_event, parse_sse_events, SseError, DONE_SSE_FRAME},
+            sse::{
+                encode_sse_event, parse_sse_events, sse_frame_separator, SseError, DONE_SSE_FRAME,
+            },
         },
     },
 };
@@ -171,7 +173,7 @@ impl ChatCompletionStreamTranslator {
         self.pending.push_str(chunk);
         let mut output = String::new();
 
-        while let Some((event_end, separator_len)) = sse_event_separator(&self.pending) {
+        while let Some((event_end, separator_len)) = sse_frame_separator(&self.pending) {
             let event_frame = self.pending[..event_end].to_string();
             self.pending.drain(..event_end + separator_len);
             if event_frame.trim().is_empty() {
@@ -1205,16 +1207,6 @@ fn openai_stream_usage(usage: Option<&Value>) -> Value {
         });
     }
     openai_usage
-}
-
-fn sse_event_separator(input: &str) -> Option<(usize, usize)> {
-    let lf = input.find("\n\n").map(|index| (index, 2));
-    let crlf = input.find("\r\n\r\n").map(|index| (index, 4));
-    match (lf, crlf) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(found), None) | (None, Some(found)) => Some(found),
-        (None, None) => None,
-    }
 }
 
 fn chat_completion_stream_id() -> String {

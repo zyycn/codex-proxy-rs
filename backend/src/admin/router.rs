@@ -17,7 +17,7 @@ use super::{
     keys::routes::{api_keys, batch_delete_api_keys, create_api_key, update_api_key},
     monitoring::{
         dashboard::{dashboard_summary, dashboard_trend},
-        usage_records::{
+        usage_record_routes::{
             clear_usage_records, usage_record_detail, usage_records,
             usage_records_endpoint_distribution, usage_records_latency_trend,
             usage_records_model_distribution, usage_records_summary, usage_records_token_trend,

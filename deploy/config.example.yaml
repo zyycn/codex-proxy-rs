@@ -3,6 +3,8 @@ server:
   host: '0.0.0.0'
   # 容器内服务端口，需与 docker-compose.yml 的 target port 一致。
   port: 8080
+  # 可信反向代理 IP 或 CIDR。为空时会忽略并剥离客户端传入的转发 IP 头。
+  trusted_proxies: []
 
 api:
   # ChatGPT / Codex 上游 API 地址。
@@ -82,9 +84,9 @@ admin:
   session_ttl_minutes: 1440
   # 过期会话清理间隔，单位秒。
   session_cleanup_interval_secs: 3600
-  # 首次启动创建的默认管理员账号。生产部署前必须修改默认密码。
+  # 首次启动创建的默认管理员账号。default_password 必须改成至少 12 位的非默认密码。
   default_username: admin@cpr.local
-  default_password: 123456
+  default_password: ''
 
 logging:
   # Docker 部署默认写入 /app/logs，由 Compose 挂载到宿主机 deploy/logs。

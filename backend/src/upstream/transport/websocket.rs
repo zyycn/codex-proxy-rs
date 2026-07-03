@@ -11,7 +11,6 @@ use std::{
 use bytes::Bytes;
 use chrono::Utc;
 use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
-use serde_json::Value;
 use thiserror::Error;
 use tokio::{sync::Mutex, time::timeout};
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
@@ -19,23 +18,24 @@ use tungstenite::{
     self,
     extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
     handshake::client::Request as WsRequest,
-    http::{HeaderMap, Response as WsResponse},
+    http::Response as WsResponse,
     protocol::WebSocketConfig,
     Message,
 };
 
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::protocol::events::{self, TokenUsage};
-use crate::upstream::protocol::responses::{response_body_has_first_event, CodexResponsesRequest};
+use crate::upstream::protocol::responses::CodexResponsesRequest;
 use crate::upstream::protocol::sse::SseError;
 use crate::upstream::protocol::websocket::{
     classify_websocket_error_frame, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
-    websocket_incomplete_response_reason, websocket_metadata_turn_state,
+    websocket_event_type, websocket_incomplete_response_reason, websocket_metadata_turn_state,
     websocket_response_completed_parse_error, websocket_response_create_payload_text,
     OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
 };
 
+use super::response_meta;
 use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey, CodexWsStream,
     PooledWebSocketConnection, WebSocketPoolAcquire, WebSocketPoolDecision,
@@ -373,7 +373,7 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         status_code,
         retry_after_seconds,
         body,
-        set_cookie_headers: websocket_set_cookie_headers(response.headers()),
+        set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
     }
 }
 
@@ -795,7 +795,7 @@ async fn collect_websocket_response(
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
             body.push_str(&frame);
             saw_response_frame = true;
-            update_first_token_ms(started_at, body.as_bytes(), &mut first_token_ms);
+            response_meta::update_first_token_ms(started_at, body.as_bytes(), &mut first_token_ms);
             true
         } else {
             false
@@ -835,23 +835,13 @@ fn reused_connection_died_before_first_frame(
     }
 }
 
-fn update_first_token_ms(started_at: Instant, body_bytes: &[u8], first_token_ms: &mut Option<i64>) {
-    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
-        *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
-    }
-}
-
-fn elapsed_millis_i64(started_at: Instant) -> i64 {
-    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
-}
-
 fn websocket_connection_metadata(
     response: &WsResponse<Option<Vec<u8>>>,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
-        turn_state: websocket_response_turn_state(response.headers()),
-        set_cookie_headers: websocket_set_cookie_headers(response.headers()),
-        rate_limit_headers: websocket_rate_limit_headers(response.headers()),
+        turn_state: response_meta::turn_state(response.headers()),
+        set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
+        rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
         handshake_status: response.status().as_u16(),
     }
 }
@@ -1070,55 +1060,6 @@ async fn discard_stream_websocket(
 // ---------------------------------------------------------------------------
 // Header / metadata helpers
 // ---------------------------------------------------------------------------
-
-fn websocket_response_turn_state(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-codex-turn-state")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string)
-}
-
-fn websocket_set_cookie_headers(headers: &HeaderMap) -> Vec<String> {
-    headers
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok().map(ToString::to_string))
-        .collect()
-}
-
-fn websocket_rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter(|(name, _)| is_rate_limit_header(name.as_str()))
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect()
-}
-
-fn is_rate_limit_header(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "retry-after"
-        || name.contains("ratelimit")
-        || name.contains("rate-limit")
-        || name.starts_with("x-codex-primary-")
-        || name.starts_with("x-codex-secondary-")
-        || name.starts_with("x-codex-code-review-")
-        || name.starts_with("x-codex-review-")
-        || name.starts_with("x-code-review-")
-}
-
-fn websocket_event_type(raw: &str) -> Option<String> {
-    serde_json::from_str::<Value>(raw).ok().and_then(|value| {
-        value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-    })
-}
 
 fn websocket_rate_limit_event_headers(raw: &str) -> Option<Vec<(String, String)>> {
     events::parse_rate_limits_event_raw(raw)

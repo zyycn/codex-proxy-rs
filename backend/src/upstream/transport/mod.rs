@@ -3,6 +3,7 @@
 pub mod client;
 pub mod endpoints;
 pub mod headers;
+mod response_meta;
 pub mod tls;
 pub mod usage;
 pub mod websocket;

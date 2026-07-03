@@ -12,13 +12,32 @@ services:
         CPR_BUILD_TYPE: ${CPR_BUILD_TYPE:-release}
     container_name: codex-proxy-rs
     restart: unless-stopped
+    user: "10001:10001"
+    init: true
+    stop_grace_period: 30s
+    pids_limit: 256
+    cpus: "2.0"
+    mem_limit: 1g
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ${CPR_CONFIG_FILE:-./config.yaml}:/app/config.yaml:ro
-      - ${CPR_DATA_DIR:-./data}:/app/data
-      - ${CPR_LOG_DIR:-./logs}:/app/logs
+      - cpr-data:/app/data
+      - cpr-logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
+      CPR_CONFIG_FILE: /app/config.yaml
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
       CPR_UPDATE_CHANNEL: stable
@@ -26,3 +45,7 @@ services:
       CPR_UPDATE_LOCK_FILE: /app/data/update.lock
       CPR_WEB_DIST_DIR: /app/web/dist
       CPR_ENABLE_SELF_RESTART: "true"
+
+volumes:
+  cpr-data:
+  cpr-logs:

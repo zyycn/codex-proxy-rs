@@ -100,9 +100,29 @@ pub(in crate::admin) fn metadata_service_tier(metadata: &Value) -> Option<&str> 
         .filter(|value| !value.is_empty())
 }
 
+pub(in crate::admin) fn metadata_string(metadata: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+pub(in crate::admin) fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| metadata.get(*key).and_then(Value::as_i64))
+}
+
+pub(in crate::admin) fn metadata_nonnegative_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
+    metadata_i64(metadata, keys).filter(|value| *value >= 0)
+}
+
 /// 响应事件记录（供 dispatch 模块使用）。
 pub struct ResponseUsageRecord<'a> {
-    pub usage_records: &'a crate::admin::monitoring::usage_record_store::AdminUsageRecordService,
+    pub usage_records: &'a crate::admin::monitoring::usage_record_service::AdminUsageRecordService,
     pub request_id: &'a str,
     pub account_id: &'a str,
     pub route: &'a str,

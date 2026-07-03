@@ -16,3 +16,4 @@ pub mod router;
 pub mod settings;
 /// 系统版本与在线更新处理器。
 pub mod system;
+pub(crate) mod update_payload;

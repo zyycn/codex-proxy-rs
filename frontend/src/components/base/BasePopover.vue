@@ -11,14 +11,7 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs } from '
 import type { CSSProperties } from 'vue'
 
 type PopoverPlacement =
-  | 'top'
-  | 'top-start'
-  | 'top-end'
-  | 'right'
-  | 'bottom'
-  | 'bottom-start'
-  | 'bottom-end'
-  | 'left'
+  'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
 type PopoverTrigger = 'click' | 'hover'
 
 interface PopoverPoint {

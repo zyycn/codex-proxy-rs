@@ -7,7 +7,7 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
-        usage_record::{UsageRecord, UsageRecordLevel},
+        usage_record_model::{UsageRecord, UsageRecordLevel},
         usage_record_store::SqliteUsageRecordStore,
     },
     config::types::AppConfig,

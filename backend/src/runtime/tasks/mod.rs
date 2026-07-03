@@ -1,5 +1,6 @@
 //! 后台任务子模块。
 
+mod cleanup;
 pub mod cookie_cleanup;
 pub mod coordinator;
 pub mod fingerprint_update;

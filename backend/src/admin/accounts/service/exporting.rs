@@ -9,37 +9,17 @@ use crate::{
     upstream::accounts::{model::AccountStatus, store::StoredAccount},
 };
 
-const EXPORT_PAGE_LIMIT: u32 = 200;
-
 impl AdminAccountService {
     pub async fn export(&self, ids: Vec<String>) -> Result<ExportedAccounts, AdminAccountError> {
-        let accounts = if ids.is_empty() {
-            self.export_all_accounts().await?
-        } else {
-            self.export_accounts_by_id(ids).await?
-        };
+        if ids.is_empty() {
+            return Err(AdminAccountError::EmptyIds);
+        }
+        let accounts = self.export_accounts_by_id(ids).await?;
 
         Ok(ExportedAccounts {
             source_format: "cpr",
             accounts: accounts.into_iter().map(ExportedAccount::from).collect(),
         })
-    }
-
-    async fn export_all_accounts(&self) -> Result<Vec<StoredAccount>, AdminAccountError> {
-        let mut accounts = Vec::new();
-        let mut cursor = None;
-        loop {
-            let page = self
-                .store
-                .list(cursor, EXPORT_PAGE_LIMIT)
-                .await
-                .map_err(|_| AdminAccountError::Export)?;
-            accounts.extend(page.items);
-            let Some(next_cursor) = page.next_cursor else {
-                return Ok(accounts);
-            };
-            cursor = Some(next_cursor);
-        }
     }
 
     async fn export_accounts_by_id(

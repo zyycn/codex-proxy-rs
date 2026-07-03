@@ -51,7 +51,10 @@ COPY --from=release-asset-builder /out /
 FROM debian:bookworm-slim AS runtime-base
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && groupadd --system --gid 10001 cpr \
+    && useradd --system --uid 10001 --gid cpr --home-dir /app --shell /usr/sbin/nologin cpr \
+    && install -d -o cpr -g cpr /app/data /app/logs /app/web \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -59,18 +62,23 @@ ENV CPR_DEPLOYMENT_MODE=docker
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+
 CMD ["codex-proxy-rs"]
 
 FROM runtime-base AS runtime
 
-COPY --from=backend-builder /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
-COPY --from=frontend-builder /app/frontend/dist ./web/dist
+COPY --from=backend-builder --chown=cpr:cpr /tmp/codex-proxy-rs /usr/local/bin/codex-proxy-rs
+COPY --from=frontend-builder --chown=cpr:cpr /app/frontend/dist ./web/dist
+USER cpr
 
 FROM runtime-base AS runtime-prebuilt
 
 ARG TARGETARCH
 ARG CPR_PREBUILT_DIR=dist/docker
 
-COPY ${CPR_PREBUILT_DIR}/linux-${TARGETARCH}/codex-proxy-rs /usr/local/bin/codex-proxy-rs
-COPY ${CPR_PREBUILT_DIR}/web/dist ./web/dist
+COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/linux-${TARGETARCH}/codex-proxy-rs /usr/local/bin/codex-proxy-rs
+COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/web/dist ./web/dist
 RUN chmod +x /usr/local/bin/codex-proxy-rs
+USER cpr
