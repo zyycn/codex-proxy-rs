@@ -2,114 +2,164 @@
 
 ## 总览
 
-Codex Proxy RS 是一个单主服务应用：Rust 后端提供 OpenAI 兼容代理、管理端 API、SQLite 持久化、静态前端托管和在线更新能力；Vue 管理端作为 SPA 由同一个后端进程托管。
+Codex Proxy RS 是一个单主进程应用。Rust 后端同时承担 OpenAI 兼容代理、管理端 API、SQLite 持久化、后台任务、静态前端托管和在线更新；Vue 管理端作为 SPA 由同一个后端进程服务。
 
 ```mermaid
 flowchart LR
-    Client["客户端 / SDK"] -->|"OpenAI API /v1/*"| Http["Axum HTTP Router"]
-    Browser["浏览器"] -->|"管理端 SPA"| Web["web 静态资源托管"]
+    Client["客户端 / OpenAI SDK"] -->|"Authorization: Bearer<br/>/v1/*"| Http["Axum Router"]
+    Browser["浏览器"] -->|"管理端 SPA"| Web["web/dist"]
     Browser -->|"/api/admin/*"| Http
 
-    subgraph App["codex-proxy-rs 单主进程"]
-        Http --> Proxy["proxy<br/>API Key 鉴权<br/>OpenAI 兼容协议"]
+    subgraph App["codex-proxy-rs"]
+        Http --> Proxy["proxy<br/>OpenAI 兼容入口<br/>客户端 API Key 鉴权"]
         Http --> Admin["admin<br/>账号 / Key / 设置 / 监控 / 系统更新"]
         Http --> Web
 
-        Proxy --> Dispatch["dispatch<br/>账号选择 / 限流 / 亲和性 / 失败回退"]
-        Dispatch --> Protocol["upstream protocol<br/>请求转换 / SSE 转换"]
-        Protocol --> Transport["upstream transport<br/>HTTP SSE / WebSocket"]
+        Proxy --> Dispatch["dispatch<br/>账号选择<br/>限流 / quota / 亲和性 / 回退"]
+        Dispatch --> Protocol["upstream protocol<br/>请求转换<br/>SSE / 错误映射"]
+        Protocol --> Transport["upstream transport<br/>HTTP / SSE / WebSocket"]
 
         Admin --> Runtime["runtime services<br/>账号池 / 后台任务 / 更新状态"]
         Dispatch --> Runtime
-        Runtime --> Store[("SQLite<br/>账号 / 会话 / 使用记录 / 设置")]
+        Runtime --> Store[("SQLite<br/>账号 / Key / session / 用量 / 设置")]
         Admin --> Store
     end
 
     Transport --> Upstream["ChatGPT / Codex Upstream"]
-    Web --> Frontend["frontend/dist<br/>Vue 3 管理端"]
-
-    Release["GitHub Release<br/>tar.gz + checksums"] --> Update["在线更新<br/>下载 / 校验 / 替换 / 重启"]
-    Update --> Admin
-    GHCR["GHCR<br/>linux/amd64 + linux/arm64"] --> Docker["Docker Compose<br/>restart: unless-stopped"]
+    Release["GitHub Release<br/>archives + checksums"] --> Updater["self update<br/>下载 / 校验 / 替换 / 重启"]
+    Updater --> Admin
+    GHCR["GHCR image<br/>linux/amd64 + linux/arm64"] --> Docker["Docker Compose<br/>.runtime bind mounts"]
 ```
 
 ## 仓库边界
 
-- `backend/`：Rust/Axum 后端、SQLite schema、运行时服务、集成测试和 Cargo 构建脚本。
-- `frontend/`：Vue 3 管理端，使用 Vite、Tailwind v4、Pinia、Vue Router 和 ECharts。
-- `deploy/`：Dockerfile、Compose 文件、Docker ignore 文件和部署样例配置。
-- `docs/`：长期维护文档，只记录当前真实架构和约定，不保留迁移过程作为开发约束。
+- `backend/`：Rust/Axum 后端、SQLite migration、构建脚本和集成测试。
+- `frontend/`：Vue 3 管理端，使用 Vite 8、Tailwind v4、Pinia、Vue Router、ECharts 和 lucide 图标。
+- `deploy/`：Dockerfile、Compose 和 Docker 部署配置模板。
+- `docs/`：长期维护文档和审计记录，只记录当前有效结构与决策。
+- `release/`：版本号、平台矩阵和发布脚本。
 - `skills/`：项目本地 Codex skill。
+
+当前后端是 `backend/` 单 crate。不要在文档里保留旧迁移布局或兼容性重导出约束，除非代码重新引入对应结构。
 
 ## 后端结构
 
-后端入口是 `backend/src/main.rs`，公共库入口是 `backend/src/lib.rs`。运行时由 `runtime::bootstrap` 初始化，服务集合在 `runtime::services` 构造，并通过 `AppState` 注入到路由。
+入口：
+
+- `backend/src/main.rs`：二进制入口。
+- `backend/src/lib.rs`：集成测试和二进制共享的库入口。
+- `backend/src/runtime/bootstrap.rs`：加载配置、初始化日志、连接数据库、构造服务、启动 HTTP。
+- `backend/src/runtime/services.rs`：集中构造账号、模型、监控、更新等运行时服务。
 
 主要模块：
 
-- `admin/`：管理端 API，包括认证、账号、API Key、监控、设置和系统更新。
-- `proxy/`：OpenAI 兼容代理入口、鉴权、请求转换和账号调度。
-- `upstream/`：ChatGPT/Codex 上游协议、传输层、账号模型、token 刷新、quota 刷新和 fingerprint。
-- `config/`：配置加载、运行时设置和配置类型。
-- `infra/`：数据库、日志、时间、格式化、JSON 和 schema。
-- `http/`：HTTP router、中间件和统一请求上下文。
-- `web/`：前端静态资源和 SPA fallback 托管。
+- `admin/`：管理端 API，包括登录 session、账号、API Key、监控、运行设置和系统更新。
+- `proxy/`：OpenAI 兼容 HTTP 入口、客户端 API Key 鉴权、请求分派。
+- `proxy/openai/`：Responses、Chat Completions 和 Models 的协议入口。
+- `proxy/dispatch/`：账号选择、quota/限流处理、错误映射、session affinity 和失败回退。
+- `upstream/`：ChatGPT/Codex 上游账号、模型、协议、传输、token 刷新和 fingerprint。
+- `config/`：启动配置、运行时设置和管理端设置落库。
+- `infra/`：SQLite、migration、日志、时间、格式化、JSON 和身份哈希。
+- `http/`：router、中间件、可信代理和请求上下文。
+- `web/`：前端静态资源和 SPA fallback。
 
-测试只放在 `backend/tests/`，不要在 `backend/src/` 中新增测试模块。
+测试统一放在 `backend/tests/`，不在 `backend/src/` 新增测试模块。
 
-## 数据和运行时
+## 配置和运行时目录
 
-后端以 SQLite 作为主要持久化存储。默认运行时数据位于 `.runtime/`，Docker 部署时通过 Compose 挂载到 `/app/data` 和 `/app/logs`。
+启动配置由 `CPR_CONFIG_FILE` 指定；未指定时读取当前工作目录的 `config.yaml`。
 
-运行时状态分两类：
+配置文件只负责启动必需项：
 
-- 持久化状态：账号、cookie、API Key、session、使用记录、时间桶、fingerprint、运行时设置等。
-- 内存状态：账号池、调度状态、运行中任务、SSE 更新日志广播、缓存的 release 检查结果等。
+- HTTP 监听。
+- 上游 base URL。
+- SQLite URL。
+- 日志目录。
+- 管理员首次初始化密码。
+- TLS、WebSocket 池、quota 周期和 fingerprint 默认值。
 
-运行时设置通过管理端 API 修改后写入数据库，并同步到内存服务。
+账号、客户端 API Key、模型别名、账号选择策略和多数运行参数由管理端写入 SQLite。
+
+`.runtime` 是本项目统一运行目录：
+
+```text
+.runtime/config.yaml
+.runtime/data/codex-proxy-rs.sqlite
+.runtime/data/update-state.json
+.runtime/data/update.lock
+.runtime/logs/
+```
+
+Docker 也使用宿主机 `.runtime`，但容器内配置路径仍然写 `/app/data` 和 `/app/logs`。Compose 默认映射：
+
+```text
+.runtime/config.yaml -> /app/config.yaml
+.runtime/data        -> /app/data
+.runtime/logs        -> /app/logs
+```
+
+容器以非 root 用户 `10001:10001` 运行。Compose 设置 `HOME=/app` 和 `XDG_DATA_HOME=/app/data`，确保 installation id、SQLite、更新状态和日志都写入可持久化目录。
 
 ## 代理请求链路
 
 客户端请求进入 `/v1/*`：
 
-1. `proxy/auth` 校验客户端 API Key。
+1. `proxy/auth` 校验客户端 API Key，并记录调用上下文。
 2. `proxy/openai` 解析 OpenAI 兼容请求。
-3. `proxy/dispatch` 选择账号、处理限流、亲和性和失败回退。
-4. `upstream/protocol` 转换 Codex/ChatGPT 上游协议。
-5. `upstream/transport` 使用 HTTP SSE 或 WebSocket 访问上游。
-6. 响应被转换回 OpenAI 兼容格式，并记录使用数据。
+3. `proxy/dispatch` 按模型、quota、账号状态和选择策略挑选账号。
+4. `upstream/protocol` 转换为 ChatGPT/Codex 上游协议。
+5. `upstream/transport` 使用 HTTP、SSE 或 WebSocket 访问上游。
+6. 响应和错误被转换回 OpenAI 兼容格式。
+7. 用量、模型维度统计、请求记录、账号窗口和失败状态写回 SQLite/账号池。
 
-账号运行时状态由 SQLite 快照恢复，并在请求、刷新、quota 检查和失败回退时更新。
+账号状态由 SQLite 恢复到内存账号池，并在请求、token 刷新、quota 刷新、Cloudflare 处理和失败回退时同步更新。
 
 ## 管理端
 
-管理端 API 位于 `/api/admin/*`，使用 session cookie 保护。前端入口由后端托管，不单独部署 Node 服务。
+管理端 API 位于 `/api/admin/*`，使用 session cookie 保护。前端由后端托管，不单独部署 Node 服务。
 
 前端结构：
 
 - `frontend/src/api/modules`：管理端 API 客户端。
 - `frontend/src/components/base`：基础 UI 组件。
-- `frontend/src/layout`：主布局、侧边栏、系统更新入口和更新弹窗。
-- `frontend/src/views`：各业务页面。
+- `frontend/src/layout`：主布局、侧边栏和系统更新弹窗。
+- `frontend/src/views`：业务页面。
 - `frontend/src/stores`：Pinia 状态。
 - `frontend/src/styles/tokens.css`：亮色/暗色主题 token。
 
-前端只展示后端返回的版本、状态和更新日志，不在前端做状态文案映射。
+管理端页面包括：
 
-## 版本和发布
+- 账号管理：导入、OAuth、连接测试、额度、模型、调度状态、刷新能力。
+- API Key 管理：客户端 Key 和管理员 API Key。
+- Dashboard：请求趋势、账号概览、服务状态。
+- 请求明细：网关调用、上游状态、Token 消耗、错误和详情。
+- 设置：运行参数、模型映射、账号选择策略。
+- 系统更新：版本、检查更新、SSE 更新日志、更新、重启、回滚。
 
-版本和平台发布契约集中在 `release/`：
+## 发布
 
-- `release/version.yaml`：产品版本，发布 tag 固定使用 `v` 前缀。
-- `release/platforms.yaml`：Release asset 构建平台、归档格式和 Docker 平台。
+版本契约集中在 `release/`：
 
-日常发布只需要执行 `release/publish 0.1.4`。该命令会更新 `release/version.yaml`、生成带署名的版本提交、创建 `v0.1.4` tag，并 push 分支和 tag 触发发布 workflow。
+- `release/version.yaml`：当前产品版本。
+- `release/platforms.yaml`：Release asset 和 Docker 平台矩阵。
+- `release/publish`：更新版本文件、生成版本提交、创建 tag 并 push。
 
-发布 workflow 会校验触发 tag 必须等于 `v` + `version`。发布构建时通过 `CPR_VERSION`、`CPR_GIT_SHA`、`CPR_BUILD_TIME` 和 `CPR_BUILD_TYPE=release` 注入编译期元数据。
+发布命令：
 
-`backend/build/build.rs` 负责把这些值写入二进制。没有 `CPR_VERSION` 时，版本回落到 `release/version.yaml`，最后才回落到 Cargo 的 `CARGO_PKG_VERSION`。
+```bash
+release/publish 0.1.5
+```
 
-GitHub Release 产物：
+发布 workflow 校验触发 tag 必须等于 `v` + `release/version.yaml`。构建时注入：
+
+- `CPR_VERSION`
+- `CPR_GIT_SHA`
+- `CPR_BUILD_TIME`
+- `CPR_BUILD_TYPE=release`
+
+`backend/build/build.rs` 负责把这些值写入二进制。没有 `CPR_VERSION` 时，版本回落到 `release/version.yaml`，最后才回落到 Cargo 包版本。
+
+Release 产物：
 
 ```text
 codex-proxy-rs_<version>_linux_amd64.tar.gz
@@ -120,11 +170,13 @@ codex-proxy-rs_<version>_windows_amd64.zip
 checksums.txt
 ```
 
-GHCR 镜像发布为 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
+GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
 
 ## 在线更新
 
-在线更新由主服务自己处理，不依赖独立 updater sidecar。核心接口：
+在线更新由主服务处理，没有独立 updater sidecar。
+
+核心接口：
 
 - `GET /api/admin/system/version`
 - `GET /api/admin/system/check-updates`
@@ -132,44 +184,57 @@ GHCR 镜像发布为 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
 - `GET /api/admin/system/update-status`
 - `POST /api/admin/system/update`
 - `POST /api/admin/system/restart`
+- `POST /api/admin/system/rollback`
 
 更新流程：
 
-1. 后端检查 GitHub latest release。
-2. 按当前 OS/arch 选择匹配 asset，兼容 `amd64/x86_64` 和 `arm64/aarch64` 命名。
-3. 下载 release tar 包并用 `checksums.txt` 校验。
-4. 解压二进制和 `web/dist`。
-5. 替换当前二进制和前端静态资源。
-6. 前端通过 SSE 实时展示后端推送的中文更新日志。
-7. Docker 部署依靠 `restart: unless-stopped` 在自重启后拉起新进程。
+1. 查询 GitHub Release。
+2. 按当前 OS/arch 选择 asset，支持 `amd64/x86_64` 与 `arm64/aarch64` 命名。
+3. 下载归档和 `checksums.txt`。
+4. 校验 checksum。
+5. 解压二进制和 `web/dist`。
+6. 替换当前二进制和前端静态资源。
+7. 写入 `.runtime/data/update-state.json`。
+8. 通过 SSE 推送中文更新日志。
+9. 管理端触发重启；Docker 模式依靠 `restart: unless-stopped` 拉起新进程。
 
-替换逻辑必须支持跨文件系统 fallback，因为容器文件系统里 `rename` 可能遇到 `Invalid cross-device link`。
+替换逻辑必须支持跨文件系统 fallback，因为容器环境中 `rename` 可能遇到 `Invalid cross-device link`。
 
-## Docker 部署
+## Docker
 
-Docker 构建入口是 `deploy/Dockerfile`，上下文保持仓库根目录。
+`deploy/Dockerfile` 的构建上下文是仓库根目录。
 
-构建阶段：
+阶段：
 
-- `frontend-builder`：构建 Vue SPA。
+- `frontend-builder`：安装前端依赖并构建 Vue SPA。
 - `backend-builder`：构建 Rust release 二进制，并复制前端 dist。
-- `release-asset`：导出 GitHub Release tar 包。
-- `runtime`：运行镜像基于 `debian:bookworm-slim`，包含 CA、curl healthcheck、后端二进制和 `web/dist`，默认以非 root 用户运行。
+- `release-asset-builder` / `release-asset`：生成 GitHub Release 归档。
+- `runtime-base`：Debian slim、CA、curl、非 root 用户、运行目录。
+- `runtime`：从源码构建出的运行镜像。
+- `runtime-prebuilt`：发布 workflow 使用的预构建二进制镜像阶段。
 
-Compose 文件是 `deploy/docker-compose.yml`。示例配置只保留 `deploy/config.example.yaml`，用户复制为 `deploy/config.yaml` 后部署。
+Compose 默认：
 
-## CI 和安全扫描
+- 镜像：`ghcr.io/zyycn/codex-proxy-rs:latest`，可用 `CPR_IMAGE` 覆盖。
+- 端口：`127.0.0.1:8080:8080`。
+- 数据：`.runtime/data:/app/data`。
+- 日志：`.runtime/logs:/app/logs`。
+- 配置：`.runtime/config.yaml:/app/config.yaml:ro`。
+- 更新：`CPR_UPDATE_REPOSITORY=zyycn/codex-proxy-rs`，`CPR_ENABLE_SELF_RESTART=true`。
+
+## CI
 
 常规 CI 位于 `.github/workflows/ci.yml`：
 
-- Rust fmt、clippy、集成测试。
-- 前端依赖安装和 build。
-- Compose 配置校验。
+- Rust fmt、clippy 和集成测试。
+- 前端 install、typecheck/build。
+- Docker Compose 配置校验。
+- Runtime image build。
 
 安全扫描位于 `.github/workflows/security-scan.yml`：
 
-- `cargo audit` 扫描 Rust 依赖。
-- `pnpm audit --prod --audit-level=high` 扫描前端生产依赖。
-- 每周定时运行，同时覆盖 push 和 pull request。
+- `cargo audit`。
+- `pnpm audit --prod --audit-level=high`。
+- Docker runtime image security scan。
 
-发布流程位于 `.github/workflows/release.yml`，只由 `v*` tag 或手动指定 tag 触发。
+发布流程位于 `.github/workflows/release.yml`，由 `v*` tag 或手动指定 tag 触发。

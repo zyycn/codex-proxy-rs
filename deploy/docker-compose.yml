@@ -21,9 +21,9 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ${CPR_CONFIG_FILE:-./config.yaml}:/app/config.yaml:ro
-      - cpr-data:/app/data
-      - cpr-logs:/app/logs
+      - ${CPR_CONFIG_FILE:-../.runtime/config.yaml}:/app/config.yaml:ro
+      - ${CPR_DATA_DIR:-../.runtime/data}:/app/data
+      - ${CPR_LOG_DIR:-../.runtime/logs}:/app/logs
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -37,15 +37,14 @@ services:
       retries: 3
       start_period: 10s
     environment:
+      HOME: /app
+      XDG_DATA_HOME: /app/data
       CPR_CONFIG_FILE: /app/config.yaml
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
       CPR_UPDATE_CHANNEL: stable
+      CPR_UPDATE_TEMP_DIR: /app/data/update-tmp
       CPR_UPDATE_STATE_FILE: /app/data/update-state.json
       CPR_UPDATE_LOCK_FILE: /app/data/update.lock
       CPR_WEB_DIST_DIR: /app/web/dist
       CPR_ENABLE_SELF_RESTART: "true"
-
-volumes:
-  cpr-data:
-  cpr-logs:

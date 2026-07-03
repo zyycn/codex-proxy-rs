@@ -7,10 +7,16 @@ Docker 部署入口集中在本目录。
 首次部署先复制样例配置：
 
 ```bash
-cp deploy/config.example.yaml deploy/config.yaml
+mkdir -p .runtime/data .runtime/logs
+cp deploy/config.example.yaml .runtime/config.yaml
 ```
 
-`deploy/config.example.yaml` 是 Docker 部署模板，默认将数据写入容器内 `/app/data`、日志写入 `/app/logs`，由 Compose 命名卷持久化。
+`deploy/config.example.yaml` 是 Docker 部署模板。Compose 默认把配置、数据和日志都放在仓库 `.runtime/` 下：
+
+- `.runtime/config.yaml` -> `/app/config.yaml`
+- `.runtime/data` -> `/app/data`
+- `.runtime/logs` -> `/app/logs`
+
 复制后必须设置 `admin.default_password`，空值或常见弱口令会被后端拒绝启动。
 如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，只在该代理会覆盖或清理 `X-Forwarded-For` / `X-Real-IP` / `CF-Connecting-IP` 时，把代理的 IP 或 CIDR 写入 `server.trusted_proxies`；默认空列表会剥离这些客户端可伪造的头并使用 TCP peer IP。
 
@@ -21,16 +27,12 @@ docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-默认挂载和卷：
-
-- `deploy/config.yaml` -> `/app/config.yaml`
-- `cpr-data` -> `/app/data`
-- `cpr-logs` -> `/app/logs`
-
-可以通过环境变量覆盖宿主机配置文件路径；容器内会通过 `CPR_CONFIG_FILE=/app/config.yaml` 显式读取挂载后的配置：
+可以通过环境变量覆盖宿主机路径；容器内会通过 `CPR_CONFIG_FILE=/app/config.yaml` 显式读取挂载后的配置：
 
 ```bash
 CPR_CONFIG_FILE=/path/to/config.yaml \
+CPR_DATA_DIR=/path/to/data \
+CPR_LOG_DIR=/path/to/logs \
 docker compose -f deploy/docker-compose.yml up -d
 ```
 

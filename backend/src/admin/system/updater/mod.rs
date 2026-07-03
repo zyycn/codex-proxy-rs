@@ -114,6 +114,7 @@ struct SystemUpdateConfig {
     web_dist_dir: PathBuf,
     update_state_file: PathBuf,
     update_lock_file: PathBuf,
+    update_temp_dir: PathBuf,
 }
 
 /// `GET /api/admin/system/version`
@@ -336,6 +337,9 @@ impl SystemUpdateConfig {
         let update_lock_file = env_string("CPR_UPDATE_LOCK_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(|| state_file.with_extension("lock"));
+        let update_temp_dir = env_string("CPR_UPDATE_TEMP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_update_temp_dir(&state_file));
         Self {
             version: build_version(),
             git_sha: build_git_sha(),
@@ -354,6 +358,7 @@ impl SystemUpdateConfig {
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_WEB_DIST_DIR)),
             update_state_file: state_file,
             update_lock_file,
+            update_temp_dir,
         }
     }
 
@@ -465,12 +470,9 @@ async fn perform_release_update(
         Some("prepare"),
         "正在创建临时更新目录",
     );
-    let exe_path = config.executable_path()?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| AdminError::internal("Executable path has no parent"))?;
-    let temp_dir = fs::canonicalize(exe_dir)
-        .and_then(|dir| fs::create_dir_all(&dir).map(|()| dir))
+    fs::create_dir_all(&config.update_temp_dir)
+        .map_err(internal_error_with("Failed to prepare update temp dir"))?;
+    let temp_dir = fs::canonicalize(&config.update_temp_dir)
         .and_then(|dir| tempfile_dir_in(&dir, ".codex-proxy-rs-update-"))
         .map_err(internal_error_with("Failed to create update temp dir"))?;
     let archive_path = temp_dir.join(&archive.name);
@@ -532,6 +534,7 @@ async fn perform_release_update(
         Some("replace"),
         "正在替换应用文件",
     );
+    let exe_path = config.executable_path()?;
     replace_release_files(&exe_path, &config.web_dist_dir, extracted)?;
     emit_update_event(
         UpdateLogLevel::Success,
@@ -559,6 +562,13 @@ fn tempfile_dir_in(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
         io::ErrorKind::AlreadyExists,
         "failed to create unique temp dir",
     ))
+}
+
+fn default_update_temp_dir(state_file: &Path) -> PathBuf {
+    state_file
+        .parent()
+        .map(|parent| parent.join("update-tmp"))
+        .unwrap_or_else(|| env::temp_dir().join("codex-proxy-rs-update"))
 }
 
 fn env_string(key: &str) -> Option<String> {

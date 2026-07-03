@@ -995,6 +995,7 @@ fn set_system_update_env(repository: &str, github_api_base: &str) {
     std::env::remove_var("CPR_WEB_DIST_DIR");
     std::env::remove_var("CPR_UPDATE_STATE_FILE");
     std::env::remove_var("CPR_UPDATE_LOCK_FILE");
+    std::env::remove_var("CPR_UPDATE_TEMP_DIR");
     std::env::remove_var("CPR_ENABLE_SELF_RESTART");
 }
 
@@ -1006,6 +1007,7 @@ fn set_system_update_paths(root: &Path, exe_path: &Path, web_dist: &Path) {
         root.join(".runtime/update-state.json"),
     );
     std::env::set_var("CPR_UPDATE_LOCK_FILE", root.join(".runtime/update.lock"));
+    std::env::set_var("CPR_UPDATE_TEMP_DIR", root.join(".runtime/update-tmp"));
 }
 
 async fn wait_for_operation_status(app: &axum::Router, expected: &str) -> Value {
