@@ -84,11 +84,11 @@ response.output_item.done
 错误体：
 
 - **quota 耗尽 → HTTP 402**（`dispatch/responses.rs` `http_status_code`、`chat.rs` 同）：OpenAI 用 429 + `insufficient_quota`。**判为设计权衡而非 bug** — 402 Payment Required 语义上对应配额耗尽。但若目标是兼容 OpenAI SDK 的限流退避/重试，SDK 的 status→异常映射无 402 分支，会落到通用 `APIStatusError` 而非 `RateLimitError`，退避逻辑失效。取决于产品意图，此处仅标注权衡点。
-- 聚合错误 type 恒为 `server_error`/`upstream_error`（`errors.rs`）：quota/rate 耗尽经账户池聚合路径时 type 未按语义映射为 `insufficient_quota`/`rate_limit_error`，读 `error.type` 判限流的客户端无法识别。
+- 聚合错误 type/code 语义映射（已修复）：quota/rate/auth/model unsupported 经账户池聚合路径时已分别映射为 `insufficient_quota`、`rate_limit_error/rate_limit_exceeded`、`invalid_request_error/invalid_api_key`、`invalid_request_error/model_not_found`。
 - 错误体缺 `param` 字段（`errors.rs:47-63`）；多数 SDK 容忍。
 - Responses 非流式错误多包一层顶层 `"type":"error"`（`errors.rs:114-141`），偏离 `{"error":{...}}`。
 - 401(expired/disabled) 聚合路径 status=401 但 type=`server_error`，body 与状态码不自洽。
-- chat 流式中途失败帧 type=`stream_error` 且无 `code`（`chat.rs:1001`），OpenAI SDK 不识别，等价于坏流。
+- Responses stream 聚合错误 `response.failed` 已复用 dispatch 语义 code，不再仅按 HTTP status 粗映射；chat 流式中途失败帧仍是 type=`stream_error` 且无 `code`（`chat.rs:1001`），OpenAI SDK 不识别，等价于坏流。
 
 SSE / chat 转换：
 
@@ -120,8 +120,9 @@ Models 端点（结构层面与 OpenAI 契约高度一致）：
 1. **修 `response.incomplete`（🔴，基准硬，已完成）** — 两条 SSE 路径已纳入终止事件集，Chat Completions 已补 `length` finish reason 和 `[DONE]`。
 2. **chat 工具定义/`tool_choice` 转扁平（🔴，已完成）** — 已参考 sub2api 与 CLIProxyAPI 的 common path，并补充请求转换测试。
 3. **chat reasoning/custom tool delta 与 `output_item.done` 兜底（🟡，已完成）** — 已补 Chat 流式/非流式转换测试。
-4. **决策 quota→402 vs 429（🟡，产品权衡）** — 明确是要 OpenAI SDK 兼容还是语义化 HTTP 码。
-5. 处理聚合错误 type 语义映射、Models 首拉为空/别名详情等中等项。
+4. **聚合错误 type/code 与 Responses stream code 映射（🟡，已完成）** — Chat/Responses JSON 与 Responses `response.failed` 已共享语义化错误 code；HTTP status 策略未在本项中改变。
+5. **决策 quota→402 vs 429（🟡，产品权衡）** — 明确是要 OpenAI SDK 兼容还是语义化 HTTP 码。
+6. 处理 chat stream 中途失败帧、Models 首拉为空/别名详情等中等项。
 
 ## 复现方法（解包基准）
 

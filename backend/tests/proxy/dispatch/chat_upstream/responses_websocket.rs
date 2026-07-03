@@ -1703,7 +1703,7 @@ async fn responses_websocket_without_history_should_mark_expired_after_fallback_
 
     assert!(body.contains("event: response.failed"));
     assert!(body.contains("\"type\":\"invalid_request_error\""));
-    assert!(body.contains("\"code\":\"authentication_error\""));
+    assert!(body.contains("\"code\":\"invalid_api_key\""));
     assert!(body.contains("All accounts exhausted"));
     assert!(body.contains("token_revoked"));
     assert_eq!(secondary_status.0, "expired");
@@ -1877,8 +1877,8 @@ async fn responses_websocket_without_history_should_return_quota_stream_error_wh
 
     assert_response_failed_stream(
         &body,
-        "invalid_request_error",
-        "codex_api_error",
+        "insufficient_quota",
+        "insufficient_quota",
         &[
             "All accounts exhausted (1 quota-exhausted)",
             "quota reached",
@@ -1928,7 +1928,7 @@ async fn responses_websocket_without_history_should_return_model_unsupported_str
     assert_response_failed_stream(
         &body,
         "invalid_request_error",
-        "codex_api_error",
+        "model_not_found",
         &[
             "No accounts available",
             "model_not_available",
@@ -1973,7 +1973,7 @@ async fn responses_websocket_with_history_should_return_path_block_stream_error_
     assert_response_failed_stream(
         &body,
         "server_error",
-        "codex_api_error",
+        "upstream_error",
         &["No accounts available", "Cloudflare path-block"],
     );
 }

@@ -164,10 +164,13 @@ fn chat_completion_from_codex_sse_should_convert_completed_response() {
 
 #[test]
 fn chat_completion_from_codex_sse_should_convert_incomplete_response() {
-    let body = include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
+    let body = format!(
+        "{}\n",
+        include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse")
+    );
 
     let response = codex_proxy_rs::proxy::openai::chat::chat_completion_from_codex_sse(
-        body, "gpt-5.5", false, None,
+        &body, "gpt-5.5", false, None,
     )
     .expect("conversion should succeed")
     .expect("terminal response");
@@ -214,12 +217,15 @@ fn chat_completion_stream_translator_should_complete_incomplete_response() {
     let mut translator = codex_proxy_rs::proxy::openai::chat::ChatCompletionStreamTranslator::new(
         "gpt-5.5", false, None,
     );
-    let body = include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
+    let body = format!(
+        "{}\n",
+        include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse")
+    );
     let output = format!(
         "{}{}",
         translator.initial_frame(),
         translator
-            .push_str(body)
+            .push_str(&body)
             .expect("stream conversion should succeed")
     );
 
