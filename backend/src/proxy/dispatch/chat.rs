@@ -516,7 +516,7 @@ impl ChatDispatchError {
     pub fn http_status_code(&self) -> u16 {
         match self {
             Self::NoActiveAccount | Self::AccountStore => 503,
-            Self::QuotaExhausted { .. } => 402,
+            Self::QuotaExhausted { .. } => 429,
             Self::RateLimited { .. } => 429,
             Self::Expired { .. } | Self::Disabled { .. } => 401,
             Self::Banned { status_code, .. } => *status_code,

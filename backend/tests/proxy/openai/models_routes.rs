@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -79,6 +81,34 @@ async fn models_route_should_accept_stored_client_api_key() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert!(body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model["id"] == "gpt-5.5"));
+}
+
+#[tokio::test]
+async fn model_detail_route_should_accept_configured_alias() {
+    let mut aliases = BTreeMap::new();
+    aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
+    let (app, plaintext, _dir) = test_app_with_aliases("openai-models-alias.sqlite", aliases).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models/codex-fast")
+                .header("authorization", format!("Bearer {plaintext}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["id"], "codex-fast");
 }
 
 async fn test_app(
@@ -95,6 +125,34 @@ async fn test_app(
         None
     };
     let config = test_config(url);
+    build_test_app(pool, config, plaintext, dir).await
+}
+
+async fn test_app_with_aliases(
+    db_name: &str,
+    model_aliases: BTreeMap<String, String>,
+) -> (Router, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join(db_name);
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+    let plaintext = insert_client_api_key(&pool).await;
+    let mut config = test_config(url);
+    config.model_aliases = model_aliases;
+    let (app, plaintext, dir) = build_test_app(pool, config, Some(plaintext), dir).await;
+    (
+        app,
+        plaintext.expect("client api key should be seeded"),
+        dir,
+    )
+}
+
+async fn build_test_app(
+    pool: sqlx::SqlitePool,
+    config: codex_proxy_rs::config::types::AppConfig,
+    plaintext: Option<String>,
+    dir: tempfile::TempDir,
+) -> (Router, Option<String>, tempfile::TempDir) {
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),

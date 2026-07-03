@@ -38,7 +38,7 @@ use crate::{
 
 use super::{
     errors::{
-        chat_dispatch_error_response, chat_stream_dispatch_error_message,
+        chat_dispatch_error_response, chat_stream_dispatch_openai_error,
         invalid_chat_completion_request_response, missing_client_api_key_response,
         model_not_found_response,
     },
@@ -105,8 +105,12 @@ pub enum ChatTranslationError {
 pub enum ChatStreamTranslationError {
     #[error("invalid upstream SSE response: {0}")]
     InvalidSse(#[from] SseError),
-    #[error("{0}")]
-    Upstream(String),
+    #[error("{message}")]
+    Upstream {
+        message: String,
+        error_type: String,
+        code: String,
+    },
 }
 
 // ====================================================================
@@ -202,9 +206,12 @@ impl ChatCompletionStreamTranslator {
             .or_else(|| value.get("type").and_then(Value::as_str));
 
         if matches!(event_type, Some("error" | "response.failed")) {
-            return Err(ChatStreamTranslationError::Upstream(
-                codex_stream_error_message(&value),
-            ));
+            let (message, error_type, code) = codex_stream_error_details(&value);
+            return Err(ChatStreamTranslationError::Upstream {
+                message,
+                error_type,
+                code,
+            });
         }
 
         match event_type {
@@ -877,7 +884,7 @@ pub fn chat_completion_from_codex_sse(
             .or_else(|| value.get("type").and_then(Value::as_str));
 
         if matches!(event_type, Some("error" | "response.failed")) {
-            failed_response = Some(codex_stream_error_message(&value));
+            failed_response = Some(codex_stream_error_details(&value));
             continue;
         }
 
@@ -931,8 +938,12 @@ pub fn chat_completion_from_codex_sse(
         }
     }
 
-    if let Some(failure) = failed_response {
-        return Err(ChatStreamTranslationError::Upstream(failure));
+    if let Some((message, error_type, code)) = failed_response {
+        return Err(ChatStreamTranslationError::Upstream {
+            message,
+            error_type,
+            code,
+        });
     }
 
     let Some(response) = completed_response else {
@@ -1062,17 +1073,34 @@ fn live_chat_event_stream_response(
     let mut translator =
         ChatCompletionStreamTranslator::new(model.to_string(), include_reasoning, tuple_schema);
     let initial_frame = translator.initial_frame();
+    let mut terminated_with_error = false;
     let body_stream =
         futures_stream::once(async move { Ok::<Bytes, Infallible>(Bytes::from(initial_frame)) })
             .chain(stream.body.map(move |result| {
+                if terminated_with_error {
+                    return Ok::<Bytes, Infallible>(Bytes::new());
+                }
                 let body = match result {
                     Ok(bytes) => {
                         let text = String::from_utf8_lossy(&bytes);
-                        translator
-                            .push_str(&text)
-                            .unwrap_or_else(|error| chat_stream_error_sse_frame(&error.to_string()))
+                        match translator.push_str(&text) {
+                            Ok(body) => body,
+                            Err(error) => {
+                                terminated_with_error = true;
+                                let (error_type, code, message) =
+                                    chat_stream_translation_openai_error(&error);
+                                chat_stream_error_sse_frame(&error_type, &code, &message)
+                            }
+                        }
                     }
-                    Err(error) => chat_stream_error_sse_frame(&error.to_string()),
+                    Err(error) => {
+                        terminated_with_error = true;
+                        chat_stream_error_sse_frame(
+                            "server_error",
+                            "upstream_error",
+                            &error.to_string(),
+                        )
+                    }
                 };
                 Ok::<Bytes, Infallible>(Bytes::from(body))
             }));
@@ -1084,27 +1112,32 @@ fn live_chat_event_stream_response(
 }
 
 fn response_dispatch_chat_stream_error_response(error: &ResponseDispatchError) -> Response {
-    let message = chat_stream_dispatch_error_message(error);
-    chat_stream_error_response(&message)
+    let error = chat_stream_dispatch_openai_error(error);
+    chat_stream_error_response(error.error_type, error.code, &error.message)
 }
 
-fn chat_stream_error_response(message: &str) -> Response {
+fn chat_stream_error_response(error_type: &str, code: &str, message: &str) -> Response {
     event_stream_response(
-        Body::from(chat_stream_error_sse_frame(message)),
+        Body::from(chat_stream_error_sse_frame(error_type, code, message)),
         SseResponseOptions::CHAT_ERROR,
     )
 }
 
-fn chat_stream_error_sse_frame(message: &str) -> String {
-    openai_sse_frame(
-        "",
-        &json!({
-            "error": {
-                "message": message,
-                "type": "stream_error",
-            }
-        })
-        .to_string(),
+fn chat_stream_error_sse_frame(error_type: &str, code: &str, message: &str) -> String {
+    format!(
+        "{}{}",
+        openai_sse_frame(
+            "",
+            &json!({
+                "error": {
+                    "message": message,
+                    "type": error_type,
+                    "code": code,
+                }
+            })
+            .to_string(),
+        ),
+        DONE_SSE_FRAME
     )
 }
 
@@ -1364,12 +1397,115 @@ fn chat_completion_stream_id() -> String {
     format!("chatcmpl-{suffix}")
 }
 
-fn codex_stream_error_message(value: &Value) -> String {
+fn chat_stream_translation_openai_error(
+    error: &ChatStreamTranslationError,
+) -> (String, String, String) {
+    match error {
+        ChatStreamTranslationError::InvalidSse(_) => (
+            "server_error".to_string(),
+            "invalid_upstream_response".to_string(),
+            "Invalid upstream Codex response".to_string(),
+        ),
+        ChatStreamTranslationError::Upstream {
+            message,
+            error_type,
+            code,
+        } => (error_type.clone(), code.clone(), message.clone()),
+    }
+}
+
+fn codex_stream_error_details(value: &Value) -> (String, String, String) {
+    let message = codex_stream_error_string(value, "message")
+        .unwrap_or_else(|| "Upstream Codex response failed".to_string());
+    let raw_code =
+        codex_stream_error_string(value, "code").unwrap_or_else(|| "upstream_error".to_string());
+    let code = openai_error_code_for_code(&raw_code);
+    let error_type =
+        codex_stream_error_type(value).unwrap_or_else(|| openai_error_type_for_code(&raw_code));
+    (message, error_type, code)
+}
+
+fn codex_stream_error_type(value: &Value) -> Option<String> {
+    codex_stream_nested_error_string(value, "type").or_else(|| {
+        codex_stream_top_level_string(value, "type")
+            .filter(|kind| !matches!(kind.as_str(), "error" | "response.failed"))
+    })
+}
+
+fn codex_stream_error_string(value: &Value, field: &str) -> Option<String> {
+    codex_stream_nested_error_string(value, field)
+        .or_else(|| codex_stream_top_level_string(value, field))
+}
+
+fn codex_stream_nested_error_string(value: &Value, field: &str) -> Option<String> {
     value
-        .pointer("/error/message")
-        .or_else(|| value.pointer("/response/error/message"))
+        .pointer(&format!("/response/error/{field}"))
+        .or_else(|| value.pointer(&format!("/error/{field}")))
         .and_then(Value::as_str)
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or("Upstream Codex response failed")
-        .to_string()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn codex_stream_top_level_string(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn openai_error_code_for_code(code: &str) -> String {
+    let lower = code.to_ascii_lowercase();
+    if lower.contains("quota") || lower.contains("payment") || lower == "insufficient_quota" {
+        "insufficient_quota"
+    } else if lower.contains("rate_limit") || lower.contains("usage_limit") {
+        "rate_limit_exceeded"
+    } else if lower.contains("auth")
+        || lower.contains("token")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid_api_key")
+        || lower.contains("account_deactivated")
+    {
+        "invalid_api_key"
+    } else if lower.contains("model_not_supported")
+        || lower.contains("model_not_available")
+        || lower.contains("model_unsupported")
+    {
+        "model_not_found"
+    } else if lower.trim().is_empty() {
+        "upstream_error"
+    } else {
+        code
+    }
+    .to_string()
+}
+
+fn openai_error_type_for_code(code: &str) -> String {
+    let code = code.to_ascii_lowercase();
+    if code.contains("quota") || code.contains("payment") || code == "insufficient_quota" {
+        "insufficient_quota"
+    } else if code.contains("rate_limit") || code.contains("usage_limit") {
+        "rate_limit_error"
+    } else if code.contains("auth")
+        || code.contains("token")
+        || code.contains("unauthorized")
+        || code.contains("invalid_api_key")
+        || code.contains("account_deactivated")
+    {
+        "invalid_request_error"
+    } else if code.contains("model")
+        || code.contains("invalid_request")
+        || code.contains("not_found")
+        || code.contains("context_window")
+        || code.contains("invalid_prompt")
+        || code.contains("cyber_policy")
+        || code.contains("bad_request")
+    {
+        "invalid_request_error"
+    } else {
+        "server_error"
+    }
+    .to_string()
 }

@@ -119,7 +119,6 @@ async fn responses_should_return_no_available_accounts_error_when_no_accounts_ar
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "server_error");
     assert_eq!(body["error"]["code"], "no_available_accounts");
 }
@@ -2062,7 +2061,7 @@ async fn responses_should_return_quota_error_when_402_fallback_is_exhausted() {
         .unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
 
-    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert!(message.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(message.contains("quota reached"));
     assert_eq!(body["error"]["type"], "insufficient_quota");

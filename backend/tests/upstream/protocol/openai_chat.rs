@@ -336,6 +336,57 @@ fn chat_completion_stream_translator_should_emit_tool_arguments_from_output_item
     );
 }
 
+#[test]
+fn chat_completion_stream_translator_should_map_response_failed_to_openai_error() {
+    let mut translator = codex_proxy_rs::proxy::openai::chat::ChatCompletionStreamTranslator::new(
+        "gpt-5.5", false, None,
+    );
+    let body = format!(
+        "{}\n\n",
+        include_str!("../../fixtures/responses/http_sse/failed_quota.sse")
+    );
+    let error = translator
+        .push_str(&body)
+        .expect_err("response.failed should terminate chat stream conversion");
+
+    let codex_proxy_rs::proxy::openai::chat::ChatStreamTranslationError::Upstream {
+        message,
+        error_type,
+        code,
+    } = error
+    else {
+        panic!("expected upstream stream error");
+    };
+    assert_eq!(message, "quota exhausted");
+    assert_eq!(error_type, "insufficient_quota");
+    assert_eq!(code, "insufficient_quota");
+}
+
+#[test]
+fn chat_completion_stream_translator_should_map_top_level_error_chunk_to_openai_error() {
+    let mut translator = codex_proxy_rs::proxy::openai::chat::ChatCompletionStreamTranslator::new(
+        "gpt-5.5", false, None,
+    );
+    let error = translator
+        .push_str(
+            "event: error\n\
+             data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"usage limit reached\"}\n\n",
+        )
+        .expect_err("top-level error chunk should terminate chat stream conversion");
+
+    let codex_proxy_rs::proxy::openai::chat::ChatStreamTranslationError::Upstream {
+        message,
+        error_type,
+        code,
+    } = error
+    else {
+        panic!("expected upstream stream error");
+    };
+    assert_eq!(message, "usage limit reached");
+    assert_eq!(error_type, "rate_limit_error");
+    assert_eq!(code, "rate_limit_exceeded");
+}
+
 fn basic_chat_request() -> codex_proxy_rs::proxy::openai::chat::ChatCompletionRequest {
     codex_proxy_rs::proxy::openai::chat::ChatCompletionRequest {
         model: "gpt-5.5".to_string(),

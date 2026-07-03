@@ -26,9 +26,9 @@ pub async fn models(State(state): State<AppState>, headers: HeaderMap) -> impl I
 
     let catalog = model_catalog_for_state(&state).await;
     let data = catalog
-        .models()
+        .public_model_ids()
         .iter()
-        .map(|model| openai_model_json(&model.id))
+        .map(|model_id| openai_model_json(model_id))
         .collect::<Vec<_>>();
     (
         StatusCode::OK,
@@ -60,7 +60,7 @@ pub async fn model_detail(
     }
 
     let catalog = model_catalog_for_state(&state).await;
-    if catalog.model_info(&model_id).is_none() {
+    if !catalog.is_recognized_model_name(&model_id) {
         return model_not_found_response();
     }
     (StatusCode::OK, Json(openai_model_json(&model_id)))
@@ -77,7 +77,7 @@ pub async fn model_info(
     }
 
     let catalog = model_catalog_for_state(&state).await;
-    let Some(info) = catalog.model_info(&model_id) else {
+    let Some(info) = catalog.model_info_for_name(&model_id) else {
         return model_not_found_response();
     };
     (StatusCode::OK, Json(json!(info)))

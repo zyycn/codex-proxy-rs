@@ -353,6 +353,55 @@ async fn chat_completions_stream_should_translate_codex_sse_to_openai_chunks() {
 }
 
 #[tokio::test]
+async fn chat_completions_stream_should_emit_openai_error_when_upstream_fails_after_chunks() {
+    let (base_url, first_chunk_sent, finish_upstream) = spawn_chunked_sse_upstream(
+        "event: response.output_text.delta\ndata: {\"delta\":\"partial hello\"}\n\n",
+        "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_failed\",\"status\":\"failed\",\"error\":{\"code\":\"quota_exceeded\",\"message\":\"quota exhausted\"}}}\n\n",
+    )
+    .await;
+
+    let (app, api_key, _pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let response_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "stream": true,
+                        "messages": [
+                            {"role": "user", "content": "Start then fail"}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+
+    first_chunk_sent.await.unwrap();
+    let response = timeout(StdDuration::from_millis(300), response_task)
+        .await
+        .expect("stream response should be returned before terminal upstream failure")
+        .unwrap();
+    finish_upstream.send(()).unwrap();
+
+    let body = response_text(response).await;
+    assert!(body.contains("\"delta\":{\"content\":\"partial hello\"}"));
+    assert!(body.contains("\"error\""));
+    assert!(body.contains("\"type\":\"insufficient_quota\""));
+    assert!(body.contains("\"code\":\"insufficient_quota\""));
+    assert!(body.contains("\"message\":\"quota exhausted\""));
+    assert!(!body.contains("stream_error"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test]
 async fn chat_completions_should_forward_runtime_installation_id_to_codex() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1082,7 +1131,7 @@ async fn chat_completions_should_return_quota_error_when_402_fallback_is_exhaust
         .unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
 
-    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert!(message.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(message.contains("quota reached"));
     assert_eq!(body["error"]["type"], "insufficient_quota");

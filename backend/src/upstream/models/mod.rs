@@ -264,6 +264,16 @@ use std::collections::BTreeSet;
 
 const SERVICE_TIER_SUFFIXES: [&str; 2] = ["fast", "flex"];
 const REASONING_EFFORT_SUFFIXES: [&str; 6] = ["none", "minimal", "low", "medium", "high", "xhigh"];
+const BUILTIN_CODEX_MODELS: [(&str, &str, bool); 8] = [
+    ("gpt-5.5", "GPT-5.5", true),
+    ("gpt-5.4", "GPT-5.4", false),
+    ("gpt-5.4-mini", "GPT-5.4 Mini", false),
+    ("gpt-5.3-codex", "GPT-5.3 Codex", false),
+    ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", false),
+    ("codex-auto-review", "Codex Auto Review", false),
+    ("gpt-5.2", "GPT-5.2", false),
+    ("gpt-image-1", "GPT Image 1", false),
+];
 
 /// 模型目录聚合。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,7 +302,7 @@ impl ModelCatalog {
     pub fn from_config(config: &ModelConfig) -> Self {
         let model_aliases = normalize_aliases(&config.model_aliases);
         Self {
-            models: Vec::new(),
+            models: builtin_codex_models(),
             model_aliases,
             model_plan_index: BTreeMap::new(),
             fetched_plan_types: BTreeSet::new(),
@@ -334,7 +344,7 @@ impl ModelCatalog {
             .collect::<Vec<_>>();
         if models.is_empty() {
             return Self {
-                models,
+                models: builtin_codex_models(),
                 model_aliases,
                 model_plan_index,
                 fetched_plan_types,
@@ -352,6 +362,23 @@ impl ModelCatalog {
     /// 返回对外可见的模型列表副本。
     pub fn models(&self) -> Vec<CodexModelInfo> {
         self.models.clone()
+    }
+
+    /// 返回 OpenAI `/v1/models` 对外暴露的模型 ID。
+    pub fn public_model_ids(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut ids = Vec::new();
+        for model in &self.models {
+            if seen.insert(model.id.clone()) {
+                ids.push(model.id.clone());
+            }
+        }
+        for alias in self.model_aliases.keys() {
+            if seen.insert(alias.clone()) {
+                ids.push(alias.clone());
+            }
+        }
+        ids
     }
 
     /// 返回模型数量。
@@ -383,6 +410,12 @@ impl ModelCatalog {
             .iter()
             .find(|model| model.id == model_id)
             .cloned()
+    }
+
+    /// 按对外模型名查询模型信息，支持别名和已知后缀。
+    pub fn model_info_for_name(&self, input: &str) -> Option<CodexModelInfo> {
+        let parsed = self.parse_model_name(input);
+        self.model_info(&parsed.model_id)
     }
 
     /// 返回 model -> plans allowlist。
@@ -504,6 +537,39 @@ fn normalize_aliases(input: &BTreeMap<String, String>) -> BTreeMap<String, Strin
             let target = target.trim();
             (!alias.is_empty() && !target.is_empty())
                 .then(|| (alias.to_string(), target.to_string()))
+        })
+        .collect()
+}
+
+fn builtin_codex_models() -> Vec<CodexModelInfo> {
+    BUILTIN_CODEX_MODELS
+        .into_iter()
+        .map(|(id, display_name, is_default)| CodexModelInfo {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            description: String::new(),
+            is_default,
+            supported_reasoning_efforts: default_reasoning_efforts(),
+            default_reasoning_effort: "medium".to_string(),
+            input_modalities: vec!["text".to_string()],
+            output_modalities: vec!["text".to_string()],
+            supports_personality: false,
+            upgrade: None,
+            source: "builtin".to_string(),
+            context_window: None,
+            max_context_window: None,
+            max_output_tokens: None,
+            truncation_policy_limit: None,
+        })
+        .collect()
+}
+
+fn default_reasoning_efforts() -> Vec<ReasoningEffortInfo> {
+    ["minimal", "low", "medium", "high"]
+        .into_iter()
+        .map(|reasoning_effort| ReasoningEffortInfo {
+            reasoning_effort: reasoning_effort.to_string(),
+            description: String::new(),
         })
         .collect()
 }

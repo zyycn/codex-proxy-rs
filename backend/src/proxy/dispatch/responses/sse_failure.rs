@@ -218,7 +218,7 @@ pub(super) fn status_code_for_stream_failure(failure: &ResponsesSseFailure) -> i
         return 403;
     }
     if code.contains("payment") || code.contains("quota") {
-        return 402;
+        return 429;
     }
     if code.contains("server_overloaded") {
         return 503;
