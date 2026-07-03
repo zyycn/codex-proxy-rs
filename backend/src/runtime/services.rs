@@ -21,12 +21,12 @@ use crate::{
         },
     },
     config::{
+        schema::AppConfig,
         settings::{account_pool_options_from_config, RuntimeSettingsService},
-        types::AppConfig,
     },
     proxy::dispatch::{
         chat::ChatDispatchService,
-        responses::{ResponseDispatchService, ResponseDispatchServiceParts},
+        responses::service::{ResponseDispatchService, ResponseDispatchServiceParts},
         session_affinity::{RuntimeSessionAffinityService, SqliteSessionAffinityStore},
     },
     upstream::accounts::{
@@ -40,7 +40,11 @@ use crate::{
     },
     upstream::{
         fingerprint::{Fingerprint, FingerprintRepository},
-        models::{ModelService, ModelServiceError, ModelSnapshotStore},
+        models::{
+            config::ModelConfig,
+            service::{ModelService, ModelServiceError},
+            snapshot_store::{ModelSnapshotStore, SqliteModelSnapshotStore},
+        },
         token_client::{default_openai_token_client, OpenAiTokenClient, TokenClientConfig},
         transport::{
             build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
@@ -219,10 +223,10 @@ impl Services {
         );
         let upstream_client: StdArc<dyn CodexModelCatalogClient> = codex.clone();
         let snapshot_store: StdArc<dyn ModelSnapshotStore> = StdArc::new(
-            crate::upstream::models::SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
+            SqliteModelSnapshotStore::new(stores.accounts.pool().clone()),
         );
         let models = StdArc::new(ModelService::new(
-            crate::upstream::models::ModelConfig {
+            ModelConfig {
                 model_aliases: config.model_aliases.clone(),
             },
             Some(snapshot_store),

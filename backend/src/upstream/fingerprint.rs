@@ -53,7 +53,7 @@ pub struct Fingerprint {
 
 impl Fingerprint {
     /// 从配置构造指纹。
-    pub fn from_config(config: &crate::config::types::FingerprintConfig) -> Self {
+    pub fn from_config(config: &crate::config::schema::FingerprintConfig) -> Self {
         Self {
             originator: config.originator.clone(),
             app_version: config.app_version.clone(),

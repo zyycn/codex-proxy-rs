@@ -20,7 +20,7 @@ use codex_proxy_rs::{
             SqliteUsageRecordStore, UsageRecordFilter, DEFAULT_USAGE_RECORD_CAPACITY,
         },
     },
-    config::types::AppConfig,
+    config::schema::AppConfig,
     http::router,
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::{

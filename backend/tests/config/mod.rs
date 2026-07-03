@@ -1,6 +1,6 @@
+use codex_proxy_rs::config::schema::LoggingConfig;
+use codex_proxy_rs::config::schema::{AdminConfig, AdminConfigError, AppConfig};
 use codex_proxy_rs::config::settings::account_pool_options_from_config;
-use codex_proxy_rs::config::types::LoggingConfig;
-use codex_proxy_rs::config::types::{AdminConfig, AdminConfigError, AppConfig};
 use serde::de::DeserializeOwned;
 use std::fs;
 

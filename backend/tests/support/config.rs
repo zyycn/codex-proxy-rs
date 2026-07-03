@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use codex_proxy_rs::config::types::{
+use codex_proxy_rs::config::schema::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
     LoggingConfig, QuotaConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
 };

@@ -149,7 +149,7 @@ async fn test_app_with_aliases(
 
 async fn build_test_app(
     pool: sqlx::SqlitePool,
-    config: codex_proxy_rs::config::types::AppConfig,
+    config: codex_proxy_rs::config::schema::AppConfig,
     plaintext: Option<String>,
     dir: tempfile::TempDir,
 ) -> (Router, Option<String>, tempfile::TempDir) {

@@ -3,8 +3,8 @@ use std::error::Error;
 use axum::Router;
 use chrono::Utc;
 
+use crate::config::schema::AppConfig;
 use crate::config::settings::RuntimeSettingsService;
-use crate::config::types::AppConfig;
 use crate::http::middleware::request_id::TrustedProxyConfig;
 use crate::infra::database::connect_sqlite;
 use crate::infra::logging::{init_tracing, LogGuard, RotationConfig};

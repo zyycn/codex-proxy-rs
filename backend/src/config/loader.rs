@@ -1,6 +1,6 @@
 use std::{env, path::Path};
 
-use super::types::AppConfig;
+use super::schema::AppConfig;
 
 const CONFIG_FILE_ENV: &str = "CPR_CONFIG_FILE";
 

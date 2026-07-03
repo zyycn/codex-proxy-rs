@@ -8,8 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::upstream::{
     accounts::{model::Account, store::StoredAccount},
-    models::CodexModelInfo,
-    models::ModelRefreshPlanAccount,
+    models::{info::CodexModelInfo, service::ModelRefreshPlanAccount},
     protocol::{
         responses::CodexResponsesRequest,
         sse::{encode_sse_event, parse_sse_events, SseEvent},
@@ -17,7 +16,7 @@ use crate::upstream::{
     transport::CodexRequestContext,
 };
 
-use super::{types::AdminAccountError, AdminAccountService};
+use super::{contracts::AdminAccountError, AdminAccountService};
 
 pub(super) type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
 

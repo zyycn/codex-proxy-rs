@@ -1,5 +1,6 @@
 //! 管理端账号业务服务。
 
+mod contracts;
 mod cookies;
 mod exporting;
 mod importing;
@@ -7,7 +8,6 @@ mod lifecycle;
 pub(crate) mod oauth;
 mod quota;
 mod testing;
-mod types;
 
 use std::sync::Arc as StdArc;
 
@@ -20,11 +20,11 @@ use crate::{
         store::SqliteAccountStore,
         token_refresh::{RuntimeRefreshPolicy, TokenRefresher},
     },
-    upstream::models::ModelService,
+    upstream::models::service::ModelService,
     upstream::transport::CodexBackendClient,
 };
 
-pub use types::{
+pub use contracts::{
     AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata, AdminAccountRefreshOutcome,
     AdminAccountRefreshResult, AdminAccountUpdate, BatchDeleteAccounts, ExportedAccounts,
     ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput, UpdatedAccountStatus,

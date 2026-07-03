@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 use crate::{
     infra::time::elapsed_millis_i64,
     upstream::{
-        models::ParsedModelName,
+        models::catalog::ParsedModelName,
         protocol::{
             schema::reconvert_tuple_values,
             sse::{parse_sse_events, SseError, SseEvent},

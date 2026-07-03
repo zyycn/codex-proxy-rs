@@ -1,7 +1,8 @@
 use codex_proxy_rs::infra::database::connect_sqlite;
-use codex_proxy_rs::upstream::models::ModelSnapshotStore as _;
-use codex_proxy_rs::upstream::models::SqliteModelSnapshotStore;
-use codex_proxy_rs::upstream::models::{BackendModelEntry, ModelPlanSnapshot};
+use codex_proxy_rs::upstream::models::backend_entry::BackendModelEntry;
+use codex_proxy_rs::upstream::models::snapshot::ModelPlanSnapshot;
+use codex_proxy_rs::upstream::models::snapshot_store::ModelSnapshotStore as _;
+use codex_proxy_rs::upstream::models::snapshot_store::SqliteModelSnapshotStore;
 
 #[tokio::test]
 async fn runtime_state_should_expose_backend_model_snapshot_through_model_service() {

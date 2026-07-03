@@ -10,7 +10,7 @@ use codex_proxy_rs::{
         usage_record_model::{UsageRecord, UsageRecordLevel},
         usage_record_store::SqliteUsageRecordStore,
     },
-    config::types::AppConfig,
+    config::schema::AppConfig,
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},

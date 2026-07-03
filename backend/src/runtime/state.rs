@@ -1,6 +1,6 @@
 //! 运行时共享状态。
 
-use crate::config::types::AppConfig;
+use crate::config::schema::AppConfig;
 use crate::runtime::services::Services;
 
 /// HTTP handler 共享的运行时状态。
@@ -13,9 +13,9 @@ pub struct AppState {
 /// 运行时配置镜像（从 AppConfig 衍生）。
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
-    pub admin: crate::config::types::AdminConfig,
-    pub auth: crate::config::types::AuthConfig,
-    pub quota: crate::config::types::QuotaConfig,
+    pub admin: crate::config::schema::AdminConfig,
+    pub auth: crate::config::schema::AuthConfig,
+    pub quota: crate::config::schema::QuotaConfig,
 }
 
 impl From<AppConfig> for RuntimeConfig {

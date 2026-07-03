@@ -11,7 +11,7 @@ use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
-use crate::config::types::AppConfig;
+use crate::config::schema::AppConfig;
 use crate::infra::identity::generate_admin_api_key;
 use crate::upstream::accounts::{
     pool::{AccountPoolOptions, RotationStrategy, RuntimeAccountPoolService},

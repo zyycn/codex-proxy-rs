@@ -1,6 +1,6 @@
 use secrecy::ExposeSecret;
 
-use super::{types::AdminAccountError, AdminAccountService};
+use super::{contracts::AdminAccountError, AdminAccountService};
 
 impl AdminAccountService {
     pub async fn account_quota(

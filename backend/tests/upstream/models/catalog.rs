@@ -9,13 +9,17 @@ use std::{
 use async_trait::async_trait;
 
 use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
-use codex_proxy_rs::upstream::models::{
-    BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy, ModelConfig,
-    ModelPlanSnapshot, ModelRefreshPlanAccount, ParsedModelName,
+use codex_proxy_rs::upstream::models::backend_entry::{
+    BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy,
 };
-use codex_proxy_rs::upstream::models::{
-    ModelCatalog, ModelRefreshResult, ModelService, ModelServiceError, ModelSnapshotStore,
-    ModelSnapshotStoreResult,
+use codex_proxy_rs::upstream::models::catalog::{ModelCatalog, ParsedModelName};
+use codex_proxy_rs::upstream::models::config::ModelConfig;
+use codex_proxy_rs::upstream::models::service::{
+    ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
+};
+use codex_proxy_rs::upstream::models::snapshot::ModelPlanSnapshot;
+use codex_proxy_rs::upstream::models::snapshot_store::{
+    ModelSnapshotStore, ModelSnapshotStoreResult,
 };
 use codex_proxy_rs::upstream::transport::{
     CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,

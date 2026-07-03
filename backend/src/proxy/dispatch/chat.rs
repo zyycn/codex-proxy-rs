@@ -42,7 +42,7 @@ use crate::{
         token_refresh::RuntimeTokenRefreshService,
     },
     upstream::{
-        models::ModelCatalog,
+        models::{catalog::ModelCatalog, service::ModelService},
         protocol::responses::{apply_response_model_options, CodexResponsesRequest},
         token_client::OpenAiTokenClient,
         transport::{
@@ -56,7 +56,7 @@ use crate::{
 #[derive(Clone)]
 pub struct ChatDispatchService {
     account_pool: Arc<RuntimeAccountPoolService>,
-    models: Arc<crate::upstream::models::ModelService>,
+    models: Arc<ModelService>,
     codex: Arc<CodexBackendClient>,
     usage_records: Arc<AdminUsageRecordService>,
     token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
@@ -67,7 +67,7 @@ pub struct ChatDispatchService {
 impl ChatDispatchService {
     pub(crate) fn new(
         account_pool: Arc<RuntimeAccountPoolService>,
-        models: Arc<crate::upstream::models::ModelService>,
+        models: Arc<ModelService>,
         codex: Arc<CodexBackendClient>,
         usage_records: Arc<AdminUsageRecordService>,
         token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,

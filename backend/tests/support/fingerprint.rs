@@ -1,4 +1,4 @@
-use codex_proxy_rs::{config::types::FingerprintConfig, upstream::fingerprint::Fingerprint};
+use codex_proxy_rs::{config::schema::FingerprintConfig, upstream::fingerprint::Fingerprint};
 
 pub(crate) fn test_fingerprint() -> Fingerprint {
     Fingerprint::from_config(&FingerprintConfig::default())

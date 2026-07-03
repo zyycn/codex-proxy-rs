@@ -12,7 +12,7 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::usage_record_store::SqliteUsageRecordStore,
-    config::{settings::RuntimeSettingsService, types::AppConfig},
+    config::{schema::AppConfig, settings::RuntimeSettingsService},
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::services::{BackgroundTaskStores, Services},

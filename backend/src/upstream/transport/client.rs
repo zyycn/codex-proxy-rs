@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use uuid::Uuid;
 
 use crate::upstream::fingerprint::Fingerprint;
-use crate::upstream::models::BackendModelEntry;
+use crate::upstream::models::backend_entry::BackendModelEntry;
 use crate::upstream::protocol::events::extract_sse_usage;
 use crate::upstream::protocol::responses::{
     http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,

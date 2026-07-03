@@ -5,7 +5,7 @@ use axum::{
     http::{header, Request, StatusCode},
     Router,
 };
-use codex_proxy_rs::{config::types::AppConfig, infra::database::connect_sqlite};
+use codex_proxy_rs::{config::schema::AppConfig, infra::database::connect_sqlite};
 use serde_json::Value;
 use sqlx::SqlitePool;
 use tower::ServiceExt;

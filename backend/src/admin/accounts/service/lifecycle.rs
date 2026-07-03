@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    types::{
+    contracts::{
         parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountHealthCheck,
         AdminAccountMetadata, AdminAccountRefreshOutcome, AdminAccountRefreshResult,
         AdminAccountUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
