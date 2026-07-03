@@ -20,7 +20,7 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
-    <BaseForm :columns="2">
+    <BaseForm :columns="2" class="max-w-6xl">
       <BaseFormItem label="单账号最大并发" description="限制单个账号同一时间可承载的请求数。">
         <BaseInput v-model="maxConcurrentPerAccount" type="number">
           <template #prefix>

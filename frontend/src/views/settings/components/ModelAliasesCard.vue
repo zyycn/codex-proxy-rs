@@ -31,7 +31,7 @@ const emit = defineEmits<{
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
-    <div class="grid gap-3">
+    <div class="grid max-w-6xl gap-3">
       <div
         class="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-0.75 text-xs leading-none font-bold text-(--cp-text-secondary) sm:grid"
       >

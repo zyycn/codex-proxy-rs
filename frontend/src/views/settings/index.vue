@@ -291,7 +291,7 @@ onMounted(loadSettings)
       </div>
     </header>
 
-    <div class="mt-5 grid max-w-6xl gap-5">
+    <div class="mt-5 grid w-full gap-5">
       <AdminApiKeyCard
         :status="adminApiKeyStatus"
         :loading="adminKeyLoading"

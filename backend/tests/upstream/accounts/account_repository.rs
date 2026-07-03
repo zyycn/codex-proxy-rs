@@ -104,6 +104,43 @@ async fn account_repository_should_list_metadata_without_exposing_tokens() {
 }
 
 #[tokio::test]
+async fn account_repository_should_list_pool_accounts_with_tokens_and_plan() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 39).await;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "insert into accounts (
+            id, email, chatgpt_account_id, chatgpt_user_id, label, plan_type, access_token, refresh_token,
+            access_token_expires_at, status, added_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_1")
+    .bind("user@example.com")
+    .bind("chatgpt-account")
+    .bind(Option::<String>::None)
+    .bind("primary")
+    .bind("plus")
+    .bind("access-token")
+    .bind(Some("refresh-token"))
+    .bind(Option::<String>::None)
+    .bind("active")
+    .bind(&now)
+    .bind(&now)
+    .execute(&pool)
+    .await
+    .expect("insert account");
+
+    let store = SqliteAccountStore::new(pool);
+    let accounts = AccountStore::list_pool_accounts(&store)
+        .await
+        .expect("list accounts");
+
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].id, "acct_1");
+    assert_eq!(accounts[0].access_token, "access-token");
+    assert_eq!(accounts[0].plan_type.as_deref(), Some("plus"));
+}
+
+#[tokio::test]
 async fn account_repository_should_update_status_and_label_without_rewriting_tokens() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 6).await;
     let repo = SqliteAccountStore::new(pool.clone());

@@ -169,6 +169,7 @@ pub(super) fn metadata_from_row(
         user_id: row.get("user_id"),
         label: row.get("label"),
         plan_type: row.get("plan_type"),
+        has_refresh_token: row.get::<i64, _>("has_refresh_token") != 0,
         access_token_expires_at: parse_optional_rfc3339(
             row.get::<Option<String>, _>("access_token_expires_at")
                 .as_deref(),

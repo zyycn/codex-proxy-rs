@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useSlots } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
@@ -51,6 +51,7 @@ const emit = defineEmits<{
   'page-change': [page: number]
   'page-size-change': [pageSize: number]
 }>()
+const slots = useSlots()
 
 const headerRowClass = 'h-10 text-[11px] font-bold text-(--cp-text-muted)'
 const bodyRowClass = 'h-13'
@@ -140,6 +141,10 @@ function rowClass(row: TableRow, index: number) {
 function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
 }
+
+function bodyCellTitle(column: BaseTableColumn, row: TableRow) {
+  return slots[column.key] ? undefined : cellTitle(column, row)
+}
 </script>
 
 <template>
@@ -193,6 +198,7 @@ function isLastColumn(index: number) {
           class="min-h-0 flex-1"
           horizontal
           :max-height="maxHeight"
+          track-inset="none"
           @scroll="handleTableScroll"
         >
           <table
@@ -224,7 +230,7 @@ function isLastColumn(index: number) {
                     ]"
                     role="cell"
                   >
-                    <div :class="cellContentClass(column)" :title="cellTitle(column, row)">
+                    <div :class="cellContentClass(column)" :title="bodyCellTitle(column, row)">
                       <slot
                         :name="column.key"
                         :row="row"

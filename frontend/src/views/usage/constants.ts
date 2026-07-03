@@ -89,7 +89,6 @@ export const usageRecordColumns = [
     key: 'actions',
     label: '操作',
     width: '92px',
-    align: 'center' as const,
     ellipsis: false,
     fixed: 'right' as const,
     headerClass: '!px-4',

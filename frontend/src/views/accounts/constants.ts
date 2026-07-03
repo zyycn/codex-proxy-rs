@@ -38,7 +38,6 @@ export const accountColumns = [
     key: 'actions',
     label: '操作',
     width: '116px',
-    align: 'right' as const,
     headerClass: '!pr-3',
     cellClass: `!px-2 ${relaxedCellClass}`,
   },

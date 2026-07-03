@@ -209,7 +209,7 @@ watch(timeRange, () => {
           </template>
 
           <template #actions="{ row }">
-            <div class="flex items-center justify-center">
+            <div class="flex items-center justify-start">
               <BaseButton
                 icon-only
                 variant="ghost"

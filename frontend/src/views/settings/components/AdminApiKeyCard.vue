@@ -58,7 +58,7 @@ const emit = defineEmits<{
       </div>
     </template>
 
-    <div class="grid gap-4">
+    <div class="grid max-w-6xl gap-4">
       <div
         class="flex min-h-16 items-center justify-between gap-4 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3"
       >

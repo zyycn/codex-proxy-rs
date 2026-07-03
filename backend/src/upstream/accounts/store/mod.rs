@@ -163,6 +163,8 @@ pub struct StoredAccountMetadata {
     pub label: Option<String>,
     /// 计划类型。
     pub plan_type: Option<String>,
+    /// 是否保存了 refresh token。
+    pub has_refresh_token: bool,
     /// access token 过期时间。
     pub access_token_expires_at: Option<DateTime<Utc>>,
     /// 账号状态。
