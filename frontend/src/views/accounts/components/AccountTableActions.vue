@@ -23,7 +23,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="relative flex items-center justify-end gap-1">
+  <div class="relative flex items-center justify-start gap-1">
     <BaseButton
       icon-only
       variant="ghost"
@@ -54,6 +54,7 @@ const emit = defineEmits<{
           测试连接
         </button>
         <button
+          v-if="account.hasRefreshToken"
           type="button"
           class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="refreshing"

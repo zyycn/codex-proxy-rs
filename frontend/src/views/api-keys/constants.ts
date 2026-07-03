@@ -21,7 +21,6 @@ export const apiKeyColumns = [
     key: 'actions',
     label: '操作',
     width: '108px',
-    align: 'center' as const,
     headerClass: relaxedActionCellClass,
     cellClass: relaxedActionCellClass,
   },

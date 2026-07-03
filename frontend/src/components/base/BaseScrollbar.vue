@@ -10,6 +10,7 @@ const props = withDefaults(
     height?: string
     horizontal?: boolean
     vertical?: boolean
+    trackInset?: 'default' | 'none'
   }>(),
   {
     viewClass: '',
@@ -17,6 +18,7 @@ const props = withDefaults(
     height: undefined,
     horizontal: false,
     vertical: true,
+    trackInset: 'default',
   },
 )
 
@@ -73,6 +75,12 @@ const verticalTrackClass = computed(() =>
 )
 const horizontalTrackClass = computed(() =>
   props.vertical && canScrollY.value ? 'right-3' : 'right-1',
+)
+const verticalTrackInsetClass = computed(() =>
+  props.trackInset === 'none' ? 'right-0' : 'right-1',
+)
+const horizontalTrackInsetClass = computed(() =>
+  props.trackInset === 'none' ? 'bottom-0 left-0' : 'bottom-1 left-1',
 )
 
 function trackHeight(wrap: HTMLElement) {
@@ -389,8 +397,12 @@ defineExpose({
 
     <div
       v-show="canScrollY"
-      class="absolute top-1 right-1 z-40 w-1.5 rounded-full transition-opacity duration-200"
-      :class="[verticalTrackClass, verticalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
+      class="absolute top-1 z-40 w-1.5 rounded-full transition-opacity duration-200"
+      :class="[
+        verticalTrackInsetClass,
+        verticalTrackClass,
+        verticalScrollbarVisible ? 'opacity-100' : 'opacity-0',
+      ]"
       @mouseenter="handleTrackMouseEnter('vertical')"
       @mouseleave="handleTrackMouseLeave('vertical')"
       @pointerdown="handleTrackPointerDown"
@@ -405,8 +417,12 @@ defineExpose({
 
     <div
       v-show="canScrollX"
-      class="absolute bottom-1 left-1 z-40 h-1.5 rounded-full transition-opacity duration-200"
-      :class="[horizontalTrackClass, horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
+      class="absolute z-40 h-1.5 rounded-full transition-opacity duration-200"
+      :class="[
+        horizontalTrackInsetClass,
+        horizontalTrackClass,
+        horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0',
+      ]"
       @mouseenter="handleTrackMouseEnter('horizontal')"
       @mouseleave="handleTrackMouseLeave('horizontal')"
       @pointerdown="handleHorizontalTrackPointerDown"

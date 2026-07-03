@@ -7,6 +7,12 @@ const props = defineProps<{
 }>()
 
 const quotaWindows = computed(() => props.account.quota.windows as any[])
+const visibleQuotaWindows = computed(() => quotaWindows.value.slice(0, 2))
+const summaryClass = computed(() =>
+  visibleQuotaWindows.value.length === 1
+    ? 'flex h-13 w-full max-w-31 min-w-0 flex-col justify-center whitespace-normal py-0.5'
+    : 'grid h-13 w-full max-w-31 min-w-0 grid-rows-2 gap-1.5 whitespace-normal py-0.5',
+)
 
 function quotaWindowPercent(window?: any) {
   return clamp(window?.usedPercent ?? 0, 0, 100)
@@ -35,18 +41,9 @@ function quotaWindowBarClass(window?: any) {
 </script>
 
 <template>
-  <div
-    v-if="quotaWindows.length > 0"
-    class="flex w-full max-w-31 min-w-0 flex-col gap-2 whitespace-normal py-1.5"
-  >
-    <div
-      v-for="window in quotaWindows"
-      :key="window.key"
-      class="min-w-0 pb-2 last:border-b-0 last:pb-0"
-    >
-      <div
-        class="mb-1.5 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]"
-      >
+  <div v-if="quotaWindows.length > 0" :class="summaryClass">
+    <div v-for="window in visibleQuotaWindows" :key="window.key" class="min-w-0">
+      <div class="mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]">
         <span class="truncate text-(--cp-text-secondary)">
           {{ window.labelDisplay }}
         </span>
@@ -63,5 +60,5 @@ function quotaWindowBarClass(window?: any) {
       </div>
     </div>
   </div>
-  <span v-else class="text-(--cp-text-muted)">-</span>
+  <span v-else class="inline-flex h-12 items-center text-(--cp-text-muted)">-</span>
 </template>

@@ -3,6 +3,7 @@ import { RefreshCw } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import AccountPlanBadge from './AccountPlanBadge.vue'
 
 const props = defineProps<{
   account: any
@@ -48,9 +49,15 @@ function quotaWindowBarClass(window?: any) {
     <div class="mb-3 flex items-center justify-between gap-3">
       <div>
         <h3 class="m-0 text-[14px] font-[760] text-(--cp-text-primary)">账号额度</h3>
-        <p class="m-0 mt-1 text-[12px] font-[620] text-(--cp-text-secondary)">
-          Codex 额度 · 套餐: {{ account.planType || 'Free' }} · 最近刷新:
-          {{ account.quota.refreshedAtDisplay }}
+        <p
+          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-[620] text-(--cp-text-secondary)"
+        >
+          <span>Codex 额度</span>
+          <span>·</span>
+          <span>套餐:</span>
+          <AccountPlanBadge :plan-type="account.planType" size="sm" />
+          <span>·</span>
+          <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
         </p>
       </div>
       <BaseButton

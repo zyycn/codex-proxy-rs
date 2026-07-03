@@ -11,6 +11,10 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         .bind("acct_plain").bind("user@example.com").bind("plain-access-token")
         .bind("active").bind("2026-06-18T00:00:00Z").bind("2026-06-18T00:00:00Z")
         .execute(&pool).await.unwrap();
+    sqlx::query("insert into accounts (id, email, access_token, refresh_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)")
+        .bind("acct_refresh").bind("refresh@example.com").bind("refresh-access-token").bind("refresh-secret-token")
+        .bind("active").bind("2026-06-19T00:00:00Z").bind("2026-06-19T00:00:00Z")
+        .execute(&pool).await.unwrap();
     let config = test_config(url);
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
@@ -45,12 +49,25 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["items"][0]["id"], "acct_plain");
-    assert_eq!(body["data"]["items"][0]["email"], "user@example.com");
-    assert_eq!(
-        body["data"]["items"][0]["addedAt"],
-        "2026-06-18T08:00:00+08:00"
-    );
+    let items = body["data"]["items"].as_array().unwrap();
+    let plain = items
+        .iter()
+        .find(|item| item["id"] == "acct_plain")
+        .unwrap();
+    let refresh = items
+        .iter()
+        .find(|item| item["id"] == "acct_refresh")
+        .unwrap();
+    assert_eq!(plain["email"], "user@example.com");
+    assert_eq!(plain["hasRefreshToken"], false);
+    assert_eq!(plain["addedAt"], "2026-06-18T08:00:00+08:00");
+    assert_eq!(refresh["email"], "refresh@example.com");
+    assert_eq!(refresh["hasRefreshToken"], true);
+
+    let response_body = body.to_string();
+    assert!(!response_body.contains("plain-access-token"));
+    assert!(!response_body.contains("refresh-access-token"));
+    assert!(!response_body.contains("refresh-secret-token"));
 }
 
 #[tokio::test]

@@ -24,7 +24,7 @@ const model = defineModel<RotationStrategy>({ required: true })
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
-    <div class="grid gap-3 lg:grid-cols-3">
+    <div class="grid max-w-6xl gap-3 lg:grid-cols-3">
       <button
         v-for="option in options"
         :key="option.value"

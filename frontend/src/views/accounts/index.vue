@@ -17,6 +17,7 @@ import AccountConnectionTestModal from './components/AccountConnectionTestModal.
 import AccountCreateModal from './components/AccountCreateModal.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
+import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel.vue'
 import AccountStatusBadge from './components/AccountStatusBadge.vue'
@@ -106,24 +107,6 @@ const {
 } = useAccountsTable(accounts, selectedIds)
 
 bindAccountLoader(loadAccounts)
-
-function planTypeLabel(planType?: string) {
-  return planType?.trim() || 'Free'
-}
-
-function planTypeClass(planType?: string) {
-  const normalized = planTypeLabel(planType).toLowerCase()
-  if (normalized.includes('enterprise') || normalized.includes('team')) {
-    return 'bg-(--cp-bg-dark) text-(--cp-white)'
-  }
-  if (normalized.includes('pro')) {
-    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
-  }
-  if (normalized.includes('plus') || normalized.includes('basic')) {
-    return 'bg-(--cp-normal-bg) text-(--cp-normal-text)'
-  }
-  return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
-}
 
 function quotaTokenDisplay(account: any) {
   const display = account?.usage?.totalTokensDisplay
@@ -247,12 +230,7 @@ function quotaTokenDisplay(account: any) {
           </template>
 
           <template #planType="{ row }">
-            <span
-              class="inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-[760] capitalize"
-              :class="planTypeClass(row.planType)"
-            >
-              {{ planTypeLabel(row.planType) }}
-            </span>
+            <AccountPlanBadge :plan-type="row.planType" />
           </template>
 
           <template #usage="{ row }">

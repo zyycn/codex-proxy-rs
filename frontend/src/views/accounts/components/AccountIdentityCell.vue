@@ -2,6 +2,8 @@
 import { sumBy } from 'es-toolkit'
 import { computed } from 'vue'
 
+import AccountPlanBadge from './AccountPlanBadge.vue'
+
 const props = withDefaults(
   defineProps<{
     account: any
@@ -35,8 +37,6 @@ const secondaryText = computed(() => {
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 
-const planTypeLabel = computed(() => props.account.planType?.trim() || 'Free')
-
 const avatarSizeClass = computed(() =>
   props.size === 'lg' ? 'size-10 text-[15px]' : 'size-9 text-[13px]',
 )
@@ -58,20 +58,6 @@ const avatarClass = computed(() => {
   const hash = sumBy([...key], (char) => char.charCodeAt(0))
   return palettes[hash % palettes.length]
 })
-
-const planClass = computed(() => {
-  const normalized = planTypeLabel.value.toLowerCase()
-  if (normalized.includes('enterprise') || normalized.includes('team')) {
-    return 'bg-(--cp-bg-dark) text-(--cp-white)'
-  }
-  if (normalized.includes('pro')) {
-    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
-  }
-  if (normalized.includes('plus') || normalized.includes('basic')) {
-    return 'bg-(--cp-normal-bg) text-(--cp-normal-text)'
-  }
-  return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
-})
 </script>
 
 <template>
@@ -87,13 +73,7 @@ const planClass = computed(() => {
         <span class="truncate text-[14px] font-[760] text-(--cp-text-primary)">
           {{ displayTitle }}
         </span>
-        <span
-          v-if="showPlan"
-          class="inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[11px] font-[760]"
-          :class="planClass"
-        >
-          {{ planTypeLabel }}
-        </span>
+        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
       </div>
       <div class="truncate font-[650]" :class="secondaryClass">
         {{ secondaryText }}
