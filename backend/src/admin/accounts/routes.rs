@@ -2,10 +2,10 @@
 
 use axum::{
     body::Body,
-    extract::{Extension, Query, State},
+    extract::{Query, State},
     http::{
         header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
-        HeaderMap, StatusCode,
+        StatusCode,
     },
     response::{IntoResponse, Response},
     Json,
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::{
@@ -31,13 +31,8 @@ use crate::{
             AdminAccountRefreshOutcome, AdminAccountRefreshResult, AdminAccountUpdate,
             OAuthExchangeInput,
         },
-        monitoring::{
-            account_usage_service::AdminUsageRecord,
-            billing,
-            usage_record_model::{UsageRecord, UsageRecordLevel},
-        },
+        monitoring::{account_usage_service::AdminUsageRecord, billing},
     },
-    http::middleware::request_id::RequestId,
     infra::{
         format::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
@@ -552,55 +547,23 @@ pub(crate) async fn create_account(
 /// `GET /api/admin/accounts/export`
 pub(crate) async fn export_accounts(
     State(state): State<AppState>,
-    request_id: Option<Extension<RequestId>>,
     _auth: AdminAuth,
-    headers: HeaderMap,
     Query(query): Query<AccountExportQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let request_id = request_id.map(|Extension(request_id)| request_id.as_str().to_string());
-    let source = account_action_source(&headers);
     let ids = account_export_ids(query.ids.as_deref());
 
     if query.confirm.as_deref() != Some(ACCOUNT_EXPORT_CONFIRMATION) {
-        record_account_export_audit(
-            &state,
-            request_id.as_deref(),
-            &source,
-            &ids,
-            AccountExportAuditOutcome::MissingConfirmation,
-        )
-        .await;
         return Err(AdminError::bad_request(
             "account export requires confirm=export_sensitive_accounts",
         ));
     }
 
-    match state.services.admin_accounts.export(ids.clone()).await {
-        Ok(result) => {
-            record_account_export_audit(
-                &state,
-                request_id.as_deref(),
-                &source,
-                &ids,
-                AccountExportAuditOutcome::Success,
-            )
-            .await;
-            Ok(AdminResponse::new(
-                StatusCode::OK,
-                AdminEnvelope::ok(result),
-            ))
-        }
-        Err(error) => {
-            record_account_export_audit(
-                &state,
-                request_id.as_deref(),
-                &source,
-                &ids,
-                AccountExportAuditOutcome::from_error(&error),
-            )
-            .await;
-            Err(account_error(&error))
-        }
+    match state.services.admin_accounts.export(ids).await {
+        Ok(result) => Ok(AdminResponse::new(
+            StatusCode::OK,
+            AdminEnvelope::ok(result),
+        )),
+        Err(error) => Err(account_error(&error)),
     }
 }
 
@@ -1226,96 +1189,6 @@ fn account_refresh_outcome_str(outcome: AdminAccountRefreshOutcome) -> &'static 
 
 fn account_not_found() -> AdminError {
     AdminError::not_found("Account not found")
-}
-
-enum AccountExportAuditOutcome {
-    Success,
-    MissingConfirmation,
-    EmptyIds,
-    NotFound,
-    Failed,
-}
-
-impl AccountExportAuditOutcome {
-    fn from_error(error: &AdminAccountError) -> Self {
-        match error {
-            AdminAccountError::EmptyIds => Self::EmptyIds,
-            AdminAccountError::NotFound => Self::NotFound,
-            _ => Self::Failed,
-        }
-    }
-
-    fn level(&self) -> UsageRecordLevel {
-        match self {
-            Self::Success => UsageRecordLevel::Warn,
-            Self::MissingConfirmation | Self::EmptyIds | Self::NotFound => UsageRecordLevel::Warn,
-            Self::Failed => UsageRecordLevel::Error,
-        }
-    }
-
-    fn message(&self) -> &'static str {
-        match self {
-            Self::Success => "Admin account export succeeded",
-            Self::MissingConfirmation => "Admin account export missing confirmation",
-            Self::EmptyIds => "Admin account export missing account ids",
-            Self::NotFound => "Admin account export account not found",
-            Self::Failed => "Admin account export failed",
-        }
-    }
-
-    fn status_code(&self) -> i64 {
-        match self {
-            Self::Success => i64::from(StatusCode::OK.as_u16()),
-            Self::MissingConfirmation | Self::EmptyIds => {
-                i64::from(StatusCode::BAD_REQUEST.as_u16())
-            }
-            Self::NotFound => i64::from(StatusCode::NOT_FOUND.as_u16()),
-            Self::Failed => i64::from(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
-        }
-    }
-
-    fn failure_class(&self) -> Option<&'static str> {
-        match self {
-            Self::Success => None,
-            Self::MissingConfirmation => Some("missing_confirmation"),
-            Self::EmptyIds => Some("empty_ids"),
-            Self::NotFound => Some("account_not_found"),
-            Self::Failed => Some("export_failed"),
-        }
-    }
-}
-
-async fn record_account_export_audit(
-    state: &AppState,
-    request_id: Option<&str>,
-    source: &str,
-    ids: &[String],
-    outcome: AccountExportAuditOutcome,
-) {
-    let mut record = UsageRecord::new("admin_account_export", outcome.level(), outcome.message());
-    record.request_id = request_id.map(ToString::to_string);
-    record.route = Some("/api/admin/accounts/export".to_string());
-    record.status_code = Some(outcome.status_code());
-    record.failure_class = outcome.failure_class().map(ToString::to_string);
-    record.metadata = json!({
-        "source": source,
-        "accountIds": ids,
-        "accountCount": ids.len(),
-    });
-
-    if let Err(error) = state.services.usage_records.record_audit(record).await {
-        tracing::warn!(%error, "failed to record account export audit event");
-    }
-}
-
-fn account_action_source(headers: &HeaderMap) -> String {
-    headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown")
-        .to_string()
 }
 
 fn account_export_ids(value: Option<&str>) -> Vec<String> {

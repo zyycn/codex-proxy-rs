@@ -1,7 +1,7 @@
 //! 账号导入逻辑。
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::upstream::accounts::model::AccountStatus;
 use crate::upstream::accounts::token_refresh::{jwt_expiry, JwtExpiry};
@@ -44,6 +44,8 @@ pub enum AccountImportSource {
     Cpr,
     /// Sub2API 格式。
     Sub2Api,
+    /// CLIProxyAPI auth 文件格式。
+    CliProxyApi,
 }
 
 impl AccountImportSource {
@@ -52,6 +54,7 @@ impl AccountImportSource {
         match self {
             Self::Cpr => "cpr",
             Self::Sub2Api => "sub2api",
+            Self::CliProxyApi => "cliproxyapi",
         }
     }
 }
@@ -70,6 +73,7 @@ const ACCOUNT_IMPORT_ACCOUNT_KEYS: &[&str] = &[
     "planType",
     "plan_type",
     "token",
+    "at",
     "accessToken",
     "access_token",
     "refreshToken",
@@ -81,34 +85,6 @@ const ACCOUNT_IMPORT_ACCOUNT_KEYS: &[&str] = &[
     "added_at",
     "updatedAt",
     "updated_at",
-];
-const SUB2API_ACCOUNT_IMPORT_KEYS: &[&str] = &[
-    "id",
-    "email",
-    "accountId",
-    "account_id",
-    "userId",
-    "user_id",
-    "label",
-    "planType",
-    "plan_type",
-    "token",
-    "accessToken",
-    "access_token",
-    "refreshToken",
-    "refresh_token",
-    "status",
-    "addedAt",
-    "added_at",
-    "cachedQuota",
-    "cached_quota",
-    "quotaFetchedAt",
-    "quota_fetched_at",
-    "quotaVerifyRequired",
-    "quota_verify_required",
-    "proxyApiKey",
-    "proxy_api_key",
-    "usage",
 ];
 
 /// 解析后的账号导入载荷。
@@ -122,74 +98,132 @@ pub struct ParsedAccountImport {
 
 /// 解析账号导入载荷。
 pub fn parse_account_import_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
-    let payload = payload
+    let payload = admin_envelope_data(payload)?.unwrap_or(payload);
+    match explicit_account_import_source(payload)? {
+        Some(AccountImportSource::Cpr) => parse_cpr_payload(payload),
+        Some(AccountImportSource::Sub2Api) => parse_sub2api_payload(payload),
+        Some(AccountImportSource::CliProxyApi) => parse_cli_proxy_api_payload(payload),
+        None if account_import_payload_looks_sub2api(payload) => parse_sub2api_payload(payload),
+        None if account_import_payload_looks_cli_proxy_api(payload) => {
+            parse_cli_proxy_api_payload(payload)
+        }
+        None => parse_cpr_payload(payload),
+    }
+}
+
+fn admin_envelope_data(payload: &Value) -> Result<Option<&Value>, &'static str> {
+    let Some(data) = payload
         .get("data")
         .filter(|data| data.get("accounts").is_some())
-        .map(|data| -> Result<&Value, &'static str> {
-            ensure_account_import_keys(payload, ACCOUNT_IMPORT_ENVELOPE_KEYS)?;
-            Ok(data)
-        })
-        .transpose()?
-        .unwrap_or(payload);
+    else {
+        return Ok(None);
+    };
+    ensure_account_import_keys(payload, ACCOUNT_IMPORT_ENVELOPE_KEYS)?;
+    Ok(Some(data))
+}
 
-    if let Some(accounts) = payload.get("accounts") {
-        ensure_account_import_keys(payload, ACCOUNT_IMPORT_CONTAINER_KEYS)?;
-        let accounts = accounts.as_array().ok_or("no importable accounts")?;
-        let source = account_import_source(payload, accounts)?;
-        return Ok(ParsedAccountImport {
-            source,
-            entries: parse_account_import_entries(accounts, source)?,
-        });
+fn explicit_account_import_source(
+    value: &Value,
+) -> Result<Option<AccountImportSource>, &'static str> {
+    let Some(source_format) = first_string(value, &["sourceFormat", "source_format"]) else {
+        return Ok(None);
+    };
+    match source_format.trim().to_ascii_lowercase().as_str() {
+        "cpr" => Ok(Some(AccountImportSource::Cpr)),
+        "sub2api" => Ok(Some(AccountImportSource::Sub2Api)),
+        "cliproxyapi" | "cli_proxy_api" | "cli-proxy-api" | "cpa" => {
+            Ok(Some(AccountImportSource::CliProxyApi))
+        }
+        _ => Err("no importable accounts"),
     }
-    if let Some(accounts) = payload.as_array() {
-        let source = account_import_source(payload, accounts)?;
-        return Ok(ParsedAccountImport {
-            source,
-            entries: parse_account_import_entries(accounts, source)?,
-        });
-    }
+}
 
-    let source = account_import_source(payload, std::slice::from_ref(payload))?;
+fn parse_cpr_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
     Ok(ParsedAccountImport {
-        source,
-        entries: account_import_entry_from_value(payload, source)?
-            .into_iter()
-            .collect(),
+        source: AccountImportSource::Cpr,
+        entries: parse_cpr_entries(payload)?,
     })
 }
 
-fn parse_account_import_entries(
+fn parse_cpr_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
+    if let Some(accounts) = payload.get("accounts") {
+        ensure_account_import_keys(payload, ACCOUNT_IMPORT_CONTAINER_KEYS)?;
+        let accounts = accounts.as_array().ok_or("no importable accounts")?;
+        return parse_entries(accounts, cpr_account_import_entry_from_value);
+    }
+    if let Some(accounts) = payload.as_array() {
+        return parse_entries(accounts, cpr_account_import_entry_from_value);
+    }
+    cpr_account_import_entry_from_value(payload).map(option_to_vec)
+}
+
+fn parse_sub2api_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
+    Ok(ParsedAccountImport {
+        source: AccountImportSource::Sub2Api,
+        entries: parse_sub2api_entries(payload)?,
+    })
+}
+
+fn parse_sub2api_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
+    if let Some(accounts) = payload.get("accounts") {
+        let accounts = accounts.as_array().ok_or("no importable accounts")?;
+        return parse_entries(accounts, sub2api_account_import_entry_from_value);
+    }
+    if let Some(accounts) = payload.as_array() {
+        return parse_entries(accounts, sub2api_account_import_entry_from_value);
+    }
+    sub2api_account_import_entry_from_value(payload).map(option_to_vec)
+}
+
+fn parse_cli_proxy_api_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
+    Ok(ParsedAccountImport {
+        source: AccountImportSource::CliProxyApi,
+        entries: parse_cli_proxy_api_entries(payload)?,
+    })
+}
+
+fn parse_cli_proxy_api_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
+    if let Some(accounts) = payload.get("accounts") {
+        let accounts = accounts.as_array().ok_or("no importable accounts")?;
+        return parse_entries(accounts, cli_proxy_api_account_import_entry_from_value);
+    }
+    if let Some(accounts) = payload.as_array() {
+        return parse_entries(accounts, cli_proxy_api_account_import_entry_from_value);
+    }
+    cli_proxy_api_account_import_entry_from_value(payload).map(option_to_vec)
+}
+
+fn parse_entries(
     accounts: &[Value],
-    source: AccountImportSource,
+    parser: fn(&Value) -> Result<Option<AccountImportEntry>, &'static str>,
 ) -> Result<Vec<AccountImportEntry>, &'static str> {
     let mut entries = Vec::new();
     for account in accounts {
-        if let Some(entry) = account_import_entry_from_value(account, source)? {
+        if let Some(entry) = parser(account)? {
             entries.push(entry);
         }
     }
     Ok(entries)
 }
 
-fn account_import_entry_from_value(
+fn option_to_vec<T>(value: Option<T>) -> Vec<T> {
+    value.into_iter().collect()
+}
+
+fn cpr_account_import_entry_from_value(
     value: &Value,
-    source: AccountImportSource,
 ) -> Result<Option<AccountImportEntry>, &'static str> {
     let Some(account) = value.as_object() else {
         return Ok(None);
     };
-    let allowed_keys = match source {
-        AccountImportSource::Cpr => ACCOUNT_IMPORT_ACCOUNT_KEYS,
-        AccountImportSource::Sub2Api => SUB2API_ACCOUNT_IMPORT_KEYS,
-    };
     if account
         .keys()
-        .any(|key| !allowed_keys.contains(&key.as_str()))
+        .any(|key| !ACCOUNT_IMPORT_ACCOUNT_KEYS.contains(&key.as_str()))
     {
         return Err("no importable accounts");
     }
 
-    let token = first_string(value, &["token", "accessToken", "access_token"]);
+    let token = first_string(value, &["token", "at", "accessToken", "access_token"]);
     let refresh_token = first_string(value, &["refreshToken", "refresh_token"]);
     if token.is_none() && refresh_token.is_none() {
         return Ok(None);
@@ -209,15 +243,247 @@ fn account_import_entry_from_value(
             &["accessTokenExpiresAt", "access_token_expires_at"],
         ),
         status: first_string(value, &["status"]),
-        cached_quota: (source == AccountImportSource::Sub2Api)
-            .then(|| first_value(value, &["cachedQuota", "cached_quota"]))
-            .flatten(),
-        quota_fetched_at: (source == AccountImportSource::Sub2Api)
-            .then(|| first_string(value, &["quotaFetchedAt", "quota_fetched_at"]))
-            .flatten(),
-        quota_verify_required: (source == AccountImportSource::Sub2Api)
-            .then(|| first_bool(value, &["quotaVerifyRequired", "quota_verify_required"]))
-            .flatten(),
+        cached_quota: None,
+        quota_fetched_at: None,
+        quota_verify_required: None,
+    }))
+}
+
+fn sub2api_account_import_entry_from_value(
+    value: &Value,
+) -> Result<Option<AccountImportEntry>, &'static str> {
+    if sub2api_account_backup_entry(value) {
+        return Ok(sub2api_backup_account_entry(value));
+    }
+    Ok(sub2api_codex_session_or_flat_entry(value))
+}
+
+fn sub2api_backup_account_entry(value: &Value) -> Option<AccountImportEntry> {
+    let account = value.as_object()?;
+    if !optional_string_field_matches(account, "platform", "openai")
+        || !optional_string_field_matches(account, "type", "oauth")
+    {
+        return None;
+    }
+    let credentials = value.get("credentials")?;
+    let token = first_path_string(
+        credentials,
+        [
+            &["access_token"],
+            &["accessToken"],
+            &["at"],
+            &["token", "access_token"],
+            &["token", "accessToken"],
+            &["token", "at"],
+        ],
+    );
+    let refresh_token = first_path_string(
+        credentials,
+        [
+            &["refresh_token"],
+            &["refreshToken"],
+            &["rt"],
+            &["token", "refresh_token"],
+            &["token", "refreshToken"],
+            &["token", "rt"],
+        ],
+    );
+    if token.is_none() && refresh_token.is_none() {
+        return None;
+    }
+
+    Some(AccountImportEntry {
+        id: first_string(value, &["id"]),
+        email: first_path_string(credentials, [&["email"], &["user", "email"]]),
+        account_id: first_path_string(
+            credentials,
+            [
+                &["chatgpt_account_id"],
+                &["chatgptAccountId"],
+                &["account_id"],
+                &["accountId"],
+                &["account", "id"],
+                &["account", "account_id"],
+                &["account", "chatgpt_account_id"],
+            ],
+        ),
+        user_id: first_path_string(
+            credentials,
+            [
+                &["chatgpt_user_id"],
+                &["chatgptUserId"],
+                &["user_id"],
+                &["userId"],
+                &["user", "id"],
+            ],
+        ),
+        label: first_string(value, &["label", "name"]),
+        plan_type: first_path_string(credentials, [&["plan_type"], &["planType"]]),
+        token,
+        refresh_token,
+        access_token_expires_at: first_datetime_string(
+            credentials,
+            [&["expires_at"], &["expiresAt"], &["expired"], &["expire"]],
+        ),
+        status: first_string(value, &["status"]),
+        cached_quota: first_value(value, &["cachedQuota", "cached_quota"]),
+        quota_fetched_at: first_string(value, &["quotaFetchedAt", "quota_fetched_at"]),
+        quota_verify_required: first_bool(value, &["quotaVerifyRequired", "quota_verify_required"]),
+    })
+}
+
+fn sub2api_codex_session_or_flat_entry(value: &Value) -> Option<AccountImportEntry> {
+    let _account = value.as_object()?;
+    let token = first_path_string(
+        value,
+        [
+            &["tokens", "access_token"],
+            &["tokens", "accessToken"],
+            &["tokens", "at"],
+            &["access_token"],
+            &["accessToken"],
+            &["token"],
+            &["at"],
+        ],
+    );
+    let refresh_token = first_path_string(
+        value,
+        [
+            &["tokens", "refresh_token"],
+            &["tokens", "refreshToken"],
+            &["tokens", "rt"],
+            &["refresh_token"],
+            &["refreshToken"],
+            &["rt"],
+        ],
+    );
+    if token.is_none() && refresh_token.is_none() {
+        return None;
+    }
+
+    Some(AccountImportEntry {
+        id: first_string(value, &["id"]),
+        email: first_path_string(value, [&["email"], &["user", "email"]]),
+        account_id: first_path_string(
+            value,
+            [
+                &["chatgpt_account_id"],
+                &["chatgptAccountId"],
+                &["account_id"],
+                &["accountId"],
+                &["account", "id"],
+                &["account", "account_id"],
+                &["account", "chatgpt_account_id"],
+            ],
+        ),
+        user_id: first_path_string(
+            value,
+            [
+                &["chatgpt_user_id"],
+                &["chatgptUserId"],
+                &["user_id"],
+                &["userId"],
+                &["user", "id"],
+            ],
+        ),
+        label: first_path_string(value, [&["label"], &["name"], &["user", "name"]]),
+        plan_type: first_path_string(
+            value,
+            [
+                &["plan_type"],
+                &["planType"],
+                &["account", "plan_type"],
+                &["account", "planType"],
+            ],
+        ),
+        token,
+        refresh_token,
+        access_token_expires_at: first_datetime_string(
+            value,
+            [
+                &["tokens", "expires_at"],
+                &["tokens", "expiresAt"],
+                &["expires_at"],
+                &["expiresAt"],
+            ],
+        ),
+        status: first_string(value, &["status"]),
+        cached_quota: first_value(value, &["cachedQuota", "cached_quota"]),
+        quota_fetched_at: first_string(value, &["quotaFetchedAt", "quota_fetched_at"]),
+        quota_verify_required: first_bool(value, &["quotaVerifyRequired", "quota_verify_required"]),
+    })
+}
+
+fn cli_proxy_api_account_import_entry_from_value(
+    value: &Value,
+) -> Result<Option<AccountImportEntry>, &'static str> {
+    let Some(account) = value.as_object() else {
+        return Ok(None);
+    };
+    if !cli_proxy_api_provider_is_codex(account) {
+        return Ok(None);
+    }
+
+    let token = first_path_string(
+        value,
+        [
+            &["access_token"],
+            &["accessToken"],
+            &["at"],
+            &["token", "access_token"],
+            &["token", "accessToken"],
+            &["token", "at"],
+            &["token"],
+        ],
+    );
+    let refresh_token = first_path_string(
+        value,
+        [
+            &["refresh_token"],
+            &["refreshToken"],
+            &["rt"],
+            &["token", "refresh_token"],
+            &["token", "refreshToken"],
+            &["token", "rt"],
+        ],
+    );
+    if token.is_none() && refresh_token.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(AccountImportEntry {
+        id: None,
+        email: first_string(value, &["email"]),
+        account_id: first_string(
+            value,
+            &["chatgpt_account_id", "chatgptAccountId", "account_id"],
+        ),
+        user_id: first_string(
+            value,
+            &["chatgpt_user_id", "chatgptUserId", "user_id", "userId"],
+        ),
+        label: first_string(value, &["label", "name"]),
+        plan_type: first_path_string(
+            value,
+            [&["plan_type"], &["planType"], &["attributes", "plan_type"]],
+        ),
+        token,
+        refresh_token,
+        access_token_expires_at: first_datetime_string(
+            value,
+            [
+                &["expired"],
+                &["expire"],
+                &["expires_at"],
+                &["expiresAt"],
+                &["expiry"],
+                &["expires"],
+            ],
+        ),
+        status: cli_proxy_api_status(account),
+        cached_quota: None,
+        quota_fetched_at: None,
+        quota_verify_required: None,
     }))
 }
 
@@ -235,42 +501,87 @@ fn ensure_account_import_keys(value: &Value, allowed_keys: &[&str]) -> Result<()
     }
 }
 
-fn account_import_source(
-    value: &Value,
-    accounts: &[Value],
-) -> Result<AccountImportSource, &'static str> {
-    if let Some(source_format) = first_string(value, &["sourceFormat", "source_format"]) {
-        return match source_format.trim().to_ascii_lowercase().as_str() {
-            "cpr" => Ok(AccountImportSource::Cpr),
-            "sub2api" => Ok(AccountImportSource::Sub2Api),
-            _ => Err("no importable accounts"),
-        };
+fn account_import_payload_looks_sub2api(value: &Value) -> bool {
+    if value.get("proxies").is_some() || value.get("exported_at").is_some() {
+        return true;
     }
-
-    if accounts.iter().any(account_import_entry_looks_sub2api) {
-        Ok(AccountImportSource::Sub2Api)
-    } else {
-        Ok(AccountImportSource::Cpr)
+    if let Some(accounts) = value.get("accounts").and_then(Value::as_array) {
+        return accounts.iter().any(sub2api_account_looks_known);
     }
+    if let Some(accounts) = value.as_array() {
+        return accounts.iter().any(sub2api_account_looks_known);
+    }
+    sub2api_account_looks_known(value)
 }
 
-fn account_import_entry_looks_sub2api(value: &Value) -> bool {
+fn sub2api_account_looks_known(value: &Value) -> bool {
     let Some(account) = value.as_object() else {
         return false;
     };
-    [
-        "proxyApiKey",
-        "proxy_api_key",
-        "usage",
-        "cachedQuota",
-        "cached_quota",
-        "quotaFetchedAt",
-        "quota_fetched_at",
-        "quotaVerifyRequired",
-        "quota_verify_required",
-    ]
-    .iter()
-    .any(|key| account.contains_key(*key))
+    sub2api_account_backup_entry(value)
+        || value.get("tokens").is_some()
+        || [
+            "proxyApiKey",
+            "proxy_api_key",
+            "usage",
+            "cachedQuota",
+            "cached_quota",
+            "quotaFetchedAt",
+            "quota_fetched_at",
+            "quotaVerifyRequired",
+            "quota_verify_required",
+        ]
+        .iter()
+        .any(|key| account.contains_key(*key))
+}
+
+fn sub2api_account_backup_entry(value: &Value) -> bool {
+    value.get("credentials").is_some()
+        && (value.get("platform").is_some() || value.get("type").is_some())
+}
+
+fn account_import_payload_looks_cli_proxy_api(value: &Value) -> bool {
+    if let Some(accounts) = value.get("accounts").and_then(Value::as_array) {
+        return accounts.iter().any(cli_proxy_api_account_looks_known);
+    }
+    if let Some(accounts) = value.as_array() {
+        return accounts.iter().any(cli_proxy_api_account_looks_known);
+    }
+    cli_proxy_api_account_looks_known(value)
+}
+
+fn cli_proxy_api_account_looks_known(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(cli_proxy_api_provider_is_codex)
+}
+
+fn cli_proxy_api_provider_is_codex(account: &Map<String, Value>) -> bool {
+    let provider = account
+        .get("type")
+        .or_else(|| account.get("provider"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(provider.as_str(), "codex" | "openai")
+}
+
+fn cli_proxy_api_status(account: &Map<String, Value>) -> Option<String> {
+    account
+        .get("disabled")
+        .and_then(Value::as_bool)
+        .filter(|disabled| *disabled)
+        .map(|_| "disabled".to_string())
+}
+
+fn optional_string_field_matches(account: &Map<String, Value>, key: &str, expected: &str) -> bool {
+    account
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none_or(|value| value.eq_ignore_ascii_case(expected))
 }
 
 /// 解析导入的状态字符串。
@@ -360,6 +671,22 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn first_path_string<const N: usize>(value: &Value, paths: [&[&str]; N]) -> Option<String> {
+    paths
+        .iter()
+        .find_map(|path| value_at_path(value, path).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn first_datetime_string<const N: usize>(value: &Value, paths: [&[&str]; N]) -> Option<String> {
+    paths
+        .iter()
+        .find_map(|path| value_at_path(value, path))
+        .and_then(datetime_value_to_rfc3339)
+}
+
 fn first_bool(value: &Value, keys: &[&str]) -> Option<bool> {
     keys.iter()
         .find_map(|key| value.get(key).and_then(Value::as_bool))
@@ -369,4 +696,30 @@ fn first_value(value: &Value, keys: &[&str]) -> Option<Value> {
     keys.iter()
         .find_map(|key| value.get(key).filter(|value| !value.is_null()))
         .cloned()
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+fn datetime_value_to_rfc3339(value: &Value) -> Option<String> {
+    if let Some(value) = value.as_str() {
+        return normalize_nonempty_str(Some(value)).map(ToString::to_string);
+    }
+    if let Some(value) = value.as_i64() {
+        return DateTime::<Utc>::from_timestamp(value, 0).map(|time| time.to_rfc3339());
+    }
+    if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
+        return DateTime::<Utc>::from_timestamp(value, 0).map(|time| time.to_rfc3339());
+    }
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .map(|value| value.trunc() as i64)
+        .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0))
+        .map(|time| time.to_rfc3339())
 }

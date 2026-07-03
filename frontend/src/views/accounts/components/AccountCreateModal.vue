@@ -44,10 +44,11 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
 })
 
 const modeOptions = [
-  { label: 'OAuth 授权', value: 'oauth' },
-  { label: 'RT 导入', value: 'rt' },
+  { label: 'OAuth', value: 'oauth' },
+  { label: 'Token', value: 'token' },
   { label: 'CPR', value: 'cpr' },
-  { label: 'Sub2API', value: 'sub2api' },
+  { label: 'Sub2', value: 'sub2api' },
+  { label: 'CPA', value: 'cliproxyapi' },
 ]
 
 const mode = computed({
@@ -59,10 +60,10 @@ const mode = computed({
   },
 })
 
-const refreshToken = computed({
-  get: () => form.value.refreshToken,
+const tokenText = computed({
+  get: () => form.value.tokenText,
   set: (value: string) => {
-    form.value = { ...form.value, refreshToken: value }
+    form.value = { ...form.value, tokenText: value }
   },
 })
 
@@ -107,7 +108,7 @@ const canSubmit = computed(() => {
       form.value.oauthSessionId && oauthAuthUrl.value && oauthCallback.value.trim().length > 0,
     )
   }
-  if (mode.value === 'rt') return refreshToken.value.trim().length > 0
+  if (mode.value === 'token') return tokenText.value.trim().length > 0
   return importText.value.trim().length > 0
 })
 
@@ -115,14 +116,17 @@ const description = computed(() => {
   if (props.reauthorizing) {
     return '完成授权后粘贴回调地址，系统会更新账号凭据。'
   }
-  if (mode.value === 'rt') {
-    return '一行一个 Refresh Token，导入时会自动换取访问令牌并补全账号信息。'
+  if (mode.value === 'token') {
+    return '一行一个 Access Token 或 Refresh Token，Access Token 会直接补全账号信息。'
   }
   if (mode.value === 'oauth') {
     return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号。'
   }
   if (mode.value === 'sub2api') {
     return '导入 Sub2API 导出的账号 JSON，已存在账号会更新。'
+  }
+  if (mode.value === 'cliproxyapi') {
+    return '导入 CLIProxyAPI Codex auth JSON，已存在账号会更新。'
   }
   return '导入 Codex Proxy RS 账号 JSON，已存在账号会更新。'
 })
@@ -166,12 +170,12 @@ async function copyOAuthAuthUrl() {
     <div class="flex flex-col gap-4">
       <BaseSegmented v-if="!reauthorizing" v-model="mode" :options="modeOptions" class="w-full" />
 
-      <BaseForm v-if="mode === 'rt'">
-        <BaseFormItem label="Refresh Token" required>
+      <BaseForm v-if="mode === 'token'">
+        <BaseFormItem label="Token" required>
           <BaseTextarea
-            v-model="refreshToken"
+            v-model="tokenText"
             size="md"
-            placeholder="rt_...&#10;rt_..."
+            placeholder="eyJ...&#10;rt_..."
             :disabled="saving"
           />
         </BaseFormItem>

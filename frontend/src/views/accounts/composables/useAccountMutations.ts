@@ -19,6 +19,8 @@ import { useDownload } from '@/composables/useDownload'
 import { useIdSet } from '@/composables/useIdSet'
 import { withMinimumDuration } from '@/utils/async'
 
+type TokenImportAccount = { token: string } | { refreshToken: string }
+
 export function useAccountMutations(options: {
   page: Ref<number>
   pageSize: Ref<number>
@@ -39,8 +41,6 @@ export function useAccountMutations(options: {
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const reauthorizingAccount = ref<any>(null)
-  const editingAccount = ref<any>(null)
-  const editingScheduleStatus = ref('active')
   const pendingDeleteAccount = ref<any>(null)
   const refreshingAccounts = useIdSet<string>()
   const refreshingQuotaAccounts = useIdSet<string>()
@@ -48,7 +48,6 @@ export function useAccountMutations(options: {
   const deletingAccountAction = useAsyncAction()
   const creatingAccountAction = useAsyncAction()
   const authorizingOAuthAction = useAsyncAction()
-  const savingAccountAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
   const refreshingAccountIds = refreshingAccounts.ids
@@ -57,22 +56,16 @@ export function useAccountMutations(options: {
   const deletingAccount = deletingAccountAction.loading
   const creatingAccount = creatingAccountAction.loading
   const authorizingOAuth = authorizingOAuthAction.loading
-  const savingAccount = savingAccountAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
 
   const createForm = ref({
     mode: 'oauth',
-    refreshToken: '',
+    tokenText: '',
     importText: '',
     oauthSessionId: '',
     oauthAuthUrl: '',
     oauthCallback: '',
-  })
-
-  const editForm = ref({
-    label: '',
-    status: 'active',
   })
 
   const showCreateModal = computed({
@@ -81,24 +74,6 @@ export function useAccountMutations(options: {
       createModalOpen.value = value
       if (!value) {
         reauthorizingAccount.value = null
-      }
-    },
-  })
-
-  const showEditModal = computed({
-    get: () => editingAccount.value !== null,
-    set: (value: boolean) => {
-      if (!value) {
-        editingAccount.value = null
-      }
-    },
-  })
-
-  const editStatusModel = computed<string>({
-    get: () => editForm.value.status,
-    set: (value) => {
-      if (value === 'active' || value === 'disabled') {
-        editForm.value.status = value
       }
     },
   })
@@ -165,12 +140,11 @@ export function useAccountMutations(options: {
       }
     }
 
-    if (createForm.value.mode === 'rt') {
-      const accounts = createForm.value.refreshToken
+    if (createForm.value.mode === 'token') {
+      const accounts = createForm.value.tokenText
         .split(/\r?\n/)
-        .map((token) => token.trim())
-        .filter(Boolean)
-        .map((refreshToken) => ({ refreshToken }))
+        .map(accountFromTokenLine)
+        .filter((account): account is TokenImportAccount => account !== null)
 
       return accounts.length ? { sourceFormat: 'cpr', accounts } : null
     }
@@ -185,7 +159,7 @@ export function useAccountMutations(options: {
       throw new Error('JSON 格式不正确')
     }
 
-    const sourceFormat = createForm.value.mode === 'sub2api' ? 'sub2api' : 'cpr'
+    const sourceFormat = accountImportSourceFormat()
     if (Array.isArray(parsed)) {
       return { sourceFormat, accounts: parsed }
     }
@@ -193,6 +167,21 @@ export function useAccountMutations(options: {
       return { ...parsed, sourceFormat }
     }
     return { sourceFormat, accounts: [parsed] }
+  }
+
+  function accountImportSourceFormat() {
+    if (createForm.value.mode === 'sub2api') return 'sub2api'
+    if (createForm.value.mode === 'cliproxyapi') return 'cliproxyapi'
+    return 'cpr'
+  }
+
+  function accountFromTokenLine(line: string): TokenImportAccount | null {
+    const token = line.trim()
+    if (!token) return null
+    if (token.startsWith('rt_')) {
+      return { refreshToken: token }
+    }
+    return { token }
   }
 
   async function handleAuthorizeOAuth() {
@@ -236,7 +225,7 @@ export function useAccountMutations(options: {
   function resetCreateForm() {
     createForm.value = {
       mode: 'oauth',
-      refreshToken: '',
+      tokenText: '',
       importText: '',
       oauthSessionId: '',
       oauthAuthUrl: '',
@@ -271,45 +260,6 @@ export function useAccountMutations(options: {
     resetCreateForm()
     showCreateModal.value = true
     void handleAuthorizeOAuth()
-  }
-
-  function openEditAccount(account: any) {
-    const scheduleStatus = account.status === 'disabled' ? 'disabled' : 'active'
-    editingAccount.value = account
-    editingScheduleStatus.value = scheduleStatus
-    editForm.value = {
-      label: account.label || '',
-      status: scheduleStatus,
-    }
-  }
-
-  async function handleSaveAccount() {
-    if (savingAccount.value) return
-
-    const account = editingAccount.value
-    if (!account) return
-
-    await savingAccountAction.run(
-      async () => {
-        const payload: any = {
-          id: account.id,
-          label: nullableTrimmedValue(editForm.value.label),
-        }
-        if (editForm.value.status !== editingScheduleStatus.value) {
-          payload.status = editForm.value.status
-        }
-        await updateAccount(payload)
-        editingAccount.value = null
-        await loadAccounts()
-        toast.success('账号已更新')
-      },
-      { errorText: '保存失败' },
-    )
-  }
-
-  function nullableTrimmedValue(value: string) {
-    const trimmed = value.trim()
-    return trimmed || null
   }
 
   function requestDeleteAccount(account: any) {
@@ -442,9 +392,7 @@ export function useAccountMutations(options: {
     showCreateModal,
     showDeleteModal,
     showSingleDeleteModal,
-    showEditModal,
     reauthorizingAccount,
-    editingAccount,
     pendingDeleteAccount,
     refreshingAccountIds,
     refreshingQuotaAccountIds,
@@ -452,20 +400,15 @@ export function useAccountMutations(options: {
     deletingAccount,
     creatingAccount,
     authorizingOAuth,
-    savingAccount,
     batchDeleting,
     exportingAccounts,
     createForm,
-    editForm,
-    editStatusModel,
     loadAccounts,
     handleCreate,
     handleAuthorizeOAuth,
     handleExchangeOAuth,
     openCreateAccount,
     openReauthorizeAccount,
-    openEditAccount,
-    handleSaveAccount,
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,

@@ -151,12 +151,15 @@ where
         let mut expired_recovery_index = 0;
 
         for account in accounts {
-            if account.refresh_token.is_none()
-                || matches!(
-                    account.status,
-                    AccountStatus::Disabled | AccountStatus::Banned
-                )
-            {
+            if self.skip_account_without_refresh_token(&account).await? {
+                summary.skipped += 1;
+                continue;
+            }
+
+            if matches!(
+                account.status,
+                AccountStatus::Disabled | AccountStatus::Banned
+            ) {
                 summary.skipped += 1;
                 continue;
             }
@@ -240,12 +243,18 @@ where
                 account_id.to_string(),
             ));
         };
-        if account.refresh_token.is_none()
-            || matches!(
-                account.status,
-                AccountStatus::Disabled | AccountStatus::Banned
-            )
-        {
+        if account.refresh_token.is_none() {
+            self.clear_scheduled_timer(account_id).await;
+            if account.next_refresh_at.is_some() {
+                persist_next_refresh_at(&self.store, account_id, None).await?;
+            }
+            return Ok(());
+        }
+
+        if matches!(
+            account.status,
+            AccountStatus::Disabled | AccountStatus::Banned
+        ) {
             return Ok(());
         }
 
@@ -272,6 +281,11 @@ where
         };
 
         for account in accounts {
+            if self.skip_account_without_refresh_token(&account).await? {
+                summary.skipped += 1;
+                continue;
+            }
+
             if account.next_refresh_at.is_some_and(|value| value > now) {
                 summary.skipped += 1;
                 continue;
@@ -334,6 +348,22 @@ where
         }
 
         (refresh_at - now).to_std().ok()
+    }
+
+    async fn skip_account_without_refresh_token(
+        &self,
+        account: &Account,
+    ) -> TokenRefreshServiceResult<bool> {
+        if account.refresh_token.is_some() {
+            return Ok(false);
+        }
+
+        self.clear_scheduled_timer(&account.id).await;
+        if account.next_refresh_at.is_some() {
+            self.persist_next_refresh_at_if_changed(account, None)
+                .await?;
+        }
+        Ok(true)
     }
 
     fn computed_refresh_at(&self, account: &Account) -> Option<DateTime<Utc>> {
@@ -440,6 +470,10 @@ where
             ));
         };
         let account = stored_account_to_refresh_account(account);
+        if self.skip_account_without_refresh_token(&account).await? {
+            return Ok(TokenRefreshOutcome::Skipped);
+        }
+
         if account.next_refresh_at.is_some_and(|value| value > now) {
             return Ok(TokenRefreshOutcome::Skipped);
         }

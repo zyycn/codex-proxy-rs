@@ -1,5 +1,4 @@
 use super::*;
-use sqlx::Row;
 
 const EXPORT_CONFIRM: &str = "confirm=export_sensitive_accounts";
 
@@ -295,28 +294,22 @@ async fn admin_accounts_export_should_require_explicit_sensitive_export_confirma
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let audit = account_export_audit_row(&pool, "req_export_missing_confirmation").await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         body["message"],
         "account export requires confirm=export_sensitive_accounts"
     );
-    assert_eq!(audit.level, "warn");
-    assert_eq!(audit.status_code, Some(400));
     assert_eq!(
-        audit.failure_class,
-        Some("missing_confirmation".to_string())
+        usage_record_count_by_request_id(&pool, "req_export_missing_confirmation").await,
+        0
     );
-    assert_eq!(audit.metadata["accountIds"][0], "acct_export_confirm");
-    assert!(audit.metadata.get("token").is_none());
-    assert!(audit.metadata.get("refreshToken").is_none());
 }
 
 #[tokio::test]
-async fn admin_accounts_export_should_record_success_audit_event() {
+async fn admin_accounts_export_should_not_write_usage_record_on_success() {
     let (app, _state, pool, _dir) =
-        admin_accounts_test_app("admin-accounts-export-audit.sqlite", 137).await;
+        admin_accounts_test_app("admin-accounts-export-usage.sqlite", 137).await;
     seed_account(
         &pool,
         NewAccount {
@@ -358,48 +351,17 @@ async fn admin_accounts_export_should_record_success_audit_event() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let audit = account_export_audit_row(&pool, "req_export_success_audit").await;
 
-    assert_eq!(audit.kind, "admin_account_export");
-    assert_eq!(audit.level, "warn");
-    assert_eq!(audit.status_code, Some(200));
-    assert_eq!(audit.failure_class, None);
-    assert_eq!(audit.message, "Admin account export succeeded");
-    assert_eq!(audit.metadata["accountCount"], 1);
-    assert_eq!(audit.metadata["accountIds"][0], "acct_export_audit");
-    assert!(audit.metadata.get("token").is_none());
-    assert!(audit.metadata.get("refreshToken").is_none());
+    assert_eq!(
+        usage_record_count_by_request_id(&pool, "req_export_success_audit").await,
+        0
+    );
 }
 
-#[derive(Debug)]
-struct AccountExportAuditRow {
-    kind: String,
-    level: String,
-    status_code: Option<i64>,
-    failure_class: Option<String>,
-    message: String,
-    metadata: Value,
-}
-
-async fn account_export_audit_row(pool: &SqlitePool, request_id: &str) -> AccountExportAuditRow {
-    let row = sqlx::query(
-        "select kind, level, status_code, failure_class, message, metadata_json \
-         from usage_records \
-         where kind = 'admin_account_export' and request_id = ? \
-         order by created_at desc, id desc \
-         limit 1",
-    )
-    .bind(request_id)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-
-    AccountExportAuditRow {
-        kind: row.get("kind"),
-        level: row.get("level"),
-        status_code: row.get("status_code"),
-        failure_class: row.get("failure_class"),
-        message: row.get("message"),
-        metadata: serde_json::from_str(&row.get::<String, _>("metadata_json")).unwrap(),
-    }
+async fn usage_record_count_by_request_id(pool: &SqlitePool, request_id: &str) -> i64 {
+    sqlx::query_scalar("select count(*) from usage_records where request_id = ?")
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }

@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, watch } from 'vue'
+import { computed, nextTick, onUnmounted, useTemplateRef, watch } from 'vue'
 import {
   ArrowUpCircle,
   CheckCircle2,
   Circle,
-  ExternalLink,
-  GitBranch,
   Power,
   RefreshCw,
   Terminal,
@@ -36,7 +34,6 @@ const {
   updateStreaming,
   updateStreamError,
   hasUpdate,
-  isReleaseBuild,
   canUpdate,
   loadSystem,
   checkUpdates,
@@ -46,6 +43,8 @@ const {
   connectUpdateEvents,
   disconnectUpdateEvents,
 } = useSystemUpdate()
+
+const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
 
 const statusView = computed(() => {
   if (updating.value) {
@@ -111,45 +110,15 @@ const summaryItems = computed(() => [
   },
 ])
 
-const statusMessage = computed(() => {
-  if (updateError.value) return updateError.value
-  if (updateSuccess.value && needRestart.value) return '更新已完成，等待重启生效'
-  if (updating.value) return '正在替换应用包'
-  if (updateInfo.value?.unsupportedReason) return updateInfo.value.unsupportedReason
-  if (updateInfo.value?.warning) return updateInfo.value.warning
-  if (hasUpdate.value) return `可更新到 v${updateInfo.value?.latestVersion}`
-  if (updateInfo.value) return '当前版本已是最新'
-  return '尚未检查更新'
-})
-
-const statusToneClass = computed(() => {
-  if (updateError.value || updateInfo.value?.warning) {
-    return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
-  }
-  if (updateInfo.value?.unsupportedReason || (hasUpdate.value && !isReleaseBuild.value)) {
-    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
-  }
-  if (updateSuccess.value || hasUpdate.value) {
-    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
-  }
-  return 'bg-(--cp-bg-muted) text-(--cp-text-secondary)'
-})
-
-const hasStatusNotice = computed(() =>
-  Boolean(
-    updateError.value ||
-    updateSuccess.value ||
-    updateInfo.value?.unsupportedReason ||
-    updateInfo.value?.warning ||
-    (hasUpdate.value && !isReleaseBuild.value),
-  ),
-)
-
 const updateLogRows = computed(() =>
   updateLogs.value.map((item) => ({
     ...item,
     time: formatLogTime(item.at),
   })),
+)
+
+const showUpdateProgress = computed(
+  () => hasUpdate.value || updating.value || updateSuccess.value || updateLogRows.value.length > 0,
 )
 
 const streamStatusLabel = computed(() => {
@@ -221,6 +190,14 @@ watch(open, (visible) => {
   }
 })
 
+watch(
+  () => updateLogs.value.at(-1)?.id,
+  async () => {
+    await nextTick()
+    await updateLogScrollbar.value?.scrollToBottom()
+  },
+)
+
 onUnmounted(() => {
   clearRestartTimer()
   disconnectUpdateEvents()
@@ -278,49 +255,10 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <section class="grid gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
-        <div
-          v-if="!hasStatusNotice || updateInfo?.releaseUrl"
-          class="flex flex-wrap items-center justify-between gap-3"
-        >
-          <div class="min-w-0">
-            <p class="m-0 text-[11px] leading-none font-[760] text-(--cp-text-muted)">状态</p>
-            <p
-              v-if="!hasStatusNotice"
-              class="mt-1.5 mb-0 wrap-break-word text-[13px] leading-normal font-[720] text-(--cp-text-primary)"
-            >
-              {{ statusMessage }}
-            </p>
-          </div>
-          <a
-            v-if="updateInfo?.releaseUrl"
-            :href="updateInfo.releaseUrl"
-            target="_blank"
-            rel="noreferrer"
-            class="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-info-bg) px-2.5 text-[12px] font-[720] text-(--cp-info-text) no-underline hover:bg-(--cp-info-bg-hover)"
-          >
-            发布页
-            <ExternalLink class="size-3.5" />
-          </a>
-        </div>
-
-        <div
-          v-if="hasStatusNotice"
-          class="flex items-center gap-2.5 rounded-(--cp-input-radius-base) px-3 py-2.5"
-          :class="statusToneClass"
-        >
-          <GitBranch
-            v-if="hasUpdate && !isReleaseBuild && !updateError && !updateInfo?.warning"
-            class="size-3.5 shrink-0"
-          />
-          <component v-else :is="statusView.icon" class="size-3.5 shrink-0" />
-          <p class="m-0 wrap-break-word text-[12px] font-[650] leading-none">
-            {{ statusMessage }}
-          </p>
-        </div>
-      </section>
-
-      <section class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)">
+      <section
+        v-if="showUpdateProgress"
+        class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)"
+      >
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-(--cp-success)" />
@@ -338,7 +276,7 @@ onUnmounted(() => {
           </span>
         </header>
 
-        <BaseScrollbar max-height="260px" view-class="px-4 pb-4">
+        <BaseScrollbar ref="updateLogScrollbar" height="260px" view-class="min-h-full px-4 pb-4">
           <div v-if="updateLogRows.length" class="grid gap-2">
             <div
               v-for="log in updateLogRows"

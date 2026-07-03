@@ -4,8 +4,6 @@ use axum::{
 };
 use chrono::Utc;
 use codex_proxy_rs::infra::{database::connect_sqlite, identity::hash_admin_password};
-use serde_json::Value;
-use sqlx::Row;
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
@@ -106,29 +104,23 @@ async fn admin_login_should_throttle_repeated_failures_from_same_source() {
 }
 
 #[tokio::test]
-async fn admin_login_should_record_success_audit_event() {
+async fn admin_login_should_not_write_usage_record_on_success() {
     let (app, _dir, pool) =
-        admin_login_test_app("admin-login-success-audit.sqlite", "correct-password").await;
+        admin_login_test_app("admin-login-success-usage.sqlite", "correct-password").await;
 
-    let response = post_login_with_request_id(&app, "correct-password", "req_login_audit_ok").await;
+    let response = post_login_with_request_id(&app, "correct-password", "req_login_usage_ok").await;
     assert_eq!(response.status(), StatusCode::OK);
-    let audit = admin_login_audit_row(&pool, "req_login_audit_ok").await;
 
-    assert_eq!(audit.kind, "admin_auth");
-    assert_eq!(audit.level, "info");
-    assert_eq!(audit.route, Some("/api/admin/login".to_string()));
-    assert_eq!(audit.status_code, Some(200));
-    assert_eq!(audit.failure_class, None);
-    assert_eq!(audit.message, "Admin login succeeded");
-    assert_eq!(audit.metadata["source"], "unknown");
-    assert_eq!(audit.metadata["usernameProvided"], false);
-    assert!(audit.metadata.get("username").is_none());
+    assert_eq!(
+        usage_record_count_by_request_id(&pool, "req_login_usage_ok").await,
+        0
+    );
 }
 
 #[tokio::test]
-async fn admin_login_should_record_invalid_credentials_audit_event() {
+async fn admin_login_should_not_write_usage_record_on_invalid_credentials() {
     let (app, _dir, pool) =
-        admin_login_test_app("admin-login-invalid-audit.sqlite", "correct-password").await;
+        admin_login_test_app("admin-login-invalid-usage.sqlite", "correct-password").await;
 
     let response = app
         .clone()
@@ -137,7 +129,7 @@ async fn admin_login_should_record_invalid_credentials_audit_event() {
                 .method("POST")
                 .uri("/api/admin/login")
                 .header("content-type", "application/json")
-                .header("x-request-id", "req_login_audit_bad")
+                .header("x-request-id", "req_login_usage_bad")
                 .body(Body::from(
                     r#"{"username":"admin","password":"wrong-password"}"#,
                 ))
@@ -146,36 +138,32 @@ async fn admin_login_should_record_invalid_credentials_audit_event() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let audit = admin_login_audit_row(&pool, "req_login_audit_bad").await;
 
-    assert_eq!(audit.level, "warn");
-    assert_eq!(audit.status_code, Some(401));
-    assert_eq!(audit.failure_class, Some("invalid_credentials".to_string()));
-    assert_eq!(audit.message, "Admin login failed");
-    assert_eq!(audit.metadata["usernameProvided"], true);
-    assert!(audit.metadata.get("username").is_none());
+    assert_eq!(
+        usage_record_count_by_request_id(&pool, "req_login_usage_bad").await,
+        0
+    );
 }
 
 #[tokio::test]
-async fn admin_login_should_record_throttled_audit_event() {
+async fn admin_login_should_not_write_usage_record_when_throttled() {
     let (app, _dir, pool) =
-        admin_login_test_app("admin-login-throttled-audit.sqlite", "correct-password").await;
+        admin_login_test_app("admin-login-throttled-usage.sqlite", "correct-password").await;
 
     for index in 0..5 {
         let response =
-            post_login_with_request_id(&app, "wrong-password", &format!("req_login_audit_{index}"))
+            post_login_with_request_id(&app, "wrong-password", &format!("req_login_usage_{index}"))
                 .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
     let response =
-        post_login_with_request_id(&app, "correct-password", "req_login_audit_throttled").await;
+        post_login_with_request_id(&app, "correct-password", "req_login_usage_throttled").await;
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-    let audit = admin_login_audit_row(&pool, "req_login_audit_throttled").await;
 
-    assert_eq!(audit.level, "warn");
-    assert_eq!(audit.status_code, Some(429));
-    assert_eq!(audit.failure_class, Some("login_throttled".to_string()));
-    assert_eq!(audit.message, "Admin login throttled");
+    assert_eq!(
+        usage_record_count_by_request_id(&pool, "req_login_usage_throttled").await,
+        0
+    );
 }
 
 async fn admin_login_test_app(
@@ -250,38 +238,12 @@ async fn post_login_with_request_id(
         .unwrap()
 }
 
-#[derive(Debug)]
-struct AdminLoginAuditRow {
-    kind: String,
-    level: String,
-    route: Option<String>,
-    status_code: Option<i64>,
-    failure_class: Option<String>,
-    message: String,
-    metadata: Value,
-}
-
-async fn admin_login_audit_row(pool: &SqlitePool, request_id: &str) -> AdminLoginAuditRow {
-    let row = sqlx::query(
-        "select kind, level, route, status_code, failure_class, message, metadata_json \
-         from usage_records \
-         where kind = 'admin_auth' and request_id = ? \
-         order by created_at desc, id desc \
-         limit 1",
-    )
-    .bind(request_id)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    AdminLoginAuditRow {
-        kind: row.get("kind"),
-        level: row.get("level"),
-        route: row.get("route"),
-        status_code: row.get("status_code"),
-        failure_class: row.get("failure_class"),
-        message: row.get("message"),
-        metadata: serde_json::from_str(&row.get::<String, _>("metadata_json")).unwrap(),
-    }
+async fn usage_record_count_by_request_id(pool: &SqlitePool, request_id: &str) -> i64 {
+    sqlx::query_scalar("select count(*) from usage_records where request_id = ?")
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 async fn seed_admin_user(pool: &SqlitePool, password: &str) {

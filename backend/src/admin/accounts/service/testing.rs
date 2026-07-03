@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::upstream::{
+    accounts::{model::Account, store::StoredAccount},
     models::CodexModelInfo,
+    models::ModelRefreshPlanAccount,
     protocol::{
         responses::CodexResponsesRequest,
         sse::{encode_sse_event, parse_sse_events, SseEvent},
@@ -37,17 +39,41 @@ impl AdminAccountService {
             .await
             .map_err(|_| AdminAccountError::Inspect)?
             .ok_or(AdminAccountError::NotFound)?;
-        let plan_type = account.plan_type.as_deref().unwrap_or("default");
-        let catalog = self.models.catalog().await;
-        let models = catalog
-            .models_for_plan(plan_type)
-            .iter()
-            .map(account_model_option)
-            .collect::<Vec<_>>();
+        let plan_type = account_plan_type(&account);
+        let mut models = self.models.catalog().await.models_for_plan(&plan_type);
+        if models.is_empty() {
+            self.refresh_account_plan_models(&account, &plan_type).await;
+            models = self.models.catalog().await.models_for_plan(&plan_type);
+        }
+        let models = models.iter().map(account_model_option).collect::<Vec<_>>();
         if models.is_empty() {
             return Err(AdminAccountError::NoModels);
         }
         Ok(models)
+    }
+
+    async fn refresh_account_plan_models(&self, account: &StoredAccount, plan_type: &str) {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let plan_account = ModelRefreshPlanAccount {
+            plan_type: plan_type.to_string(),
+            account: stored_account_to_model_refresh_account(account.clone()),
+        };
+        if let Err(error) = self
+            .models
+            .refresh_backend_models_with_installation_id(
+                &[plan_account],
+                &request_id,
+                self.installation_id.as_deref(),
+            )
+            .await
+        {
+            tracing::warn!(
+                account_id = %account.id,
+                plan_type,
+                error = %error,
+                "failed to refresh account plan models"
+            );
+        }
     }
 
     pub async fn test_connection_stream(
@@ -140,6 +166,57 @@ fn account_model_option(model: &CodexModelInfo) -> AccountModelOption {
     AccountModelOption {
         id: model.id.clone(),
         label: model.display_name.clone(),
+    }
+}
+
+fn account_plan_type(account: &StoredAccount) -> String {
+    account
+        .plan_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_string()
+}
+
+fn stored_account_to_model_refresh_account(stored: StoredAccount) -> Account {
+    Account {
+        id: stored.id,
+        email: stored.email,
+        account_id: stored.account_id,
+        user_id: stored.user_id,
+        label: stored.label,
+        plan_type: stored.plan_type,
+        access_token: stored.access_token.expose_secret().to_string(),
+        refresh_token: stored
+            .refresh_token
+            .map(|token| token.expose_secret().to_string()),
+        access_token_expires_at: stored.access_token_expires_at,
+        next_refresh_at: stored.next_refresh_at,
+        status: stored.status,
+        quota_limit_reached: false,
+        quota_verify_required: false,
+        quota_cooldown_until: None,
+        cloudflare_cooldown_until: None,
+        request_count: 0,
+        empty_response_count: 0,
+        image_input_tokens: 0,
+        image_output_tokens: 0,
+        image_request_count: 0,
+        image_request_failed_count: 0,
+        window_request_count: 0,
+        window_input_tokens: 0,
+        window_output_tokens: 0,
+        window_cached_tokens: 0,
+        window_image_input_tokens: 0,
+        window_image_output_tokens: 0,
+        window_image_request_count: 0,
+        window_image_request_failed_count: 0,
+        window_started_at: None,
+        window_reset_at: None,
+        limit_window_seconds: None,
+        added_at: stored.added_at,
+        last_used_at: None,
     }
 }
 

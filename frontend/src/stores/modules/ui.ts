@@ -21,14 +21,16 @@ export const useUiStore = defineStore(
     const sidebarCollapsed = shallowRef(false)
     const themeMode = shallowRef<ThemeMode>('system')
     const themeRevision = shallowRef(0)
+    const themeTransitioning = shallowRef(false)
     const preferredMotion = usePreferredReducedMotion()
     let themeApplied = false
     let themeTransitionOrigin: ThemeTransitionOrigin | undefined
     let themeTransitionRequested = false
-    let themeTransitioning = false
+
     const { start: startFallbackTransitionTimer, stop: stopFallbackTransitionTimer } = useTimeoutFn(
       () => {
         document.documentElement.classList.remove('theme-fallback-transition')
+        themeTransitioning.value = false
       },
       180,
       { immediate: false },
@@ -55,7 +57,17 @@ export const useUiStore = defineStore(
     }
 
     function applyTheme(theme: ThemeName) {
-      if (!themeApplied || !themeTransitionRequested || preferredMotion.value === 'reduce') {
+      if (themeApplied && document.documentElement.dataset.theme === theme) {
+        themeTransitionRequested = false
+        return
+      }
+
+      if (
+        !themeApplied ||
+        !themeTransitionRequested ||
+        preferredMotion.value === 'reduce' ||
+        themeTransitioning.value
+      ) {
         commitTheme(theme)
         themeApplied = true
         themeTransitionRequested = false
@@ -75,15 +87,13 @@ export const useUiStore = defineStore(
 
     function runThemeTransition(theme: ThemeName) {
       const transitionDocument = document as ViewTransitionDocument
-      const previousTheme = document.documentElement.dataset.theme
-      const expanding = theme === 'dark'
+      const shrinkingDarkLayer =
+        document.documentElement.dataset.theme === 'dark' && theme === 'light'
 
       if (!transitionDocument.startViewTransition) {
         runFallbackThemeTransition(theme)
         return
       }
-
-      themeTransitioning = true
 
       const origin = themeTransitionOrigin ?? {
         x: window.innerWidth - 44,
@@ -93,44 +103,68 @@ export const useUiStore = defineStore(
       const maxX = Math.max(origin.x, window.innerWidth - origin.x)
       const maxY = Math.max(origin.y, window.innerHeight - origin.y)
       const radius = Math.hypot(maxX, maxY)
-      document.documentElement.classList.toggle(
-        'theme-view-transition-reverse',
-        previousTheme === 'dark' && theme === 'light',
-      )
-      const transition = transitionDocument.startViewTransition(() => commitTheme(theme))
+      document.documentElement.classList.toggle('theme-view-transition-shrink', shrinkingDarkLayer)
+      themeTransitioning.value = true
+      let transition: ViewTransition
+      try {
+        transition = transitionDocument.startViewTransition(() => commitTheme(theme))
+      } catch {
+        document.documentElement.classList.remove('theme-view-transition-shrink')
+        themeTransitioning.value = false
+        runFallbackThemeTransition(theme)
+        return
+      }
 
-      transition.ready.then(() => {
-        document.documentElement.animate(
-          {
-            clipPath: expanding
-              ? [
-                  `circle(0px at ${origin.x}px ${origin.y}px)`,
-                  `circle(${radius}px at ${origin.x}px ${origin.y}px)`,
-                ]
-              : [
-                  `circle(${radius}px at ${origin.x}px ${origin.y}px)`,
-                  `circle(0px at ${origin.x}px ${origin.y}px)`,
-                ],
-          },
-          {
-            duration: 420,
-            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-            fill: 'both',
-            pseudoElement: expanding
-              ? '::view-transition-new(root)'
-              : '::view-transition-old(root)',
-          },
-        )
-      })
-      transition.finished.finally(() => {
-        themeTransitioning = false
+      let cleaned = false
+      const cleanupTransition = () => {
+        if (cleaned) {
+          return
+        }
+        cleaned = true
         requestAnimationFrame(() => {
-          document.documentElement.classList.remove('theme-view-transition-reverse')
+          document.documentElement.classList.remove('theme-view-transition-shrink')
+          themeTransitioning.value = false
         })
-      })
+      }
+      const cleanupTimer = window.setTimeout(cleanupTransition, 1200)
+      void transition.finished.catch(() => undefined)
+      let activeAnimation: Animation | undefined
+      void transition.ready
+        .then(() => {
+          const animation = document.documentElement.animate(
+            {
+              clipPath: shrinkingDarkLayer
+                ? [
+                    `circle(${radius}px at ${origin.x}px ${origin.y}px)`,
+                    `circle(0px at ${origin.x}px ${origin.y}px)`,
+                  ]
+                : [
+                    `circle(0px at ${origin.x}px ${origin.y}px)`,
+                    `circle(${radius}px at ${origin.x}px ${origin.y}px)`,
+                  ],
+            },
+            {
+              duration: 420,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+              fill: 'both',
+              pseudoElement: shrinkingDarkLayer
+                ? '::view-transition-old(root)'
+                : '::view-transition-new(root)',
+            },
+          )
+          activeAnimation = animation
+          return animation.finished.catch(() => undefined)
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          activeAnimation?.cancel()
+          window.clearTimeout(cleanupTimer)
+          cleanupTransition()
+        })
     }
 
     function runFallbackThemeTransition(theme: ThemeName) {
+      themeTransitioning.value = true
       stopFallbackTransitionTimer()
       document.documentElement.classList.add('theme-fallback-transition')
       commitTheme(theme)
@@ -148,7 +182,10 @@ export const useUiStore = defineStore(
     }
 
     function toggleTheme(event?: MouseEvent) {
-      if (themeTransitioning) return
+      if (themeTransitioning.value) {
+        return
+      }
+
       if (event) {
         themeTransitionOrigin = {
           x: event.clientX,
@@ -163,6 +200,7 @@ export const useUiStore = defineStore(
       sidebarCollapsed,
       themeMode,
       themeRevision,
+      themeTransitioning,
       effectiveTheme,
       toggleSidebar,
       initializeTheme,

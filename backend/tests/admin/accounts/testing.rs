@@ -2,7 +2,7 @@ use super::*;
 use axum::body::to_bytes;
 use codex_proxy_rs::upstream::protocol::sse::{encode_sse_event, parse_sse_events};
 use wiremock::{
-    matchers::{method, path},
+    matchers::{header, method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -75,6 +75,146 @@ async fn account_models_should_return_database_snapshot_models() {
     assert_eq!(body["data"]["models"][1]["label"], "GPT 5.4");
 }
 
+#[tokio::test]
+async fn account_models_should_fetch_missing_plan_snapshot_with_account_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/codex/models"))
+        .and(header("authorization", "Bearer access-plan-b"))
+        .and(header("chatgpt-account-id", "chatgpt-plan-b"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [
+                {
+                    "slug": "gpt-plan-b-live",
+                    "display_name": "GPT Plan B Live",
+                    "description": "Live model",
+                    "is_default": true,
+                    "supported_reasoning_efforts": [{"reasoning_effort": "medium", "description": "medium"}],
+                    "default_reasoning_effort": "medium",
+                    "input_modalities": ["text"],
+                    "output_modalities": ["text"],
+                    "supports_personality": false
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-models-unfetched-plan.sqlite",
+        93,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_plan_b".to_string(),
+            email: Some("plan-b@example.com".to_string()),
+            account_id: Some("chatgpt-plan-b".to_string()),
+            user_id: None,
+            label: None,
+            plan_type: Some("plan-b".to_string()),
+            access_token: SecretString::new("access-plan-b".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+    seed_model_snapshot(&pool, "plus").await;
+    state
+        .services
+        .models
+        .reload_from_store()
+        .await
+        .expect("model catalog should reload from seeded snapshot");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/models?id=acct_plan_b")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_account_models_unfetched_plan")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(requests.len(), 1, "missing plan should be fetched upstream");
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["models"][0]["id"], "gpt-plan-b-live");
+    assert_eq!(body["data"]["models"][0]["label"], "GPT Plan B Live");
+    let stored_plan_b: i64 =
+        sqlx::query_scalar("select count(*) from model_plan_snapshots where plan_type = ?")
+            .bind("plan-b")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_plan_b, 1);
+}
+
+#[tokio::test]
+async fn account_models_should_return_models_for_account_plan_snapshot() {
+    let server = MockServer::start().await;
+    let (app, state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-models-matching-plan.sqlite",
+        94,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_plan_b_snapshot".to_string(),
+            email: Some("plan-b-snapshot@example.com".to_string()),
+            account_id: Some("chatgpt-plan-b-snapshot".to_string()),
+            user_id: None,
+            label: None,
+            plan_type: Some("plan-b".to_string()),
+            access_token: SecretString::new("access-plan-b-snapshot".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+    seed_model_snapshot(&pool, "plan-a").await;
+    seed_single_model_snapshot(&pool, "plan-b", "gpt-plan-b-only", "GPT Plan B Only").await;
+    state
+        .services
+        .models
+        .reload_from_store()
+        .await
+        .expect("model catalog should reload from seeded snapshots");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/models?id=acct_plan_b_snapshot")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_account_models_matching_plan")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(requests.is_empty(), "model list should be loaded from DB");
+    let body = response_json(response).await;
+    assert_eq!(body["data"]["models"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["models"][0]["id"], "gpt-plan-b-only");
+    assert_eq!(body["data"]["models"][0]["label"], "GPT Plan B Only");
+}
+
 async fn seed_model_snapshot(pool: &SqlitePool, plan_type: &str) {
     let models_json = json!([
         {
@@ -93,6 +233,39 @@ async fn seed_model_snapshot(pool: &SqlitePool, plan_type: &str) {
         {
             "id": "gpt-5.4",
             "displayName": "GPT 5.4",
+            "description": "Test model",
+            "isDefault": false,
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "medium"}],
+            "defaultReasoningEffort": "medium",
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "supportsPersonality": false,
+            "upgrade": null,
+            "source": "test"
+        }
+    ])
+    .to_string();
+    sqlx::query(
+        "insert or replace into model_plan_snapshots (plan_type, models_json, fetched_at) values (?, ?, ?)",
+    )
+    .bind(plan_type)
+    .bind(models_json)
+    .bind("2026-06-29T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_single_model_snapshot(
+    pool: &SqlitePool,
+    plan_type: &str,
+    model_id: &str,
+    display_name: &str,
+) {
+    let models_json = json!([
+        {
+            "id": model_id,
+            "displayName": display_name,
             "description": "Test model",
             "isDefault": false,
             "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": "medium"}],

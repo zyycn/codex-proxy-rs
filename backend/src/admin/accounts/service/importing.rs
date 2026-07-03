@@ -143,8 +143,15 @@ impl AdminAccountService {
                 chatgpt_user_id.as_deref(),
             )
             .await?;
-        let next_refresh_at = access_token_expires_at
-            .map(|expires_at| self.next_refresh_at_for_expires_at(&account_id, expires_at));
+        let refresh_token = resolved_tokens
+            .refresh_token
+            .map(|token| SecretString::new(token.into()));
+        let next_refresh_at = if refresh_token.is_some() {
+            access_token_expires_at
+                .map(|expires_at| self.next_refresh_at_for_expires_at(&account_id, expires_at))
+        } else {
+            None
+        };
         if plan_type.is_none() {
             plan_type = supplemental.plan_type;
         }
@@ -163,9 +170,7 @@ impl AdminAccountService {
             label,
             plan_type,
             access_token: SecretString::new(resolved_tokens.access_token.into()),
-            refresh_token: resolved_tokens
-                .refresh_token
-                .map(|token| SecretString::new(token.into())),
+            refresh_token,
             access_token_expires_at,
             status,
             added_at: None,
