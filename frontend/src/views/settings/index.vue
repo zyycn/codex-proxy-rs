@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
 import { useClipboard } from '@vueuse/core'
 import { sortBy } from 'es-toolkit'
-import { Copy, Gauge, GitBranch, KeyRound, Plus, Save, Timer, Trash2, Zap } from '@lucide/vue'
+import { Save } from '@lucide/vue'
 
 import {
   deleteAdminApiKey,
@@ -12,12 +12,13 @@ import {
   updateSettings,
 } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseForm from '@/components/base/BaseForm/index.vue'
-import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import { toast } from '@/components/base/BaseToast'
+
+import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
+import ModelAliasesCard from './components/ModelAliasesCard.vue'
+import RotationStrategyCard from './components/RotationStrategyCard.vue'
+import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 
 type RotationStrategy = 'least_used' | 'round_robin' | 'sticky'
 
@@ -35,14 +36,25 @@ interface SettingsForm {
   rotationStrategy: RotationStrategy
 }
 
-const loading = ref(true)
-const saving = ref(false)
-const aliasError = ref('')
-const adminKeyLoading = ref(true)
-const adminKeyRegenerating = ref(false)
-const adminKeyDeleting = ref(false)
-const showDeleteAdminKeyModal = ref(false)
-const generatedAdminApiKey = ref('')
+interface RotationOption {
+  label: string
+  value: RotationStrategy
+  description: string
+}
+
+interface AdminApiKeyStatus {
+  exists: boolean
+  maskedKey: string | null
+}
+
+const loading = shallowRef(true)
+const saving = shallowRef(false)
+const aliasError = shallowRef('')
+const adminKeyLoading = shallowRef(true)
+const adminKeyRegenerating = shallowRef(false)
+const adminKeyDeleting = shallowRef(false)
+const showDeleteAdminKeyModal = shallowRef(false)
+const generatedAdminApiKey = shallowRef('')
 const { copy } = useClipboard()
 
 const form = reactive<SettingsForm>({
@@ -55,16 +67,12 @@ const form = reactive<SettingsForm>({
 })
 
 const aliasRows = ref<AliasRow[]>([])
-const adminApiKeyStatus = reactive({
+const adminApiKeyStatus = reactive<AdminApiKeyStatus>({
   exists: false,
-  maskedKey: null as string | null,
+  maskedKey: null,
 })
 
-const rotationOptions: Array<{
-  label: string
-  value: RotationStrategy
-  description: string
-}> = [
+const rotationOptions: RotationOption[] = [
   {
     label: '智能分配（推荐）',
     value: 'least_used',
@@ -284,241 +292,34 @@ onMounted(loadSettings)
     </header>
 
     <div class="mt-5 grid max-w-6xl gap-5">
-      <BaseCard
-        :padded="false"
-        title="管理员 API Key"
-        description="用于外部系统集成，具有管理员权限。"
-        header-class="px-5 pt-4"
-        body-class="px-5 py-5"
-      >
-        <template #actions>
-          <div class="flex flex-wrap items-center gap-2">
-            <BaseButton
-              variant="default"
-              :loading="adminKeyRegenerating"
-              :disabled="adminKeyLoading || adminKeyDeleting"
-              @click="handleRegenerateAdminApiKey"
-            >
-              <template #icon>
-                <KeyRound class="size-4" />
-              </template>
-              {{ adminApiKeyStatus.exists ? '重新生成' : '生成' }}
-            </BaseButton>
-            <BaseButton
-              variant="danger"
-              :disabled="adminKeyLoading || adminKeyRegenerating || !adminApiKeyStatus.exists"
-              @click="showDeleteAdminKeyModal = true"
-            >
-              <template #icon>
-                <Trash2 class="size-4" />
-              </template>
-              删除
-            </BaseButton>
-          </div>
-        </template>
+      <AdminApiKeyCard
+        :status="adminApiKeyStatus"
+        :loading="adminKeyLoading"
+        :regenerating="adminKeyRegenerating"
+        :deleting="adminKeyDeleting"
+        :generated-key="generatedAdminApiKey"
+        @regenerate="handleRegenerateAdminApiKey"
+        @request-delete="showDeleteAdminKeyModal = true"
+        @copy="copyAdminApiKey"
+      />
 
-        <div class="grid gap-4">
-          <div
-            class="flex min-h-16 items-center justify-between gap-4 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3"
-          >
-            <div class="flex min-w-0 items-center gap-3">
-              <span
-                class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) text-(--cp-normal) shadow-(--cp-shadow-control)"
-              >
-                <KeyRound class="size-4" />
-              </span>
-              <div class="min-w-0">
-                <p class="m-0 text-[13px] leading-[1.15] font-[720] text-(--cp-text-primary)">
-                  {{ adminApiKeyStatus.exists ? '已启用' : '未生成' }}
-                </p>
-                <p
-                  class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
-                >
-                  {{
-                    adminKeyLoading
-                      ? '加载中...'
-                      : adminApiKeyStatus.maskedKey || '外部系统暂时无法通过 API Key 调用管理接口'
-                  }}
-                </p>
-              </div>
-            </div>
-          </div>
+      <RuntimeSettingsCard
+        v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
+        v-model:refresh-margin-seconds="refreshMarginSecondsValue"
+        v-model:refresh-concurrency="refreshConcurrencyValue"
+        v-model:request-interval-ms="requestIntervalMsValue"
+      />
 
-          <div v-if="generatedAdminApiKey" class="grid gap-2">
-            <p class="m-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
-              完整 Key 仅显示一次，请立即保存。
-            </p>
-            <div class="flex min-w-0 items-center gap-2">
-              <code
-                class="min-w-0 flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[12px] leading-normal font-[650] break-all text-(--cp-text-primary)"
-              >
-                {{ generatedAdminApiKey }}
-              </code>
-              <BaseButton icon-only size="md" title="复制" @click="copyAdminApiKey">
-                <Copy class="size-4" />
-              </BaseButton>
-            </div>
-          </div>
-        </div>
-      </BaseCard>
+      <ModelAliasesCard
+        :rows="aliasRows"
+        :error="aliasError"
+        :disabled="saving || loading"
+        @add="addAliasRow"
+        @update="updateAliasRow"
+        @remove="removeAliasRow"
+      />
 
-      <BaseCard
-        :padded="false"
-        title="运行参数"
-        description="请求节奏、账号并发和 Token 刷新。"
-        header-class="px-5 pt-4"
-        body-class="px-5 py-5"
-      >
-        <BaseForm :columns="2">
-          <BaseFormItem label="单账号最大并发" description="限制单个账号同一时间可承载的请求数。">
-            <BaseInput v-model="maxConcurrentPerAccountValue" type="number">
-              <template #prefix>
-                <Gauge class="size-4" />
-              </template>
-            </BaseInput>
-          </BaseFormItem>
-
-          <BaseFormItem label="提前刷新秒数" description="Token 过期前多少秒触发刷新。">
-            <BaseInput v-model="refreshMarginSecondsValue" type="number">
-              <template #prefix>
-                <Timer class="size-4" />
-              </template>
-            </BaseInput>
-          </BaseFormItem>
-
-          <BaseFormItem
-            label="刷新并发数"
-            description="同时刷新 Token 的最大请求数，减小可避免限流。"
-          >
-            <BaseInput v-model="refreshConcurrencyValue" type="number">
-              <template #prefix>
-                <Zap class="size-4" />
-              </template>
-            </BaseInput>
-          </BaseFormItem>
-
-          <BaseFormItem label="请求间隔 ms" description="控制同一账号两次调度之间的最小等待时间。">
-            <BaseInput v-model="requestIntervalMsValue" type="number">
-              <template #prefix>
-                <Timer class="size-4" />
-              </template>
-            </BaseInput>
-          </BaseFormItem>
-        </BaseForm>
-      </BaseCard>
-
-      <BaseCard
-        :padded="false"
-        title="模型映射"
-        description="把客户端可见名称指向真实上游模型。"
-        header-class="px-5 pt-4"
-        body-class="px-5 py-5"
-      >
-        <div class="grid gap-3">
-          <div
-            class="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-0.75 text-xs leading-none font-bold text-(--cp-text-secondary) sm:grid"
-          >
-            <span>别名</span>
-            <span>目标模型</span>
-            <span />
-          </div>
-
-          <div
-            v-if="aliasRows.length === 0"
-            class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3 text-[13px] font-[650] text-(--cp-text-muted)"
-          >
-            还没有模型映射。
-          </div>
-
-          <div
-            v-for="(row, index) in aliasRows"
-            :key="index"
-            class="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem]"
-          >
-            <BaseInput
-              :model-value="row.alias"
-              placeholder="gpt-5.2"
-              @update:model-value="updateAliasRow(index, 'alias', $event)"
-            >
-              <template #prefix>
-                <GitBranch class="size-4" />
-              </template>
-            </BaseInput>
-            <BaseInput
-              :model-value="row.target"
-              placeholder="gpt-5.5"
-              @update:model-value="updateAliasRow(index, 'target', $event)"
-            />
-            <BaseButton
-              variant="ghost"
-              size="default"
-              icon-only
-              label="删除映射"
-              :disabled="saving || loading"
-              @click="removeAliasRow(index)"
-            >
-              <Trash2 class="size-4" />
-            </BaseButton>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-3 pt-1">
-            <BaseButton variant="default" :disabled="saving || loading" @click="addAliasRow">
-              <template #icon>
-                <Plus class="size-4" />
-              </template>
-              添加映射
-            </BaseButton>
-            <span v-if="aliasError" class="text-xs font-[650] text-(--cp-danger-text)">
-              {{ aliasError }}
-            </span>
-          </div>
-        </div>
-      </BaseCard>
-
-      <BaseCard
-        :padded="false"
-        title="账号选择"
-        description="决定每次请求如何使用账号池。"
-        header-class="px-5 pt-4"
-        body-class="px-5 py-5"
-      >
-        <div class="grid gap-3 lg:grid-cols-3">
-          <button
-            v-for="option in rotationOptions"
-            :key="option.value"
-            type="button"
-            class="min-h-25 cursor-pointer rounded-(--cp-input-radius-base) border-0 px-4 py-3.5 text-left shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-160 focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
-            :class="
-              form.rotationStrategy === option.value
-                ? 'bg-(--cp-info-bg) text-(--cp-info-text) shadow-(--cp-shadow-control)'
-                : 'bg-(--cp-input-current-bg,var(--cp-input-context-bg)) text-(--cp-text-primary) hover:bg-(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover)) hover:shadow-(--cp-shadow-input-hover)'
-            "
-            :aria-pressed="form.rotationStrategy === option.value"
-            @click="form.rotationStrategy = option.value"
-          >
-            <span class="flex items-center gap-2">
-              <span
-                class="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-(--cp-bg-surface) shadow-[inset_0_0_0_1px_var(--cp-default-border-hover)]"
-              >
-                <span
-                  class="size-2 rounded-full transition-opacity duration-150"
-                  :class="
-                    form.rotationStrategy === option.value
-                      ? 'bg-(--cp-info) opacity-100'
-                      : 'opacity-0'
-                  "
-                />
-              </span>
-              <span class="text-[14px] leading-[1.15] font-[760]">{{ option.label }}</span>
-            </span>
-            <span
-              class="mt-2 block text-[13px] leading-normal font-[650] text-(--cp-text-secondary)"
-            >
-              {{ option.description }}
-            </span>
-          </button>
-        </div>
-      </BaseCard>
+      <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
 
       <BaseConfirmModal
         v-model="showDeleteAdminKeyModal"

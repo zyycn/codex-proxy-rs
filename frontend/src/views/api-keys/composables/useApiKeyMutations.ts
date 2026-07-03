@@ -4,6 +4,8 @@ import { onMounted, ref, type Ref } from 'vue'
 
 import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { useIdSet } from '@/composables/useIdSet'
 
 export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   const { copy } = useClipboard()
@@ -16,11 +18,16 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   const createdKey = ref('')
   const editingLabel = ref<{ id: string; value: string } | null>(null)
   const pendingDeleteKey = ref<any | null>(null)
-  const creatingKey = ref(false)
-  const deletingKey = ref(false)
-  const batchDeleting = ref(false)
-  const updatingStatusKeyIds = ref<Set<string>>(new Set())
-  const savingLabelKeyIds = ref<Set<string>>(new Set())
+  const creatingKeyAction = useAsyncAction()
+  const deletingKeyAction = useAsyncAction()
+  const batchDeletingAction = useAsyncAction()
+  const updatingStatusKeys = useIdSet<string>()
+  const savingLabelKeys = useIdSet<string>()
+  const creatingKey = creatingKeyAction.loading
+  const deletingKey = deletingKeyAction.loading
+  const batchDeleting = batchDeletingAction.loading
+  const updatingStatusKeyIds = updatingStatusKeys.ids
+  const savingLabelKeyIds = savingLabelKeys.ids
 
   const createForm = ref({
     name: '',
@@ -46,25 +53,23 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
       return
     }
 
-    try {
-      creatingKey.value = true
-      const result = await createApiKey({
-        name: createForm.value.name,
-        label: createForm.value.label || undefined,
-      })
+    await creatingKeyAction.run(
+      async () => {
+        const result = await createApiKey({
+          name: createForm.value.name,
+          label: createForm.value.label || undefined,
+        })
 
-      createdKey.value = result.key
-      showCreateModal.value = false
-      showKeyModal.value = true
-      createForm.value = { name: '', label: '' }
+        createdKey.value = result.key
+        showCreateModal.value = false
+        showKeyModal.value = true
+        createForm.value = { name: '', label: '' }
 
-      await loadApiKeys()
-      toast.success('API Key 创建成功')
-    } catch (error: any) {
-      toast.error(error.message || '创建失败')
-    } finally {
-      creatingKey.value = false
-    }
+        await loadApiKeys()
+        toast.success('API Key 创建成功')
+      },
+      { errorText: '创建失败' },
+    )
   }
 
   function requestDeleteKey(key: any) {
@@ -78,70 +83,58 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     const keyId = pendingDeleteKey.value?.id
     if (!keyId) return
 
-    try {
-      deletingKey.value = true
-      await deleteApiKeys({ ids: [keyId] })
-      showSingleDeleteModal.value = false
-      pendingDeleteKey.value = null
-      await loadApiKeys()
-      toast.success('删除成功')
-    } catch (error: any) {
-      toast.error(error.message || '删除失败')
-    } finally {
-      deletingKey.value = false
-    }
+    await deletingKeyAction.run(
+      async () => {
+        await deleteApiKeys({ ids: [keyId] })
+        showSingleDeleteModal.value = false
+        pendingDeleteKey.value = null
+        await loadApiKeys()
+        toast.success('删除成功')
+      },
+      { errorText: '删除失败' },
+    )
   }
 
   async function handleBatchDelete() {
     if (batchDeleting.value) return
     if (selectedIds.value.size === 0) return
 
-    try {
-      batchDeleting.value = true
-      const deleteCount = selectedIds.value.size
-      await deleteApiKeys({ ids: [...selectedIds.value] })
-      selectedIds.value = new Set()
-      showDeleteModal.value = false
-      await loadApiKeys()
-      toast.success(`已删除 ${deleteCount} 个 API Key`)
-    } catch (error: any) {
-      toast.error(error.message || '批量删除失败')
-    } finally {
-      batchDeleting.value = false
-    }
+    await batchDeletingAction.run(
+      async () => {
+        const deleteCount = selectedIds.value.size
+        await deleteApiKeys({ ids: [...selectedIds.value] })
+        selectedIds.value = new Set()
+        showDeleteModal.value = false
+        await loadApiKeys()
+        toast.success(`已删除 ${deleteCount} 个 API Key`)
+      },
+      { errorText: '批量删除失败' },
+    )
   }
 
   async function handleToggleStatus(key: any) {
-    if (updatingStatusKeyIds.value.has(key.id)) return
-    updatingStatusKeyIds.value = new Set(updatingStatusKeyIds.value).add(key.id)
-    try {
-      await updateApiKey({ id: key.id, status: key.enabled ? 'disabled' : 'active' })
-      await loadApiKeys()
-      toast.success(key.enabled ? '已禁用' : '已启用')
-    } catch (error: any) {
-      toast.error(error.message || '状态更新失败')
-    } finally {
-      const next = new Set(updatingStatusKeyIds.value)
-      next.delete(key.id)
-      updatingStatusKeyIds.value = next
-    }
+    await updatingStatusKeys.run(key.id, async () => {
+      try {
+        await updateApiKey({ id: key.id, status: key.enabled ? 'disabled' : 'active' })
+        await loadApiKeys()
+        toast.success(key.enabled ? '已禁用' : '已启用')
+      } catch (error: any) {
+        toast.error(error.message || '状态更新失败')
+      }
+    })
   }
 
   async function handleUpdateLabel(keyId: string, label: string) {
-    if (savingLabelKeyIds.value.has(keyId)) return
-    savingLabelKeyIds.value = new Set(savingLabelKeyIds.value).add(keyId)
-    try {
-      await updateApiKey({ id: keyId, label: label || null })
-      editingLabel.value = null
-      await loadApiKeys()
-      toast.success('标签已更新')
-    } catch (error: any) {
-      toast.error(error.message || '标签更新失败')
-    } finally {
-      const next = new Set(savingLabelKeyIds.value)
-      next.delete(keyId)
-      savingLabelKeyIds.value = next
-    }
+    await savingLabelKeys.run(keyId, async () => {
+      try {
+        await updateApiKey({ id: keyId, label: label || null })
+        editingLabel.value = null
+        await loadApiKeys()
+        toast.success('标签已更新')
+      } catch (error: any) {
+        toast.error(error.message || '标签更新失败')
+      }
+    })
   }
 
   function startEditLabel(key: any) {

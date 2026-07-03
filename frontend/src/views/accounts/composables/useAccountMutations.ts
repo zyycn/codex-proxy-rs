@@ -14,7 +14,9 @@ import {
   updateAccount,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
+import { useIdSet } from '@/composables/useIdSet'
 import { withMinimumDuration } from '@/utils/async'
 
 export function useAccountMutations(options: {
@@ -40,15 +42,24 @@ export function useAccountMutations(options: {
   const editingAccount = ref<any>(null)
   const editingScheduleStatus = ref('active')
   const pendingDeleteAccount = ref<any>(null)
-  const refreshingAccountIds = ref<Set<string>>(new Set())
-  const refreshingQuotaAccountIds = ref<Set<string>>(new Set())
-  const updatingStatusAccountIds = ref<Set<string>>(new Set())
-  const deletingAccount = ref(false)
-  const creatingAccount = ref(false)
-  const authorizingOAuth = ref(false)
-  const savingAccount = ref(false)
-  const batchDeleting = ref(false)
-  const exportingAccounts = ref(false)
+  const refreshingAccounts = useIdSet<string>()
+  const refreshingQuotaAccounts = useIdSet<string>()
+  const updatingStatusAccounts = useIdSet<string>()
+  const deletingAccountAction = useAsyncAction()
+  const creatingAccountAction = useAsyncAction()
+  const authorizingOAuthAction = useAsyncAction()
+  const savingAccountAction = useAsyncAction()
+  const batchDeletingAction = useAsyncAction()
+  const exportingAccountsAction = useAsyncAction()
+  const refreshingAccountIds = refreshingAccounts.ids
+  const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
+  const updatingStatusAccountIds = updatingStatusAccounts.ids
+  const deletingAccount = deletingAccountAction.loading
+  const creatingAccount = creatingAccountAction.loading
+  const authorizingOAuth = authorizingOAuthAction.loading
+  const savingAccount = savingAccountAction.loading
+  const batchDeleting = batchDeletingAction.loading
+  const exportingAccounts = exportingAccountsAction.loading
 
   const createForm = ref({
     mode: 'oauth',
@@ -130,21 +141,19 @@ export function useAccountMutations(options: {
     }
     if (creatingAccount.value) return
 
-    try {
-      const payload = accountImportPayload()
-      if (!payload) return
+    await creatingAccountAction.run(
+      async () => {
+        const payload = accountImportPayload()
+        if (!payload) return
 
-      creatingAccount.value = true
-      const result = await importAccounts(payload)
-      showCreateModal.value = false
-      resetCreateForm()
-      await loadAccounts()
-      toast.success(importSuccessText(result))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '导入失败')
-    } finally {
-      creatingAccount.value = false
-    }
+        const result = await importAccounts(payload)
+        showCreateModal.value = false
+        resetCreateForm()
+        await loadAccounts()
+        toast.success(importSuccessText(result))
+      },
+      { errorText: '导入失败' },
+    )
   }
 
   function accountImportPayload() {
@@ -189,45 +198,39 @@ export function useAccountMutations(options: {
   async function handleAuthorizeOAuth() {
     if (authorizingOAuth.value) return
 
-    try {
-      authorizingOAuth.value = true
-      const result = await authorizeAccountOAuth()
-      createForm.value = {
-        ...createForm.value,
-        mode: 'oauth',
-        oauthSessionId: result.sessionId,
-        oauthAuthUrl: result.authUrl,
-        oauthCallback: '',
-      }
-      toast.success('授权链接已生成')
-    } catch (error: any) {
-      toast.error(error.message || '授权链接生成失败')
-    } finally {
-      authorizingOAuth.value = false
-    }
+    await authorizingOAuthAction.run(
+      async () => {
+        const result = await authorizeAccountOAuth()
+        createForm.value = {
+          ...createForm.value,
+          mode: 'oauth',
+          oauthSessionId: result.sessionId,
+          oauthAuthUrl: result.authUrl,
+          oauthCallback: '',
+        }
+        toast.success('授权链接已生成')
+      },
+      { errorText: '授权链接生成失败' },
+    )
   }
 
   async function handleExchangeOAuth() {
     if (creatingAccount.value) return
 
-    try {
-      const payload = accountImportPayload()
-      if (!payload) return
+    await creatingAccountAction.run(
+      async () => {
+        const payload = accountImportPayload()
+        if (!payload) return
 
-      creatingAccount.value = true
-      const result = await exchangeAccountOAuth(payload)
-      const successText = oauthSuccessText(result)
-      showCreateModal.value = false
-      resetCreateForm()
-      await loadAccounts()
-      toast.success(successText)
-    } catch (error: any) {
-      toast.error(
-        error.message || (reauthorizingAccount.value ? '重新授权失败' : 'OAuth 授权导入失败'),
-      )
-    } finally {
-      creatingAccount.value = false
-    }
+        const result = await exchangeAccountOAuth(payload)
+        const successText = oauthSuccessText(result)
+        showCreateModal.value = false
+        resetCreateForm()
+        await loadAccounts()
+        toast.success(successText)
+      },
+      { errorText: reauthorizingAccount.value ? '重新授权失败' : 'OAuth 授权导入失败' },
+    )
   }
 
   function resetCreateForm() {
@@ -286,24 +289,22 @@ export function useAccountMutations(options: {
     const account = editingAccount.value
     if (!account) return
 
-    try {
-      savingAccount.value = true
-      const payload: any = {
-        id: account.id,
-        label: nullableTrimmedValue(editForm.value.label),
-      }
-      if (editForm.value.status !== editingScheduleStatus.value) {
-        payload.status = editForm.value.status
-      }
-      await updateAccount(payload)
-      editingAccount.value = null
-      await loadAccounts()
-      toast.success('账号已更新')
-    } catch (error: any) {
-      toast.error(error.message || '保存失败')
-    } finally {
-      savingAccount.value = false
-    }
+    await savingAccountAction.run(
+      async () => {
+        const payload: any = {
+          id: account.id,
+          label: nullableTrimmedValue(editForm.value.label),
+        }
+        if (editForm.value.status !== editingScheduleStatus.value) {
+          payload.status = editForm.value.status
+        }
+        await updateAccount(payload)
+        editingAccount.value = null
+        await loadAccounts()
+        toast.success('账号已更新')
+      },
+      { errorText: '保存失败' },
+    )
   }
 
   function nullableTrimmedValue(value: string) {
@@ -322,35 +323,36 @@ export function useAccountMutations(options: {
     const accountId = pendingDeleteAccount.value?.id
     if (!accountId) return
 
-    try {
-      deletingAccount.value = true
-      await deleteAccounts({ ids: [accountId] })
-      showSingleDeleteModal.value = false
-      pendingDeleteAccount.value = null
-      await loadAccounts()
-      toast.success('账号已删除')
-    } catch (error: any) {
-      toast.error(error.message || '删除失败')
-    } finally {
-      deletingAccount.value = false
-    }
+    await deletingAccountAction.run(
+      async () => {
+        await deleteAccounts({ ids: [accountId] })
+        showSingleDeleteModal.value = false
+        pendingDeleteAccount.value = null
+        await loadAccounts()
+        toast.success('账号已删除')
+      },
+      { errorText: '删除失败' },
+    )
   }
 
   async function handleBatchDelete() {
     if (batchDeleting.value) return
     if (options.selectedIds.value.size === 0) return
 
-    try {
-      batchDeleting.value = true
-      await deleteAccounts({ ids: [...options.selectedIds.value] })
-      options.selectedIds.value = new Set()
-      showDeleteModal.value = false
-      await loadAccounts()
-    } catch (error) {
-      console.error('Failed to batch delete accounts:', error)
-    } finally {
-      batchDeleting.value = false
-    }
+    await batchDeletingAction.run(
+      async () => {
+        await deleteAccounts({ ids: [...options.selectedIds.value] })
+        options.selectedIds.value = new Set()
+        showDeleteModal.value = false
+        await loadAccounts()
+      },
+      {
+        errorText: false,
+        onError: (error) => {
+          console.error('Failed to batch delete accounts:', error)
+        },
+      },
+    )
   }
 
   async function handleExportAccounts() {
@@ -361,78 +363,64 @@ export function useAccountMutations(options: {
       return
     }
 
-    try {
-      exportingAccounts.value = true
-      const payload = await exportAccounts({ ids: selected.join(',') })
-      await downloadJson(payload, exportFileName(selected.length))
-      toast.success(`已导出 ${selected.length} 个账号`)
-    } catch (error: any) {
-      toast.error(error.message || '导出失败')
-    } finally {
-      exportingAccounts.value = false
-    }
+    await exportingAccountsAction.run(
+      async () => {
+        const payload = await exportAccounts({ ids: selected.join(',') })
+        await downloadJson(payload, exportFileName(selected.length))
+        toast.success(`已导出 ${selected.length} 个账号`)
+      },
+      { errorText: '导出失败' },
+    )
   }
 
   async function handleRefresh(accountId: string) {
-    if (refreshingAccountIds.value.has(accountId)) return
-    refreshingAccountIds.value = new Set(refreshingAccountIds.value).add(accountId)
-    try {
-      await withMinimumDuration(async () => {
-        await refreshAccount({ id: accountId })
-        await loadAccounts()
-      })
-      toast.success('Token 已刷新')
-    } catch (error: any) {
-      toast.error(error.message || '刷新失败')
-    } finally {
-      const next = new Set(refreshingAccountIds.value)
-      next.delete(accountId)
-      refreshingAccountIds.value = next
-    }
+    await refreshingAccounts.run(accountId, async () => {
+      try {
+        await withMinimumDuration(async () => {
+          await refreshAccount({ id: accountId })
+          await loadAccounts()
+        })
+        toast.success('Token 已刷新')
+      } catch (error: any) {
+        toast.error(error.message || '刷新失败')
+      }
+    })
   }
 
   async function handleRefreshQuota(accountId: string) {
-    if (refreshingQuotaAccountIds.value.has(accountId)) return
-    refreshingQuotaAccountIds.value = new Set(refreshingQuotaAccountIds.value).add(accountId)
-    try {
-      await withMinimumDuration(async () => {
-        const result = await getAccountQuota({ id: accountId })
-        if (result?.quotaData) {
-          accounts.value = accounts.value.map((account) =>
-            account.id === accountId
-              ? {
-                  ...account,
-                  quota: result.quotaData,
-                  planType: result.planType ?? account.planType,
-                }
-              : account,
-          )
-        }
-      })
-    } catch (error) {
-      console.error('Failed to refresh account quota:', error)
-    } finally {
-      const next = new Set(refreshingQuotaAccountIds.value)
-      next.delete(accountId)
-      refreshingQuotaAccountIds.value = next
-    }
+    await refreshingQuotaAccounts.run(accountId, async () => {
+      try {
+        await withMinimumDuration(async () => {
+          const result = await getAccountQuota({ id: accountId })
+          if (result?.quotaData) {
+            accounts.value = accounts.value.map((account) =>
+              account.id === accountId
+                ? {
+                    ...account,
+                    quota: result.quotaData,
+                    planType: result.planType ?? account.planType,
+                  }
+                : account,
+            )
+          }
+        })
+      } catch (error) {
+        console.error('Failed to refresh account quota:', error)
+      }
+    })
   }
 
   async function handleToggleSchedule(account: any) {
-    if (updatingStatusAccountIds.value.has(account.id)) return
     const nextStatus = account.status === 'disabled' ? 'active' : 'disabled'
-    updatingStatusAccountIds.value = new Set(updatingStatusAccountIds.value).add(account.id)
-    try {
-      await updateAccount({ id: account.id, status: nextStatus })
-      await loadAccounts()
-      toast.success(nextStatus === 'disabled' ? '已禁用调度' : '已启用调度')
-    } catch (error: any) {
-      toast.error(error.message || '状态更新失败')
-    } finally {
-      const next = new Set(updatingStatusAccountIds.value)
-      next.delete(account.id)
-      updatingStatusAccountIds.value = next
-    }
+    await updatingStatusAccounts.run(account.id, async () => {
+      try {
+        await updateAccount({ id: account.id, status: nextStatus })
+        await loadAccounts()
+        toast.success(nextStatus === 'disabled' ? '已禁用调度' : '已启用调度')
+      } catch (error: any) {
+        toast.error(error.message || '状态更新失败')
+      }
+    })
   }
 
   function scheduleActionLabel(account: any) {
