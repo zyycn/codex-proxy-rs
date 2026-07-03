@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { useResizeObserver } from '@vueuse/core'
-import { ChevronLeft, ChevronRight } from '@lucide/vue'
-import { computed, nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
-import BaseSelect from '../BaseSelect.vue'
+import BaseTablePagination from './BaseTablePagination.vue'
 import {
   alignClass,
   cellContentClass,
@@ -17,13 +15,8 @@ import {
   tableStyle as resolveTableStyle,
   type BaseTableColumn,
 } from './columns'
-import {
-  getCurrentPage,
-  getPageSizeOptions,
-  getPagerItems,
-  getTotalPages,
-  type BaseTablePagination,
-} from './pagination'
+import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
+import { useHorizontalStickyShadow } from './useHorizontalStickyShadow'
 
 type TableRow = Record<string, any>
 type RowKey = string | ((row: TableRow, index: number) => string | number)
@@ -39,7 +32,7 @@ const props = withDefaults(
     emptyText?: string
     maxHeight?: string
     minWidth?: number | string
-    pagination?: BaseTablePagination
+    pagination?: BaseTablePaginationConfig
     expandedRowKeys?: Array<string | number>
   }>(),
   {
@@ -67,33 +60,13 @@ const bodyCellClass =
   'min-w-0 px-4 first:pl-3 text-[13px] text-(--cp-text-primary) first:rounded-l-lg'
 
 const computedColumns = computed(() => resolveColumns(props.columns, props.minWidth))
-const totalPages = computed(() => getTotalPages(props.pagination))
-const currentPage = computed(() => getCurrentPage(props.pagination, totalPages.value))
-const pageSizeOptions = computed(() => getPageSizeOptions(props.pagination))
 const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
 const hasRows = computed(() => props.rows.length > 0)
-
-const pageSizeModel = computed({
-  get: () => String(props.pagination?.pageSize ?? ''),
-  set: (value: string) => {
-    if (props.loading) {
-      return
-    }
-
-    const pageSize = Number(value)
-    if (Number.isFinite(pageSize) && pageSize > 0) {
-      emit('page-size-change', pageSize)
-    }
-  },
-})
-
-const headerWrapRef = useTemplateRef<HTMLDivElement>('headerWrap')
-const bodyScrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('bodyScrollbar')
-const tableViewRef = useTemplateRef<HTMLTableElement>('tableView')
-const horizontalScrolled = shallowRef(false)
-const horizontalCanScrollRight = shallowRef(false)
-
-const pagerItems = computed(() => getPagerItems(totalPages.value, currentPage.value))
+const { horizontalScrolled, horizontalCanScrollRight, handleTableScroll } =
+  useHorizontalStickyShadow({
+    hasRows,
+    watchSources: () => [props.rows.length, props.minWidth],
+  })
 
 function fixedHeaderClass(column: BaseTableColumn) {
   if (!column.fixed) {
@@ -164,98 +137,8 @@ function rowClass(row: TableRow, index: number) {
   ]
 }
 
-function maxScrollLeft(wrap: HTMLElement) {
-  return Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
-}
-
-function scrollWrap() {
-  return bodyScrollbarRef.value?.wrapRef ?? null
-}
-
-function resetHorizontalScrollbar() {
-  horizontalScrolled.value = false
-  horizontalCanScrollRight.value = false
-}
-
-function updateHorizontalScrollbar() {
-  const wrap = scrollWrap()
-  if (!wrap || !hasRows.value) {
-    resetHorizontalScrollbar()
-    return
-  }
-
-  const scrollRange = maxScrollLeft(wrap)
-  if (scrollRange <= 0) {
-    resetHorizontalScrollbar()
-    return
-  }
-
-  horizontalScrolled.value = wrap.scrollLeft > 0
-  horizontalCanScrollRight.value = wrap.scrollLeft < scrollRange - 1
-}
-
-function handleTableScroll() {
-  const wrap = scrollWrap()
-  if (wrap && headerWrapRef.value) {
-    headerWrapRef.value.scrollLeft = wrap.scrollLeft
-  }
-  updateHorizontalScrollbar()
-}
-
-onMounted(async () => {
-  await nextTick()
-  updateHorizontalScrollbar()
-})
-
-useResizeObserver(
-  () =>
-    [scrollWrap(), tableViewRef.value].filter(
-      (element): element is HTMLDivElement | HTMLTableElement => Boolean(element),
-    ),
-  updateHorizontalScrollbar,
-)
-watch(
-  () => [props.rows.length, props.minWidth],
-  async () => {
-    await nextTick()
-    updateHorizontalScrollbar()
-  },
-)
-
 function isLastColumn(index: number) {
   return index === computedColumns.value.length - 1
-}
-
-function goToPage(page: number) {
-  if (
-    props.loading ||
-    !props.pagination ||
-    page < 1 ||
-    page > totalPages.value ||
-    page === currentPage.value
-  ) {
-    return
-  }
-
-  emit('page-change', page)
-}
-
-function paginationButtonClass(disabled: boolean) {
-  return [
-    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 bg-(--cp-bg-subtle) text-(--cp-text-secondary) transition-colors duration-150 outline-none',
-    disabled
-      ? 'cursor-not-allowed opacity-45 shadow-none'
-      : 'cursor-pointer hover:bg-(--cp-default-bg-hover) hover:text-(--cp-text-primary) focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
-  ]
-}
-
-function paginationPageClass(page: number) {
-  return [
-    'inline-flex size-8 items-center justify-center rounded-(--cp-input-radius-base) border-0 text-xs font-[720] leading-none transition-colors duration-150 outline-none',
-    page === currentPage.value
-      ? 'cursor-default bg-(--cp-info) text-(--cp-info-on)'
-      : 'cursor-pointer bg-(--cp-bg-subtle) text-(--cp-text-primary) hover:bg-(--cp-default-bg-hover) focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
-  ]
 }
 </script>
 
@@ -374,68 +257,12 @@ function paginationPageClass(page: number) {
       </div>
     </div>
 
-    <footer
+    <BaseTablePagination
       v-if="pagination"
-      class="mt-2 flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-3 px-0 py-1"
-    >
-      <div
-        class="flex min-w-0 items-center gap-2.5 text-[12px] font-[650] text-(--cp-text-secondary)"
-      >
-        <span class="whitespace-nowrap">共 {{ pagination.total }} 条</span>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <BaseSelect
-          v-model="pageSizeModel"
-          :options="pageSizeOptions"
-          :disabled="loading"
-          size="compact"
-          class="w-28"
-        />
-
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            :class="paginationButtonClass(loading || currentPage <= 1)"
-            :disabled="loading || currentPage <= 1"
-            title="上一页"
-            aria-label="上一页"
-            @click="goToPage(currentPage - 1)"
-          >
-            <ChevronLeft class="size-4" />
-          </button>
-
-          <template v-for="(item, index) in pagerItems" :key="`${item}-${index}`">
-            <span
-              v-if="item === 'ellipsis'"
-              class="inline-flex size-8 items-center justify-center text-xs font-[720] text-(--cp-text-muted)"
-            >
-              ...
-            </span>
-            <button
-              v-else
-              type="button"
-              :class="paginationPageClass(item)"
-              :disabled="loading || item === currentPage"
-              :aria-current="item === currentPage ? 'page' : undefined"
-              @click="goToPage(item)"
-            >
-              {{ item }}
-            </button>
-          </template>
-
-          <button
-            type="button"
-            :class="paginationButtonClass(loading || currentPage >= totalPages)"
-            :disabled="loading || currentPage >= totalPages"
-            title="下一页"
-            aria-label="下一页"
-            @click="goToPage(currentPage + 1)"
-          >
-            <ChevronRight class="size-4" />
-          </button>
-        </div>
-      </div>
-    </footer>
+      :pagination="pagination"
+      :loading="loading"
+      @page-change="emit('page-change', $event)"
+      @page-size-change="emit('page-size-change', $event)"
+    />
   </div>
 </template>
