@@ -2,7 +2,7 @@ use chrono::Utc;
 use secrecy::SecretString;
 
 use super::{
-    types::{
+    contracts::{
         import_quota_plan_type, import_status_from_usage_error, import_usage_plan_type,
         import_usage_string, AdminAccountError, ImportSupplementalAccountInfo,
         ImportSupplementalNeeds, ImportedAccountState, ImportedAccounts, ResolvedImportTokens,

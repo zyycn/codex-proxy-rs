@@ -8,7 +8,10 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::{proxy::auth::authorize_client_api_key, runtime::state::AppState};
+use crate::{
+    proxy::auth::authorize_client_api_key, runtime::state::AppState,
+    upstream::models::catalog::ModelCatalog,
+};
 
 use super::errors::{missing_client_api_key_response, model_not_found_response};
 
@@ -83,7 +86,7 @@ pub async fn model_info(
     (StatusCode::OK, Json(json!(info)))
 }
 
-pub async fn model_catalog_for_state(state: &AppState) -> crate::upstream::models::ModelCatalog {
+pub async fn model_catalog_for_state(state: &AppState) -> ModelCatalog {
     state.services.models.catalog().await
 }
 

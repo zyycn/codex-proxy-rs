@@ -10,8 +10,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     proxy::dispatch::responses::{
-        finalize_live_response_stream, latest_response_id, premature_close_failed_event,
-        LiveResponseStreamContext, ResponseDispatchStream, ResponseDispatchStreamError,
+        errors::ResponseDispatchStreamError,
+        service::ResponseDispatchStream,
+        stream_lifecycle::{
+            finalize_live_response_stream, latest_response_id, premature_close_failed_event,
+            LiveResponseStreamContext,
+        },
     },
     upstream::{
         protocol::{

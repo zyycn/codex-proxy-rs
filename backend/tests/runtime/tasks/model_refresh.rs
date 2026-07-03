@@ -4,7 +4,11 @@ use std::collections::BTreeMap;
 
 use codex_proxy_rs::upstream::{
     accounts::pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
-    models::{BackendModelEntry, ModelPlanSnapshot, ModelSnapshotStore, ModelSnapshotStoreResult},
+    models::{
+        backend_entry::BackendModelEntry,
+        snapshot::ModelPlanSnapshot,
+        snapshot_store::{ModelSnapshotStore, ModelSnapshotStoreResult},
+    },
     transport::{CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest},
 };
 

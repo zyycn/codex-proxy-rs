@@ -9,10 +9,11 @@ use crate::{
     admin::auth::session::AdminAuth,
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     config::{
+        schema::AppConfig,
         settings::{AdminSettingsPatch, RuntimeSettingsError, SettingsServiceError},
-        types::AppConfig,
     },
     runtime::state::AppState,
+    upstream::models::config::ModelConfig,
 };
 
 const ALLOWED_SETTINGS_KEYS: [&str; 7] = [
@@ -76,12 +77,9 @@ pub(crate) async fn update_settings(
         .update(patch)
         .await
         .map_err(settings_service_error)?;
-    state
-        .services
-        .models
-        .update_config(crate::upstream::models::ModelConfig {
-            model_aliases: config.model_aliases.clone(),
-        });
+    state.services.models.update_config(ModelConfig {
+        model_aliases: config.model_aliases.clone(),
+    });
 
     Ok(AdminResponse::new(
         StatusCode::OK,

@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use super::{
-    types::{AdminAccountError, OAuthAuthorizeResult, OAuthExchangeInput},
+    contracts::{AdminAccountError, OAuthAuthorizeResult, OAuthExchangeInput},
     AdminAccountService,
 };
 
@@ -144,7 +144,7 @@ impl AdminAccountService {
     pub async fn oauth_exchange(
         &self,
         input: OAuthExchangeInput,
-    ) -> Result<super::types::ImportedAccounts, AdminAccountError> {
+    ) -> Result<super::contracts::ImportedAccounts, AdminAccountError> {
         let tokens = self.oauth.exchange(input).await?;
         self.import(serde_json::json!({
             "sourceFormat": "cpr",

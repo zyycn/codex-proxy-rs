@@ -11,8 +11,8 @@ use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
 use codex_proxy_rs::upstream::accounts::model::{AccountModelUsageDelta, AccountUsageDelta};
 use codex_proxy_rs::upstream::accounts::store::{AccountStore, AccountStoreResult};
 use codex_proxy_rs::upstream::fingerprint::FingerprintRepository;
-use codex_proxy_rs::upstream::models::ModelConfig;
-use codex_proxy_rs::upstream::models::ModelService;
+use codex_proxy_rs::upstream::models::config::ModelConfig;
+use codex_proxy_rs::upstream::models::service::ModelService;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,

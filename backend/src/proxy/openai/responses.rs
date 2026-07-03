@@ -15,7 +15,7 @@ use crate::{
     http::middleware::request_id::RequestId,
     proxy::{
         auth::authorize_client_api_key,
-        dispatch::responses::{ResponseDispatchError, ResponseDispatchStream},
+        dispatch::responses::{errors::ResponseDispatchError, service::ResponseDispatchStream},
     },
     runtime::state::AppState,
     upstream::protocol::{

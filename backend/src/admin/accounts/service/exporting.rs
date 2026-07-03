@@ -1,7 +1,7 @@
 use secrecy::ExposeSecret;
 
 use super::{
-    types::{ExportedAccount, ExportedAccounts},
+    contracts::{ExportedAccount, ExportedAccounts},
     AdminAccountError, AdminAccountService,
 };
 use crate::{

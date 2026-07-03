@@ -7,7 +7,7 @@ use tokio::time::{interval, sleep};
 use tracing::{info, warn};
 
 use crate::upstream::accounts::pool::RuntimeAccountPoolService;
-use crate::upstream::models::{
+use crate::upstream::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
 

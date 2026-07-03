@@ -8,7 +8,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::proxy::{
-    dispatch::{chat::ChatDispatchError, responses::ResponseDispatchError},
+    dispatch::{chat::ChatDispatchError, responses::errors::ResponseDispatchError},
     openai::responses::response_failed_sse_event as encode_response_failed_sse_event,
 };
 

@@ -4,7 +4,11 @@ use codex_proxy_rs::upstream::{
         model::AccountStatus,
         store::{AccountStore, SqliteAccountStore},
     },
-    models::{BackendModelEntry, ModelPlanSnapshot, ModelSnapshotStore, SqliteModelSnapshotStore},
+    models::{
+        backend_entry::BackendModelEntry,
+        snapshot::ModelPlanSnapshot,
+        snapshot_store::{ModelSnapshotStore, SqliteModelSnapshotStore},
+    },
 };
 
 #[tokio::test]
