@@ -15,6 +15,10 @@ permissions:
   contents: write
   packages: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: zyycn/codex-proxy-rs
@@ -29,12 +33,14 @@ jobs:
       git_sha: ${{ steps.version.outputs.git_sha }}
       platform_matrix: ${{ steps.version.outputs.platform_matrix }}
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Read release metadata
         id: version
@@ -45,6 +51,7 @@ jobs:
           ruby <<'RUBY' >> "$GITHUB_OUTPUT"
           require "json"
           require "open3"
+          require "rubygems"
           require "time"
           require "yaml"
 
@@ -62,13 +69,19 @@ jobs:
             value.strip
           end
 
+          def version_sort_key(version)
+            Gem::Version.new(version.split("+", 2).first)
+          rescue ArgumentError
+            nil
+          end
+
           version_path = "release/version.yaml"
           platforms_path = "release/platforms.yaml"
           version_data = YAML.load_file(version_path)
           platforms_data = YAML.load_file(platforms_path)
 
           version = require_string(version_data, "version", version_path).delete_prefix("v")
-          tag_prefix = require_string(version_data, "tagPrefix", version_path)
+          tag_prefix = "v"
           expected_tag = "#{tag_prefix}#{version}"
           release_tag = ENV.fetch("RELEASE_TAG")
           fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
@@ -101,6 +114,23 @@ jobs:
           git_sha, status = Open3.capture2("git", "rev-parse", "HEAD")
           fail("failed to resolve git sha") unless status.success?
           matrix = JSON.generate({ "include" => platforms })
+          current_sort_key = version_sort_key(version)
+          tags, status = Open3.capture2("git", "tag", "--list", "#{tag_prefix}*", "--merged", "HEAD")
+          fail("failed to list git tags") unless status.success?
+          previous_tag = tags
+            .lines
+            .map(&:strip)
+            .reject(&:empty?)
+            .reject { |tag| tag == release_tag }
+            .filter_map do |tag|
+              tag_version = tag.delete_prefix(tag_prefix)
+              next unless tag_version.match?(SEMVER)
+              sort_key = version_sort_key(tag_version)
+              next unless sort_key && current_sort_key && sort_key < current_sort_key
+              [sort_key, tag]
+            end
+            .max_by(&:first)
+            &.last
 
           puts "tag=#{release_tag}"
           puts "version=#{version}"
@@ -108,6 +138,7 @@ jobs:
           puts "git_sha=#{git_sha.strip}"
           puts "platform_matrix=#{matrix}"
           puts "docker_platforms=#{docker_platforms.join(",")}"
+          puts "previous_tag=#{previous_tag}"
           RUBY
 
   build-frontend:
@@ -149,6 +180,7 @@ jobs:
           retention-days: 1
 
   build-binary:
+    name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
     needs: [release-info, build-frontend]
     strategy:
       fail-fast: false
@@ -416,6 +448,7 @@ jobs:
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
+          previous_tag: ${{ needs.release-info.outputs.previous_tag }}
           body: |
             ## 📥 Installation
 
@@ -432,5 +465,6 @@ jobs:
 
             - [GitHub Repository](https://github.com/${{ github.repository }})
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
+          fail_on_unmatched_files: true
           files: |
             dist/release/*

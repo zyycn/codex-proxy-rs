@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="codex-proxy-rs"
 VERSION_FILE="release/version.yaml"
+TAG_PREFIX="v"
 SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 SIGNATURE="Co-authored-by: Codex <noreply@openai.com>"
 
@@ -94,8 +95,7 @@ current_version="$(read_version_key version)"
 current_version="${current_version#v}"
 [[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
 
-tag_prefix="$(read_version_key tagPrefix)"
-tag="${tag_prefix}${version}"
+tag="${TAG_PREFIX}${version}"
 
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
