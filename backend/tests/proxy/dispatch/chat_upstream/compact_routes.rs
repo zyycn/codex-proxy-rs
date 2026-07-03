@@ -267,7 +267,6 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
     let message = body["error"]["message"].as_str().unwrap_or_default();
 
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "rate_limit_error");
     assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
@@ -335,7 +334,6 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "invalid_request_error");
     assert_eq!(body["error"]["code"], "codex_api_error");
     let event = latest_response_usage_record(&pool).await;
@@ -384,7 +382,6 @@ async fn responses_compact_should_return_responses_error_when_no_accounts_are_av
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "server_error");
     assert_eq!(body["error"]["code"], "no_available_accounts");
 }

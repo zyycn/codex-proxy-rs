@@ -107,13 +107,8 @@ pub fn chat_dispatch_error_response(error: &ChatDispatchError) -> Response {
         .into_response()
 }
 
-pub fn chat_stream_dispatch_error_message(error: &ResponseDispatchError) -> String {
-    response_dispatch_http_error(
-        error,
-        ResponseDispatchStatusMode::UpstreamFailureStatus,
-        ResponseDispatchMessageStyle::Standard,
-    )
-    .message
+pub fn chat_stream_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorDetails {
+    response_dispatch_openai_error(error)
 }
 
 pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Response {
@@ -155,7 +150,6 @@ fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({
-            "type": "error",
             "error": {
                 "type": "server_error",
                 "code": "no_available_accounts",
@@ -170,7 +164,6 @@ fn responses_error_response(status: StatusCode, message: &str) -> (StatusCode, J
     (
         status,
         Json(json!({
-            "type": "error",
             "error": {
                 "type": kind.error_type,
                 "code": kind.code,
