@@ -363,7 +363,8 @@ async fn responses_should_return_auth_error_when_401_fallback_is_exhausted() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(message.contains("All accounts exhausted (1 expired)"));
     assert!(message.contains("token_revoked"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "invalid_api_key");
     assert_eq!(account_status.0, "expired");
 }
 
@@ -1006,6 +1007,7 @@ async fn responses_stream_should_return_model_unsupported_error_when_fallback_is
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
     assert!(body.contains("event: response.failed"));
+    assert!(body.contains("\"code\":\"model_not_found\""));
     assert!(body.contains("All accounts exhausted (1 model-unsupported)"));
     assert!(body.contains("model_not_available"));
     assert_eq!(account_status.0, "active");
@@ -1512,6 +1514,7 @@ async fn responses_stream_should_return_auth_error_when_401_fallback_is_exhauste
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
     assert!(body.contains("event: response.failed"));
+    assert!(body.contains("\"code\":\"invalid_api_key\""));
     assert!(body.contains("All accounts exhausted (1 expired)"));
     assert!(body.contains("token_revoked"));
     assert_eq!(account_status.0, "expired");
@@ -2062,7 +2065,8 @@ async fn responses_should_return_quota_error_when_402_fallback_is_exhausted() {
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
     assert!(message.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(message.contains("quota reached"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "insufficient_quota");
+    assert_eq!(body["error"]["code"], "insufficient_quota");
     assert_eq!(account_status.0, "quota_exhausted");
 }
 
@@ -2115,7 +2119,8 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
     assert!(message.contains("rate limited"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+    assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
     let event = latest_response_usage_record(&pool).await;
@@ -2272,6 +2277,7 @@ async fn responses_stream_should_return_quota_error_when_402_fallback_is_exhaust
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
     assert!(body.contains("event: response.failed"));
+    assert!(body.contains("\"code\":\"insufficient_quota\""));
     assert!(body.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(body.contains("quota reached"));
     assert_eq!(account_status.0, "quota_exhausted");

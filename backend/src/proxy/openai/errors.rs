@@ -43,6 +43,45 @@ pub struct OpenAiErrorDetails {
     pub code: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct OpenAiErrorKind {
+    error_type: &'static str,
+    code: &'static str,
+}
+
+const UPSTREAM_UNAVAILABLE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "server_error",
+    code: "upstream_unavailable",
+};
+const UPSTREAM_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "server_error",
+    code: "upstream_error",
+};
+const INSUFFICIENT_QUOTA_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "insufficient_quota",
+    code: "insufficient_quota",
+};
+const RATE_LIMIT_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "rate_limit_error",
+    code: "rate_limit_exceeded",
+};
+const AUTHENTICATION_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "invalid_request_error",
+    code: "invalid_api_key",
+};
+const MODEL_NOT_FOUND_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "invalid_request_error",
+    code: "model_not_found",
+};
+const INVALID_UPSTREAM_RESPONSE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "server_error",
+    code: "invalid_upstream_response",
+};
+const CODEX_API_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "server_error",
+    code: "codex_api_error",
+};
+
 /// OpenAI 兼容错误响应。
 pub fn openai_error_response(
     status: StatusCode,
@@ -103,12 +142,13 @@ pub fn responses_compact_dispatch_error_response(error: ResponseDispatchError) -
 }
 
 pub fn responses_stream_dispatch_failed_sse_event(error: &ResponseDispatchError) -> String {
-    let error = response_dispatch_http_error(
+    let http_error = response_dispatch_http_error(
         error,
         ResponseDispatchStatusMode::UpstreamFailureStatus,
         ResponseDispatchMessageStyle::ResponsesStream,
     );
-    responses_failed_sse_event(error.status, &error.message)
+    let kind = response_dispatch_error_kind(error);
+    responses_failed_sse_event(kind, &http_error.message)
 }
 
 fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
@@ -126,14 +166,14 @@ fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
 }
 
 fn responses_error_response(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
-    let (error_type, code) = responses_error_type_and_code_for_status(status);
+    let kind = responses_error_kind_for_status(status);
     (
         status,
         Json(json!({
             "type": "error",
             "error": {
-                "type": error_type,
-                "code": code,
+                "type": kind.error_type,
+                "code": kind.code,
                 "message": message,
             }
         })),
@@ -146,9 +186,8 @@ fn response_dispatch_openai_error_response(error: &ResponseDispatchError) -> Res
         .into_response()
 }
 
-fn responses_failed_sse_event(status: StatusCode, message: &str) -> String {
-    let (error_type, code) = responses_error_type_and_code_for_status(status);
-    encode_response_failed_sse_event(error_type, code, message)
+fn responses_failed_sse_event(kind: OpenAiErrorKind, message: &str) -> String {
+    encode_response_failed_sse_event(kind.error_type, kind.code, message)
 }
 
 /// 缺失 client API key。
@@ -192,48 +231,42 @@ fn invalid_openai_request_response(message: &str) -> (StatusCode, Json<Value>) {
 
 fn chat_dispatch_openai_error(error: &ChatDispatchError) -> OpenAiErrorDetails {
     let status = chat_dispatch_status(error);
-    let (message, error_type, code) = match error {
+    let (message, kind) = match error {
         ChatDispatchError::NoActiveAccount | ChatDispatchError::AccountStore => (
             NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE.to_owned(),
-            "server_error",
-            "upstream_unavailable",
+            UPSTREAM_UNAVAILABLE_ERROR,
         ),
         ChatDispatchError::Upstream(_) => (
             UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
-            "server_error",
-            "upstream_error",
+            UPSTREAM_ERROR,
         ),
         ChatDispatchError::QuotaExhausted {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "quota-exhausted", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            INSUFFICIENT_QUOTA_ERROR,
         ),
         ChatDispatchError::RateLimited {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "rate-limited", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            RATE_LIMIT_ERROR,
         ),
         ChatDispatchError::Expired {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "expired", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            AUTHENTICATION_ERROR,
         ),
         ChatDispatchError::Disabled {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "disabled", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            AUTHENTICATION_ERROR,
         ),
         ChatDispatchError::Banned {
             count,
@@ -241,45 +274,40 @@ fn chat_dispatch_openai_error(error: &ChatDispatchError) -> OpenAiErrorDetails {
             ..
         } => (
             exhausted_dispatch_message(*count, "banned", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            AUTHENTICATION_ERROR,
         ),
         ChatDispatchError::CloudflareChallenge {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "cloudflare-challenge", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            UPSTREAM_ERROR,
         ),
         ChatDispatchError::CloudflarePathBlocked {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "cloudflare-path-block", upstream_error, false),
-            "server_error",
-            "upstream_error",
+            UPSTREAM_ERROR,
         ),
         ChatDispatchError::ModelUnsupported {
             count,
             upstream_error,
         } => (
             exhausted_dispatch_message(*count, "model-unsupported", upstream_error, false),
-            "invalid_request_error",
-            "upstream_error",
+            MODEL_NOT_FOUND_ERROR,
         ),
         ChatDispatchError::InvalidSse(_) | ChatDispatchError::EmptyUpstreamResponse => (
             INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE.to_owned(),
-            "server_error",
-            "invalid_upstream_response",
+            INVALID_UPSTREAM_RESPONSE_ERROR,
         ),
     };
 
     OpenAiErrorDetails {
         status,
         message,
-        error_type,
-        code,
+        error_type: kind.error_type,
+        code: kind.code,
     }
 }
 
@@ -289,32 +317,37 @@ fn response_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorD
         ResponseDispatchStatusMode::UpstreamFailureStatus,
         ResponseDispatchMessageStyle::Standard,
     );
-    let (error_type, code) = response_dispatch_error_type_and_code(error);
+    let kind = response_dispatch_error_kind(error);
 
     OpenAiErrorDetails {
         status,
         message,
-        error_type,
-        code,
+        error_type: kind.error_type,
+        code: kind.code,
     }
 }
 
-fn response_dispatch_error_type_and_code(
-    error: &ResponseDispatchError,
-) -> (&'static str, &'static str) {
+fn response_dispatch_error_kind(error: &ResponseDispatchError) -> OpenAiErrorKind {
     match error {
-        ResponseDispatchError::ModelUnsupported { .. } => {
-            ("invalid_request_error", "upstream_error")
+        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
+            UPSTREAM_UNAVAILABLE_ERROR
         }
+        ResponseDispatchError::QuotaExhausted { .. } => INSUFFICIENT_QUOTA_ERROR,
+        ResponseDispatchError::RateLimited { .. } => RATE_LIMIT_ERROR,
+        ResponseDispatchError::Expired { .. }
+        | ResponseDispatchError::Disabled { .. }
+        | ResponseDispatchError::Banned { .. } => AUTHENTICATION_ERROR,
+        ResponseDispatchError::ModelUnsupported { .. } => MODEL_NOT_FOUND_ERROR,
         ResponseDispatchError::InvalidSse(_)
         | ResponseDispatchError::MissingCompleted
-        | ResponseDispatchError::EmptyUpstreamResponse => {
-            ("server_error", "invalid_upstream_response")
-        }
-        ResponseDispatchError::Failed(_) => responses_error_type_and_code_for_status(
-            status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
-        ),
-        _ => ("server_error", "upstream_error"),
+        | ResponseDispatchError::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,
+        ResponseDispatchError::Failed(_) => responses_error_kind_for_status(status_from_u16(
+            error.http_status_code(),
+            StatusCode::BAD_GATEWAY,
+        )),
+        ResponseDispatchError::Upstream(_)
+        | ResponseDispatchError::CloudflareChallenge { .. }
+        | ResponseDispatchError::CloudflarePathBlocked { .. } => UPSTREAM_ERROR,
     }
 }
 
@@ -329,15 +362,20 @@ pub fn response_dispatch_http_error(
     }
 }
 
-fn responses_error_type_and_code_for_status(status: StatusCode) -> (&'static str, &'static str) {
+fn responses_error_kind_for_status(status: StatusCode) -> OpenAiErrorKind {
     if status == StatusCode::TOO_MANY_REQUESTS {
-        ("rate_limit_error", "rate_limit_exceeded")
+        RATE_LIMIT_ERROR
+    } else if status == StatusCode::PAYMENT_REQUIRED {
+        INSUFFICIENT_QUOTA_ERROR
     } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-        ("invalid_request_error", "authentication_error")
+        AUTHENTICATION_ERROR
     } else if status.is_client_error() {
-        ("invalid_request_error", "codex_api_error")
+        OpenAiErrorKind {
+            error_type: "invalid_request_error",
+            code: "codex_api_error",
+        }
     } else {
-        ("server_error", "codex_api_error")
+        CODEX_API_ERROR
     }
 }
 

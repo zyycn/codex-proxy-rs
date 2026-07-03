@@ -552,7 +552,8 @@ async fn chat_completions_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
     assert!(message.contains("rate limited"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+    assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
     let event = latest_usage_record(&pool, "v1.chat").await;
@@ -683,7 +684,8 @@ async fn chat_completions_should_return_model_unsupported_error_when_fallback_is
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(message.contains("All accounts exhausted (1 model-unsupported)"));
     assert!(message.contains("model_not_supported"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "model_not_found");
     assert_eq!(account_status.0, "active");
 }
 
@@ -787,7 +789,8 @@ async fn chat_completions_should_return_auth_error_when_401_fallback_is_exhauste
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(message.contains("All accounts exhausted (1 expired)"));
     assert!(message.contains("token_revoked"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "invalid_api_key");
     assert_eq!(account_status.0, "expired");
 }
 
@@ -1082,7 +1085,8 @@ async fn chat_completions_should_return_quota_error_when_402_fallback_is_exhaust
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
     assert!(message.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(message.contains("quota reached"));
-    assert_eq!(body["error"]["code"], "upstream_error");
+    assert_eq!(body["error"]["type"], "insufficient_quota");
+    assert_eq!(body["error"]["code"], "insufficient_quota");
     assert_eq!(account_status.0, "quota_exhausted");
 }
 
