@@ -355,15 +355,17 @@ export function useAccountMutations(options: {
 
   async function handleExportAccounts() {
     if (exportingAccounts.value) return
+    const selected = [...options.selectedIds.value]
+    if (selected.length === 0) {
+      toast.warning('请选择要导出的账号')
+      return
+    }
 
     try {
       exportingAccounts.value = true
-      const selected = [...options.selectedIds.value]
-      const payload = await exportAccounts(
-        selected.length ? { ids: selected.join(',') } : undefined,
-      )
+      const payload = await exportAccounts({ ids: selected.join(',') })
       await downloadJson(payload, exportFileName(selected.length))
-      toast.success(selected.length ? `已导出 ${selected.length} 个账号` : '账号已导出')
+      toast.success(`已导出 ${selected.length} 个账号`)
     } catch (error: any) {
       toast.error(error.message || '导出失败')
     } finally {
@@ -438,8 +440,7 @@ export function useAccountMutations(options: {
   }
 
   function exportFileName(selectedCount: number) {
-    const suffix = selectedCount > 0 ? `selected-${selectedCount}` : 'all'
-    return `cpr-accounts-${suffix}-${dayjs().format('YYYY-MM-DD')}.json`
+    return `cpr-accounts-selected-${selectedCount}-${dayjs().format('YYYY-MM-DD')}.json`
   }
 
   onMounted(() => {

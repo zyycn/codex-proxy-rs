@@ -1,17 +1,12 @@
 //! 管理端设置处理器。
 
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-};
+use axum::{body::Bytes, extract::State, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::{
-    admin::auth::session::require_admin_auth,
+    admin::auth::session::AdminAuth,
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
     config::{
         settings::{AdminSettingsPatch, RuntimeSettingsError, SettingsServiceError},
@@ -59,9 +54,8 @@ impl AdminSettingsData {
 /// `GET /api/admin/settings`
 pub(crate) async fn settings(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let config = state.services.settings.current();
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -72,11 +66,9 @@ pub(crate) async fn settings(
 /// `POST /api/admin/settings`
 pub(crate) async fn update_settings(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     body: Bytes,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
-
     let patch = parse_settings_patch(&body)?;
     let config = state
         .services
@@ -100,9 +92,8 @@ pub(crate) async fn update_settings(
 /// `GET /api/admin/settings/admin-api-key`
 pub(crate) async fn admin_api_key_status(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let status = state
         .services
         .settings
@@ -119,9 +110,8 @@ pub(crate) async fn admin_api_key_status(
 /// `POST /api/admin/settings/admin-api-key/regenerate`
 pub(crate) async fn regenerate_admin_api_key(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let key = state
         .services
         .settings
@@ -138,9 +128,8 @@ pub(crate) async fn regenerate_admin_api_key(
 /// `DELETE /api/admin/settings/admin-api-key`
 pub(crate) async fn delete_admin_api_key(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     state
         .services
         .settings

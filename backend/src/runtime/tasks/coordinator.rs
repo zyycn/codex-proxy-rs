@@ -1,6 +1,6 @@
 //! 后台任务协调器。
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use tokio::task::JoinHandle;
 
@@ -96,6 +96,12 @@ impl TaskCoordinator {
                 services.fingerprint.build_number.clone(),
             ),
         );
+        if let Some(pool) = &services.websocket_pool {
+            coordinator.push(
+                "websocket_pool",
+                SchedulerHandle::from_websocket_pool(pool.clone()),
+            );
+        }
 
         coordinator
     }
@@ -117,6 +123,8 @@ pub enum SchedulerHandle {
     Channel(tokio::sync::mpsc::Sender<()>),
     /// 直接持有 tokio 任务句柄。
     JoinHandle(JoinHandle<()>),
+    /// 关闭上游 WebSocket 连接池。
+    WebSocketPool(Arc<crate::upstream::transport::CodexWebSocketPool>),
 }
 
 impl SchedulerHandle {
@@ -130,6 +138,11 @@ impl SchedulerHandle {
         Self::JoinHandle(handle)
     }
 
+    /// 使用 WebSocket 连接池构造句柄。
+    pub fn from_websocket_pool(pool: Arc<crate::upstream::transport::CodexWebSocketPool>) -> Self {
+        Self::WebSocketPool(pool)
+    }
+
     /// 关闭任务。
     pub async fn shutdown(self) {
         match self {
@@ -138,6 +151,9 @@ impl SchedulerHandle {
             }
             Self::JoinHandle(handle) => {
                 handle.abort();
+            }
+            Self::WebSocketPool(pool) => {
+                pool.shutdown().await;
             }
         }
     }

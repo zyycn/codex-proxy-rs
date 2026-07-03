@@ -11,9 +11,11 @@ use chrono::{DateTime, Duration, Utc};
 use indexmap::IndexMap;
 use thiserror::Error;
 
+use crate::infra::time::parse_rfc3339_utc;
 use crate::upstream::accounts::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
 use crate::upstream::accounts::store::AccountStore;
 use crate::upstream::accounts::token_refresh::{jwt_expiry, JwtExpiry};
+use crate::upstream::accounts::window::should_reset_usage_window;
 use crate::upstream::accounts::{
     model::{Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta},
     service::AccountService,
@@ -737,7 +739,12 @@ impl AccountPool {
         let Some(account) = self.accounts.get_mut(account_id) else {
             return false;
         };
-        if should_reset_window_counters(account, new_reset_at, limit_window_seconds) {
+        if should_reset_usage_window(
+            account.window_reset_at,
+            account.limit_window_seconds,
+            new_reset_at,
+            limit_window_seconds,
+        ) {
             reset_window_counters(account);
             account.window_started_at = Some(now);
         }
@@ -1316,32 +1323,6 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
     }
 }
 
-fn should_reset_window_counters(
-    account: &Account,
-    new_reset_at: DateTime<Utc>,
-    limit_window_seconds: Option<u64>,
-) -> bool {
-    let Some(old_reset_at) = account.window_reset_at else {
-        return false;
-    };
-    if old_reset_at == new_reset_at {
-        return false;
-    }
-    let drift = old_reset_at
-        .signed_duration_since(new_reset_at)
-        .num_seconds()
-        .unsigned_abs();
-    let window_seconds = limit_window_seconds
-        .or(account.limit_window_seconds)
-        .unwrap_or(0);
-    let threshold = if window_seconds > 0 {
-        window_seconds / 2
-    } else {
-        3_600
-    };
-    drift >= threshold
-}
-
 fn reset_window_counters(account: &mut Account) {
     account.window_request_count = 0;
     account.window_input_tokens = 0;
@@ -1406,7 +1387,7 @@ fn compare_last_used(a: Option<&str>, b: Option<&str>) -> Ordering {
 
 fn last_used_millis(value: Option<&str>) -> i64 {
     value
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .and_then(|value| parse_rfc3339_utc(value).ok())
         .map(|datetime| datetime.timestamp_millis())
         .unwrap_or(0)
 }

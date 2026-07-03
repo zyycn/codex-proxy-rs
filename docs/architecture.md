@@ -154,7 +154,7 @@ Docker 构建入口是 `deploy/Dockerfile`，上下文保持仓库根目录。
 - `frontend-builder`：构建 Vue SPA。
 - `backend-builder`：构建 Rust release 二进制，并复制前端 dist。
 - `release-asset`：导出 GitHub Release tar 包。
-- `runtime`：最小运行镜像，基于 `debian:bookworm-slim`，只包含 CA、后端二进制和 `web/dist`。
+- `runtime`：运行镜像基于 `debian:bookworm-slim`，包含 CA、curl healthcheck、后端二进制和 `web/dist`，默认以非 root 用户运行。
 
 Compose 文件是 `deploy/docker-compose.yml`。示例配置只保留 `deploy/config.example.yaml`，用户复制为 `deploy/config.yaml` 后部署。
 

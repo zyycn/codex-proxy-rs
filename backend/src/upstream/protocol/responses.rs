@@ -1,13 +1,16 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::upstream::{
-    models::ParsedModelName,
-    protocol::{
-        schema::reconvert_tuple_values,
-        sse::{parse_sse_events, SseError, SseEvent},
+use crate::{
+    infra::time::elapsed_millis_i64,
+    upstream::{
+        models::ParsedModelName,
+        protocol::{
+            schema::reconvert_tuple_values,
+            sse::{parse_sse_events, SseError, SseEvent},
+        },
     },
 };
 
@@ -148,6 +151,17 @@ pub fn response_body_has_first_event(body_bytes: &[u8]) -> bool {
     };
     parse_sse_events(complete_body)
         .is_ok_and(|events| events.iter().any(response_sse_event_has_first_output))
+}
+
+/// 已收到首个有效 Responses SSE 输出事件时记录首 token 耗时。
+pub fn update_first_response_event_ms(
+    started_at: Instant,
+    body_bytes: &[u8],
+    first_token_ms: &mut Option<i64>,
+) {
+    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
+        *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
+    }
 }
 
 fn response_sse_event_has_first_output(event: &SseEvent) -> bool {

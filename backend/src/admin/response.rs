@@ -19,6 +19,7 @@ const ADMIN_INVALID_ENDPOINT_SOURCE_CODE: u32 = 40004;
 const ADMIN_SESSION_REQUIRED_CODE: u32 = 40101;
 const ADMIN_INVALID_CREDENTIALS_CODE: u32 = 40102;
 const ADMIN_INVALID_API_KEY_CODE: u32 = 40103;
+const ADMIN_TOO_MANY_LOGIN_ATTEMPTS_CODE: u32 = 42901;
 const ADMIN_NOT_FOUND_CODE: u32 = 40401;
 const ADMIN_CONFLICT_CODE: u32 = 40901;
 const ADMIN_SETTINGS_PERSIST_CODE: u32 = 50000;
@@ -95,6 +96,14 @@ impl AdminError {
             StatusCode::UNAUTHORIZED,
             ADMIN_INVALID_API_KEY_CODE,
             "Invalid admin API key",
+        )
+    }
+
+    pub fn too_many_login_attempts() -> Self {
+        Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            ADMIN_TOO_MANY_LOGIN_ATTEMPTS_CODE,
+            "Too many admin login attempts",
         )
     }
 

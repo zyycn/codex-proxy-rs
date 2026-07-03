@@ -376,8 +376,7 @@ onUnmounted(() => {
         <BaseScrollbar max-height="160px" view-class="pr-2">
           <pre
             class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-[620] text-(--cp-text-primary)"
-            >{{ updateInfo.notes }}</pre
-          >
+            >{{ updateInfo.notes }}</pre>
         </BaseScrollbar>
       </section>
     </div>

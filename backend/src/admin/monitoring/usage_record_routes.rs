@@ -4,25 +4,27 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::{
     admin::monitoring::{
-        billing,
-        usage_record::{metadata_service_tier, UsageRecord, UsageRecordLevel},
+        usage_record_model::{
+            metadata_nonnegative_i64, metadata_string, UsageRecord, UsageRecordLevel,
+        },
+        usage_record_service::{
+            usage_record_cost_details, AdminUsageRecordError, AdminUsageRecordFilter,
+        },
         usage_record_store::{
-            AdminUsageRecordError, AdminUsageRecordFilter, UsageRecordBreakdown,
-            UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
-            UsageRecordTrendPoint,
+            UsageRecordBreakdown, UsageRecordEndpointSource, UsageRecordModelSource,
+            UsageRecordSummary, UsageRecordTrendPoint,
         },
     },
     admin::{
-        auth::session::require_admin_auth,
+        auth::session::AdminAuth,
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
     },
     infra::{
@@ -200,10 +202,9 @@ struct UsageRecordTrendPointData {
 /// `GET /api/admin/usage/records`
 pub(crate) async fn usage_records(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
     let page = query.page;
     let use_numbered_page = page.is_some() || query.page_size.is_some();
@@ -218,7 +219,12 @@ pub(crate) async fn usage_records(
             .await
         {
             Ok(page) => {
-                let account_emails = account_email_map(&state, &page.items).await?;
+                let account_emails = state
+                    .services
+                    .usage_records
+                    .account_email_map(&page.items)
+                    .await
+                    .map_err(|error| log_error(&error))?;
                 let page = NumberedPage {
                     items: usage_record_items(page.items, &account_emails),
                     total: page.total,
@@ -241,7 +247,12 @@ pub(crate) async fn usage_records(
         .await
     {
         Ok(page) => {
-            let account_emails = account_email_map(&state, &page.items).await?;
+            let account_emails = state
+                .services
+                .usage_records
+                .account_email_map(&page.items)
+                .await
+                .map_err(|error| log_error(&error))?;
             let page = Page {
                 items: usage_record_items(page.items, &account_emails),
                 next_cursor: page.next_cursor,
@@ -258,10 +269,9 @@ pub(crate) async fn usage_records(
 /// `GET /api/admin/usage/records/summary`
 pub(crate) async fn usage_records_summary(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let filter = filter_from_query(query)?;
     match state.services.usage_records.summary(filter).await {
         Ok(summary) => Ok(AdminResponse::new(
@@ -275,10 +285,9 @@ pub(crate) async fn usage_records_summary(
 /// `GET /api/admin/usage/records/insights/models`
 pub(crate) async fn usage_records_model_distribution(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordDistributionQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let source = model_source_from_query(query.source)?;
     let filter = filter_from_query(query.records)?;
     match state
@@ -298,10 +307,9 @@ pub(crate) async fn usage_records_model_distribution(
 /// `GET /api/admin/usage/records/insights/endpoints`
 pub(crate) async fn usage_records_endpoint_distribution(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordDistributionQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let source = endpoint_source_from_query(query.source)?;
     let filter = filter_from_query(query.records)?;
     match state
@@ -321,10 +329,9 @@ pub(crate) async fn usage_records_endpoint_distribution(
 /// `GET /api/admin/usage/records/insights/token-trend`
 pub(crate) async fn usage_records_token_trend(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let filter = filter_from_query(query)?;
     match state.services.usage_records.token_trend(filter).await {
         Ok(points) => Ok(AdminResponse::new(
@@ -343,10 +350,9 @@ pub(crate) async fn usage_records_token_trend(
 /// `GET /api/admin/usage/records/insights/latency-trend`
 pub(crate) async fn usage_records_latency_trend(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let filter = filter_from_query(query)?;
     match state.services.usage_records.latency_trend(filter).await {
         Ok(points) => Ok(AdminResponse::new(
@@ -365,13 +371,17 @@ pub(crate) async fn usage_records_latency_trend(
 /// `GET /api/admin/usage/records/detail`
 pub(crate) async fn usage_record_detail(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<UsageRecordDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state.services.usage_records.get(&query.id).await {
         Ok(Some(log)) => {
-            let account_emails = account_email_map(&state, std::slice::from_ref(&log)).await?;
+            let account_emails = state
+                .services
+                .usage_records
+                .account_email_map(std::slice::from_ref(&log))
+                .await
+                .map_err(|error| log_error(&error))?;
             Ok(AdminResponse::new(
                 StatusCode::OK,
                 AdminEnvelope::ok(usage_record_data(log, &account_emails)),
@@ -385,9 +395,8 @@ pub(crate) async fn usage_record_detail(
 /// `POST /api/admin/usage/records/delete`
 pub(crate) async fn clear_usage_records(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state.services.usage_records.clear().await {
         Ok(cleared) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -462,6 +471,9 @@ fn log_error(error: &AdminUsageRecordError) -> AdminError {
         | AdminUsageRecordError::Clear
         | AdminUsageRecordError::Append
         | AdminUsageRecordError::Trim => AdminError::internal(error.to_string()),
+        AdminUsageRecordError::Accounts => {
+            AdminError::usage_record_accounts_failed(error.to_string())
+        }
     }
 }
 
@@ -482,50 +494,6 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-pub(crate) async fn account_email_map(
-    state: &AppState,
-    items: &[UsageRecord],
-) -> Result<HashMap<String, String>, AdminError> {
-    let mut account_ids = items
-        .iter()
-        .filter_map(|item| item.account_id.as_deref())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    account_ids.sort_unstable();
-    account_ids.dedup();
-
-    if account_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let mut builder = QueryBuilder::<Sqlite>::new("select id, email from accounts where id in (");
-    let mut separated = builder.separated(", ");
-    for account_id in &account_ids {
-        separated.push_bind(account_id);
-    }
-    separated.push_unseparated(")");
-
-    let rows = builder
-        .build()
-        .fetch_all(state.services.background_tasks.accounts.pool())
-        .await
-        .map_err(|error| {
-            AdminError::usage_record_accounts_failed(format!(
-                "Failed to load usage record accounts: {error}"
-            ))
-        })?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            row.get::<Option<String>, _>("email")
-                .map(|email| email.trim().to_string())
-                .filter(|email| !email.is_empty())
-                .map(|email| (row.get::<String, _>("id"), email))
-        })
-        .collect())
 }
 
 pub(crate) fn usage_record_items(
@@ -555,7 +523,7 @@ fn usage_record_data(
         metadata_string(&record.metadata, &["reasoningEffort", "reasoning_effort"]);
     let token_details = usage_token_details(&record.metadata);
     let cost_details = usage_cost_details(&record, upstream_model.as_deref(), &token_details);
-    let first_token_latency_ms = metadata_i64(
+    let first_token_latency_ms = metadata_nonnegative_i64(
         &record.metadata,
         &[
             "firstTokenMs",
@@ -626,51 +594,37 @@ fn usage_cost_details(
     upstream_model: Option<&str>,
     tokens: &UsageRecordTokenDetailsData,
 ) -> Option<UsageRecordCostDetailsData> {
-    if tokens.input_tokens == 0 && tokens.output_tokens == 0 && tokens.cached_tokens == 0 {
-        return None;
-    }
-
-    let model = upstream_model
-        .or(record.model.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let service_tier = metadata_service_tier(&record.metadata);
-    let breakdown = billing::calculate_cost_breakdown(
+    let cost = usage_record_cost_details(
+        record,
+        upstream_model,
         tokens.input_tokens,
         tokens.output_tokens,
         tokens.cached_tokens,
-        model,
-        service_tier,
-    );
-    let original_cost = breakdown.input_cost + breakdown.output_cost + breakdown.cache_read_cost;
+    )?;
 
     Some(UsageRecordCostDetailsData {
-        input_cost: breakdown.input_cost,
-        output_cost: breakdown.output_cost,
-        cache_read_cost: breakdown.cache_read_cost,
-        total_cost: breakdown.total_cost,
-        billed_cost: breakdown.total_cost,
-        original_cost,
-        input_price_per_mtoken: breakdown.input_price_per_mtoken,
-        output_price_per_mtoken: breakdown.output_price_per_mtoken,
-        cache_read_price_per_mtoken: breakdown.cache_read_price_per_mtoken,
-        service_tier: breakdown.service_tier.clone(),
-        service_tier_display: breakdown
-            .service_tier
-            .as_deref()
-            .map(format_service_tier)
-            .unwrap_or_else(|| "Default".to_string()),
-        multiplier: breakdown.tier_multiplier,
-        input_cost_display: format_precise_cost(breakdown.input_cost),
-        output_cost_display: format_precise_cost(breakdown.output_cost),
-        cache_read_cost_display: format_precise_cost(breakdown.cache_read_cost),
-        total_cost_display: format_precise_cost(breakdown.total_cost),
-        billed_cost_display: format_precise_cost(breakdown.total_cost),
-        original_cost_display: format_precise_cost(original_cost),
-        input_price_display: format_token_price(breakdown.input_price_per_mtoken),
-        output_price_display: format_token_price(breakdown.output_price_per_mtoken),
-        cache_read_price_display: format_token_price(breakdown.cache_read_price_per_mtoken),
-        multiplier_display: format_multiplier(breakdown.tier_multiplier),
+        input_cost: cost.input_cost,
+        output_cost: cost.output_cost,
+        cache_read_cost: cost.cache_read_cost,
+        total_cost: cost.total_cost,
+        billed_cost: cost.billed_cost,
+        original_cost: cost.original_cost,
+        input_price_per_mtoken: cost.input_price_per_mtoken,
+        output_price_per_mtoken: cost.output_price_per_mtoken,
+        cache_read_price_per_mtoken: cost.cache_read_price_per_mtoken,
+        service_tier: cost.service_tier,
+        service_tier_display: cost.service_tier_display,
+        multiplier: cost.multiplier,
+        input_cost_display: format_precise_cost(cost.input_cost),
+        output_cost_display: format_precise_cost(cost.output_cost),
+        cache_read_cost_display: format_precise_cost(cost.cache_read_cost),
+        total_cost_display: format_precise_cost(cost.total_cost),
+        billed_cost_display: format_precise_cost(cost.billed_cost),
+        original_cost_display: format_precise_cost(cost.original_cost),
+        input_price_display: format_token_price(cost.input_price_per_mtoken),
+        output_price_display: format_token_price(cost.output_price_per_mtoken),
+        cache_read_price_display: format_token_price(cost.cache_read_price_per_mtoken),
+        multiplier_display: format_multiplier(cost.multiplier),
     })
 }
 
@@ -686,32 +640,6 @@ fn metadata_u64_at(value: &Value, key: &str) -> Option<u64> {
     value
         .get(key)
         .and_then(|value| value.as_u64().or_else(|| value.as_i64()?.try_into().ok()))
-}
-
-fn metadata_string(metadata: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        metadata
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
-    keys.iter()
-        .find_map(|key| metadata.get(*key).and_then(Value::as_i64))
-        .filter(|value| *value >= 0)
-}
-
-fn format_service_tier(value: &str) -> String {
-    match value {
-        "priority" | "fast" => "Fast".to_string(),
-        "flex" => "Flex".to_string(),
-        "default" => "Default".to_string(),
-        other => other.to_string(),
-    }
 }
 
 impl From<UsageRecordSummary> for UsageRecordSummaryData {

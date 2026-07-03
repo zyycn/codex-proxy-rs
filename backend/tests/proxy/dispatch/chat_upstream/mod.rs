@@ -15,7 +15,7 @@ use codex_proxy_rs::{
     admin::auth::service::SqliteAdminSessionStore,
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
-        usage_record::UsageRecordLevel,
+        usage_record_model::UsageRecordLevel,
         usage_record_store::{
             SqliteUsageRecordStore, UsageRecordFilter, DEFAULT_USAGE_RECORD_CAPACITY,
         },

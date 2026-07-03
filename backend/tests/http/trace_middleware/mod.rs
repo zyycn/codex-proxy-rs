@@ -9,11 +9,14 @@ use axum::{
     extract::connect_info::ConnectInfo,
     http::HeaderMap,
     http::{Request, StatusCode},
-    middleware::from_fn,
+    middleware::{from_fn, from_fn_with_state},
     routing::get,
     Router,
 };
-use codex_proxy_rs::http::middleware::{request_id::attach_request_id, trace::http_trace_layer};
+use codex_proxy_rs::http::middleware::{
+    request_id::{attach_request_id, attach_request_id_with_proxy_config, TrustedProxyConfig},
+    trace::http_trace_layer,
+};
 use tokio::time::{sleep, Duration};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -108,6 +111,113 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn http_trace_should_redact_request_uri_query_values() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_ansi(false)
+        .finish();
+
+    let app = Router::new()
+        .route("/trace-test", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(http_trace_layer())
+        .layer(from_fn(attach_request_id));
+
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/trace-test?token=secret-token&code=secret-code")
+                .header("x-request-id", "req_trace_query")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    let output = wait_for_trace_output(&logs).await;
+    assert!(
+        output.contains("/trace-test?token=<redacted>&code=<redacted>")
+            && !output.contains("secret-token")
+            && !output.contains("secret-code")
+            && output.contains("token=<redacted>")
+            && output.contains("code=<redacted>"),
+        "unexpected trace output: {output}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_trace_should_redact_bare_query_segments() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_ansi(false)
+        .finish();
+
+    let app = Router::new()
+        .route("/trace-test", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(http_trace_layer())
+        .layer(from_fn(attach_request_id));
+
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/trace-test?bare-secret&empty=&page=2&page=3")
+                .header("x-request-id", "req_trace_query_bare")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    let output = wait_for_trace_output(&logs).await;
+    assert!(
+        output.contains("/trace-test?<redacted>&empty=<redacted>&page=<redacted>&page=<redacted>")
+            && !output.contains("bare-secret")
+            && !output.contains("page=2")
+            && !output.contains("page=3"),
+        "unexpected trace output: {output}"
+    );
+}
+
+#[tokio::test]
+async fn request_context_should_generate_new_request_id_for_invalid_header() {
+    let app = Router::new()
+        .route("/request-id", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(from_fn(attach_request_id));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/request-id")
+                .header("x-request-id", "req invalid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    assert!(
+        request_id.starts_with("req_") && request_id != "req invalid",
+        "unexpected request id: {request_id}"
+    );
+}
+
 #[tokio::test]
 async fn request_context_should_attach_real_ip_from_connection() {
     let app = Router::new()
@@ -137,7 +247,7 @@ async fn request_context_should_attach_real_ip_from_connection() {
 }
 
 #[tokio::test]
-async fn request_context_should_not_override_forwarded_ip_headers() {
+async fn request_context_should_replace_untrusted_forwarded_ip_headers() {
     let app = Router::new()
         .route(
             "/ip",
@@ -153,6 +263,8 @@ async fn request_context_should_not_override_forwarded_ip_headers() {
     let mut request = Request::builder()
         .uri("/ip")
         .header("x-forwarded-for", "203.0.113.42, 10.0.0.2")
+        .header("cf-connecting-ip", "203.0.113.43")
+        .header("x-real-ip", "203.0.113.44")
         .body(Body::empty())
         .expect("request should build");
     request
@@ -162,5 +274,88 @@ async fn request_context_should_not_override_forwarded_ip_headers() {
     let response = app.oneshot(request).await.expect("response");
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
 
-    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "missing");
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "127.0.0.1");
+}
+
+#[tokio::test]
+async fn request_context_should_accept_forwarded_ip_from_trusted_proxy() {
+    let trusted_proxies =
+        TrustedProxyConfig::from_entries(&["127.0.0.0/8".to_string()]).expect("trusted proxy");
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|headers: HeaderMap| async move {
+                let real_ip = headers
+                    .get("x-real-ip")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("missing");
+                let forwarded_present = headers.contains_key("x-forwarded-for");
+                format!("{real_ip}|forwarded={forwarded_present}")
+            }),
+        )
+        .layer(from_fn_with_state(
+            trusted_proxies,
+            attach_request_id_with_proxy_config,
+        ));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-forwarded-for", "203.0.113.42, 10.0.0.2")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(
+        std::str::from_utf8(&bytes).unwrap(),
+        "203.0.113.42|forwarded=false"
+    );
+}
+
+#[tokio::test]
+async fn request_context_should_prefer_cloudflare_ip_from_trusted_proxy() {
+    let trusted_proxies =
+        TrustedProxyConfig::from_entries(&["127.0.0.1".to_string()]).expect("trusted proxy");
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|headers: HeaderMap| async move {
+                headers
+                    .get("x-real-ip")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("missing")
+                    .to_string()
+            }),
+        )
+        .layer(from_fn_with_state(
+            trusted_proxies,
+            attach_request_id_with_proxy_config,
+        ));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("cf-connecting-ip", "198.51.100.23")
+        .header("x-forwarded-for", "203.0.113.42, 10.0.0.2")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "198.51.100.23");
+}
+
+#[test]
+fn trusted_proxy_config_should_reject_invalid_entries() {
+    let error = TrustedProxyConfig::from_entries(&["not-an-ip".to_string()]).unwrap_err();
+
+    assert!(
+        error.to_string().contains("not-an-ip"),
+        "unexpected error: {error}"
+    );
 }

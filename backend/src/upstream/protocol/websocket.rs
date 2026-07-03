@@ -140,7 +140,7 @@ pub fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
     Some(encode_sse_event(&event, raw))
 }
 
-fn websocket_event_type(raw: &str) -> Option<String> {
+pub(crate) fn websocket_event_type(raw: &str) -> Option<String> {
     serde_json::from_str::<Value>(raw).ok().and_then(|value| {
         value
             .get("type")

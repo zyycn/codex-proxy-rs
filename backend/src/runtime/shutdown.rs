@@ -1,9 +1,15 @@
 //! 优雅关闭信号处理。
 
+use std::sync::OnceLock;
+
 use tokio::signal;
+use tokio::sync::broadcast;
+
+static SHUTDOWN_REQUESTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 
 /// 等待进程关闭信号（Ctrl+C 或 SIGTERM）。
 pub async fn shutdown_signal() {
+    let mut requested = shutdown_sender().subscribe();
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -22,7 +28,20 @@ pub async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
+        _ = requested.recv() => {},
         () = ctrl_c => {},
         () = terminate => {},
     }
+}
+
+/// 请求进程按优雅关闭路径退出。
+pub fn request_shutdown() {
+    let _ = shutdown_sender().send(());
+}
+
+fn shutdown_sender() -> &'static broadcast::Sender<()> {
+    SHUTDOWN_REQUESTS.get_or_init(|| {
+        let (sender, _receiver) = broadcast::channel(16);
+        sender
+    })
 }

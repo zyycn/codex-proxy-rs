@@ -2,10 +2,11 @@
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::admin::monitoring::usage_store::{
-    SqliteUsageStore, UsageListRecord, UsageSummary, UsageTimeBucketRecord,
+use crate::admin::monitoring::{
+    account_usage_store::{SqliteUsageStore, UsageListRecord, UsageSummary, UsageTimeBucketRecord},
+    billing,
 };
-use crate::infra::json::Page;
+use crate::infra::{format::nonnegative_i64_to_u64, json::Page};
 
 /// 管理端用量统计服务。
 #[derive(Clone)]
@@ -121,7 +122,7 @@ pub struct AdminUsageSummary {
 }
 
 /// 管理端时间桶用量记录。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AdminUsageTimeBucketRecord {
     pub bucket_start: DateTime<Utc>,
     pub model: String,
@@ -137,6 +138,7 @@ pub struct AdminUsageTimeBucketRecord {
     pub latency_count: i64,
     pub max_latency_ms: i64,
     pub min_latency_ms: i64,
+    pub cost_usd: Option<f64>,
 }
 
 impl From<UsageSummary> for AdminUsageSummary {
@@ -160,6 +162,7 @@ impl From<UsageSummary> for AdminUsageSummary {
 
 impl From<UsageTimeBucketRecord> for AdminUsageTimeBucketRecord {
     fn from(record: UsageTimeBucketRecord) -> Self {
+        let cost_usd = time_bucket_cost_usd(&record);
         Self {
             bucket_start: record.bucket_start,
             model: record.model,
@@ -175,8 +178,31 @@ impl From<UsageTimeBucketRecord> for AdminUsageTimeBucketRecord {
             latency_count: record.latency_count,
             max_latency_ms: record.max_latency_ms,
             min_latency_ms: record.min_latency_ms,
+            cost_usd,
         }
     }
+}
+
+fn time_bucket_cost_usd(record: &UsageTimeBucketRecord) -> Option<f64> {
+    let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
+    let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
+    let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
+    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
+        return None;
+    }
+
+    let model = record.model.trim();
+    if model.is_empty() {
+        return None;
+    }
+
+    Some(billing::calculate_cost(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        model,
+        record.service_tier.as_deref(),
+    ))
 }
 
 impl From<UsageListRecord> for AdminUsageRecord {

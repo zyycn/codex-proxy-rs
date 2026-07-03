@@ -228,8 +228,7 @@ async function copyOAuthAuthUrl() {
             >
               <pre
                 class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-[650] text-(--cp-text-secondary)"
-                >{{ oauthAuthUrl }}</pre
-              >
+                >{{ oauthAuthUrl }}</pre>
             </BaseScrollbar>
           </BaseFormItem>
         </BaseForm>

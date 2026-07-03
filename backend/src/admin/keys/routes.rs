@@ -2,20 +2,20 @@
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use validator::{Validate, ValidationError};
 
 use crate::{
-    admin::auth::session::require_admin_auth,
+    admin::auth::session::AdminAuth,
     admin::keys::service::{AdminClientApiKey, AdminClientKeyError},
     admin::response::{
         AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse, BatchDeleteData,
     },
+    admin::update_payload::{parse_editable_update, EditableUpdateMessages},
     infra::{
         json::{clamp_limit, Page},
         time::{china_relative_time_str, china_rfc3339_str},
@@ -88,16 +88,6 @@ fn client_key_not_found() -> AdminError {
     AdminError::not_found("Client API key not found")
 }
 
-#[derive(Debug, Deserialize, Validate)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ClientApiKeyUpdateRequest {
-    #[validate(custom(function = "validate_non_empty_trimmed"))]
-    id: String,
-    label: Option<Option<String>>,
-    #[validate(custom(function = "validate_non_empty_trimmed"))]
-    status: Option<String>,
-}
-
 struct ParsedClientApiKeyUpdate {
     id: String,
     label: Option<Option<String>>,
@@ -105,21 +95,15 @@ struct ParsedClientApiKeyUpdate {
 }
 
 fn parse_client_api_key_update(payload: &Value) -> Result<ParsedClientApiKeyUpdate, AdminError> {
-    if !payload.is_object() {
-        return Err(AdminError::bad_request(
-            "Client API key update request must be an object",
-        ));
-    }
-    let update = serde_json::from_value::<ClientApiKeyUpdateRequest>(payload.clone())
-        .map_err(|_| AdminError::bad_request("Invalid client API key update request"))?;
-    update
-        .validate()
-        .map_err(|_| AdminError::bad_request("Invalid client API key update request"))?;
-    if update.label.is_none() && update.status.is_none() {
-        return Err(AdminError::bad_request(
-            "Client API key update request must include label or status",
-        ));
-    }
+    let update = parse_editable_update(
+        payload,
+        EditableUpdateMessages {
+            object_required: "Client API key update request must be an object",
+            invalid: "Invalid client API key update request",
+            empty_update: "Client API key update request must include label or status",
+            unknown_field_editable: false,
+        },
+    )?;
     Ok(ParsedClientApiKeyUpdate {
         id: update.id,
         label: update.label,
@@ -127,20 +111,12 @@ fn parse_client_api_key_update(payload: &Value) -> Result<ParsedClientApiKeyUpda
     })
 }
 
-fn validate_non_empty_trimmed(value: &str) -> Result<(), ValidationError> {
-    if value.trim().is_empty() {
-        return Err(ValidationError::new("required"));
-    }
-    Ok(())
-}
-
 /// `GET /api/admin/keys`
 pub(crate) async fn api_keys(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<ApiKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let limit = clamp_limit(query.limit.unwrap_or(50));
     match state
         .services
@@ -165,10 +141,9 @@ pub(crate) async fn api_keys(
 /// `POST /api/admin/keys`
 pub(crate) async fn create_api_key(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state.services.admin_client_keys.create(&payload.name).await {
         Ok(created) => Ok(AdminResponse::new(
             StatusCode::OK,
@@ -181,11 +156,9 @@ pub(crate) async fn create_api_key(
 /// `POST /api/admin/keys/update`
 pub(crate) async fn update_api_key(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<Value>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
-
     let update = parse_client_api_key_update(&payload)?;
     if let Some(label) = update.label {
         match state
@@ -225,10 +198,9 @@ pub(crate) async fn update_api_key(
 /// `POST /api/admin/keys/delete`
 pub(crate) async fn batch_delete_api_keys(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Json(payload): Json<BatchDeleteClientApiKeysRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     match state
         .services
         .admin_client_keys

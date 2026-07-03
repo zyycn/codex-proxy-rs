@@ -12,8 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -37,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
@@ -147,17 +146,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.release-info.outputs.tag }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 10
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           cache: pnpm
@@ -172,7 +171,7 @@ jobs:
         working-directory: frontend
 
       - name: Upload frontend artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: frontend-dist
           path: frontend/dist
@@ -189,12 +188,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.release-info.outputs.tag }}
 
       - name: Cache Cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -205,7 +204,7 @@ jobs:
             cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: frontend-dist
           path: backend/web/dist
@@ -228,7 +227,7 @@ jobs:
           CPR_BUILD_TYPE: release
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
@@ -238,21 +237,25 @@ jobs:
   package-assets:
     needs: [release-info, build-frontend, build-binary]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.release-info.outputs.tag }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: frontend-dist
           path: dist/frontend
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: codex-proxy-rs-*
           path: dist/binaries
@@ -336,8 +339,13 @@ jobs:
                   file.write(f"{sha256(archive)}  {archive.name}\n")
           PY
 
+      - name: Generate release asset provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: dist/release/*
+
       - name: Upload release assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-assets
           path: dist/release
@@ -347,27 +355,32 @@ jobs:
   publish:
     needs: [release-info, build-frontend, build-binary, package-assets]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.release-info.outputs.tag }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: frontend-dist
           path: dist/docker/web/dist
 
       - name: Download Docker binary artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: codex-proxy-rs-linux-*
           path: dist/docker-artifacts
 
       - name: Download release assets
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-assets
           path: dist/release
@@ -409,20 +422,24 @@ jobs:
           PY
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Login to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push app image
-        uses: docker/build-push-action@v7
+        id: build-and-push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: deploy/Dockerfile
@@ -433,6 +450,8 @@ jobs:
             CPR_PREBUILT_DIR=dist/docker
           cache-from: type=gha,scope=runtime-prebuilt
           cache-to: type=gha,mode=max,scope=runtime-prebuilt
+          provenance: mode=max
+          sbom: true
           labels: |
             org.opencontainers.image.title=Codex Proxy RS
             org.opencontainers.image.version=${{ needs.release-info.outputs.version }}
@@ -443,8 +462,38 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}
 
+      - name: Generate container provenance attestation
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign app image
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          IMAGE_TAGS: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest"
+            exit 1
+          fi
+
+          images=()
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            images+=("${tag}@${DIGEST}")
+          done <<< "${IMAGE_TAGS}"
+
+          cosign sign --yes "${images[@]}"
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
@@ -460,6 +509,8 @@ jobs:
 
             **Manual download:**
             Download the appropriate archive for your platform from the assets below.
+
+            Release archives are covered by GitHub artifact attestations. Docker images are published with SBOM/provenance attestations and keyless cosign signatures.
 
             ## 📚 Documentation
 

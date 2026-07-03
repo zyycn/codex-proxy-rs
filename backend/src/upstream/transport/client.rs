@@ -13,7 +13,7 @@ use futures::{Stream, TryStreamExt};
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE,
-        COOKIE, RETRY_AFTER, SET_COOKIE, USER_AGENT,
+        COOKIE, RETRY_AFTER, USER_AGENT,
     },
     Client, Response as ReqwestResponse, StatusCode,
 };
@@ -26,8 +26,8 @@ use crate::upstream::fingerprint::Fingerprint;
 use crate::upstream::models::BackendModelEntry;
 use crate::upstream::protocol::events::extract_sse_usage;
 use crate::upstream::protocol::responses::{
-    http_sse_fallback_allowed, response_body_has_first_event, transport_for_request,
-    CodexCompactRequest, CodexResponsesRequest, CodexTransport,
+    http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,
+    CodexTransport,
 };
 use crate::upstream::protocol::sse::SseError;
 use crate::upstream::protocol::websocket::{
@@ -39,6 +39,7 @@ use super::headers::{
     build_ordered_codex_base_headers, insert_optional_header, insert_ordered_headers,
     websocket_header_pairs,
 };
+use super::response_meta;
 use super::tls::{build_reqwest_client_with_custom_ca, custom_ca_env_cache_key, CustomCaError};
 use super::websocket::{
     execute_response_create_request_stream_with_pool, execute_response_create_request_with_pool,
@@ -366,9 +367,9 @@ impl CodexBackendClient {
             .send()
             .await?;
         let status = response.status();
-        let turn_state = turn_state(&response);
-        let set_cookie_headers = set_cookie_headers(&response);
-        let rate_limit_headers = rate_limit_headers(response.headers());
+        let turn_state = response_meta::turn_state(response.headers());
+        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
+        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
         if !status.is_success() {
@@ -387,7 +388,7 @@ impl CodexBackendClient {
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.try_next().await? {
             body_bytes.extend_from_slice(&chunk);
-            update_first_token_ms(started_at, &body_bytes, &mut first_token_ms);
+            response_meta::update_first_token_ms(started_at, &body_bytes, &mut first_token_ms);
         }
         let body = String::from_utf8_lossy(&body_bytes).into_owned();
         let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
@@ -418,9 +419,9 @@ impl CodexBackendClient {
             .send()
             .await?;
         let status = response.status();
-        let turn_state = turn_state(&response);
-        let set_cookie_headers = set_cookie_headers(&response);
-        let rate_limit_headers = rate_limit_headers(response.headers());
+        let turn_state = response_meta::turn_state(response.headers());
+        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
+        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
         if !status.is_success() {
@@ -704,8 +705,8 @@ impl CodexBackendClient {
             .await?;
 
         let status = response.status();
-        let set_cookie_headers = set_cookie_headers(&response);
-        let rate_limit_headers = rate_limit_headers(response.headers());
+        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
+        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let body = response.text().await?;
 
@@ -953,20 +954,6 @@ impl CodexModelCatalogClient for CodexBackendClient {
 // Response helpers
 // ---------------------------------------------------------------------------
 
-fn turn_state(response: &ReqwestResponse) -> Option<String> {
-    response
-        .headers()
-        .get("x-codex-turn-state")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string)
-}
-
-fn update_first_token_ms(started_at: Instant, body_bytes: &[u8], first_token_ms: &mut Option<i64>) {
-    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
-        *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
-    }
-}
-
 fn log_websocket_pool_decision(
     request_id: &str,
     account_id: Option<&str>,
@@ -1014,44 +1001,6 @@ impl WebSocketPoolLogContext {
             pool_key_hash: key.stable_hash(),
         }
     }
-}
-
-fn elapsed_millis_i64(started_at: Instant) -> i64 {
-    started_at.elapsed().as_millis().min(i64::MAX as u128) as i64
-}
-
-fn set_cookie_headers(response: &ReqwestResponse) -> Vec<String> {
-    response
-        .headers()
-        .get_all(SET_COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok().map(ToString::to_string))
-        .collect()
-}
-
-fn rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter(|(name, _)| is_rate_limit_header(name.as_str()))
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect()
-}
-
-fn is_rate_limit_header(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "retry-after"
-        || name.contains("ratelimit")
-        || name.contains("rate-limit")
-        || name.starts_with("x-codex-primary-")
-        || name.starts_with("x-codex-secondary-")
-        || name.starts_with("x-codex-code-review-")
-        || name.starts_with("x-codex-review-")
-        || name.starts_with("x-code-review-")
 }
 
 pub(super) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Option<u64> {

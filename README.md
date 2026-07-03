@@ -23,18 +23,18 @@
 cargo run --manifest-path backend/Cargo.toml
 ```
 
-启动后监听 `http://0.0.0.0:8080`，配置从运行目录下的 `config.yaml` 读取。首次启动会自动创建管理端账号（默认用户名密码见配置文件）。
+启动后监听 `http://0.0.0.0:8080`，默认配置从运行目录下的 `config.yaml` 读取，也可以用 `CPR_CONFIG_FILE=/path/to/config.yaml` 显式指定。首次启动会自动创建管理端账号；`admin.default_password` 必须显式设置为至少 12 位的非默认密码。
 
 Docker 部署：
 
 ```bash
 cp deploy/config.example.yaml deploy/config.yaml
-# 编辑 deploy/config.yaml，至少改掉 admin.default_password
+# 编辑 deploy/config.yaml，设置 admin.default_password
 docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-挂载关系：`deploy/config.yaml` → `/app/config.yaml`，`deploy/data` → `/app/data`，`deploy/logs` → `/app/logs`。
+默认只监听宿主机 `127.0.0.1:8080`。挂载关系：`deploy/config.yaml` → `/app/config.yaml`，数据和日志写入 Compose 命名卷 `cpr-data`、`cpr-logs`。
 
 ## API
 
@@ -90,6 +90,9 @@ database:
 logging:
   directory: .runtime/logs
   retention_days: 14
+
+admin:
+  default_password: '<set-a-long-random-password>'
 ```
 
 完整配置项见 `deploy/config.example.yaml`，包括 TLS、WebSocket 连接池、请求指纹、账号额度策略等。

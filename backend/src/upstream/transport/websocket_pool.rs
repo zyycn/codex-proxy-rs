@@ -271,7 +271,7 @@ impl CodexWebSocketPool {
                     break;
                 };
                 let pool = CodexWebSocketPool { inner, config };
-                if pool.is_shutting_down().await {
+                if pool.is_shutdown().await {
                     break;
                 }
                 pool.maintain_idle_connections().await;
@@ -279,7 +279,8 @@ impl CodexWebSocketPool {
         });
     }
 
-    async fn is_shutting_down(&self) -> bool {
+    /// 返回连接池是否已进入关闭状态。
+    pub async fn is_shutdown(&self) -> bool {
         self.inner.lock().await.shutting_down
     }
 

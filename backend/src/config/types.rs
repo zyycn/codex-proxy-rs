@@ -2,6 +2,17 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+const WEAK_ADMIN_PASSWORDS: &[&str] = &[
+    "",
+    "admin",
+    "123456",
+    "password",
+    "changeme",
+    "change-me",
+    "replace-me",
+    "codex-proxy-rs",
+];
+
 /// 应用运行总配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -43,11 +54,15 @@ pub struct AppConfig {
 
 /// HTTP 监听配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// 监听主机。
     pub host: String,
     /// 监听端口。
     pub port: u16,
+    /// 可信反向代理 IP 或 CIDR。只有这些 peer 的转发 IP 头会被采信。
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 /// 上游 API 地址配置。
@@ -276,6 +291,30 @@ impl Default for AdminConfig {
     }
 }
 
+impl AdminConfig {
+    /// 校验首次启动创建管理员时使用的默认密码。
+    pub fn validate_default_password(&self) -> Result<(), AdminConfigError> {
+        let password = self.default_password.trim();
+        if password.len() < 12 {
+            return Err(AdminConfigError::WeakDefaultPassword);
+        }
+        if WEAK_ADMIN_PASSWORDS.contains(&password.to_ascii_lowercase().as_str()) {
+            return Err(AdminConfigError::WeakDefaultPassword);
+        }
+        Ok(())
+    }
+}
+
+/// 管理员配置校验错误。
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+pub enum AdminConfigError {
+    /// 默认管理员密码为空、过短或属于常见弱口令。
+    #[error(
+        "admin.default_password must be set to a non-default password with at least 12 characters"
+    )]
+    WeakDefaultPassword,
+}
+
 fn default_session_cleanup_interval() -> u64 {
     3600 // 默认每小时清理一次过期会话
 }
@@ -285,7 +324,7 @@ fn default_admin_username() -> String {
 }
 
 fn default_admin_password() -> String {
-    "admin".to_string()
+    String::new()
 }
 
 /// 日志持久化配置。

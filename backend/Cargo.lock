@@ -329,6 +329,7 @@ dependencies = [
  "futures",
  "hex",
  "indexmap",
+ "ipnet",
  "rand 0.10.1",
  "rand_core 0.6.4",
  "reqwest",
@@ -339,8 +340,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serde_yml",
- "sha2 0.11.0",
+ "sha2 0.10.9",
  "sqlx",
  "subtle",
  "tar",
@@ -355,7 +355,6 @@ dependencies = [
  "tracing-subscriber",
  "tungstenite",
  "uuid",
- "validator",
  "wiremock",
 ]
 
@@ -407,12 +406,6 @@ dependencies = [
  "winnow",
  "yaml-rust2",
 ]
-
-[[package]]
-name = "const-oid"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "const-random"
@@ -589,41 +582,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "darling"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
-dependencies = [
- "darling_core",
- "darling_macro",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
-dependencies = [
- "darling_core",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -671,7 +629,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
- "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
 ]
@@ -1344,12 +1301,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ident_case"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-
-[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1567,19 +1518,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "noyalib"
-version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e493c05128df7a83b9676b709d590e0ebc285c7ed3152bc679668e8c1e506af5"
-dependencies = [
- "indexmap",
- "memchr",
- "rustc-hash",
- "serde",
- "smallvec",
-]
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1770,28 +1708,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
-]
-
-[[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2300,16 +2216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yml"
-version = "0.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909764a65f86829ccdb5eea9ab355843aa02c019a7bfd47465092953565caa05"
-dependencies = [
- "noyalib",
- "serde",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2615,12 +2521,6 @@ dependencies = [
  "unicode-normalization",
  "unicode-properties",
 ]
-
-[[package]]
-name = "strsim"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "subtle"
@@ -3167,36 +3067,6 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "validator"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43fb22e1a008ece370ce08a3e9e4447a910e92621bb49b85d6e48a45397e7cfa"
-dependencies = [
- "idna",
- "once_cell",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "url",
- "validator_derive",
-]
-
-[[package]]
-name = "validator_derive"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7df16e474ef958526d1205f6dda359fdfab79d9aa6d54bafcb92dcd07673dca"
-dependencies = [
- "darling",
- "once_cell",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

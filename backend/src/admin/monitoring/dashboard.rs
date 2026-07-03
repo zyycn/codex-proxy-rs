@@ -4,7 +4,7 @@ use std::{cmp::Reverse, collections::HashMap};
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -13,15 +13,16 @@ use serde_json::Value;
 
 use crate::{
     admin::{
-        auth::session::require_admin_auth,
+        auth::session::AdminAuth,
         monitoring::{
-            billing,
+            account_usage_service::{
+                AdminUsageRecord, AdminUsageSummary, AdminUsageTimeBucketRecord,
+            },
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
-            service::{AdminUsageRecord, AdminUsageSummary, AdminUsageTimeBucketRecord},
-            usage_record_store::AdminUsageRecordFilter,
-            usage_records::{account_email_map, usage_record_items, UsageRecordData},
+            usage_record_routes::{usage_record_items, UsageRecordData},
+            usage_record_service::AdminUsageRecordFilter,
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
@@ -250,10 +251,8 @@ impl UsageWindow {
 /// `GET /api/admin/dashboard/summary`
 pub(crate) async fn dashboard_summary(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
-
     let accounts = state
         .services
         .accounts
@@ -293,7 +292,12 @@ pub(crate) async fn dashboard_summary(
     let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
     let settings = state.services.settings.current();
     let recent_usage_records = recent_events.into_iter().take(10).collect::<Vec<_>>();
-    let account_emails = account_email_map(&state, &recent_usage_records).await?;
+    let account_emails = state
+        .services
+        .usage_records
+        .account_email_map(&recent_usage_records)
+        .await
+        .map_err(|error| AdminError::usage_record_accounts_failed(error.to_string()))?;
     let dashboard_usage_records = usage_record_items(recent_usage_records, &account_emails);
 
     Ok(AdminResponse::new(
@@ -315,10 +319,9 @@ pub(crate) async fn dashboard_summary(
 /// `GET /api/admin/dashboard/trend?kind=usage|latency|errors`
 pub(crate) async fn dashboard_trend(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: AdminAuth,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    require_admin_auth(&state, &headers).await?;
     let time_buckets = dashboard_time_buckets(&state, Utc::now()).await;
 
     Ok(AdminResponse::new(
@@ -736,7 +739,7 @@ fn cost_window(
     let mut has_usage = false;
     for record in records {
         if record.bucket_start >= start && record.bucket_start < end {
-            if let Some(cost) = bucket_cost(record) {
+            if let Some(cost) = record.cost_usd {
                 total += cost;
                 has_usage = true;
             }
@@ -749,7 +752,7 @@ fn total_cost(records: &[AdminUsageTimeBucketRecord]) -> f64 {
     let mut total = 0.0;
     let mut has_usage = false;
     for record in records {
-        if let Some(cost) = bucket_cost(record) {
+        if let Some(cost) = record.cost_usd {
             total += cost;
             has_usage = true;
         }
@@ -759,29 +762,6 @@ fn total_cost(records: &[AdminUsageTimeBucketRecord]) -> f64 {
     }
 
     0.0
-}
-
-fn bucket_cost(record: &AdminUsageTimeBucketRecord) -> Option<f64> {
-    let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
-    let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
-    let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
-    if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
-        return None;
-    }
-
-    let model = record.model.trim();
-    if model.is_empty() {
-        return None;
-    }
-    let service_tier = record.service_tier.as_deref();
-
-    Some(billing::calculate_cost(
-        input_tokens,
-        output_tokens,
-        cached_tokens,
-        model,
-        service_tier,
-    ))
 }
 
 fn apply_bucket(window: &mut UsageWindow, record: &AdminUsageTimeBucketRecord) {

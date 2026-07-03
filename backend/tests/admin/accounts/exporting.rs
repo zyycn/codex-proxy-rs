@@ -1,7 +1,10 @@
 use super::*;
+use sqlx::Row;
+
+const EXPORT_CONFIRM: &str = "confirm=export_sensitive_accounts";
 
 #[tokio::test]
-async fn admin_accounts_export_should_return_cpr_payload_for_all_accounts() {
+async fn admin_accounts_export_should_reject_empty_ids() {
     let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-export-all.sqlite", 131).await;
     seed_account(
@@ -59,7 +62,7 @@ async fn admin_accounts_export_should_return_cpr_payload_for_all_accounts() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/export")
+                .uri(format!("/api/admin/accounts/export?{EXPORT_CONFIRM}"))
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -68,18 +71,10 @@ async fn admin_accounts_export_should_return_cpr_payload_for_all_accounts() {
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let accounts = body["data"]["accounts"].as_array().unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["sourceFormat"], "cpr");
-    assert_eq!(accounts.len(), 2);
-    assert!(accounts.iter().any(|account| {
-        account["id"] == "acct_export_a"
-            && account["token"]
-                .as_str()
-                .is_some_and(|token| !token.is_empty())
-            && account["refreshToken"] == "refresh-export-a"
-    }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], 40001);
+    assert_eq!(body["message"], "account ids are required");
 }
 
 #[tokio::test]
@@ -141,7 +136,9 @@ async fn admin_accounts_export_should_filter_by_ids() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/export?ids=acct_export_selected")
+                .uri(format!(
+                    "/api/admin/accounts/export?ids=acct_export_selected&{EXPORT_CONFIRM}"
+                ))
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -164,7 +161,9 @@ async fn admin_accounts_export_should_fail_when_selected_id_is_missing() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts/export?ids=missing_account")
+                .uri(format!(
+                    "/api/admin/accounts/export?ids=missing_account&{EXPORT_CONFIRM}"
+                ))
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -209,7 +208,9 @@ async fn admin_accounts_export_payload_should_import_directly() {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/api/admin/accounts/export?ids=acct_export_roundtrip")
+                    .uri(format!(
+                        "/api/admin/accounts/export?ids=acct_export_roundtrip&{EXPORT_CONFIRM}"
+                    ))
                     .header("cookie", "cpr_admin_session=session_1")
                     .body(Body::empty())
                     .unwrap(),
@@ -248,4 +249,157 @@ async fn admin_accounts_export_payload_should_import_directly() {
         stored.refresh_token.unwrap().expose_secret(),
         "refresh-roundtrip"
     );
+}
+
+#[tokio::test]
+async fn admin_accounts_export_should_require_explicit_sensitive_export_confirmation() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-export-confirm.sqlite", 136).await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_export_confirm".into(),
+            email: Some("confirm@example.com".into()),
+            account_id: Some("chatgpt_export_confirm".into()),
+            user_id: Some("user_export_confirm".into()),
+            label: None,
+            plan_type: Some("pro".into()),
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt_export_confirm",
+                    Some("user_export_confirm"),
+                    Some("confirm@example.com"),
+                    Some("pro"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-confirm".into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/export?ids=acct_export_confirm")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_export_missing_confirmation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let audit = account_export_audit_row(&pool, "req_export_missing_confirmation").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        "account export requires confirm=export_sensitive_accounts"
+    );
+    assert_eq!(audit.level, "warn");
+    assert_eq!(audit.status_code, Some(400));
+    assert_eq!(
+        audit.failure_class,
+        Some("missing_confirmation".to_string())
+    );
+    assert_eq!(audit.metadata["accountIds"][0], "acct_export_confirm");
+    assert!(audit.metadata.get("token").is_none());
+    assert!(audit.metadata.get("refreshToken").is_none());
+}
+
+#[tokio::test]
+async fn admin_accounts_export_should_record_success_audit_event() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-export-audit.sqlite", 137).await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_export_audit".into(),
+            email: Some("audit@example.com".into()),
+            account_id: Some("chatgpt_export_audit".into()),
+            user_id: Some("user_export_audit".into()),
+            label: None,
+            plan_type: Some("team".into()),
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt_export_audit",
+                    Some("user_export_audit"),
+                    Some("audit@example.com"),
+                    Some("team"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-audit".into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Active,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/admin/accounts/export?ids=acct_export_audit&{EXPORT_CONFIRM}"
+                ))
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_export_success_audit")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let audit = account_export_audit_row(&pool, "req_export_success_audit").await;
+
+    assert_eq!(audit.kind, "admin_account_export");
+    assert_eq!(audit.level, "warn");
+    assert_eq!(audit.status_code, Some(200));
+    assert_eq!(audit.failure_class, None);
+    assert_eq!(audit.message, "Admin account export succeeded");
+    assert_eq!(audit.metadata["accountCount"], 1);
+    assert_eq!(audit.metadata["accountIds"][0], "acct_export_audit");
+    assert!(audit.metadata.get("token").is_none());
+    assert!(audit.metadata.get("refreshToken").is_none());
+}
+
+#[derive(Debug)]
+struct AccountExportAuditRow {
+    kind: String,
+    level: String,
+    status_code: Option<i64>,
+    failure_class: Option<String>,
+    message: String,
+    metadata: Value,
+}
+
+async fn account_export_audit_row(pool: &SqlitePool, request_id: &str) -> AccountExportAuditRow {
+    let row = sqlx::query(
+        "select kind, level, status_code, failure_class, message, metadata_json \
+         from usage_records \
+         where kind = 'admin_account_export' and request_id = ? \
+         order by created_at desc, id desc \
+         limit 1",
+    )
+    .bind(request_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    AccountExportAuditRow {
+        kind: row.get("kind"),
+        level: row.get("level"),
+        status_code: row.get("status_code"),
+        failure_class: row.get("failure_class"),
+        message: row.get("message"),
+        metadata: serde_json::from_str(&row.get::<String, _>("metadata_json")).unwrap(),
+    }
 }

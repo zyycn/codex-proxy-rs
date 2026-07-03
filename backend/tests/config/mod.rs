@@ -1,12 +1,14 @@
 use codex_proxy_rs::config::settings::account_pool_options_from_config;
-use codex_proxy_rs::config::types::AppConfig;
 use codex_proxy_rs::config::types::LoggingConfig;
+use codex_proxy_rs::config::types::{AdminConfig, AdminConfigError, AppConfig};
+use serde::de::DeserializeOwned;
 use std::fs;
 
 const DEFAULT_CONFIG_YAML: &str = r#"
 server:
   host: 0.0.0.0
   port: 8080
+  trusted_proxies: []
 api:
   base_url: https://chatgpt.com/backend-api
 database:
@@ -67,7 +69,7 @@ fingerprint:
 admin:
   session_ttl_minutes: 1440
   default_username: admin
-  default_password: admin
+  default_password: test-admin-password
 logging:
   directory: .runtime/logs
   retention_days: 14
@@ -76,8 +78,9 @@ logging:
 
 #[test]
 fn default_config_keeps_only_codex_backend() {
-    let cfg: AppConfig = serde_yml::from_str(DEFAULT_CONFIG_YAML).unwrap();
+    let cfg: AppConfig = parse_yaml_config(DEFAULT_CONFIG_YAML).unwrap();
     assert_eq!(cfg.server.host, "0.0.0.0");
+    assert!(cfg.server.trusted_proxies.is_empty());
     assert_eq!(cfg.api.base_url, "https://chatgpt.com/backend-api");
     assert!(cfg.model_aliases.is_empty());
     assert_eq!(cfg.auth.refresh_margin_seconds, 300);
@@ -99,7 +102,7 @@ fn default_config_keeps_only_codex_backend() {
 
 #[test]
 fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
-    let cfg: AppConfig = serde_yml::from_str(DEFAULT_CONFIG_YAML).unwrap();
+    let cfg: AppConfig = parse_yaml_config(DEFAULT_CONFIG_YAML).unwrap();
 
     assert_eq!(
         cfg.database.url,
@@ -110,7 +113,7 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
 
 #[test]
 fn account_pool_options_should_use_quota_skip_exhausted() {
-    let mut cfg: AppConfig = serde_yml::from_str(DEFAULT_CONFIG_YAML).unwrap();
+    let mut cfg: AppConfig = parse_yaml_config(DEFAULT_CONFIG_YAML).unwrap();
     cfg.quota.skip_exhausted = false;
 
     let options = account_pool_options_from_config(&cfg);
@@ -119,8 +122,31 @@ fn account_pool_options_should_use_quota_skip_exhausted() {
 }
 
 #[test]
+fn admin_config_should_reject_weak_default_password() {
+    let config = AdminConfig {
+        default_password: "123456".to_string(),
+        ..AdminConfig::default()
+    };
+
+    assert_eq!(
+        config.validate_default_password(),
+        Err(AdminConfigError::WeakDefaultPassword)
+    );
+}
+
+#[test]
+fn admin_config_should_accept_explicit_strong_default_password() {
+    let config = AdminConfig {
+        default_password: "correct-horse-battery-staple".to_string(),
+        ..AdminConfig::default()
+    };
+
+    assert_eq!(config.validate_default_password(), Ok(()));
+}
+
+#[test]
 fn config_should_reject_unknown_top_level_sections() {
-    let err = serde_yml::from_str::<AppConfig>(
+    let err = parse_yaml_config::<AppConfig>(
         r"
 server:
   host: 127.0.0.1
@@ -233,6 +259,7 @@ ws_pool:
 
     assert_eq!(cfg.server.host, "127.0.0.1");
     assert_eq!(cfg.server.port, 8080);
+    assert!(cfg.server.trusted_proxies.is_empty());
     assert_eq!(
         cfg.database.url,
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
@@ -254,8 +281,56 @@ ws_pool:
 }
 
 #[test]
+fn config_should_parse_trusted_proxy_entries() {
+    let cfg: AppConfig = parse_yaml_config(&DEFAULT_CONFIG_YAML.replace(
+        "trusted_proxies: []",
+        "trusted_proxies:\n    - 127.0.0.1\n    - 10.0.0.0/8",
+    ))
+    .unwrap();
+
+    assert_eq!(
+        cfg.server.trusted_proxies,
+        vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()]
+    );
+}
+
+#[test]
+fn server_config_should_reject_unknown_fields() {
+    let err = parse_yaml_config::<AppConfig>(&DEFAULT_CONFIG_YAML.replace(
+        "trusted_proxies: []",
+        "trusted_proxies: []\n  trusted_proxy: 127.0.0.1",
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("trusted_proxy"),
+        "expected unknown server field to be rejected, got {err}"
+    );
+}
+
+#[test]
+fn config_loader_should_read_explicit_config_file_from_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_file = dir.path().join("custom-config.yaml");
+    fs::write(
+        &config_file,
+        DEFAULT_CONFIG_YAML
+            .replace("host: 0.0.0.0", "host: 127.0.0.2")
+            .replace("directory: .runtime/logs", "directory: .runtime/env-logs"),
+    )
+    .unwrap();
+    std::env::set_var("CPR_CONFIG_FILE", &config_file);
+
+    let cfg = AppConfig::load().unwrap();
+
+    std::env::remove_var("CPR_CONFIG_FILE");
+    assert_eq!(cfg.server.host, "127.0.0.2");
+    assert_eq!(cfg.logging.directory, ".runtime/env-logs");
+}
+
+#[test]
 fn logging_config_should_reject_unknown_fields() {
-    let err = serde_yml::from_str::<LoggingConfig>(
+    let err = parse_yaml_config::<LoggingConfig>(
         r"
 directory: .runtime/logs
 unexpected: true
@@ -269,4 +344,11 @@ enabled: false
         err.to_string().contains("unexpected"),
         "expected unknown logging field to be rejected, got {err}"
     );
+}
+
+fn parse_yaml_config<T: DeserializeOwned>(yaml: &str) -> Result<T, config::ConfigError> {
+    config::Config::builder()
+        .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+        .build()?
+        .try_deserialize()
 }

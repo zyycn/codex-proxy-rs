@@ -14,8 +14,25 @@ use codex_proxy_rs::{
         transport::tls::CODEX_CA_CERT_ENV,
     },
 };
+use sqlx::SqlitePool;
 
 use crate::support::{config::test_config, sqlite::init_test_db};
+
+fn stores(pool: SqlitePool) -> BackgroundTaskStores {
+    BackgroundTaskStores {
+        accounts: SqliteAccountStore::new(pool.clone()),
+        admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
+        cookies: SqliteCookieStore::new(pool.clone()),
+        fingerprints: FingerprintRepository::new(pool.clone()),
+        session_affinity:
+            codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
+                pool.clone(),
+            ),
+        refresh_leases: RefreshLeaseStore::new(pool.clone()),
+        client_keys: SqliteClientKeyStore::new(pool.clone()),
+        usage_records: SqliteUsageRecordStore::new(pool),
+    }
+}
 
 #[tokio::test]
 async fn services_try_new_should_use_configured_tls_transport_builder() {
@@ -27,19 +44,7 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
             "sqlite://{}",
             temp_dir.path().join("services-tls.sqlite").display()
         ));
-        let stores = BackgroundTaskStores {
-            accounts: SqliteAccountStore::new(pool.clone()),
-            admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
-            cookies: SqliteCookieStore::new(pool.clone()),
-            fingerprints: FingerprintRepository::new(pool.clone()),
-            session_affinity:
-                codex_proxy_rs::proxy::dispatch::session_affinity::SqliteSessionAffinityStore::new(
-                    pool.clone(),
-                ),
-            refresh_leases: RefreshLeaseStore::new(pool.clone()),
-            client_keys: SqliteClientKeyStore::new(pool.clone()),
-            usage_records: SqliteUsageRecordStore::new(pool),
-        };
+        let stores = stores(pool);
 
         let Err(error) = Services::try_new(
             &config,
@@ -70,4 +75,45 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[tokio::test]
+async fn services_try_new_should_expose_websocket_pool_when_enabled() {
+    let (pool, temp_dir) = init_test_db("services-ws-pool-enabled.sqlite").await;
+    let config = test_config(format!(
+        "sqlite://{}",
+        temp_dir
+            .path()
+            .join("services-ws-pool-enabled.sqlite")
+            .display()
+    ));
+    let services = Services::try_new(
+        &config,
+        stores(pool),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .expect("services should build");
+
+    assert!(services.websocket_pool.is_some());
+}
+
+#[tokio::test]
+async fn services_try_new_should_not_expose_websocket_pool_when_disabled() {
+    let (pool, temp_dir) = init_test_db("services-ws-pool-disabled.sqlite").await;
+    let mut config = test_config(format!(
+        "sqlite://{}",
+        temp_dir
+            .path()
+            .join("services-ws-pool-disabled.sqlite")
+            .display()
+    ));
+    config.ws_pool.enabled = false;
+    let services = Services::try_new(
+        &config,
+        stores(pool),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .expect("services should build");
+
+    assert!(services.websocket_pool.is_none());
 }

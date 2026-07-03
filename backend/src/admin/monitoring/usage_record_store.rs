@@ -1,6 +1,6 @@
 //! 使用记录存储实现（SQLite）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -9,10 +9,15 @@ use thiserror::Error;
 
 use crate::admin::monitoring::{
     billing,
-    usage_record::{metadata_service_tier, UsageRecord, UsageRecordLevel},
+    usage_record_model::{
+        metadata_i64, metadata_service_tier, metadata_string, UsageRecord, UsageRecordLevel,
+    },
 };
-use crate::infra::json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page};
-use crate::infra::time::china_quarter_hour_start;
+use crate::infra::{
+    format::optional_nonnegative_i64_to_u64,
+    json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page},
+    time::{china_quarter_hour_start, parse_rfc3339_utc as parse_rfc3339},
+};
 
 /// 默认保留最新使用记录数量。
 pub const DEFAULT_USAGE_RECORD_CAPACITY: u32 = 2_000;
@@ -44,6 +49,7 @@ pub type SqliteUsageRecordStoreResult<T> = Result<T, SqliteUsageRecordStoreError
 
 const USAGE_RECORD_SERVICE_TIER_SQL: &str =
     "nullif(trim(json_extract(metadata_json, '$.serviceTier')), '')";
+const USAGE_RECORD_SELECT_SQL: &str = "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from usage_records";
 
 /// 使用记录查询过滤器。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -112,9 +118,7 @@ impl SqliteUsageRecordStore {
         limit: u32,
     ) -> SqliteUsageRecordStoreResult<Page<UsageRecord>> {
         let fetch_limit = i64::from(limit) + 1;
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from usage_records",
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new(USAGE_RECORD_SELECT_SQL);
         push_filter(&mut builder, &filter, cursor.as_deref())?;
         builder.push(" order by created_at desc, id desc limit ");
         builder.push_bind(fetch_limit);
@@ -148,9 +152,7 @@ impl SqliteUsageRecordStore {
         let page_size = page_size.clamp(1, 200);
         let total = count_usage_records(&self.pool, &filter).await?;
         let offset = page_offset(page, page_size);
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from usage_records",
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new(USAGE_RECORD_SELECT_SQL);
         push_filter(&mut builder, &filter, None)?;
         builder.push(" order by created_at desc, id desc limit ");
         builder.push_bind(i64::from(page_size));
@@ -173,13 +175,19 @@ impl SqliteUsageRecordStore {
 
     /// 按 ID 读取使用记录。
     pub async fn get(&self, id: &str) -> SqliteUsageRecordStoreResult<Option<UsageRecord>> {
-        let row = sqlx::query(
-            "select id, request_id, kind, level, account_id, route, model, status_code, transport, attempt_index, upstream_status_code, failure_class, response_id, upstream_request_id, latency_ms, message, metadata_json, created_at from usage_records where id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let mut builder = QueryBuilder::<Sqlite>::new(USAGE_RECORD_SELECT_SQL);
+        builder.push(" where id = ");
+        builder.push_bind(id);
+        let row = builder.build().fetch_optional(&self.pool).await?;
         row.map(|row| usage_record_from_row(&row)).transpose()
+    }
+
+    /// 读取使用记录关联账号的邮箱映射。
+    pub async fn account_email_map(
+        &self,
+        items: &[UsageRecord],
+    ) -> SqliteUsageRecordStoreResult<HashMap<String, String>> {
+        usage_record_account_email_map(&self.pool, items).await
     }
 
     /// 汇总事件使用记录。
@@ -208,16 +216,8 @@ impl SqliteUsageRecordStore {
         usage_endpoint_distribution(&self.pool, &filter, source, 8).await
     }
 
-    /// 聚合 Token 使用趋势。
-    pub async fn token_trend(
-        &self,
-        filter: UsageRecordFilter,
-    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordTrendPoint>> {
-        usage_trend(&self.pool, &filter).await
-    }
-
-    /// 聚合延迟趋势。
-    pub async fn latency_trend(
+    /// 聚合使用记录趋势。
+    pub async fn trend(
         &self,
         filter: UsageRecordFilter,
     ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordTrendPoint>> {
@@ -282,21 +282,6 @@ fn usage_record_summary_fields(event: &UsageRecord) -> UsageRecordSummaryFields 
             )
         }),
     }
-}
-
-fn metadata_string(metadata: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        metadata
-            .get(*key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
-    keys.iter()
-        .find_map(|key| metadata.get(*key).and_then(Value::as_i64))
 }
 
 async fn append_event(pool: &SqlitePool, event: &UsageRecord) -> SqliteUsageRecordStoreResult<()> {
@@ -473,13 +458,17 @@ async fn usage_summary(
     push_filter(&mut builder, filter, None)?;
 
     let row = builder.build().fetch_one(pool).await?;
-    let input_tokens = nonnegative_i64(row.get::<Option<i64>, _>("input_tokens"));
-    let output_tokens = nonnegative_i64(row.get::<Option<i64>, _>("output_tokens"));
-    let cached_tokens = nonnegative_i64(row.get::<Option<i64>, _>("cached_tokens"));
+    let input_tokens = optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("input_tokens"));
+    let output_tokens = optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("output_tokens"));
+    let cached_tokens = optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("cached_tokens"));
 
     Ok(UsageRecordSummary {
-        total_requests: nonnegative_i64(row.get::<Option<i64>, _>("total_requests")),
-        error_requests: nonnegative_i64(row.get::<Option<i64>, _>("error_requests")),
+        total_requests: optional_nonnegative_i64_to_u64(
+            row.get::<Option<i64>, _>("total_requests"),
+        ),
+        error_requests: optional_nonnegative_i64_to_u64(
+            row.get::<Option<i64>, _>("error_requests"),
+        ),
         input_tokens,
         output_tokens,
         cached_tokens,
@@ -488,8 +477,39 @@ async fn usage_summary(
     })
 }
 
-fn nonnegative_i64(value: Option<i64>) -> u64 {
-    value.unwrap_or_default().max(0).cast_unsigned()
+async fn usage_record_account_email_map(
+    pool: &SqlitePool,
+    items: &[UsageRecord],
+) -> SqliteUsageRecordStoreResult<HashMap<String, String>> {
+    let mut account_ids = items
+        .iter()
+        .filter_map(|item| item.account_id.as_deref())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    account_ids.sort_unstable();
+    account_ids.dedup();
+
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut builder = QueryBuilder::<Sqlite>::new("select id, email from accounts where id in (");
+    let mut separated = builder.separated(", ");
+    for account_id in &account_ids {
+        separated.push_bind(account_id);
+    }
+    separated.push_unseparated(")");
+
+    let rows = builder.build().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.get::<Option<String>, _>("email")
+                .map(|email| email.trim().to_string())
+                .filter(|email| !email.is_empty())
+                .map(|email| (row.get::<String, _>("id"), email))
+        })
+        .collect())
 }
 
 async fn usage_model_distribution(
@@ -590,9 +610,12 @@ async fn usage_breakdown(
     let mut items = Vec::<UsageRecordBreakdown>::new();
     for row in rows {
         let name: String = row.get(group_alias);
-        let input_tokens = nonnegative_i64(row.get::<Option<i64>, _>("input_tokens"));
-        let output_tokens = nonnegative_i64(row.get::<Option<i64>, _>("output_tokens"));
-        let cached_tokens = nonnegative_i64(row.get::<Option<i64>, _>("cached_tokens"));
+        let input_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("input_tokens"));
+        let output_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("output_tokens"));
+        let cached_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("cached_tokens"));
         let cost = usage_breakdown_cost(
             input_tokens,
             output_tokens,
@@ -600,7 +623,8 @@ async fn usage_breakdown(
             &row.get::<String, _>("billing_model"),
             row.get::<Option<String>, _>("service_tier").as_deref(),
         );
-        let request_count = nonnegative_i64(row.get::<Option<i64>, _>("request_count"));
+        let request_count =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("request_count"));
         let average_latency_ms = row.get::<Option<f64>, _>("average_latency_ms");
 
         if let Some(item) = items.iter_mut().find(|item| item.name == name) {
@@ -678,11 +702,14 @@ async fn usage_trend(
 
     for row in rows {
         let date: String = row.get("date");
-        let input_tokens = nonnegative_i64(row.get::<Option<i64>, _>("input_tokens"));
-        let output_tokens = nonnegative_i64(row.get::<Option<i64>, _>("output_tokens"));
+        let input_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("input_tokens"));
+        let output_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("output_tokens"));
         let cache_creation_tokens =
-            nonnegative_i64(row.get::<Option<i64>, _>("cache_creation_tokens"));
-        let cached_tokens = nonnegative_i64(row.get::<Option<i64>, _>("cached_tokens"));
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("cache_creation_tokens"));
+        let cached_tokens =
+            optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("cached_tokens"));
         let cost = usage_breakdown_cost(
             input_tokens,
             output_tokens,
@@ -932,48 +959,6 @@ fn level_from_db(value: &str) -> SqliteUsageRecordStoreResult<UsageRecordLevel> 
     }
 }
 
-fn parse_rfc3339(value: &str) -> SqliteUsageRecordStoreResult<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
-}
-
-/// 管理端使用记录服务相关类型。
-/// 使用记录查询过滤器。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdminUsageRecordFilter {
-    /// 事件类别。
-    pub kind: Option<String>,
-    /// 事件等级。
-    pub level: Option<UsageRecordLevel>,
-    /// 请求 ID。
-    pub request_id: Option<String>,
-    /// 账号 ID。
-    pub account_id: Option<String>,
-    /// 路由。
-    pub route: Option<String>,
-    /// 模型。
-    pub model: Option<String>,
-    /// HTTP 状态码。
-    pub status_code: Option<i64>,
-    /// 上游传输方式。
-    pub transport: Option<String>,
-    /// 同一请求内的上游尝试序号。
-    pub attempt_index: Option<i64>,
-    /// 上游 HTTP 状态码。
-    pub upstream_status_code: Option<i64>,
-    /// 失败分类。
-    pub failure_class: Option<String>,
-    /// 上游响应 ID。
-    pub response_id: Option<String>,
-    /// 上游请求 ID。
-    pub upstream_request_id: Option<String>,
-    /// 搜索关键词。
-    pub search: Option<String>,
-    /// 起始时间。
-    pub start_time: Option<DateTime<Utc>>,
-    /// 结束时间。
-    pub end_time: Option<DateTime<Utc>>,
-}
-
 /// 使用记录汇总。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UsageRecordSummary {
@@ -1061,223 +1046,4 @@ pub struct UsageRecordTrendPoint {
     pub actual_cost: f64,
     /// 平均耗时。
     pub average_latency_ms: Option<f64>,
-}
-
-impl From<AdminUsageRecordFilter> for UsageRecordFilter {
-    fn from(filter: AdminUsageRecordFilter) -> Self {
-        Self {
-            kind: filter.kind,
-            level: filter.level,
-            request_id: filter.request_id,
-            account_id: filter.account_id,
-            route: filter.route,
-            model: filter.model,
-            status_code: filter.status_code,
-            transport: filter.transport,
-            attempt_index: filter.attempt_index,
-            upstream_status_code: filter.upstream_status_code,
-            failure_class: filter.failure_class,
-            response_id: filter.response_id,
-            upstream_request_id: filter.upstream_request_id,
-            search: filter.search,
-            start_time: filter.start_time,
-            end_time: filter.end_time,
-        }
-    }
-}
-
-/// 清空使用记录结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminClearUsageRecords {
-    /// 清理数量。
-    pub cleared: u64,
-}
-
-/// 管理端使用记录错误。
-#[derive(Debug, Error)]
-pub enum AdminUsageRecordError {
-    /// 列表失败。
-    #[error("failed to list usage records")]
-    List,
-    /// 读取失败。
-    #[error("failed to get usage record")]
-    Get,
-    /// 清空失败。
-    #[error("failed to clear usage records")]
-    Clear,
-    /// 写入失败。
-    #[error("failed to append usage record")]
-    Append,
-    /// 裁剪失败。
-    #[error("failed to trim usage records")]
-    Trim,
-}
-
-/// 管理端使用记录服务。
-#[derive(Clone)]
-pub struct AdminUsageRecordService {
-    store: SqliteUsageRecordStore,
-    settings: std::sync::Arc<tokio::sync::RwLock<AdminUsageRecordSettings>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AdminUsageRecordSettings {
-    enabled: bool,
-    capacity: u32,
-    capture_body: bool,
-}
-
-impl AdminUsageRecordService {
-    /// 构造管理端使用记录服务。
-    pub fn new(
-        store: SqliteUsageRecordStore,
-        enabled: bool,
-        capacity: u32,
-        capture_body: bool,
-    ) -> Self {
-        Self {
-            store,
-            settings: std::sync::Arc::new(tokio::sync::RwLock::new(AdminUsageRecordSettings {
-                enabled,
-                capacity,
-                capture_body,
-            })),
-        }
-    }
-
-    /// 分页查询日志。
-    pub async fn list(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<Page<UsageRecord>, AdminUsageRecordError> {
-        self.store
-            .list(filter.into(), cursor, limit)
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 按页码查询日志。
-    pub async fn list_page(
-        &self,
-        page: u32,
-        page_size: u32,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<NumberedPage<UsageRecord>, AdminUsageRecordError> {
-        self.store
-            .list_page(filter.into(), page, page_size)
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 按 ID 读取日志。
-    pub async fn get(&self, id: &str) -> Result<Option<UsageRecord>, AdminUsageRecordError> {
-        self.store
-            .get(id)
-            .await
-            .map_err(|_| AdminUsageRecordError::Get)
-    }
-
-    /// 汇总使用记录。
-    pub async fn summary(
-        &self,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<UsageRecordSummary, AdminUsageRecordError> {
-        self.store
-            .summary(filter.into())
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 按模型来源聚合使用记录分布。
-    pub async fn model_distribution(
-        &self,
-        filter: AdminUsageRecordFilter,
-        source: UsageRecordModelSource,
-    ) -> Result<Vec<UsageRecordBreakdown>, AdminUsageRecordError> {
-        self.store
-            .model_distribution(filter.into(), source)
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 按端点来源聚合使用记录分布。
-    pub async fn endpoint_distribution(
-        &self,
-        filter: AdminUsageRecordFilter,
-        source: UsageRecordEndpointSource,
-    ) -> Result<Vec<UsageRecordBreakdown>, AdminUsageRecordError> {
-        self.store
-            .endpoint_distribution(filter.into(), source)
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 聚合 Token 趋势。
-    pub async fn token_trend(
-        &self,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
-        self.store
-            .token_trend(filter.into())
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 聚合延迟趋势。
-    pub async fn latency_trend(
-        &self,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
-        self.store
-            .latency_trend(filter.into())
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 清空日志。
-    pub async fn clear(&self) -> Result<AdminClearUsageRecords, AdminUsageRecordError> {
-        self.store
-            .clear()
-            .await
-            .map(|cleared| AdminClearUsageRecords { cleared })
-            .map_err(|_| AdminUsageRecordError::Clear)
-    }
-
-    /// 记录使用记录。
-    pub async fn record(&self, mut event: UsageRecord) -> Result<(), AdminUsageRecordError> {
-        let settings = *self.settings.read().await;
-        if !settings.enabled && event.level != UsageRecordLevel::Error {
-            return Ok(());
-        }
-        apply_capture_body_policy(&mut event, settings.capture_body);
-        self.store
-            .append(&event)
-            .await
-            .map_err(|_| AdminUsageRecordError::Append)?;
-        self.store
-            .trim_to_capacity(settings.capacity)
-            .await
-            .map_err(|_| AdminUsageRecordError::Trim)?;
-        Ok(())
-    }
-}
-
-fn apply_capture_body_policy(event: &mut UsageRecord, capture_body: bool) {
-    if capture_body {
-        return;
-    }
-    let Some(metadata) = event.metadata.as_object_mut() else {
-        return;
-    };
-    for key in [
-        "body",
-        "rawBody",
-        "requestBody",
-        "responseBody",
-        "upstreamBody",
-    ] {
-        metadata.remove(key);
-    }
 }

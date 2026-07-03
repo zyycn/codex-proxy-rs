@@ -1,12 +1,17 @@
 //! SQLite 用量存储。
 
 use chrono::{DateTime, Utc};
-use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
 
-use crate::infra::json::{decode_cursor, encode_cursor, Page};
+use crate::infra::{
+    json::{decode_cursor, encode_cursor, Page},
+    time::{
+        parse_optional_rfc3339_utc as parse_optional_rfc3339, parse_rfc3339_utc as parse_rfc3339,
+    },
+};
 
-const LIST_USAGE_AFTER_CURSOR_SQL: &str = r"
+const LIST_USAGE_SELECT_SQL: &str = r"
 select
   au.account_id,
   a.email,
@@ -32,41 +37,7 @@ select
   au.limit_window_seconds,
   au.last_used_at
 from account_usage au
-left join accounts a on a.id = au.account_id
-where au.last_used_at < ?
-   or (au.last_used_at = ? and au.account_id < ?)
-order by au.last_used_at desc, au.account_id desc
-limit ?";
-
-const LIST_USAGE_SQL: &str = r"
-select
-  au.account_id,
-  a.email,
-  a.label,
-  a.plan_type,
-  au.request_count,
-  au.empty_response_count,
-  au.input_tokens,
-  au.output_tokens,
-  au.cached_tokens,
-  au.reasoning_tokens,
-  au.total_tokens,
-  au.image_input_tokens,
-  au.image_output_tokens,
-  au.image_request_count,
-  au.image_request_failed_count,
-  au.window_request_count,
-  au.window_input_tokens,
-  au.window_output_tokens,
-  au.window_cached_tokens,
-  au.window_started_at,
-  au.window_reset_at,
-  au.limit_window_seconds,
-  au.last_used_at
-from account_usage au
-left join accounts a on a.id = au.account_id
-order by au.last_used_at desc, au.account_id desc
-limit ?";
+left join accounts a on a.id = au.account_id";
 
 const USAGE_SUMMARY_SQL: &str = r"
 select
@@ -254,24 +225,24 @@ impl SqliteUsageStore {
         limit: u32,
     ) -> SqliteUsageStoreResult<Page<UsageListRecord>> {
         let limit = limit.clamp(1, 200);
+        let fetch_limit = i64::from(limit) + 1;
+        let mut builder = QueryBuilder::<Sqlite>::new(LIST_USAGE_SELECT_SQL);
         if let Some(cursor) = cursor {
             let (last_used_at, account_id) =
                 decode_cursor(&cursor).ok_or(SqliteUsageStoreError::InvalidCursor)?;
-            let rows = sqlx::query(LIST_USAGE_AFTER_CURSOR_SQL)
-                .bind(&last_used_at)
-                .bind(&last_used_at)
-                .bind(&account_id)
-                .bind(limit + 1)
-                .fetch_all(&self.pool)
-                .await?;
-            Ok(to_page(&rows, limit))
-        } else {
-            let rows = sqlx::query(LIST_USAGE_SQL)
-                .bind(limit + 1)
-                .fetch_all(&self.pool)
-                .await?;
-            Ok(to_page(&rows, limit))
+            builder.push("\nwhere au.last_used_at < ");
+            builder.push_bind(last_used_at.clone());
+            builder.push("\n   or (au.last_used_at = ");
+            builder.push_bind(last_used_at);
+            builder.push(" and au.account_id < ");
+            builder.push_bind(account_id);
+            builder.push(")");
         }
+        builder.push("\norder by au.last_used_at desc, au.account_id desc\nlimit ");
+        builder.push_bind(fetch_limit);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        Ok(to_page(&rows, limit))
     }
 
     /// 汇总账号用量。
@@ -347,8 +318,7 @@ fn usage_list_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageListRecor
 fn usage_time_bucket_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageTimeBucketRecord> {
     let service_tier = row.get::<String, _>("service_tier").trim().to_string();
     Ok(UsageTimeBucketRecord {
-        bucket_start: DateTime::parse_from_rfc3339(row.get::<&str, _>("bucket_start"))?
-            .with_timezone(&Utc),
+        bucket_start: parse_rfc3339(row.get::<&str, _>("bucket_start"))?,
         model: row.get("model"),
         service_tier: (!service_tier.is_empty()).then_some(service_tier),
         request_count: row.get("request_count"),
@@ -363,12 +333,6 @@ fn usage_time_bucket_from_row(row: &SqliteRow) -> SqliteUsageStoreResult<UsageTi
         max_latency_ms: row.get("max_latency_ms"),
         min_latency_ms: row.get("min_latency_ms"),
     })
-}
-
-fn parse_optional_rfc3339(value: Option<&str>) -> SqliteUsageStoreResult<Option<DateTime<Utc>>> {
-    value
-        .map(|value| Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc)))
-        .transpose()
 }
 
 fn to_page(rows: &[SqliteRow], limit: u32) -> Page<UsageListRecord> {
