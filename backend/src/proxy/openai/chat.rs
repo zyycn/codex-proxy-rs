@@ -1493,9 +1493,7 @@ fn openai_error_type_for_code(code: &str) -> String {
         || code.contains("unauthorized")
         || code.contains("invalid_api_key")
         || code.contains("account_deactivated")
-    {
-        "invalid_request_error"
-    } else if code.contains("model")
+        || code.contains("model")
         || code.contains("invalid_request")
         || code.contains("not_found")
         || code.contains("context_window")
