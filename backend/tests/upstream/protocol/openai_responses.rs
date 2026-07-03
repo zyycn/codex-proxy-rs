@@ -98,6 +98,48 @@ fn response_from_codex_sse_should_collect_completed_response_with_deltas() {
 }
 
 #[test]
+fn response_from_codex_sse_should_collect_incomplete_response() {
+    let body = include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
+
+    let response = response_from_codex_sse(body, None).expect("conversion should succeed");
+
+    assert_eq!(
+        response,
+        CollectedResponse::Completed(json!({
+            "id": "resp_incomplete",
+            "object": "response",
+            "status": "incomplete",
+            "incomplete_details": {
+                "reason": "max_output_tokens"
+            },
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3
+            },
+            "output": [{
+                "type": "message",
+                "status": "incomplete",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "hello",
+                    "annotations": []
+                }]
+            }],
+            "output_text": "hello"
+        }))
+    );
+}
+
+#[test]
+fn response_sse_event_is_terminal_should_match_incomplete_response() {
+    let body = include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse");
+    let events = parse_sse_events(body).expect("sse should parse");
+
+    assert!(events.iter().any(response_sse_event_is_terminal));
+}
+
+#[test]
 fn response_failed_sse_event_should_encode_openai_failure_shape() {
     let frame = response_failed_sse_event("server_error", "stream_disconnected", "closed early");
 
