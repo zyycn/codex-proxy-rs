@@ -165,7 +165,6 @@ Release 产物：
 ```text
 codex-proxy-rs_<version>_linux_amd64.tar.gz
 codex-proxy-rs_<version>_linux_arm64.tar.gz
-codex-proxy-rs_<version>_darwin_amd64.tar.gz
 codex-proxy-rs_<version>_darwin_arm64.tar.gz
 codex-proxy-rs_<version>_windows_amd64.zip
 checksums.txt
