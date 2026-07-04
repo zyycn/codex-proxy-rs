@@ -12,6 +12,7 @@ import {
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
@@ -124,9 +125,6 @@ const updateLogRows = computed(() =>
   })),
 )
 
-const showUpdateProgress = computed(
-  () => hasUpdate.value || updating.value || updateSuccess.value || updateLogRows.value.length > 0,
-)
 const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.notes))
 
 const streamStatusLabel = computed(() => {
@@ -289,9 +287,21 @@ onUnmounted(() => {
       </section>
 
       <section
-        v-if="showUpdateProgress"
-        class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)"
+        v-if="renderedReleaseNotes"
+        class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
       >
+        <div class="flex items-center justify-between gap-3">
+          <p class="m-0 text-[13px] font-[760] text-(--cp-text-primary)">发布说明</p>
+          <span class="font-mono text-[11px] font-[650] text-(--cp-text-muted)">
+            {{ displayValue(updateInfo?.latestVersion) }}
+          </span>
+        </div>
+        <BaseScrollbar class="-mx-4" max-height="160px" view-class="px-4 pr-5" track-inset="none">
+          <div class="release-notes" v-html="renderedReleaseNotes" />
+        </BaseScrollbar>
+      </section>
+
+      <section class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)">
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-(--cp-success)" />
@@ -309,8 +319,13 @@ onUnmounted(() => {
           </span>
         </header>
 
-        <BaseScrollbar ref="updateLogScrollbar" height="260px" view-class="min-h-full px-4 pb-4">
-          <div v-if="updateLogRows.length" class="grid gap-2">
+        <BaseScrollbar
+          v-if="updateLogRows.length"
+          ref="updateLogScrollbar"
+          height="260px"
+          view-class="min-h-full px-4 pb-4"
+        >
+          <div class="grid gap-2">
             <div
               v-for="log in updateLogRows"
               :key="log.id"
@@ -328,25 +343,10 @@ onUnmounted(() => {
               </p>
             </div>
           </div>
-          <p v-else class="m-0 py-8 text-center text-[12px] font-[650] text-(--cp-text-muted)">
-            暂无进度
-          </p>
         </BaseScrollbar>
-      </section>
-
-      <section
-        v-if="renderedReleaseNotes"
-        class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
-      >
-        <div class="flex items-center justify-between gap-3">
-          <p class="m-0 text-[13px] font-[760] text-(--cp-text-primary)">发布说明</p>
-          <span class="font-mono text-[11px] font-[650] text-(--cp-text-muted)">
-            {{ displayValue(updateInfo?.latestVersion) }}
-          </span>
+        <div v-else class="grid h-30 place-items-center px-4 pb-4">
+          <BaseEmpty title="暂无进度" :icon="Terminal" compact plain />
         </div>
-        <BaseScrollbar class="-mx-4" max-height="160px" view-class="px-4 pr-5" track-inset="none">
-          <div class="release-notes" v-html="renderedReleaseNotes" />
-        </BaseScrollbar>
       </section>
     </div>
 

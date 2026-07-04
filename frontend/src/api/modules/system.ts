@@ -10,6 +10,10 @@ export interface SystemVersion {
   deploymentMode: string
   deploymentModeLabel: string
   updateChannel: string
+  latestVersion: string
+  hasUpdate: boolean
+  updateCached: boolean
+  updateWarning?: string
 }
 
 export interface SystemUpdateInfo {
@@ -49,11 +53,11 @@ export function getSystemVersion() {
   })
 }
 
-export function checkSystemUpdates(force = false) {
+export function getSystemUpdateDetail(refresh = false) {
   return request<SystemUpdateInfo>({
-    url: '/api/admin/system/check-updates',
+    url: '/api/admin/system/update-detail',
     method: 'GET',
-    params: { force },
+    params: { refresh },
   })
 }
 

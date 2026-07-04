@@ -66,7 +66,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     assert!(
-        csp.contains("style-src 'self';") && !csp.contains("unsafe-inline"),
+        csp.contains("script-src 'self';") && csp.contains("style-src 'self' 'unsafe-inline';"),
         "unexpected content security policy: {csp}"
     );
     assert_eq!(

@@ -28,7 +28,7 @@ use super::{
         update_settings,
     },
     system::routes::{
-        check_updates, perform_update, restart, rollback, update_event_stream, update_status,
+        perform_update, restart, rollback, update_detail, update_event_stream, update_status,
         version,
     },
 };
@@ -49,7 +49,7 @@ pub fn router() -> Router<AppState> {
             post(regenerate_admin_api_key),
         )
         .route("/api/admin/system/version", get(version))
-        .route("/api/admin/system/check-updates", get(check_updates))
+        .route("/api/admin/system/update-detail", get(update_detail))
         .route("/api/admin/system/update-events", get(update_event_stream))
         .route("/api/admin/system/update", post(perform_update))
         .route("/api/admin/system/update-status", get(update_status))
