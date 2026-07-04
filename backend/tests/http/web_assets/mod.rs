@@ -12,18 +12,6 @@ use tower::ServiceExt;
 
 use crate::support::{config::test_config as base_test_config, http::response_json};
 
-#[test]
-fn asset_headers_should_distinguish_spa_and_fingerprinted_assets() {
-    assert_eq!(
-        codex_proxy_rs::web::headers::cache_control_for_path("/"),
-        "no-cache"
-    );
-    assert_eq!(
-        codex_proxy_rs::web::headers::cache_control_for_path("/assets/app.abc123.js"),
-        "public, max-age=31536000, immutable"
-    );
-}
-
 #[tokio::test]
 async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -60,21 +48,8 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     assert_eq!(asset.status(), StatusCode::OK);
     assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(health.status(), StatusCode::NO_CONTENT);
-    let csp = index
-        .headers()
-        .get(header::CONTENT_SECURITY_POLICY)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    assert!(
-        csp.contains("script-src 'self';") && csp.contains("style-src 'self' 'unsafe-inline';"),
-        "unexpected content security policy: {csp}"
-    );
-    assert_eq!(
-        asset.headers().get(header::CACHE_CONTROL),
-        Some(&header::HeaderValue::from_static(
-            "public, max-age=31536000, immutable"
-        ))
-    );
+    assert_no_static_policy_headers(&index);
+    assert_no_static_policy_headers(&asset);
     assert_body_contains(index, "Codex Proxy Admin").await;
     assert_body_contains(asset, "__asset").await;
     assert_eq!(response_json(api).await["code"], Value::from(40101));
@@ -151,6 +126,18 @@ async fn assert_unknown_api_route(response: axum::response::Response) {
     let body = response_json(response).await;
     assert_eq!(body["code"], Value::from(40401));
     assert_eq!(body["message"], Value::from("API route not found"));
+}
+
+fn assert_no_static_policy_headers(response: &axum::response::Response) {
+    assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+    assert!(!response
+        .headers()
+        .contains_key(header::CONTENT_SECURITY_POLICY));
+    assert!(!response
+        .headers()
+        .contains_key(header::X_CONTENT_TYPE_OPTIONS));
+    assert!(!response.headers().contains_key("x-frame-options"));
+    assert!(!response.headers().contains_key("referrer-policy"));
 }
 
 async fn router_with_dist_and_database(dist: &Path, database_url: &str) -> (Router, SqlitePool) {
