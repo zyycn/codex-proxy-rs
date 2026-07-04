@@ -25,7 +25,6 @@ COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/build ./build
 COPY backend/src ./src
 COPY release/version.yaml /app/release/version.yaml
-COPY --from=frontend-builder /app/frontend/dist ./web/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/backend/target \
@@ -38,9 +37,8 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /out
-RUN mkdir -p /tmp/release/codex-proxy-rs/web \
-    && cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
-    && cp -r /app/backend/web/dist /tmp/release/codex-proxy-rs/web/dist \
+COPY --from=frontend-builder /app/frontend/dist /tmp/release/codex-proxy-rs/web/dist
+RUN cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
     && tar -czf "/out/codex-proxy-rs_${CPR_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
         -C /tmp/release codex-proxy-rs
 
