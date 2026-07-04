@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, Mutex};
 use crate::{
     admin::auth::session::AdminAuth,
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
-    runtime::shutdown::{request_process_restart, request_shutdown},
+    runtime::shutdown::{request_process_restart, request_shutdown, shutdown_subscription},
 };
 
 use super::state::{
@@ -155,20 +155,29 @@ pub(crate) async fn update_event_stream(
     _auth: AdminAuth,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError> {
     let receiver = update_event_sender().subscribe();
-    let stream = futures::stream::unfold(receiver, |mut receiver| async move {
-        loop {
-            match receiver.recv().await {
-                Ok(message) => {
-                    let id = message.id.clone();
-                    let data = serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
-                    let event = Event::default().event("update").id(id).data(data);
-                    return Some((Ok(event), receiver));
+    let shutdown = shutdown_subscription();
+    let stream = futures::stream::unfold(
+        (receiver, shutdown),
+        |(mut receiver, mut shutdown)| async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown.recv() => return None,
+                    received = receiver.recv() => {
+                        match received {
+                            Ok(message) => {
+                                let id = message.id.clone();
+                                let data = serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
+                                let event = Event::default().event("update").id(id).data(data);
+                                return Some((Ok(event), (receiver, shutdown)));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return None,
             }
-        }
-    });
+        },
+    );
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }

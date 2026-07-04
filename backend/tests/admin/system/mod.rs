@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use codex_proxy_rs::{
@@ -819,6 +819,43 @@ async fn update_events_should_open_authenticated_sse_stream() {
         .unwrap_or_default();
 
     assert!(response.status() == StatusCode::OK && content_type.starts_with("text/event-stream"));
+}
+
+#[tokio::test]
+async fn update_events_should_close_on_shutdown() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let deploy = tempfile::tempdir().unwrap();
+    set_system_update_env(
+        "zyycn/codex-proxy-rs-events-shutdown-route",
+        "http://127.0.0.1:9",
+    );
+    set_system_update_paths(
+        deploy.path(),
+        &deploy.path().join("codex-proxy-rs"),
+        &deploy.path().join("web/dist"),
+    );
+    let (app, _dir) = admin_system_test_app("system-events-shutdown.sqlite").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/system/update-events")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_events_shutdown")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    codex_proxy_rs::runtime::shutdown::request_shutdown();
+
+    let body = tokio::time::timeout(Duration::from_secs(2), to_bytes(response.into_body(), 1024))
+        .await
+        .expect("update event stream should end after shutdown")
+        .unwrap();
+
+    assert!(body.is_empty());
 }
 
 async fn get_update_detail(app: &axum::Router, refresh: bool, request_id: &str) -> Value {

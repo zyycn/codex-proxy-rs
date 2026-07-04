@@ -261,6 +261,7 @@ async function restartNow() {
   restartCountdown.value = restartCountdownSeconds
   updateError.value = ''
   clearRestartTimer()
+  disconnectUpdateEvents()
 
   try {
     await restartSystem()

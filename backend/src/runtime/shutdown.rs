@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::signal;
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::{self, Receiver};
 
 static SHUTDOWN_REQUESTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -45,6 +45,11 @@ pub async fn shutdown_signal() {
 /// 请求进程按优雅关闭路径退出。
 pub fn request_shutdown() {
     let _ = shutdown_sender().send(());
+}
+
+/// 订阅进程关闭请求。
+pub fn shutdown_subscription() -> Receiver<()> {
+    shutdown_sender().subscribe()
 }
 
 /// 请求进程完成优雅关闭后以新二进制替换当前进程。
