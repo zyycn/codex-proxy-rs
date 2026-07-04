@@ -2,8 +2,8 @@ import { computed, ref, shallowRef } from 'vue'
 
 import {
   SYSTEM_UPDATE_EVENTS_URL,
-  checkSystemUpdates,
   getSystemVersion,
+  getSystemUpdateDetail,
   performSystemUpdate,
   restartSystem,
   type SystemUpdateInfo,
@@ -38,9 +38,11 @@ const updateStreamError = shallowRef('')
 const updateEventSource = shallowRef<EventSource | null>(null)
 
 let restartTimer: number | undefined
+let loadVersionPromise: Promise<SystemVersion> | undefined
+let loadSystemPromise: Promise<void> | undefined
 const maxUpdateLogs = 200
 
-const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate))
+const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate ?? version.value?.hasUpdate))
 const isReleaseBuild = computed(() => updateInfo.value?.buildType === 'release')
 const canUpdate = computed(
   () =>
@@ -121,30 +123,47 @@ function disconnectUpdateEvents() {
   updateStreaming.value = false
 }
 
-async function loadSystem(force = false) {
-  if (loading.value) return
+async function loadSystem(refresh = false) {
+  if (loadSystemPromise) return loadSystemPromise
 
   loading.value = true
-  try {
-    const [versionData, updateData] = await Promise.all([
-      getSystemVersion(),
-      checkSystemUpdates(force),
-    ])
-    version.value = versionData
+  loadSystemPromise = (async () => {
+    const updateData = await getSystemUpdateDetail(refresh)
     updateInfo.value = updateData
+    if (!version.value) {
+      version.value = await getSystemVersion()
+    }
     loadedOnce.value = true
+  })()
+
+  try {
+    await loadSystemPromise
   } finally {
     loading.value = false
+    loadSystemPromise = undefined
   }
 }
 
-async function checkUpdates(force = true) {
+async function loadVersion() {
+  if (loadVersionPromise) return loadVersionPromise
+
+  loadVersionPromise = getSystemVersion()
+  try {
+    const versionData = await loadVersionPromise
+    version.value = versionData
+    return versionData
+  } finally {
+    loadVersionPromise = undefined
+  }
+}
+
+async function checkUpdates(refresh = true) {
   if (checking.value) return updateInfo.value
 
   checking.value = true
   resetUpdateResult()
   try {
-    updateInfo.value = await checkSystemUpdates(force)
+    updateInfo.value = await getSystemUpdateDetail(refresh)
     if (!version.value) {
       version.value = await getSystemVersion()
     }
@@ -268,6 +287,7 @@ export function useSystemUpdate() {
     hasUpdate,
     isReleaseBuild,
     canUpdate,
+    loadVersion,
     loadSystem,
     checkUpdates,
     updateNow,

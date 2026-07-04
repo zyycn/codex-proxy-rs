@@ -43,7 +43,7 @@ use archive::{extract_release_archive, replace_release_files, rollback_release_u
 mod release;
 use release::{
     check_latest_release, fetch_latest_release, select_release_archive, update_info_from_release,
-    GitHubRelease,
+    GitHubRelease, UpdateInfoData,
 };
 
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
@@ -58,8 +58,8 @@ static UPDATE_EVENT_SENDER: OnceLock<broadcast::Sender<SystemUpdateEvent>> = Onc
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CheckUpdateQuery {
-    force: Option<bool>,
+pub(crate) struct UpdateDetailQuery {
+    refresh: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +71,10 @@ struct VersionData {
     deployment_mode: String,
     deployment_mode_label: String,
     update_channel: String,
+    latest_version: String,
+    has_update: bool,
+    update_cached: bool,
+    update_warning: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,19 +127,20 @@ struct SystemUpdateConfig {
 /// `GET /api/admin/system/version`
 pub(crate) async fn version(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
     let config = SystemUpdateConfig::from_env();
+    let update_info = check_latest_release(&config, false).await;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(config.version_data()),
+        AdminEnvelope::ok(config.version_data(&update_info)),
     ))
 }
 
-/// `GET /api/admin/system/check-updates`
-pub(crate) async fn check_updates(
+/// `GET /api/admin/system/update-detail`
+pub(crate) async fn update_detail(
     _auth: AdminAuth,
-    Query(query): Query<CheckUpdateQuery>,
+    Query(query): Query<UpdateDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     let config = SystemUpdateConfig::from_env();
-    let info = check_latest_release(&config, query.force.unwrap_or(false)).await;
+    let info = check_latest_release(&config, query.refresh.unwrap_or(false)).await;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(info)))
 }
 
@@ -388,7 +393,7 @@ impl SystemUpdateConfig {
         }
     }
 
-    fn version_data(&self) -> VersionData {
+    fn version_data(&self, update_info: &UpdateInfoData) -> VersionData {
         VersionData {
             version: self.version.clone(),
             git_sha: self.git_sha.clone(),
@@ -396,6 +401,10 @@ impl SystemUpdateConfig {
             deployment_mode: self.deployment_mode.clone(),
             deployment_mode_label: deployment_mode_label(&self.deployment_mode).to_string(),
             update_channel: self.update_channel.clone(),
+            latest_version: update_info.latest_version.clone(),
+            has_update: update_info.has_update,
+            update_cached: update_info.cached,
+            update_warning: update_info.warning.clone(),
         }
     }
 

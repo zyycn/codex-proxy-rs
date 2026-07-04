@@ -180,7 +180,7 @@ GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
 核心接口：
 
 - `GET /api/admin/system/version`
-- `GET /api/admin/system/check-updates`
+- `GET /api/admin/system/update-detail`
 - `GET /api/admin/system/update-events`
 - `GET /api/admin/system/update-status`
 - `POST /api/admin/system/update`

@@ -46,7 +46,10 @@ const VERSION_NEW: &str = "0.2.0";
 #[tokio::test]
 async fn version_should_return_backend_build_metadata() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
-    set_system_update_env("zyycn/codex-proxy-rs-version-route", "http://127.0.0.1:9");
+    let repository = "zyycn/codex-proxy-rs-version-route";
+    let github = MockServer::start().await;
+    mount_latest_release(&github, repository, "0.2.0").await;
+    set_system_update_env(repository, &github.uri());
     std::env::set_var("CPR_GIT_SHA", "version-test-sha");
     std::env::set_var("CPR_BUILD_TIME", "2026-07-01T00:00:00Z");
     let (app, _dir) = admin_system_test_app("system-version.sqlite").await;
@@ -72,22 +75,26 @@ async fn version_should_return_backend_build_metadata() {
             && body["data"]["deploymentMode"] == "docker"
             && body["data"]["deploymentModeLabel"] == "Docker"
             && body["data"]["updateChannel"] == "stable"
+            && body["data"]["latestVersion"] == VERSION_NEW
+            && body["data"]["hasUpdate"] == true
+            && body["data"]["updateCached"] == false
+            && body["data"]["updateWarning"].is_null()
     );
 }
 
 #[tokio::test]
-async fn check_updates_should_use_cached_release_when_not_forced() {
+async fn update_detail_should_use_cached_release_when_not_refreshed() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-cache-route";
     let success_server = MockServer::start().await;
     mount_latest_release(&success_server, repository, "0.2.0").await;
     set_system_update_env(repository, &success_server.uri());
     let (app, _dir) = admin_system_test_app("system-cache.sqlite").await;
-    let initial = get_check_updates(&app, true, "req_system_cache_initial").await;
+    let initial = get_update_detail(&app, true, "req_system_cache_initial").await;
 
     let failing_server = MockServer::start().await;
     set_system_update_env(repository, &failing_server.uri());
-    let cached = get_check_updates(&app, false, "req_system_cache_cached").await;
+    let cached = get_update_detail(&app, false, "req_system_cache_cached").await;
 
     assert!(
         initial["hasUpdate"] == true
@@ -97,14 +104,14 @@ async fn check_updates_should_use_cached_release_when_not_forced() {
 }
 
 #[tokio::test]
-async fn check_updates_should_fallback_to_cache_when_forced_fetch_fails() {
+async fn update_detail_should_fallback_to_cache_when_refresh_fetch_fails() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-cache-forced-route";
     let success_server = MockServer::start().await;
     mount_latest_release(&success_server, repository, "0.3.0").await;
     set_system_update_env(repository, &success_server.uri());
     let (app, _dir) = admin_system_test_app("system-cache-forced.sqlite").await;
-    let initial = get_check_updates(&app, true, "req_system_cache_forced_initial").await;
+    let initial = get_update_detail(&app, true, "req_system_cache_forced_initial").await;
 
     let failing_server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -113,7 +120,7 @@ async fn check_updates_should_fallback_to_cache_when_forced_fetch_fails() {
         .mount(&failing_server)
         .await;
     set_system_update_env(repository, &failing_server.uri());
-    let fallback = get_check_updates(&app, true, "req_system_cache_forced_fallback").await;
+    let fallback = get_update_detail(&app, true, "req_system_cache_forced_fallback").await;
 
     assert!(
         initial["hasUpdate"] == true
@@ -124,7 +131,7 @@ async fn check_updates_should_fallback_to_cache_when_forced_fetch_fails() {
 }
 
 #[tokio::test]
-async fn check_updates_should_report_source_build_as_unsupported() {
+async fn update_detail_should_report_source_build_as_unsupported() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-source-route";
     let github = MockServer::start().await;
@@ -133,7 +140,7 @@ async fn check_updates_should_report_source_build_as_unsupported() {
     std::env::set_var("CPR_BUILD_TYPE", "source");
     let (app, _dir) = admin_system_test_app("system-source-build.sqlite").await;
 
-    let info = get_check_updates(&app, true, "req_system_source_build").await;
+    let info = get_update_detail(&app, true, "req_system_source_build").await;
 
     assert!(
         info["currentVersion"] == VERSION_OLD
@@ -147,7 +154,7 @@ async fn check_updates_should_report_source_build_as_unsupported() {
 }
 
 #[tokio::test]
-async fn check_updates_should_reject_untrusted_github_api_base() {
+async fn update_detail_should_reject_untrusted_github_api_base() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     set_system_update_env(
         "zyycn/codex-proxy-rs-untrusted-api-base-route",
@@ -155,7 +162,7 @@ async fn check_updates_should_reject_untrusted_github_api_base() {
     );
     let (app, _dir) = admin_system_test_app("system-untrusted-api-base.sqlite").await;
 
-    let info = get_check_updates(&app, true, "req_system_untrusted_api_base").await;
+    let info = get_update_detail(&app, true, "req_system_untrusted_api_base").await;
 
     assert!(
         info["hasUpdate"] == false
@@ -763,13 +770,13 @@ async fn update_events_should_open_authenticated_sse_stream() {
     assert!(response.status() == StatusCode::OK && content_type.starts_with("text/event-stream"));
 }
 
-async fn get_check_updates(app: &axum::Router, force: bool, request_id: &str) -> Value {
+async fn get_update_detail(app: &axum::Router, refresh: bool, request_id: &str) -> Value {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/admin/system/check-updates?force={force}"))
+                .uri(format!("/api/admin/system/update-detail?refresh={refresh}"))
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", request_id)
                 .body(Body::empty())

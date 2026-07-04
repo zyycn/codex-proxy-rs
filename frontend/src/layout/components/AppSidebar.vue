@@ -33,7 +33,7 @@ const uiStore = useUiStore()
 const { effectiveTheme } = storeToRefs(uiStore)
 const { toggleTheme } = uiStore
 const preferredMotion = usePreferredReducedMotion()
-const { version, hasUpdate, loadSystem } = useSystemUpdate()
+const { version, hasUpdate, loadedOnce, loadVersion, loadSystem } = useSystemUpdate()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -50,6 +50,24 @@ const isActive = (path: string) => {
 
 function navigate(path: string) {
   router.push(path)
+}
+
+const systemUpdateOpening = shallowRef(false)
+
+async function openSystemUpdate() {
+  if (systemUpdateOpen.value || systemUpdateOpening.value) return
+
+  systemUpdateOpening.value = true
+  try {
+    if (!loadedOnce.value) {
+      await loadSystem(false)
+    }
+  } catch {
+    // 弹窗打开后由弹窗内的加载逻辑提示失败原因。
+  } finally {
+    systemUpdateOpening.value = false
+    systemUpdateOpen.value = true
+  }
 }
 
 async function handleLogout() {
@@ -77,7 +95,9 @@ const systemUpdateOpen = shallowRef(false)
 const themeToggleLabel = computed(() =>
   effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
 )
-const versionLabel = computed(() => `v${version.value?.version || '...'}`)
+const versionText = computed(() => version.value?.version.trim() ?? '')
+const hasVersionLabel = computed(() => versionText.value.length > 0)
+const versionLabel = computed(() => `v${versionText.value}`)
 const updateButtonLabel = computed(() =>
   hasUpdate.value ? '发现新版本，打开系统更新' : '打开系统更新',
 )
@@ -200,7 +220,7 @@ onMounted(() => {
     })
   }
   animateSidebarLabels(Boolean(props.collapsed))
-  void loadSystem(false).catch(() => undefined)
+  void loadVersion().catch(() => undefined)
 })
 
 watch(
@@ -250,15 +270,18 @@ watch(
             Rust build
           </span>
           <button
+            v-if="hasVersionLabel"
             type="button"
             class="inline-flex h-4.5 min-w-0 items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-[720] cursor-pointer transition-colors"
-            :class="
+            :class="[
               hasUpdate
                 ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
-                : 'bg-(--cp-bg-subtle) text-(--cp-text-muted) hover:bg-(--cp-bg-muted) hover:text-(--cp-text-secondary)'
-            "
+                : 'bg-(--cp-bg-subtle) text-(--cp-text-muted) hover:bg-(--cp-bg-muted) hover:text-(--cp-text-secondary)',
+              systemUpdateOpening ? 'cursor-wait opacity-70' : '',
+            ]"
             :title="updateButtonLabel"
-            @click="systemUpdateOpen = true"
+            :disabled="systemUpdateOpening"
+            @click="openSystemUpdate"
           >
             <span>{{ versionLabel }}</span>
             <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-(--cp-success)" />
@@ -309,12 +332,13 @@ watch(
 
         <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
           <BaseButton
-            v-if="collapsed && hasUpdate"
+            v-if="collapsed"
             icon-only
             :variant="hasUpdate ? 'success' : 'ghost'"
             size="default"
             :label="updateButtonLabel"
-            @click="systemUpdateOpen = true"
+            :loading="systemUpdateOpening"
+            @click="openSystemUpdate"
           >
             <ArrowUpCircle :size="19" />
           </BaseButton>
