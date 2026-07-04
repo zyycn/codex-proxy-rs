@@ -276,6 +276,6 @@ fn asset_matches_current_platform(name: &str, os_aliases: &[&str], arch_aliases:
         && arch_aliases.iter().any(|arch| name.contains(arch))
 }
 
-fn normalize_version_tag(version: &str) -> String {
+pub(super) fn normalize_version_tag(version: &str) -> String {
     version.trim().trim_start_matches('v').to_string()
 }

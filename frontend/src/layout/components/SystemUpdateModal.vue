@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 import {
   ArrowUpCircle,
   CheckCircle2,
@@ -12,12 +12,14 @@ import {
 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useSystemUpdate, type SystemUpdateLogLevel } from '@/composables/useSystemUpdate'
 import { renderMarkdown } from '@/utils/markdown'
+import type { SystemUpdateInfo } from '@/api'
 
 const open = defineModel<boolean>({ default: false })
 
@@ -48,6 +50,11 @@ const {
 } = useSystemUpdate()
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
+const updateConfirmOpen = shallowRef(false)
+const updateConfirmInfo = shallowRef<SystemUpdateInfo | null>(null)
+const updateConfirmPreviousTarget = shallowRef('')
+const preparingUpdate = shallowRef(false)
+let updateLogPinTimer: number | undefined
 
 const statusView = computed(() => {
   if (updating.value) {
@@ -127,10 +134,40 @@ const updateLogRows = computed(() =>
 
 const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.notes))
 
+const showUpdateProgress = computed(
+  () => hasUpdate.value || updating.value || restarting.value || updateLogRows.value.length > 0,
+)
+
+const updateConfirmRows = computed(() => [
+  {
+    key: 'current',
+    label: '当前版本',
+    value: version.value?.version ? `v${version.value.version}` : '-',
+  },
+  {
+    key: 'previous',
+    label: '已显示目标',
+    value: updateConfirmPreviousTarget.value ? `v${updateConfirmPreviousTarget.value}` : '-',
+  },
+  {
+    key: 'target',
+    label: '远端最新目标',
+    value: updateConfirmInfo.value?.latestVersion
+      ? `v${updateConfirmInfo.value.latestVersion}`
+      : '-',
+  },
+])
+
 const streamStatusLabel = computed(() => {
   if (updateStreaming.value) return '实时'
   if (updateStreamError.value) return '断开'
   return '待连接'
+})
+
+const restartButtonLabel = computed(() => {
+  if (!restarting.value) return '立即重启'
+  if (restartCountdown.value > 0) return `重启中 ${restartCountdown.value}s`
+  return '等待恢复'
 })
 
 function displayValue(value: unknown) {
@@ -157,6 +194,37 @@ function logTextClass(level: SystemUpdateLogLevel) {
   return 'text-(--cp-text-primary)'
 }
 
+function normalizeUpdateVersion(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .replace(/^v/i, '')
+}
+
+async function scrollUpdateLogsToBottom() {
+  await nextTick()
+  await updateLogScrollbar.value?.scrollToBottom()
+}
+
+function pinUpdateLogsToBottom() {
+  window.requestAnimationFrame(() => {
+    void scrollUpdateLogsToBottom()
+  })
+}
+
+function startUpdateLogPinning() {
+  if (updateLogPinTimer !== undefined) return
+
+  pinUpdateLogsToBottom()
+  updateLogPinTimer = window.setInterval(pinUpdateLogsToBottom, 250)
+}
+
+function stopUpdateLogPinning() {
+  if (updateLogPinTimer === undefined) return
+
+  window.clearInterval(updateLogPinTimer)
+  updateLogPinTimer = undefined
+}
+
 async function handleCheckUpdates(force = true) {
   try {
     const data = await checkUpdates(force)
@@ -166,15 +234,54 @@ async function handleCheckUpdates(force = true) {
   }
 }
 
-async function handleUpdate() {
+async function handleUpdateRequest() {
+  if (preparingUpdate.value || updating.value) return
+
+  const previousTargetVersion = normalizeUpdateVersion(updateInfo.value?.latestVersion)
+  preparingUpdate.value = true
   try {
-    const result = await updateNow()
+    const data = await checkUpdates(true)
+    if (!data?.hasUpdate) {
+      toast.success('当前已是最新版本')
+      return
+    }
+    const remoteTargetVersion = normalizeUpdateVersion(data.latestVersion)
+    if (!remoteTargetVersion) {
+      toast.error('远端目标版本为空')
+      return
+    }
+    if (previousTargetVersion && previousTargetVersion !== remoteTargetVersion) {
+      updateConfirmPreviousTarget.value = previousTargetVersion
+      updateConfirmInfo.value = data
+      updateConfirmOpen.value = true
+      return
+    }
+    await runConfirmedUpdate(remoteTargetVersion)
+  } catch (error: any) {
+    toast.error(error.message || '检查更新失败')
+  } finally {
+    preparingUpdate.value = false
+  }
+}
+
+async function runConfirmedUpdate(targetVersion: string) {
+  try {
+    const result = await updateNow(targetVersion)
     if (result?.needRestart) {
       toast.success('更新完成，请重启服务')
     }
   } catch (error: any) {
     toast.error(error.message || '更新失败')
   }
+}
+
+async function handleConfirmUpdate() {
+  const targetVersion = normalizeUpdateVersion(updateConfirmInfo.value?.latestVersion)
+  if (!targetVersion) return
+
+  updateConfirmOpen.value = false
+  await nextTick()
+  await runConfirmedUpdate(targetVersion)
 }
 
 async function handleRestart() {
@@ -204,13 +311,31 @@ watch(open, (visible) => {
 
 watch(
   () => updateLogs.value.at(-1)?.id,
-  async () => {
-    await nextTick()
-    await updateLogScrollbar.value?.scrollToBottom()
+  () => {
+    pinUpdateLogsToBottom()
+  },
+)
+
+watch(
+  () => updateLogRows.value.length,
+  () => {
+    pinUpdateLogsToBottom()
+  },
+)
+
+watch(
+  () => updating.value || restarting.value || updateStreaming.value,
+  (active) => {
+    if (active) {
+      startUpdateLogPinning()
+      return
+    }
+    stopUpdateLogPinning()
   },
 )
 
 onUnmounted(() => {
+  stopUpdateLogPinning()
   clearRestartTimer()
   disconnectUpdateEvents()
 })
@@ -301,7 +426,10 @@ onUnmounted(() => {
         </BaseScrollbar>
       </section>
 
-      <section class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)">
+      <section
+        v-if="showUpdateProgress"
+        class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)"
+      >
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-(--cp-success)" />
@@ -372,14 +500,14 @@ onUnmounted(() => {
         <template #icon>
           <Power class="size-4" />
         </template>
-        {{ restarting ? `重启中 ${restartCountdown}s` : '立即重启' }}
+        {{ restartButtonLabel }}
       </BaseButton>
       <BaseButton
         v-else
         variant="success"
-        :loading="updating"
-        :disabled="!canUpdate"
-        @click="handleUpdate"
+        :loading="preparingUpdate || updating"
+        :disabled="!canUpdate || preparingUpdate"
+        @click="handleUpdateRequest"
       >
         <template #icon>
           <ArrowUpCircle class="size-4" />
@@ -388,6 +516,39 @@ onUnmounted(() => {
       </BaseButton>
     </template>
   </BaseModal>
+
+  <BaseConfirmModal
+    v-model="updateConfirmOpen"
+    title="远端目标版本已变化"
+    description="检测到远端 latest 与当前显示的目标版本不一致。"
+    variant="warning"
+    confirm-text="确认更新"
+    :loading="updating"
+    :confirm-disabled="!updateConfirmInfo?.latestVersion"
+    @confirm="handleConfirmUpdate"
+  >
+    <div class="grid gap-3">
+      <div class="grid gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-3">
+        <div
+          v-for="item in updateConfirmRows"
+          :key="item.key"
+          class="flex min-w-0 items-center justify-between gap-3"
+        >
+          <span class="text-[12px] leading-none font-[720] text-(--cp-text-muted)">
+            {{ item.label }}
+          </span>
+          <span
+            class="truncate font-mono text-[13px] leading-none font-[760] text-(--cp-text-primary)"
+          >
+            {{ item.value }}
+          </span>
+        </div>
+      </div>
+      <p class="m-0 text-[12px] leading-relaxed font-[650] text-(--cp-text-muted)">
+        点击确认后弹窗会关闭，并按远端最新目标版本开始更新。
+      </p>
+    </div>
+  </BaseConfirmModal>
 </template>
 
 <style scoped>

@@ -1,3 +1,5 @@
+name: codex-proxy-rs
+
 services:
   codex-proxy-rs:
     image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}

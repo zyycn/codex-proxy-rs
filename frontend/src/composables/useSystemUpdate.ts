@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from 'vue'
 
 import {
   SYSTEM_UPDATE_EVENTS_URL,
+  checkSystemHealth,
   getSystemVersion,
   getSystemUpdateDetail,
   performSystemUpdate,
@@ -41,6 +42,9 @@ let restartTimer: number | undefined
 let loadVersionPromise: Promise<SystemVersion> | undefined
 let loadSystemPromise: Promise<void> | undefined
 const maxUpdateLogs = 200
+const restartCountdownSeconds = 8
+const restartReadyPollAttempts = 60
+const restartReadyPollIntervalMs = 1000
 
 const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate ?? version.value?.hasUpdate))
 const isReleaseBuild = computed(() => updateInfo.value?.buildType === 'release')
@@ -174,9 +178,10 @@ async function checkUpdates(refresh = true) {
   }
 }
 
-async function updateNow() {
+async function updateNow(targetVersion: string) {
   const currentInfo = updateInfo.value
-  if (!canUpdate.value || !currentInfo || updating.value) return null
+  const confirmedTargetVersion = targetVersion.trim()
+  if (!canUpdate.value || !currentInfo || updating.value || !confirmedTargetVersion) return null
 
   clearUpdateLogs()
   connectUpdateEvents()
@@ -184,7 +189,7 @@ async function updateNow() {
   updateError.value = ''
   updateSuccess.value = false
   try {
-    const result = await performSystemUpdate()
+    const result = await performSystemUpdate(confirmedTargetVersion)
     updateSuccess.value = true
     needRestart.value = result.needRestart
     updateInfo.value = {
@@ -214,18 +219,28 @@ function clearRestartTimer() {
   }
 }
 
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
 async function waitForServiceAndReload() {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  restartCountdown.value = 0
+
+  for (let attempt = 0; attempt < restartReadyPollAttempts; attempt += 1) {
     try {
-      await getSystemVersion()
+      await checkSystemHealth()
       window.location.reload()
       return
     } catch {
-      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      if (attempt < restartReadyPollAttempts - 1) {
+        await delay(restartReadyPollIntervalMs)
+      }
     }
   }
 
-  updateError.value = '服务重启后暂不可用，请检查进程是否已被自重启或外部守护进程拉起'
+  updateError.value = '服务重启恢复超时，请检查进程是否已被自重启或外部守护进程拉起'
   restarting.value = false
   restartCountdown.value = 0
 }
@@ -243,7 +258,7 @@ async function restartNow() {
   if (restarting.value) return
 
   restarting.value = true
-  restartCountdown.value = 8
+  restartCountdown.value = restartCountdownSeconds
   updateError.value = ''
   clearRestartTimer()
 

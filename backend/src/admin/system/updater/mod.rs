@@ -10,7 +10,7 @@ use std::{
 };
 
 use axum::{
-    extract::Query,
+    extract::{Json, Query},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, Mutex};
 use crate::{
     admin::auth::session::AdminAuth,
     admin::response::{AdminEnvelope, AdminError, AdminResponse},
-    runtime::shutdown::request_shutdown,
+    runtime::shutdown::{request_process_restart, request_shutdown},
 };
 
 use super::state::{
@@ -42,8 +42,8 @@ mod archive;
 use archive::{extract_release_archive, replace_release_files, rollback_release_update};
 mod release;
 use release::{
-    check_latest_release, fetch_latest_release, select_release_archive, update_info_from_release,
-    GitHubRelease, UpdateInfoData,
+    check_latest_release, fetch_latest_release, normalize_version_tag, select_release_archive,
+    update_info_from_release, GitHubRelease, UpdateInfoData,
 };
 
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
@@ -60,6 +60,12 @@ static UPDATE_EVENT_SENDER: OnceLock<broadcast::Sender<SystemUpdateEvent>> = Onc
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UpdateDetailQuery {
     refresh: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateRequest {
+    target_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,7 +174,10 @@ pub(crate) async fn update_event_stream(
 }
 
 /// `POST /api/admin/system/update`
-pub(crate) async fn perform_update(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
+pub(crate) async fn perform_update(
+    _auth: AdminAuth,
+    payload: Option<Json<UpdateRequest>>,
+) -> Result<impl IntoResponse, AdminError> {
     let _guard = SYSTEM_OPERATION_LOCK
         .try_lock()
         .map_err(|_| AdminError::conflict("System update already running"))?;
@@ -182,6 +191,7 @@ pub(crate) async fn perform_update(_auth: AdminAuth) -> Result<impl IntoResponse
         );
         return Err(AdminError::conflict(reason));
     }
+    let confirmed_target_version = confirmed_update_target(payload)?;
 
     emit_update_event(
         UpdateLogLevel::Info,
@@ -202,6 +212,19 @@ pub(crate) async fn perform_update(_auth: AdminAuth) -> Result<impl IntoResponse
         AdminError::bad_gateway(error)
     })?;
     let info = update_info_from_release(&config, release.clone());
+    if info.latest_version != confirmed_target_version {
+        let message = format!(
+            "远端最新版本已变更为 v{}，请重新检查并确认",
+            info.latest_version
+        );
+        emit_update_event(
+            UpdateLogLevel::Warning,
+            None,
+            Some("release"),
+            message.clone(),
+        );
+        return Err(AdminError::conflict(message));
+    }
     if !info.has_update {
         emit_update_event(
             UpdateLogLevel::Warning,
@@ -265,6 +288,17 @@ pub(crate) async fn perform_update(_auth: AdminAuth) -> Result<impl IntoResponse
     ))
 }
 
+fn confirmed_update_target(payload: Option<Json<UpdateRequest>>) -> Result<String, AdminError> {
+    let Some(Json(payload)) = payload else {
+        return Err(AdminError::conflict("更新前需要确认目标版本"));
+    };
+    let target_version = normalize_version_tag(&payload.target_version);
+    if target_version.is_empty() {
+        return Err(AdminError::bad_request("目标版本不能为空"));
+    }
+    Ok(target_version)
+}
+
 /// `GET /api/admin/system/update-status`
 pub(crate) async fn update_status(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
     let config = SystemUpdateConfig::from_env();
@@ -323,11 +357,15 @@ pub(crate) async fn restart(_auth: AdminAuth) -> Result<impl IntoResponse, Admin
     }
 
     let config = SystemUpdateConfig::from_env();
-    let message = schedule_restart(&config)?;
+    let plan = schedule_restart(&config)?;
+    let message = plan.message;
 
-    tokio::spawn(async {
+    tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        request_shutdown();
+        match plan.action {
+            RestartAction::Exec(executable_path) => request_process_restart(executable_path),
+            RestartAction::Shutdown => request_shutdown(),
+        }
     });
 
     Ok(AdminResponse::new(
@@ -339,13 +377,29 @@ pub(crate) async fn restart(_auth: AdminAuth) -> Result<impl IntoResponse, Admin
     ))
 }
 
-fn schedule_restart(config: &SystemUpdateConfig) -> Result<&'static str, AdminError> {
+struct RestartPlan {
+    message: &'static str,
+    action: RestartAction,
+}
+
+enum RestartAction {
+    Exec(PathBuf),
+    Shutdown,
+}
+
+fn schedule_restart(config: &SystemUpdateConfig) -> Result<RestartPlan, AdminError> {
     if config.deployment_mode == "docker" {
-        return Ok("已安排重启");
+        return Ok(RestartPlan {
+            message: "已安排进程内重启",
+            action: RestartAction::Exec(config.executable_path()?),
+        });
     }
 
     spawn_replacement_process(config)?;
-    Ok("已安排自重启")
+    Ok(RestartPlan {
+        message: "已安排自重启",
+        action: RestartAction::Shutdown,
+    })
 }
 
 fn spawn_replacement_process(config: &SystemUpdateConfig) -> Result<(), AdminError> {
@@ -362,6 +416,14 @@ fn spawn_replacement_process(config: &SystemUpdateConfig) -> Result<(), AdminErr
 impl SystemUpdateConfig {
     fn from_env() -> Self {
         let update_repository = env_string("CPR_UPDATE_REPOSITORY");
+        let deployment_mode =
+            env_string("CPR_DEPLOYMENT_MODE").unwrap_or_else(|| "source".to_string());
+        let executable_path = env_string("CPR_UPDATE_EXE_PATH")
+            .map(PathBuf::from)
+            .or_else(|| {
+                (deployment_mode == "docker")
+                    .then(|| PathBuf::from("/app/bin").join(APP_BINARY_NAME))
+            });
         let state_file = env_string("CPR_UPDATE_STATE_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/app/data/update-state.json"));
@@ -375,15 +437,14 @@ impl SystemUpdateConfig {
             version: build_version(),
             git_sha: build_git_sha(),
             build_time: build_time(),
-            deployment_mode: env_string("CPR_DEPLOYMENT_MODE")
-                .unwrap_or_else(|| "source".to_string()),
+            deployment_mode,
             build_type: build_type(),
             update_channel: env_string("CPR_UPDATE_CHANNEL")
                 .unwrap_or_else(|| "stable".to_string()),
             update_repository,
             github_api_base: env_string("CPR_GITHUB_API_BASE")
                 .unwrap_or_else(|| GITHUB_API_BASE.to_string()),
-            executable_path: env_string("CPR_UPDATE_EXE_PATH").map(PathBuf::from),
+            executable_path,
             web_dist_dir: env_string("CPR_WEB_DIST_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_WEB_DIST_DIR)),
