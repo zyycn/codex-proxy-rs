@@ -171,7 +171,7 @@ codex-proxy-rs_<version>_windows_amd64.zip
 checksums.txt
 ```
 
-GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
+GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。发布 workflow 先在对应原生 runner 上构建平台镜像，再合并正式 manifest。Docker 在线更新使用的 Linux 二进制在 `rust:1.95-bookworm` 中构建，保持与 runtime 镜像的 glibc ABI 兼容。
 
 ## 在线更新
 
@@ -208,8 +208,8 @@ GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
 阶段：
 
 - `frontend-builder`：安装前端依赖并构建 Vue SPA。
-- `backend-builder`：构建 Rust release 二进制，并复制前端 dist。
-- `release-asset-builder` / `release-asset`：生成 GitHub Release 归档。
+- `backend-builder`：构建 Rust release 二进制，不依赖前端 dist。
+- `release-asset-builder` / `release-asset`：组合后端二进制和前端 dist，生成 GitHub Release 归档。
 - `runtime-base`：Debian slim、CA、curl、非 root 用户、运行目录。
 - `runtime`：从源码构建出的运行镜像。
 - `runtime-prebuilt`：发布 workflow 使用的预构建二进制镜像阶段。

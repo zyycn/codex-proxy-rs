@@ -31,6 +31,8 @@ jobs:
       build_time: ${{ steps.version.outputs.build_time }}
       git_sha: ${{ steps.version.outputs.git_sha }}
       platform_matrix: ${{ steps.version.outputs.platform_matrix }}
+      docker_matrix: ${{ steps.version.outputs.docker_matrix }}
+      non_docker_matrix: ${{ steps.version.outputs.non_docker_matrix }}
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
 
@@ -91,6 +93,8 @@ jobs:
 
           required_platform_keys = %w[os arch runner target binary archive]
           seen_platforms = {}
+          docker_platform_jobs = []
+          non_docker_platform_jobs = []
           docker_platforms = []
           platforms.each_with_index do |platform, index|
             fail("#{platforms_path}: platforms[#{index}] must be a table") unless platform.is_a?(Hash)
@@ -104,7 +108,12 @@ jobs:
             seen_platforms[platform_key] = true
             platform["artifact"] = "#{APP_NAME}-#{platform_key}"
             if platform["docker"] == true
-              docker_platforms << require_string(platform, "dockerPlatform", "#{platforms_path}: platforms[#{index}]")
+              docker_platform = require_string(platform, "dockerPlatform", "#{platforms_path}: platforms[#{index}]")
+              platform["dockerPlatform"] = docker_platform
+              docker_platform_jobs << platform
+              docker_platforms << docker_platform
+            else
+              non_docker_platform_jobs << platform
             end
           end
 
@@ -113,6 +122,8 @@ jobs:
           git_sha, status = Open3.capture2("git", "rev-parse", "HEAD")
           fail("failed to resolve git sha") unless status.success?
           matrix = JSON.generate({ "include" => platforms })
+          docker_matrix = JSON.generate({ "include" => docker_platform_jobs })
+          non_docker_matrix = JSON.generate({ "include" => non_docker_platform_jobs })
           current_sort_key = version_sort_key(version)
           tags, status = Open3.capture2("git", "tag", "--list", "#{tag_prefix}*", "--merged", "HEAD")
           fail("failed to list git tags") unless status.success?
@@ -136,6 +147,8 @@ jobs:
           puts "build_time=#{Time.now.utc.iso8601}"
           puts "git_sha=#{git_sha.strip}"
           puts "platform_matrix=#{matrix}"
+          puts "docker_matrix=#{docker_matrix}"
+          puts "non_docker_matrix=#{non_docker_matrix}"
           puts "docker_platforms=#{docker_platforms.join(",")}"
           puts "previous_tag=#{previous_tag}"
           RUBY
@@ -178,12 +191,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build-binary:
-    name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [release-info, build-frontend]
+  build-docker-binary:
+    name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
+    needs: [release-info]
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.release-info.outputs.platform_matrix) }}
+      matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -203,11 +216,65 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-${{ matrix.target }}-
 
-      - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+      - name: Build binary
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cargo" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
+          docker run --rm \
+            --platform "${{ matrix.dockerPlatform }}" \
+            --user "$(id -u):$(id -g)" \
+            -e CARGO_HOME=/cargo \
+            -e HOME=/tmp \
+            -e CPR_VERSION="${CPR_VERSION}" \
+            -e CPR_GIT_SHA="${CPR_GIT_SHA}" \
+            -e CPR_BUILD_TIME="${CPR_BUILD_TIME}" \
+            -e CPR_BUILD_TYPE="${CPR_BUILD_TYPE}" \
+            -v "$HOME/.cargo:/cargo" \
+            -v "$PWD/..:/workspace" \
+            -w /workspace/backend \
+            rust:1.95-bookworm \
+            cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
+          mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
+        working-directory: backend
+        env:
+          CPR_VERSION: ${{ needs.release-info.outputs.version }}
+          CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
+          CPR_BUILD_TYPE: release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: frontend-dist
-          path: backend/web/dist
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 1
+
+  build-binary:
+    name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
+    needs: [release-info]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.release-info.outputs.non_docker_matrix) }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
@@ -235,7 +302,7 @@ jobs:
           retention-days: 1
 
   package-assets:
-    needs: [release-info, build-frontend, build-binary]
+    needs: [release-info, build-frontend, build-docker-binary, build-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -352,14 +419,17 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  publish:
-    needs: [release-info, build-frontend, build-binary, package-assets]
-    runs-on: ubuntu-latest
+  build-docker-image:
+    name: build-docker-image (${{ matrix.dockerPlatform }})
+    needs: [release-info, build-frontend, build-docker-binary]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
       packages: write
       id-token: write
-      attestations: write
 
     steps:
       - name: Checkout
@@ -376,59 +446,37 @@ jobs:
       - name: Download Docker binary artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: codex-proxy-rs-linux-*
-          path: dist/docker-artifacts
-
-      - name: Download release assets
-        uses: actions/download-artifact@v8
-        with:
-          name: release-assets
-          path: dist/release
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/docker-artifacts/codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Prepare Docker prebuilt assets
         shell: bash
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+          MATRIX_ARCH: ${{ matrix.arch }}
+          MATRIX_BINARY: ${{ matrix.binary }}
         run: |
           set -euo pipefail
-          ruby <<'RUBY' > release-platforms.json
-          require "json"
-          require "yaml"
-
-          print JSON.generate(YAML.load_file("release/platforms.yaml"))
-          RUBY
           python3 - <<'PY'
-          import json
-          import pathlib
           import shutil
+          import os
+          import pathlib
 
-          APP_NAME = "codex-proxy-rs"
-          platforms = json.loads(pathlib.Path("release-platforms.json").read_text())["platforms"]
-          source_root = pathlib.Path("dist/docker-artifacts")
-          target_root = pathlib.Path("dist/docker")
+          app_name = "codex-proxy-rs"
+          platform_name = f"{os.environ['MATRIX_OS']}-{os.environ['MATRIX_ARCH']}"
+          binary_src = pathlib.Path("dist/docker-artifacts") / f"{app_name}-{platform_name}" / os.environ["MATRIX_BINARY"]
+          if not binary_src.is_file():
+              raise SystemExit(f"Missing Docker binary artifact: {binary_src}")
 
-          for platform in platforms:
-              if platform.get("docker") is not True:
-                  continue
-              platform_name = f"{platform['os']}-{platform['arch']}"
-              artifact_name = f"{APP_NAME}-{platform_name}"
-              binary_src = source_root / artifact_name / platform["binary"]
-              if not binary_src.is_file():
-                  raise SystemExit(f"Missing Docker binary artifact: {binary_src}")
-
-              target_dir = target_root / platform_name
-              target_dir.mkdir(parents=True, exist_ok=True)
-              binary_dest = target_dir / APP_NAME
-              shutil.copy2(binary_src, binary_dest)
-              binary_dest.chmod(0o755)
+          target_dir = pathlib.Path("dist/docker") / platform_name
+          target_dir.mkdir(parents=True, exist_ok=True)
+          binary_dest = target_dir / app_name
+          shutil.copy2(binary_src, binary_dest)
+          binary_dest.chmod(0o755)
           PY
-
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v4
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Login to GHCR
         uses: docker/login-action@v4
@@ -444,12 +492,12 @@ jobs:
           context: .
           file: deploy/Dockerfile
           target: runtime-prebuilt
-          platforms: ${{ needs.release-info.outputs.docker_platforms }}
+          platforms: ${{ matrix.dockerPlatform }}
           push: true
           build-args: |
             CPR_PREBUILT_DIR=dist/docker
-          cache-from: type=gha,scope=runtime-prebuilt
-          cache-to: type=gha,mode=max,scope=runtime-prebuilt
+          cache-from: type=gha,scope=runtime-prebuilt-${{ matrix.os }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=runtime-prebuilt-${{ matrix.os }}-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
           labels: |
@@ -458,21 +506,102 @@ jobs:
             org.opencontainers.image.revision=${{ needs.release-info.outputs.git_sha }}
             org.opencontainers.image.source=https://github.com/zyycn/codex-proxy-rs
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}-${{ matrix.arch }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}-${{ matrix.arch }}
+
+  publish:
+    needs: [release-info, package-assets, build-docker-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-info.outputs.tag }}
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist/release
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create app image manifest
+        id: manifest
+        shell: bash
+        env:
+          VERSION: ${{ needs.release-info.outputs.version }}
+          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          DOCKER_PLATFORMS: ${{ needs.release-info.outputs.docker_platforms }}
+        run: |
+          set -euo pipefail
+
+          image="${REGISTRY}/${IMAGE_NAME}"
+          sources=()
+          IFS=',' read -ra platforms <<< "${DOCKER_PLATFORMS}"
+          for platform in "${platforms[@]}"; do
+            platform="${platform//[[:space:]]/}"
+            [ -n "${platform}" ] || continue
+            arch="${platform##*/}"
+            sources+=("${image}:${VERSION}-${arch}")
+          done
+
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "missing Docker image sources"
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            -t "${image}:${VERSION}" \
+            -t "${image}:latest" \
+            -t "${image}:sha-${GIT_SHA}" \
+            "${sources[@]}"
+
+          inspect_output="$(docker buildx imagetools inspect "${image}:${VERSION}")"
+          platform_list="$(awk '$1 == "Platform:" { print $2 }' <<< "${inspect_output}")"
+          for platform in "${platforms[@]}"; do
+            if ! grep -Eq "^${platform}(/|$)" <<< "${platform_list}"; then
+              echo "image manifest is missing platform ${platform}"
+              echo "${inspect_output}"
+              exit 1
+            fi
+          done
+
+          digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+          if [ -z "${digest}" ]; then
+            echo "missing image digest"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Generate container provenance attestation
         uses: actions/attest@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
       - name: Sign app image
         shell: bash
         env:
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
           IMAGE_TAGS: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
