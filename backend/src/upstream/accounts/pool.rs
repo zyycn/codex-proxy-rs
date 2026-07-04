@@ -154,13 +154,19 @@ pub struct DistinctPlanAccount {
 #[derive(Debug)]
 struct AccountAcquireWithStatusRefresh {
     acquired: Option<AcquiredAccount>,
-    expired_account_ids: Vec<String>,
+    refreshed_accounts: Vec<RefreshedAccountState>,
 }
 
 #[derive(Debug)]
 struct DistinctPlanAccountsWithStatusRefresh {
     accounts: Vec<DistinctPlanAccount>,
-    expired_account_ids: Vec<String>,
+    refreshed_accounts: Vec<RefreshedAccountState>,
+}
+
+#[derive(Debug)]
+struct AccountCapacitySummaryWithStatusRefresh {
+    summary: AccountCapacitySummary,
+    refreshed_accounts: Vec<RefreshedAccountState>,
 }
 
 /// 账号池容量摘要。
@@ -174,6 +180,71 @@ pub struct AccountCapacitySummary {
     pub used_slots: usize,
     /// 当前可用槽位数。
     pub available_slots: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeAccountStateSnapshot {
+    status: AccountStatus,
+    quota_limit_reached: bool,
+    quota_verify_required: bool,
+    quota_cooldown_until: Option<DateTime<Utc>>,
+    cloudflare_cooldown_until: Option<DateTime<Utc>>,
+    window_request_count: u64,
+    window_input_tokens: u64,
+    window_output_tokens: u64,
+    window_cached_tokens: u64,
+    window_image_input_tokens: u64,
+    window_image_output_tokens: u64,
+    window_image_request_count: u64,
+    window_image_request_failed_count: u64,
+    window_started_at: Option<DateTime<Utc>>,
+    window_reset_at: Option<DateTime<Utc>>,
+    limit_window_seconds: Option<u64>,
+}
+
+impl From<&Account> for RuntimeAccountStateSnapshot {
+    fn from(account: &Account) -> Self {
+        Self {
+            status: account.status,
+            quota_limit_reached: account.quota_limit_reached,
+            quota_verify_required: account.quota_verify_required,
+            quota_cooldown_until: account.quota_cooldown_until,
+            cloudflare_cooldown_until: account.cloudflare_cooldown_until,
+            window_request_count: account.window_request_count,
+            window_input_tokens: account.window_input_tokens,
+            window_output_tokens: account.window_output_tokens,
+            window_cached_tokens: account.window_cached_tokens,
+            window_image_input_tokens: account.window_image_input_tokens,
+            window_image_output_tokens: account.window_image_output_tokens,
+            window_image_request_count: account.window_image_request_count,
+            window_image_request_failed_count: account.window_image_request_failed_count,
+            window_started_at: account.window_started_at,
+            window_reset_at: account.window_reset_at,
+            limit_window_seconds: account.limit_window_seconds,
+        }
+    }
+}
+
+impl RuntimeAccountStateSnapshot {
+    fn usage_window_changed(&self, other: &Self) -> bool {
+        self.window_request_count != other.window_request_count
+            || self.window_input_tokens != other.window_input_tokens
+            || self.window_output_tokens != other.window_output_tokens
+            || self.window_cached_tokens != other.window_cached_tokens
+            || self.window_image_input_tokens != other.window_image_input_tokens
+            || self.window_image_output_tokens != other.window_image_output_tokens
+            || self.window_image_request_count != other.window_image_request_count
+            || self.window_image_request_failed_count != other.window_image_request_failed_count
+            || self.window_started_at != other.window_started_at
+            || self.window_reset_at != other.window_reset_at
+            || self.limit_window_seconds != other.limit_window_seconds
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RefreshedAccountState {
+    account: Account,
+    sync_usage_window: bool,
 }
 
 /// 运行时窗口用量增量。
@@ -419,7 +490,7 @@ impl AccountPool {
         request: &AccountAcquireRequest,
     ) -> AccountAcquireWithStatusRefresh {
         self.cleanup_stale_slots(request.now);
-        let expired_account_ids = self.refresh_account_statuses(request.now);
+        let refreshed_accounts = self.refresh_account_statuses(request.now);
         let candidates = self.candidates(request);
         let selected = if let Some(preferred_account_id) = &request.preferred_account_id {
             let preferred = candidates
@@ -458,7 +529,7 @@ impl AccountPool {
         let Some((selected, previous_slot_at, selection_source)) = selected else {
             return AccountAcquireWithStatusRefresh {
                 acquired: None,
-                expired_account_ids,
+                refreshed_accounts,
             };
         };
         tracing::info!(
@@ -485,13 +556,15 @@ impl AccountPool {
                 account: selected,
                 previous_slot_at,
             }),
-            expired_account_ids,
+            refreshed_accounts,
         }
     }
 
-    fn refresh_account_statuses(&mut self, now: DateTime<Utc>) -> Vec<String> {
+    fn refresh_account_statuses(&mut self, now: DateTime<Utc>) -> Vec<RefreshedAccountState> {
+        let mut refreshed_accounts = Vec::new();
         let mut expired_account_ids = Vec::new();
         for (account_id, account) in &mut self.accounts {
+            let before = RuntimeAccountStateSnapshot::from(&*account);
             if account.status == AccountStatus::Active && access_token_expired(account, now) {
                 account.status = AccountStatus::Expired;
                 expired_account_ids.push(account_id.clone());
@@ -499,11 +572,18 @@ impl AccountPool {
                 refresh_quota_window(account, now);
                 refresh_cloudflare_cooldown(account, now);
             }
+            let after = RuntimeAccountStateSnapshot::from(&*account);
+            if before != after {
+                refreshed_accounts.push(RefreshedAccountState {
+                    account: account.clone(),
+                    sync_usage_window: before.usage_window_changed(&after),
+                });
+            }
         }
         for account_id in &expired_account_ids {
             self.slots.remove(account_id);
         }
-        expired_account_ids
+        refreshed_accounts
     }
 
     /// 释放指定账号的一个在途槽位。
@@ -527,8 +607,15 @@ impl AccountPool {
 
     /// 计算账号池容量摘要。
     pub fn capacity_summary(&mut self, now: DateTime<Utc>) -> AccountCapacitySummary {
+        self.capacity_summary_with_status_refresh(now).summary
+    }
+
+    fn capacity_summary_with_status_refresh(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> AccountCapacitySummaryWithStatusRefresh {
         self.cleanup_stale_slots(now);
-        self.refresh_account_statuses(now);
+        let refreshed_accounts = self.refresh_account_statuses(now);
         let is_capacity_account = |account: &Account| {
             account.status == AccountStatus::Active
                 && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
@@ -550,11 +637,14 @@ impl AccountPool {
             .map(|(_, slots)| slots.len().min(self.options.max_concurrent_per_account))
             .sum();
 
-        AccountCapacitySummary {
-            max_concurrent_per_account: self.options.max_concurrent_per_account,
-            total_slots,
-            used_slots,
-            available_slots: total_slots.saturating_sub(used_slots),
+        AccountCapacitySummaryWithStatusRefresh {
+            summary: AccountCapacitySummary {
+                max_concurrent_per_account: self.options.max_concurrent_per_account,
+                total_slots,
+                used_slots,
+                available_slots: total_slots.saturating_sub(used_slots),
+            },
+            refreshed_accounts,
         }
     }
 
@@ -569,7 +659,7 @@ impl AccountPool {
         now: DateTime<Utc>,
     ) -> DistinctPlanAccountsWithStatusRefresh {
         self.cleanup_stale_slots(now);
-        let expired_account_ids = self.refresh_account_statuses(now);
+        let refreshed_accounts = self.refresh_account_statuses(now);
         let mut by_plan = IndexMap::<String, Vec<Account>>::new();
 
         for account in self.accounts.values() {
@@ -615,7 +705,7 @@ impl AccountPool {
 
         DistinctPlanAccountsWithStatusRefresh {
             accounts,
-            expired_account_ids,
+            refreshed_accounts,
         }
     }
 
@@ -874,7 +964,14 @@ impl RuntimeAccountPoolService {
 
     /// 读取账号池容量摘要。
     pub async fn capacity_summary(&self, now: DateTime<Utc>) -> AccountCapacitySummary {
-        self.pool.lock().await.capacity_summary(now)
+        let refresh = self
+            .pool
+            .lock()
+            .await
+            .capacity_summary_with_status_refresh(now);
+        self.persist_runtime_account_states(refresh.refreshed_accounts)
+            .await;
+        refresh.summary
     }
 
     /// 使用当前时间读取账号池容量摘要。
@@ -964,7 +1061,7 @@ impl RuntimeAccountPoolService {
     /// 按请求上下文获取可用账号。
     pub async fn acquire_with(&self, request: &AccountAcquireRequest) -> Option<AcquiredAccount> {
         let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
-        self.persist_expired_statuses(refresh.expired_account_ids)
+        self.persist_runtime_account_states(refresh.refreshed_accounts)
             .await;
         refresh.acquired
     }
@@ -976,22 +1073,22 @@ impl RuntimeAccountPoolService {
             .lock()
             .await
             .distinct_plan_accounts_with_status_refresh(now);
-        self.persist_expired_statuses(refresh.expired_account_ids)
+        self.persist_runtime_account_states(refresh.refreshed_accounts)
             .await;
         refresh.accounts
     }
 
-    async fn persist_expired_statuses(&self, account_ids: Vec<String>) {
-        for account_id in account_ids {
+    async fn persist_runtime_account_states(&self, refreshed_states: Vec<RefreshedAccountState>) {
+        for refreshed in refreshed_states {
             if let Err(error) = self
                 .store
-                .set_status(&account_id, AccountStatus::Expired)
+                .sync_runtime_account_state(&refreshed.account, refreshed.sync_usage_window)
                 .await
             {
                 tracing::warn!(
-                    account_id,
+                    account_id = %refreshed.account.id,
                     error = %error,
-                    "failed to persist runtime-expired account status"
+                    "failed to persist refreshed runtime account state"
                 );
             }
         }

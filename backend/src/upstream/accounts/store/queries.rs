@@ -432,6 +432,63 @@ set
   updated_at = ?
 where id = ?";
 
+pub(super) const SYNC_RUNTIME_ACCOUNT_STATE_SQL: &str = r"
+update accounts
+set
+  status = case
+    when status in ('disabled', 'banned', 'refreshing') then status
+    else ?
+  end,
+  quota_limit_reached = case
+    when ? = 0 and quota_cooldown_until is not null and quota_cooldown_until > ? then quota_limit_reached
+    else ?
+  end,
+  quota_verify_required = case
+    when ? = 1 and quota_cooldown_until is not null and quota_cooldown_until > ? then quota_verify_required
+    else ?
+  end,
+  quota_cooldown_until = case
+    when ? is null and quota_cooldown_until is not null and quota_cooldown_until > ? then quota_cooldown_until
+    else ?
+  end,
+  cloudflare_cooldown_until = case
+    when ? is null and cloudflare_cooldown_until is not null and cloudflare_cooldown_until > ? then cloudflare_cooldown_until
+    else ?
+  end,
+  updated_at = ?
+where id = ?";
+
+pub(super) const SYNC_RUNTIME_ACCOUNT_USAGE_WINDOW_SQL: &str = r"
+insert into account_usage (
+  account_id,
+  window_request_count,
+  window_input_tokens,
+  window_output_tokens,
+  window_cached_tokens,
+  window_image_input_tokens,
+  window_image_output_tokens,
+  window_image_request_count,
+  window_image_request_failed_count,
+  window_started_at,
+  window_reset_at,
+  limit_window_seconds
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(account_id) do update set
+  window_request_count = excluded.window_request_count,
+  window_input_tokens = excluded.window_input_tokens,
+  window_output_tokens = excluded.window_output_tokens,
+  window_cached_tokens = excluded.window_cached_tokens,
+  window_image_input_tokens = excluded.window_image_input_tokens,
+  window_image_output_tokens = excluded.window_image_output_tokens,
+  window_image_request_count = excluded.window_image_request_count,
+  window_image_request_failed_count = excluded.window_image_request_failed_count,
+  window_started_at = excluded.window_started_at,
+  window_reset_at = excluded.window_reset_at,
+  limit_window_seconds = excluded.limit_window_seconds
+where account_usage.window_reset_at is null
+  or account_usage.window_reset_at <= excluded.window_reset_at
+  or account_usage.window_reset_at <= ?";
+
 pub(super) const SET_CLOUDFLARE_COOLDOWN_UNTIL_SQL: &str = r"
 update accounts
 set

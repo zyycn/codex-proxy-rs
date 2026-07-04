@@ -338,6 +338,13 @@ pub trait AccountStore: Send + Sync + 'static {
         cooldown_until: Option<DateTime<Utc>>,
     ) -> AccountStoreResult<bool>;
 
+    /// 同步运行时自然刷新出来的账号状态。
+    async fn sync_runtime_account_state(
+        &self,
+        account: &Account,
+        sync_usage_window: bool,
+    ) -> AccountStoreResult<bool>;
+
     /// 同步账号当前 rate-limit 统计窗口。
     async fn sync_rate_limit_window(
         &self,
@@ -711,6 +718,66 @@ impl SqliteAccountStore {
         Ok(result.rows_affected() > 0)
     }
 
+    /// 同步运行时自然刷新出来的账号状态。
+    pub async fn sync_runtime_account_state(
+        &self,
+        account: &Account,
+        sync_usage_window: bool,
+    ) -> SqliteAccountStoreResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let quota_limit_reached = if account.quota_limit_reached { 1 } else { 0 };
+        let quota_verify_required = if account.quota_verify_required { 1 } else { 0 };
+        let quota_cooldown_until = account.quota_cooldown_until.map(|dt| dt.to_rfc3339());
+        let cloudflare_cooldown_until = account.cloudflare_cooldown_until.map(|dt| dt.to_rfc3339());
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(SYNC_RUNTIME_ACCOUNT_STATE_SQL)
+            .bind(status_to_db(account.status))
+            .bind(quota_limit_reached)
+            .bind(&now)
+            .bind(quota_limit_reached)
+            .bind(quota_verify_required)
+            .bind(&now)
+            .bind(quota_verify_required)
+            .bind(&quota_cooldown_until)
+            .bind(&now)
+            .bind(&quota_cooldown_until)
+            .bind(&cloudflare_cooldown_until)
+            .bind(&now)
+            .bind(&cloudflare_cooldown_until)
+            .bind(&now)
+            .bind(&account.id)
+            .execute(&mut *tx)
+            .await?;
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        if sync_usage_window {
+            sqlx::query(SYNC_RUNTIME_ACCOUNT_USAGE_WINDOW_SQL)
+                .bind(&account.id)
+                .bind(u64_to_i64_saturating(account.window_request_count))
+                .bind(u64_to_i64_saturating(account.window_input_tokens))
+                .bind(u64_to_i64_saturating(account.window_output_tokens))
+                .bind(u64_to_i64_saturating(account.window_cached_tokens))
+                .bind(u64_to_i64_saturating(account.window_image_input_tokens))
+                .bind(u64_to_i64_saturating(account.window_image_output_tokens))
+                .bind(u64_to_i64_saturating(account.window_image_request_count))
+                .bind(u64_to_i64_saturating(
+                    account.window_image_request_failed_count,
+                ))
+                .bind(account.window_started_at.map(|dt| dt.to_rfc3339()))
+                .bind(account.window_reset_at.map(|dt| dt.to_rfc3339()))
+                .bind(account.limit_window_seconds.map(u64_to_i64_saturating))
+                .bind(&now)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// 标记账号 Cloudflare 冷却期。
     pub async fn set_cloudflare_cooldown_until(
         &self,
@@ -1080,6 +1147,16 @@ impl AccountStore for SqliteAccountStore {
         )
         .await
         .map_err(|error| map_account_store_error(&error))
+    }
+
+    async fn sync_runtime_account_state(
+        &self,
+        account: &Account,
+        sync_usage_window: bool,
+    ) -> AccountStoreResult<bool> {
+        SqliteAccountStore::sync_runtime_account_state(self, account, sync_usage_window)
+            .await
+            .map_err(|error| map_account_store_error(&error))
     }
 
     async fn sync_rate_limit_window(

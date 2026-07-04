@@ -11,10 +11,12 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{from_fn, from_fn_with_state},
     routing::get,
-    Router,
+    Extension, Router,
 };
 use codex_proxy_rs::http::middleware::{
-    request_id::{attach_request_id, attach_request_id_with_proxy_config, TrustedProxyConfig},
+    request_id::{
+        attach_request_id, attach_request_id_with_proxy_config, ClientIp, TrustedProxyConfig,
+    },
     trace::http_trace_layer,
 };
 use tokio::time::{sleep, Duration};
@@ -219,16 +221,12 @@ async fn request_context_should_generate_new_request_id_for_invalid_header() {
 }
 
 #[tokio::test]
-async fn request_context_should_attach_real_ip_from_connection() {
+async fn request_context_should_attach_client_ip_from_connection() {
     let app = Router::new()
         .route(
             "/ip",
-            get(|headers: HeaderMap| async move {
-                headers
-                    .get("x-real-ip")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or_default()
-                    .to_string()
+            get(|Extension(client_ip): Extension<ClientIp>| async move {
+                client_ip.as_str().to_string()
             }),
         )
         .layer(from_fn(attach_request_id));
@@ -247,17 +245,30 @@ async fn request_context_should_attach_real_ip_from_connection() {
 }
 
 #[tokio::test]
-async fn request_context_should_replace_untrusted_forwarded_ip_headers() {
+async fn request_context_should_preserve_forwarded_headers_from_untrusted_peer() {
     let app = Router::new()
         .route(
             "/ip",
-            get(|headers: HeaderMap| async move {
-                headers
-                    .get("x-real-ip")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("missing")
-                    .to_string()
-            }),
+            get(
+                |Extension(client_ip): Extension<ClientIp>, headers: HeaderMap| async move {
+                    let cf_ip = headers
+                        .get("cf-connecting-ip")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("missing");
+                    let forwarded_for = headers
+                        .get("x-forwarded-for")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("missing");
+                    let real_ip = headers
+                        .get("x-real-ip")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("missing");
+                    format!(
+                        "{}|cf={cf_ip}|xff={forwarded_for}|real={real_ip}",
+                        client_ip.as_str()
+                    )
+                },
+            ),
         )
         .layer(from_fn(attach_request_id));
     let mut request = Request::builder()
@@ -274,7 +285,10 @@ async fn request_context_should_replace_untrusted_forwarded_ip_headers() {
     let response = app.oneshot(request).await.expect("response");
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
 
-    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "127.0.0.1");
+    assert_eq!(
+        std::str::from_utf8(&bytes).unwrap(),
+        "127.0.0.1|cf=203.0.113.43|xff=203.0.113.42, 10.0.0.2|real=203.0.113.44"
+    );
 }
 
 #[tokio::test]
@@ -284,14 +298,12 @@ async fn request_context_should_accept_forwarded_ip_from_trusted_proxy() {
     let app = Router::new()
         .route(
             "/ip",
-            get(|headers: HeaderMap| async move {
-                let real_ip = headers
-                    .get("x-real-ip")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("missing");
-                let forwarded_present = headers.contains_key("x-forwarded-for");
-                format!("{real_ip}|forwarded={forwarded_present}")
-            }),
+            get(
+                |Extension(client_ip): Extension<ClientIp>, headers: HeaderMap| async move {
+                    let forwarded_present = headers.contains_key("x-forwarded-for");
+                    format!("{}|forwarded={forwarded_present}", client_ip.as_str())
+                },
+            ),
         )
         .layer(from_fn_with_state(
             trusted_proxies,
@@ -311,14 +323,72 @@ async fn request_context_should_accept_forwarded_ip_from_trusted_proxy() {
 
     assert_eq!(
         std::str::from_utf8(&bytes).unwrap(),
-        "203.0.113.42|forwarded=false"
+        "203.0.113.42|forwarded=true"
     );
 }
 
 #[tokio::test]
-async fn request_context_should_prefer_cloudflare_ip_from_trusted_proxy() {
+async fn request_context_should_accept_real_ip_from_trusted_proxy_when_forwarded_for_missing() {
     let trusted_proxies =
         TrustedProxyConfig::from_entries(&["127.0.0.1".to_string()]).expect("trusted proxy");
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|Extension(client_ip): Extension<ClientIp>| async move {
+                client_ip.as_str().to_string()
+            }),
+        )
+        .layer(from_fn_with_state(
+            trusted_proxies,
+            attach_request_id_with_proxy_config,
+        ));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-real-ip", "198.51.100.23")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "198.51.100.23");
+}
+
+#[tokio::test]
+async fn request_context_should_ignore_forwarded_ip_from_untrusted_peer() {
+    let trusted_proxies =
+        TrustedProxyConfig::from_entries(&["10.0.0.0/8".to_string()]).expect("trusted proxy");
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|Extension(client_ip): Extension<ClientIp>| async move {
+                client_ip.as_str().to_string()
+            }),
+        )
+        .layer(from_fn_with_state(
+            trusted_proxies,
+            attach_request_id_with_proxy_config,
+        ));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-forwarded-for", "203.0.113.42")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "127.0.0.1");
+}
+
+#[tokio::test]
+async fn request_context_should_not_inject_real_ip_header() {
     let app = Router::new()
         .route(
             "/ip",
@@ -330,14 +400,11 @@ async fn request_context_should_prefer_cloudflare_ip_from_trusted_proxy() {
                     .to_string()
             }),
         )
-        .layer(from_fn_with_state(
-            trusted_proxies,
-            attach_request_id_with_proxy_config,
-        ));
+        .layer(from_fn(attach_request_id));
     let mut request = Request::builder()
         .uri("/ip")
-        .header("cf-connecting-ip", "198.51.100.23")
         .header("x-forwarded-for", "203.0.113.42, 10.0.0.2")
+        .header("cf-connecting-ip", "203.0.113.43")
         .body(Body::empty())
         .expect("request should build");
     request
@@ -347,7 +414,7 @@ async fn request_context_should_prefer_cloudflare_ip_from_trusted_proxy() {
     let response = app.oneshot(request).await.expect("response");
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
 
-    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "198.51.100.23");
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "missing");
 }
 
 #[test]
