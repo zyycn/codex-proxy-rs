@@ -1,4 +1,4 @@
-use std::{env, error::Error, process::Command, time::Duration};
+use std::{env, error::Error, time::Duration};
 
 use axum::Router;
 use chrono::Utc;
@@ -147,6 +147,7 @@ fn exec_replacement_process(
     executable_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     use std::os::unix::process::CommandExt;
+    use std::process::Command;
 
     let error = Command::new(executable_path)
         .args(env::args_os().skip(1))
