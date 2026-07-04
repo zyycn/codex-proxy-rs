@@ -168,7 +168,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         client_ip: record.request.client_ip.as_deref(),
         client_user_agent: record.request.client_user_agent.as_deref(),
         reasoning_effort: reasoning_effort_from_request(record.request),
-        service_tier: record.request.service_tier.as_deref(),
+        service_tier: record.request.service_tier(),
         started_at: record.started_at,
         status_code: status_code_for_stream_failure(record.failure),
         level: UsageRecordLevel::Error,
@@ -246,7 +246,7 @@ pub(super) async fn record_live_response_stream_event(
         context.client_ip.as_deref(),
         context.request.client_user_agent.as_deref(),
         reasoning_effort_from_request(&context.request),
-        context.request.service_tier.as_deref(),
+        context.request.service_tier(),
     );
     event.metadata = metadata;
     if let Err(error) = context.usage_records.record(event).await {

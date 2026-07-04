@@ -162,11 +162,10 @@ fn compute_variant_hash_with_identity(
     identity: Option<&str>,
 ) -> String {
     let tools_json = request
-        .tools
-        .as_ref()
-        .map_or_else(|| "[]".to_string(), |tools| tools_json(tools));
+        .tools()
+        .map_or_else(|| "[]".to_string(), tools_json);
     let mut hasher = Sha256::new();
-    hasher.update(request.instructions.as_bytes());
+    hasher.update(request.instructions().as_bytes());
     hasher.update(b"\0");
     hasher.update(tools_json.as_bytes());
     if let Some(identity) = identity
@@ -255,23 +254,24 @@ pub fn build_conversation_identity(
 /// 确保请求拥有上游可复用的 prompt cache key。
 pub fn ensure_prompt_cache_key(request: &mut CodexResponsesRequest) {
     if let Some(existing) = request
-        .prompt_cache_key
-        .as_deref()
+        .prompt_cache_key()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        request.prompt_cache_key = Some(existing.to_string());
+        let existing = existing.to_string();
+        request.set_prompt_cache_key(Some(existing));
         return;
     }
 
-    request.prompt_cache_key =
-        Some(derive_stable_conversation_key(request).unwrap_or_else(|| Uuid::new_v4().to_string()));
+    request.set_prompt_cache_key(Some(
+        derive_stable_conversation_key(request).unwrap_or_else(|| Uuid::new_v4().to_string()),
+    ));
 }
 
 /// 按原版 `stable-conversation-key.ts` 的规则派生稳定 conversation key。
 pub fn derive_stable_conversation_key(request: &CodexResponsesRequest) -> Option<String> {
-    let instructions = request.instructions.chars().take(2000).collect::<String>();
-    let first_user_text = first_user_text(&request.input);
+    let instructions = request.instructions().chars().take(2000).collect::<String>();
+    let first_user_text = first_user_text(request.input());
     let normalized_first_user_text = normalize_conversation_anchor_text(&first_user_text);
     let first_user_text = if normalized_first_user_text.is_empty() {
         first_user_text
@@ -283,7 +283,7 @@ pub fn derive_stable_conversation_key(request: &CodexResponsesRequest) -> Option
     }
 
     let mut hasher = Sha256::new();
-    hasher.update(request.model.as_bytes());
+    hasher.update(request.model().as_bytes());
     hasher.update(b"\0");
     hasher.update(instructions.as_bytes());
     hasher.update(b"\0");

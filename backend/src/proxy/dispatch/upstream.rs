@@ -152,7 +152,7 @@ pub(crate) async fn create_response_with_account(
         .cookie_header_for_request(&account.id, "/codex/responses")
         .await;
     let identity = build_conversation_identity(
-        request.prompt_cache_key.as_deref(),
+        request.prompt_cache_key(),
         request.codex_window_id.as_deref(),
         &account.id,
     );
@@ -192,7 +192,7 @@ async fn create_response_stream_with_account(
         .cookie_header_for_request(&account.id, "/codex/responses")
         .await;
     let identity = build_conversation_identity(
-        request.prompt_cache_key.as_deref(),
+        request.prompt_cache_key(),
         request.codex_window_id.as_deref(),
         &account.id,
     );

@@ -12,7 +12,7 @@ use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
 use codex_proxy_rs::upstream::models::backend_entry::{
     BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy,
 };
-use codex_proxy_rs::upstream::models::catalog::{ModelCatalog, ParsedModelName};
+use codex_proxy_rs::upstream::models::catalog::ModelCatalog;
 use codex_proxy_rs::upstream::models::config::ModelConfig;
 use codex_proxy_rs::upstream::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
@@ -26,13 +26,12 @@ use codex_proxy_rs::upstream::transport::{
 };
 
 #[test]
-fn model_catalog_should_parse_alias_reasoning_and_service_tier_suffixes() {
+fn model_catalog_should_resolve_alias_chain_to_model_id() {
     let mut model_aliases = BTreeMap::new();
     model_aliases.insert("codex-fast".to_string(), "gpt-5.5".to_string());
     let catalog = ModelCatalog::from_config(&ModelConfig { model_aliases });
 
-    let parsed = catalog.parse_model_name("codex-fast-high-flex");
-
+    // 透明代理：只解析 alias，不再拆分 `-high`/`-flex` 等后缀。
     assert!(catalog
         .public_model_ids()
         .contains(&"codex-fast".to_string()));
@@ -40,40 +39,18 @@ fn model_catalog_should_parse_alias_reasoning_and_service_tier_suffixes() {
         catalog.model_info_for_name("codex-fast").unwrap().id,
         "gpt-5.5"
     );
-    assert_eq!(
-        parsed,
-        ParsedModelName {
-            model_id: "gpt-5.5".to_string(),
-            reasoning_effort: Some("high".to_string()),
-            service_tier: Some("flex".to_string())
-        }
-    );
+    assert_eq!(catalog.resolve_model_id("codex-fast"), "gpt-5.5");
 }
 
 #[test]
-fn model_catalog_should_keep_unknown_model_names_without_fallback() {
+fn model_catalog_should_keep_unknown_model_names_verbatim() {
     let catalog = ModelCatalog::from_config(&ModelConfig {
         model_aliases: BTreeMap::new(),
     });
 
-    let parsed = catalog.parse_model_name("unknown-medium");
-
-    assert_eq!(parsed.model_id, "unknown");
-    assert_eq!(parsed.reasoning_effort, Some("medium".to_string()));
-}
-
-#[test]
-fn model_catalog_should_parse_none_and_minimal_reasoning_suffixes() {
-    let catalog = ModelCatalog::from_config(&ModelConfig {
-        model_aliases: BTreeMap::new(),
-    });
-
-    let none = catalog.parse_model_name("gpt-5.5-none");
-    let minimal = catalog.parse_model_name("gpt-5.5-minimal-fast");
-
-    assert_eq!(none.reasoning_effort, Some("none".to_string()));
-    assert_eq!(minimal.reasoning_effort, Some("minimal".to_string()));
-    assert_eq!(minimal.service_tier, Some("fast".to_string()));
+    // 无 alias 命中时原样返回，不再剥离后缀。
+    assert_eq!(catalog.resolve_model_id("unknown-medium"), "unknown-medium");
+    assert_eq!(catalog.resolve_model_id("gpt-5.5-high"), "gpt-5.5-high");
 }
 
 #[test]

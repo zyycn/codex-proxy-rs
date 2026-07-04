@@ -1,6 +1,7 @@
 //! 请求上下文中间件。
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::LazyLock;
 
 use axum::{
     extract::{connect_info::ConnectInfo, Request, State},
@@ -14,8 +15,28 @@ use uuid::Uuid;
 /// 请求 ID 头。
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 const MAX_REQUEST_ID_LEN: usize = 128;
+const CF_CONNECTING_IP_HEADER: &str = "cf-connecting-ip";
 const REAL_IP_HEADER: &str = "x-real-ip";
 const X_FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
+
+/// 私有 / 回环 / 唯一本地地址网段，用于在自动模式下从 `X-Forwarded-For` 中跳过内网跳板 IP。
+static PRIVATE_NETWORKS: LazyLock<Vec<IpNet>> = LazyLock::new(|| {
+    [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "::1/128",
+        "fc00::/7",
+    ]
+    .iter()
+    .filter_map(|entry| entry.parse().ok())
+    .collect()
+});
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    PRIVATE_NETWORKS.iter().any(|network| network.contains(&ip))
+}
 
 /// 可信反向代理配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +56,11 @@ impl TrustedProxyConfig {
 
     fn is_trusted(&self, ip: IpAddr) -> bool {
         self.networks.iter().any(|network| network.contains(&ip))
+    }
+
+    /// 是否未配置任何可信代理（决定是否启用自动真实 IP 探测）。
+    fn is_empty(&self) -> bool {
+        self.networks.is_empty()
     }
 }
 
@@ -144,15 +170,52 @@ fn client_ip_from_peer(
     headers: &HeaderMap,
     trusted_proxies: &TrustedProxyConfig,
 ) -> String {
+    if trusted_proxies.is_empty() {
+        // 未配置可信代理：自动模式，按 CF-Connecting-IP → X-Real-IP →
+        // X-Forwarded-For（首个公网 IP）→ peer IP 的优先级解析真实客户端 IP。
+        return auto_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string());
+    }
     if trusted_proxies.is_trusted(peer_ip) {
+        // 已配置可信代理且直连来源可信：只采信转发头。
         trusted_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string())
     } else {
+        // 已配置可信代理但直连来源不可信：忽略转发头，使用 peer IP。
         peer_ip.to_string()
     }
 }
 
+/// 自动模式下解析转发头中的真实客户端 IP。
+///
+/// 未配置可信代理时使用，对齐常见反代（Cloudflare / Nginx）默认行为：
+/// `CF-Connecting-IP` → `X-Real-IP` → `X-Forwarded-For` 首个公网 IP。
+fn auto_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
+    if let Some(cf_ip) = header_string(headers, CF_CONNECTING_IP_HEADER) {
+        return Some(cf_ip);
+    }
+    if let Some(real_ip) = header_string(headers, REAL_IP_HEADER) {
+        return Some(real_ip);
+    }
+    forwarded_for_public_ip(headers).or_else(|| first_forwarded_for_value(headers))
+}
+
+/// 返回 `X-Forwarded-For` 链中第一个公网 IP（跳过内网跳板）。
+fn forwarded_for_public_ip(headers: &HeaderMap) -> Option<String> {
+    let value = header_string(headers, X_FORWARDED_FOR_HEADER)?;
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .find(|entry| match entry.parse::<IpAddr>() {
+            Ok(ip) => !is_private_ip(ip),
+            Err(_) => false,
+        })
+        .map(ToString::to_string)
+}
+
 fn trusted_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
-    first_forwarded_for_value(headers).or_else(|| header_string(headers, REAL_IP_HEADER))
+    header_string(headers, CF_CONNECTING_IP_HEADER)
+        .or_else(|| first_forwarded_for_value(headers))
+        .or_else(|| header_string(headers, REAL_IP_HEADER))
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -175,24 +238,13 @@ fn first_forwarded_for_value(headers: &HeaderMap) -> Option<String> {
 }
 
 fn parse_trusted_proxy_entry(entry: &str) -> Result<IpNet, TrustedProxyConfigError> {
-    let entry = entry.trim();
-    if entry.is_empty() {
-        return Err(invalid_trusted_proxy_entry(entry));
-    }
     if let Ok(network) = entry.parse::<IpNet>() {
         return Ok(network);
     }
-    let ip = entry
+    entry
         .parse::<IpAddr>()
-        .map_err(|_| invalid_trusted_proxy_entry(entry))?;
-    IpNet::new(
-        ip,
-        match ip {
-            IpAddr::V4(_) => 32,
-            IpAddr::V6(_) => 128,
-        },
-    )
-    .map_err(|_| invalid_trusted_proxy_entry(entry))
+        .map(IpNet::from)
+        .map_err(|_| invalid_trusted_proxy_entry(entry))
 }
 
 fn invalid_trusted_proxy_entry(entry: &str) -> TrustedProxyConfigError {

@@ -143,11 +143,11 @@ pub(super) fn enrich_usage_record_identity(
 }
 
 pub(super) fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
-    reasoning_effort_from_value(request.reasoning.as_ref())
+    reasoning_effort_from_value(request.reasoning())
 }
 
 pub(super) fn reasoning_effort_from_compact_request(request: &CodexCompactRequest) -> Option<&str> {
-    reasoning_effort_from_value(request.reasoning.as_ref())
+    reasoning_effort_from_value(request.reasoning())
 }
 
 fn insert_trimmed_string(

@@ -2,7 +2,7 @@ const relaxedActionCellClass = '!px-4'
 
 export const apiKeyColumns = [
   { key: 'selection', label: '', width: '48px', align: 'center' as const },
-  { key: 'identity', label: '名称 / 标签', minWidth: '280px', flex: 1.25 },
+  { key: 'identity', label: '名称', minWidth: '280px', flex: 1.25 },
   { key: 'prefix', label: '密钥前缀', minWidth: '300px', flex: 1.35 },
   { key: 'enabled', label: '状态', width: '112px', align: 'center' as const },
   {
@@ -20,7 +20,7 @@ export const apiKeyColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '108px',
+    width: '184px',
     headerClass: relaxedActionCellClass,
     cellClass: relaxedActionCellClass,
   },

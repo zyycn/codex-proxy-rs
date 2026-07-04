@@ -264,12 +264,12 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
             Vec::new(),
         );
     request.use_websocket = true;
-    request.prompt_cache_key = Some("client-thread".to_string());
-    request.client_metadata = Some(json!({
+    request.set_prompt_cache_key(Some("client-thread".to_string()));
+    request.set_client_metadata(Some(json!({
         "safe": "yes",
         "x-openai-subagent": "review",
         "ignored_non_string": 42
-    }));
+    })));
     let pool = Arc::new(
         codex_proxy_rs::upstream::transport::websocket_pool::CodexWebSocketPool::new(
             8,
@@ -321,11 +321,14 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let mut stable_metadata = metadata.clone();
     stable_metadata.remove("x-codex-ws-stream-request-start-ms");
     assert_eq!(payload["prompt_cache_key"], "cp_derived");
+    // 透明代理：客户端 client_metadata 的非字符串值（ignored_non_string: 42）原样保留，
+    // 代理字段只做追加式合并，不再过滤用户字段。
     assert_eq!(
         Value::Object(stable_metadata),
         json!({
             "safe": "yes",
             "x-openai-subagent": "review",
+            "ignored_non_string": 42,
             "x-codex-installation-id": "install-123",
             "session_id": "cp_derived",
             "thread_id": "cp_derived",
@@ -716,13 +719,14 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
     client
         .create_compact_response(
             &codex_proxy_rs::upstream::protocol::responses::CodexCompactRequest {
-                model: "gpt-5.5".to_string(),
-                input: Vec::new(),
-                instructions: String::new(),
-                tools: None,
-                parallel_tool_calls: None,
-                reasoning: None,
-                text: None,
+                body: json!({
+                    "model": "gpt-5.5",
+                    "input": [],
+                    "instructions": ""
+                })
+                .as_object()
+                .cloned()
+                .unwrap(),
                 client_ip: None,
                 client_user_agent: None,
             },

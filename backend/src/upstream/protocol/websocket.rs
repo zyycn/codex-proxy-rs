@@ -1,4 +1,4 @@
-use serde::{ser::SerializeMap, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::upstream::protocol::responses::{
@@ -142,31 +142,13 @@ fn is_internal_websocket_event(event: &str) -> bool {
     event == "codex.rate_limits"
 }
 
+/// 判断 WebSocket 事件是否应在转发前剥离。
+///
+/// 仅剥离传输层内部帧：`response.metadata` 承载 turn_state，由上层提取转存到
+/// 会话状态，不下发客户端。业务事件一律原样转发，不做 schema 校验。
+/// （`codex.rate_limits` 内部事件由 `is_internal_websocket_event` 单独剥离。）
 fn websocket_event_should_skip(raw: &str) -> bool {
     websocket_metadata_turn_state(raw).is_some()
-        || websocket_event_shape_parse_error(raw)
-        || websocket_response_completed_missing_response(raw)
-        || websocket_response_created_missing_response(raw)
-        || websocket_response_output_text_delta_missing_delta(raw)
-        || websocket_delta_event_missing_official_required_fields(raw)
-        || websocket_output_item_event_missing_item(raw)
-        || websocket_output_item_event_non_object_item(raw)
-        || websocket_output_item_event_invalid_item_type_tag(raw)
-        || websocket_output_item_event_invalid_metadata(raw)
-        || websocket_message_output_item_event_invalid_required_fields(raw)
-        || websocket_agent_message_output_item_event_invalid_required_fields(raw)
-        || websocket_reasoning_output_item_event_invalid_required_fields(raw)
-        || websocket_function_call_output_item_event_invalid_required_fields(raw)
-        || websocket_function_call_output_payload_item_event_invalid_required_fields(raw)
-        || websocket_custom_tool_call_output_item_event_invalid_required_fields(raw)
-        || websocket_custom_tool_call_output_payload_item_event_invalid_required_fields(raw)
-        || websocket_tool_search_call_output_item_event_invalid_required_fields(raw)
-        || websocket_tool_search_output_item_event_invalid_required_fields(raw)
-        || websocket_local_shell_call_output_item_event_invalid_required_fields(raw)
-        || websocket_web_search_call_output_item_event_invalid_required_fields(raw)
-        || websocket_image_generation_call_output_item_event_invalid_required_fields(raw)
-        || websocket_compaction_output_item_event_invalid_required_fields(raw)
-        || websocket_reasoning_summary_part_added_missing_summary_index(raw)
 }
 
 /// 从 `response.metadata` 帧中提取 `x-codex-turn-state`。
@@ -979,193 +961,33 @@ fn websocket_transport_mode_name(request: &CodexResponsesRequest) -> &'static st
 }
 
 /// 生成 Responses WebSocket `response.create` payload。
+///
+/// payload = `{"type": "response.create"}` 加上原始上游 body 的全部字段
+/// （保持插入顺序，含未知字段），逐字段原样透传。
 pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Value {
-    let mut body = Map::new();
-    insert_value(
-        &mut body,
-        "type",
+    let mut payload = Map::new();
+    payload.insert(
+        "type".to_string(),
         Value::String("response.create".to_string()),
     );
-    insert_value(&mut body, "model", Value::String(request.model.clone()));
-    insert_value(
-        &mut body,
-        "instructions",
-        Value::String(request.instructions.clone()),
-    );
-    insert_value(&mut body, "input", Value::Array(request.input.clone()));
-    insert_value(&mut body, "store", Value::Bool(request.store));
-    insert_value(&mut body, "stream", Value::Bool(request.stream));
-    if let Some(previous_response_id) = &request.previous_response_id {
-        insert_value(
-            &mut body,
-            "previous_response_id",
-            Value::String(previous_response_id.clone()),
-        );
+    for (key, value) in request.body() {
+        payload.insert(key.clone(), value.clone());
     }
-    if let Some(reasoning) = &request.reasoning {
-        insert_value(&mut body, "reasoning", reasoning.clone());
-    }
-    if let Some(tools) = non_empty_tools(request) {
-        insert_value(&mut body, "tools", Value::Array(tools.to_vec()));
-    }
-    insert_value(
-        &mut body,
-        "tool_choice",
-        request
-            .tool_choice
-            .clone()
-            .unwrap_or(Value::String("auto".to_string())),
-    );
-    insert_value(
-        &mut body,
-        "parallel_tool_calls",
-        Value::Bool(request.parallel_tool_calls.unwrap_or(true)),
-    );
-    if let Some(text) = &request.text {
-        insert_value(&mut body, "text", text.clone());
-    }
-    if let Some(service_tier) = &request.service_tier {
-        insert_value(
-            &mut body,
-            "service_tier",
-            Value::String(service_tier.clone()),
-        );
-    }
-    if let Some(prompt_cache_key) = &request.prompt_cache_key {
-        insert_value(
-            &mut body,
-            "prompt_cache_key",
-            Value::String(prompt_cache_key.clone()),
-        );
-    }
-    if let Some(include) = non_empty_include(request) {
-        insert_value(
-            &mut body,
-            "include",
-            include
-                .iter()
-                .cloned()
-                .map(Value::String)
-                .collect::<Vec<_>>()
-                .into(),
-        );
-    }
-    if let Some(client_metadata) = &request.client_metadata {
-        insert_value(&mut body, "client_metadata", client_metadata.clone());
-    }
-    Value::Object(body)
+    Value::Object(payload)
 }
 
 /// 生成 Responses WebSocket `response.create` 文本帧内容。
 pub fn websocket_response_create_payload_text(
     request: &CodexResponsesRequest,
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&OrderedResponseCreatePayload(request))
-}
-
-struct OrderedResponseCreatePayload<'a>(&'a CodexResponsesRequest);
-
-impl Serialize for OrderedResponseCreatePayload<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let request = self.0;
-        let mut map = serializer.serialize_map(Some(websocket_payload_keys(request).len()))?;
-        map.serialize_entry("type", "response.create")?;
-        map.serialize_entry("model", &request.model)?;
-        map.serialize_entry("instructions", &request.instructions)?;
-        map.serialize_entry("input", &request.input)?;
-        map.serialize_entry("store", &request.store)?;
-        map.serialize_entry("stream", &request.stream)?;
-        if let Some(previous_response_id) = &request.previous_response_id {
-            map.serialize_entry("previous_response_id", previous_response_id)?;
-        }
-        if let Some(reasoning) = &request.reasoning {
-            map.serialize_entry("reasoning", reasoning)?;
-        }
-        if let Some(tools) = non_empty_tools(request) {
-            map.serialize_entry("tools", tools)?;
-        }
-        if let Some(tool_choice) = &request.tool_choice {
-            map.serialize_entry("tool_choice", tool_choice)?;
-        } else {
-            map.serialize_entry("tool_choice", "auto")?;
-        }
-        map.serialize_entry(
-            "parallel_tool_calls",
-            &request.parallel_tool_calls.unwrap_or(true),
-        )?;
-        if let Some(text) = &request.text {
-            map.serialize_entry("text", text)?;
-        }
-        if let Some(service_tier) = &request.service_tier {
-            map.serialize_entry("service_tier", service_tier)?;
-        }
-        if let Some(prompt_cache_key) = &request.prompt_cache_key {
-            map.serialize_entry("prompt_cache_key", prompt_cache_key)?;
-        }
-        if let Some(include) = non_empty_include(request) {
-            map.serialize_entry("include", include)?;
-        }
-        if let Some(client_metadata) = &request.client_metadata {
-            map.serialize_entry("client_metadata", client_metadata)?;
-        }
-        map.end()
-    }
-}
-
-fn insert_value(body: &mut Map<String, Value>, key: &str, value: Value) {
-    body.insert(key.to_string(), value);
+    serde_json::to_string(&websocket_response_create_payload(request))
 }
 
 fn websocket_payload_keys(request: &CodexResponsesRequest) -> Vec<String> {
-    let mut keys = vec![
-        "type".to_string(),
-        "model".to_string(),
-        "instructions".to_string(),
-        "input".to_string(),
-        "store".to_string(),
-        "stream".to_string(),
-    ];
-    if request.previous_response_id.is_some() {
-        keys.push("previous_response_id".to_string());
-    }
-    if request.reasoning.is_some() {
-        keys.push("reasoning".to_string());
-    }
-    if non_empty_tools(request).is_some() {
-        keys.push("tools".to_string());
-    }
-    keys.push("tool_choice".to_string());
-    keys.push("parallel_tool_calls".to_string());
-    if request.text.is_some() {
-        keys.push("text".to_string());
-    }
-    if request.service_tier.is_some() {
-        keys.push("service_tier".to_string());
-    }
-    if request.prompt_cache_key.is_some() {
-        keys.push("prompt_cache_key".to_string());
-    }
-    if non_empty_include(request).is_some() {
-        keys.push("include".to_string());
-    }
-    if request.client_metadata.is_some() {
-        keys.push("client_metadata".to_string());
-    }
+    let mut keys = Vec::with_capacity(request.body().len() + 1);
+    keys.push("type".to_string());
+    keys.extend(request.body().keys().cloned());
     keys
-}
-
-fn non_empty_tools(request: &CodexResponsesRequest) -> Option<&[Value]> {
-    request.tools.as_deref().filter(|tools| !tools.is_empty())
-}
-
-fn non_empty_include(request: &CodexResponsesRequest) -> Option<&[String]> {
-    request
-        .include
-        .as_deref()
-        .filter(|include| !include.is_empty())
 }
 
 fn redact_payload_body(body: Value) -> Value {

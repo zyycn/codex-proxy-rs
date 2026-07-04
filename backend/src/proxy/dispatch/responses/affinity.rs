@@ -26,8 +26,7 @@ pub(super) async fn record_response_affinity(
     usage: Option<TokenUsage>,
 ) {
     let Some(conversation_id) = request
-        .prompt_cache_key
-        .as_deref()
+        .prompt_cache_key()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
@@ -52,7 +51,7 @@ pub(super) async fn record_response_affinity(
         turn_state: turn_state
             .filter(|value| !value.trim().is_empty())
             .or_else(|| request.turn_state.clone()),
-        instructions_hash: Some(hash_instructions(Some(&request.instructions))),
+        instructions_hash: Some(hash_instructions(Some(request.instructions()))),
         input_tokens: usage.map(|usage| usage.input_tokens),
         function_call_ids: metadata.function_call_ids,
         variant_hash: Some(variant_hash.clone()),
@@ -86,11 +85,7 @@ pub(super) async fn evict_reasoning_replay(
     account_id: &str,
 ) {
     let variant_hash = compute_variant_hash(request);
-    let conversation_id = request
-        .prompt_cache_key
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
+    let conversation_id = request.prompt_cache_key().unwrap_or("").to_string();
     reasoning_replay.lock().await.evict_by_identity(
         account_id,
         &conversation_id,

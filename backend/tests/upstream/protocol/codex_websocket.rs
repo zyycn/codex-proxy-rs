@@ -10,25 +10,19 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
             "content": "private prompt",
         })],
     );
-    request.previous_response_id = Some("resp_secret".to_string());
-    request.reasoning = Some(json!({"effort": "medium"}));
-    request.tools = Some(vec![json!({
-        "type": "function",
-        "name": "private_tool",
-        "description": "private schema",
-    })]);
-    request.text = Some(json!({"format": {"type": "text"}}));
-    request.service_tier = Some("flex".to_string());
-    request.prompt_cache_key = Some("cache-secret".to_string());
-    request.generate = Some(false);
-    request.include = Some(vec!["reasoning.encrypted_content".to_string()]);
-    request.client_metadata = Some(json!({
+    request.set_previous_response_id(Some("resp_secret".to_string()));
+    request.set_reasoning(Some(json!({"effort": "medium"})));
+    request.set_service_tier(Some("flex".to_string()));
+    request.set_prompt_cache_key(Some("cache-secret".to_string()));
+    request.set_client_metadata(Some(json!({
         "thread_id": "thread-secret",
         "safe": "value",
-    }));
+    })));
 
     let snapshot = websocket_payload_audit_snapshot(&request);
 
+    // 透明代理：payload key 顺序即 `type` 前置到原始 body 的插入顺序，
+    // 不再重排为固定 canonical 顺序，也不注入 tool_choice/parallel_tool_calls 等默认字段。
     assert_eq!(
         snapshot.top_level_keys,
         vec![
@@ -36,17 +30,12 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
             "model",
             "instructions",
             "input",
-            "store",
             "stream",
+            "store",
             "previous_response_id",
             "reasoning",
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "text",
             "service_tier",
             "prompt_cache_key",
-            "include",
             "client_metadata",
         ]
     );
@@ -58,7 +47,6 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
     assert_eq!(snapshot.body["previous_response_id"], "<redacted>");
     assert_eq!(snapshot.body["prompt_cache_key"], "<redacted>");
     assert_eq!(snapshot.body["client_metadata"], "<redacted>");
-    assert_eq!(snapshot.body["tools"], "<redacted>");
 }
 
 #[test]
@@ -71,12 +59,11 @@ fn codex_websocket_response_create_payload_text_should_preserve_canonical_field_
             "content": "private capture prompt",
         })],
     );
-    request.prompt_cache_key = Some("session-1".to_string());
-    request.generate = Some(false);
-    request.client_metadata = Some(json!({
+    request.set_prompt_cache_key(Some("session-1".to_string()));
+    request.set_client_metadata(Some(json!({
         "thread_id": "capture-thread-secret",
         "safe": "capture",
-    }));
+    })));
 
     let payload =
         codex_proxy_rs::upstream::protocol::websocket::websocket_response_create_payload_text(
@@ -84,6 +71,8 @@ fn codex_websocket_response_create_payload_text_should_preserve_canonical_field_
         )
         .expect("payload should serialize");
 
+    // 透明代理：payload 即 `type` 前置到原始 body 的插入顺序，字段原样透传，
+    // 不注入 tool_choice/parallel_tool_calls 默认值。
     assert_substrings_appear_in_order(
         &payload,
         &[
@@ -91,10 +80,8 @@ fn codex_websocket_response_create_payload_text_should_preserve_canonical_field_
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"store\":false",
             "\"stream\":true",
-            "\"tool_choice\":\"auto\"",
-            "\"parallel_tool_calls\":true",
+            "\"store\":false",
             "\"prompt_cache_key\":\"session-1\"",
             "\"client_metadata\":",
         ],
@@ -128,7 +115,7 @@ fn codex_websocket_audit_artifact_should_record_transport_opening_and_payload() 
         })],
     );
     request.force_http_sse = false;
-    request.previous_response_id = Some("resp_secret".to_string());
+    request.set_previous_response_id(Some("resp_secret".to_string()));
     let opening = OpeningAuditSnapshot {
         request_line: "GET /backend-api/codex/responses HTTP/1.1".to_string(),
         header_order: vec!["Host".to_string(), "authorization".to_string()],
@@ -906,7 +893,9 @@ fn codex_websocket_reasoning_summary_part_should_require_summary_index() {
 }
 
 #[test]
-fn codex_websocket_event_to_sse_frame_should_skip_invalid_json_and_shape_mismatches() {
+fn codex_websocket_event_to_sse_frame_should_forward_typed_events_without_schema_filtering() {
+    // 透明代理：WS 输出侧不再按官方 schema 校验丢弃事件。只有无法确定 type 的帧
+    // （非 JSON / 缺 type）和内部事件（codex.rate_limits）会被丢弃，其余原样转发。
     let invalid_delta = json!({
         "type": "response.output_text.delta",
         "delta": 42
@@ -918,7 +907,17 @@ fn codex_websocket_event_to_sse_frame_should_skip_invalid_json_and_shape_mismatc
     })
     .to_string();
 
+    // 无 type / 非 JSON：无法编码，丢弃。
     assert!(websocket_event_to_sse_frame("not-json-from-upstream").is_none());
-    assert!(websocket_event_to_sse_frame(&invalid_delta).is_none());
-    assert!(websocket_event_to_sse_frame(&non_object_item).is_none());
+    // 内部事件：transport 剥离，丢弃。
+    assert!(websocket_event_to_sse_frame(r#"{"type":"codex.rate_limits"}"#).is_none());
+    // 有 type 的畸形事件：原样透传，不再做 schema 过滤。
+    let invalid_delta_frame =
+        websocket_event_to_sse_frame(&invalid_delta).expect("typed event should be forwarded");
+    assert!(invalid_delta_frame.contains("event: response.output_text.delta"));
+    assert!(invalid_delta_frame.contains(&invalid_delta));
+    let non_object_item_frame =
+        websocket_event_to_sse_frame(&non_object_item).expect("typed event should be forwarded");
+    assert!(non_object_item_frame.contains("event: response.output_item.done"));
+    assert!(non_object_item_frame.contains(&non_object_item));
 }

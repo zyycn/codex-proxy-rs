@@ -48,8 +48,8 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first = backend
         .create_response(
@@ -108,8 +108,8 @@ async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_acc
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first = backend
         .create_response_with_pool_account_started_at(
@@ -396,8 +396,8 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_during_maintenan
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool-keepalive".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-keepalive".to_string()));
 
     let first = backend
         .create_response(
@@ -645,8 +645,8 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool-background".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-background".to_string()));
 
     let first = backend
         .create_response(
@@ -750,8 +750,8 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool-evict".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-evict".to_string()));
 
     let first = backend
         .create_response(
@@ -854,8 +854,8 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool-shutdown".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-shutdown".to_string()));
 
     let first = backend
         .create_response(
@@ -958,8 +958,8 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool-liveness".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-liveness".to_string()));
 
     let first = backend
         .create_response(
@@ -1053,8 +1053,8 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_upstream_err
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some("conversation-pool".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool".to_string()));
 
     let first_error = backend
         .create_response(

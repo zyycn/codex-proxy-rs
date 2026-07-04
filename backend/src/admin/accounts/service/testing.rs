@@ -220,11 +220,10 @@ fn stored_account_to_model_refresh_account(stored: StoredAccount) -> Account {
 }
 
 fn test_responses_request(model: String) -> CodexResponsesRequest {
-    CodexResponsesRequest {
+    let mut request = CodexResponsesRequest::new_http_sse(
         model,
-        instructions: "You are checking whether this Codex account can answer. Reply with ok."
-            .to_string(),
-        input: vec![json!({
+        "You are checking whether this Codex account can answer. Reply with ok.",
+        vec![json!({
             "role": "user",
             "content": [
                 {
@@ -233,35 +232,9 @@ fn test_responses_request(model: String) -> CodexResponsesRequest {
                 }
             ]
         })],
-        stream: true,
-        store: false,
-        reasoning: None,
-        tools: None,
-        tool_choice: None,
-        parallel_tool_calls: None,
-        text: None,
-        generate: None,
-        tuple_schema: None,
-        service_tier: None,
-        previous_response_id: None,
-        prompt_cache_key: None,
-        explicit_prompt_cache_key: false,
-        client_conversation_id: None,
-        variant_identity: None,
-        include: None,
-        client_metadata: None,
-        client_ip: None,
-        client_user_agent: None,
-        use_websocket: false,
-        force_http_sse: true,
-        turn_state: None,
-        turn_metadata: None,
-        beta_features: None,
-        version: None,
-        include_timing_metrics: None,
-        codex_window_id: None,
-        parent_thread_id: None,
-    }
+    );
+    request.force_http_sse = true;
+    request
 }
 
 async fn process_upstream_test_stream(

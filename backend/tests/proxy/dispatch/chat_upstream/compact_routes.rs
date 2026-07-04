@@ -132,7 +132,7 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
                 .header("x-request-id", "req_compact_success_log")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-5.5-fast",
+                        "model": "gpt-5.5",
                         "instructions": "compress the session",
                         "input": [
                             {"role": "user", "content": "hello"},
@@ -160,7 +160,7 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
                         "stream": true,
                         "use_websocket": false,
                         "store": true,
-                        "prompt_cache_key": "must_not_forward"
+                        "prompt_cache_key": "session-seed"
                     })
                     .to_string(),
                 ))
@@ -193,18 +193,20 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["instructions"], "compress the session");
     assert_eq!(upstream_body["parallel_tool_calls"], false);
+    // compact 原样透传 reasoning，含未知键。
     assert_eq!(
         upstream_body["reasoning"],
-        json!({"effort": "high", "summary": "auto"})
+        json!({"effort": "high", "summary": "auto", "extra": "drop"})
     );
     assert_eq!(
         upstream_body["tools"],
         json!([{"type": "function", "name": "lookup"}])
     );
     assert_eq!(upstream_body["text"]["format"]["type"], "json_schema");
+    // compact 只剥离 stream（端点不支持流式）；store/prompt_cache_key 等业务字段原样透传。
     assert!(upstream_body.get("stream").is_none());
-    assert!(upstream_body.get("store").is_none());
-    assert!(upstream_body.get("prompt_cache_key").is_none());
+    assert_eq!(upstream_body["store"], true);
+    assert_eq!(upstream_body["prompt_cache_key"], "session-seed");
     assert_eq!(upstream_body["input"].as_array().unwrap().len(), 4);
     assert_eq!(upstream_body["input"][1]["ignored"], "drop");
     assert_eq!(
