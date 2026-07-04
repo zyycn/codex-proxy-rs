@@ -6,14 +6,12 @@ use std::{
 use axum::{
     body::Body,
     extract::{Path as AxumPath, State},
-    http::{header, StatusCode, Uri},
+    http::{header, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
 use serde_json::json;
-
-use super::headers::{apply_static_headers, content_type_for_path};
 
 #[derive(Clone)]
 struct AssetState {
@@ -33,7 +31,7 @@ pub fn spa_router(dist_dir: impl AsRef<Path>) -> Router {
 }
 
 async fn serve_index(State(state): State<AssetState>) -> Response {
-    serve_file(&state.dist_dir.join("index.html"), "/").await
+    serve_file(&state.dist_dir.join("index.html")).await
 }
 
 async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Response {
@@ -49,7 +47,7 @@ async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Respon
             .into_response();
     }
 
-    serve_file(&state.dist_dir.join("index.html"), "/").await
+    serve_file(&state.dist_dir.join("index.html")).await
 }
 
 fn is_api_path(path: &str) -> bool {
@@ -63,29 +61,37 @@ async fn serve_asset(
     let Some(relative_path) = safe_relative_path(&path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let request_path = format!("/assets/{path}");
-
-    serve_file(
-        &state.dist_dir.join("assets").join(relative_path),
-        &request_path,
-    )
-    .await
+    serve_file(&state.dist_dir.join("assets").join(relative_path)).await
 }
 
-async fn serve_file(path: &Path, request_path: &str) -> Response {
+async fn serve_file(path: &Path) -> Response {
     let Ok(bytes) = tokio::fs::read(path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     let mut response = Response::new(Body::from(bytes));
-    let path_for_content_type = path.to_string_lossy();
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
-        content_type_for_path(&path_for_content_type),
+        content_type_for_path(&path.to_string_lossy()),
     );
-    apply_static_headers(headers, request_path);
     response
+}
+
+fn content_type_for_path(path: &str) -> HeaderValue {
+    if path.ends_with(".html") || path == "/" {
+        HeaderValue::from_static("text/html; charset=utf-8")
+    } else if path.ends_with(".js") {
+        HeaderValue::from_static("text/javascript; charset=utf-8")
+    } else if path.ends_with(".css") {
+        HeaderValue::from_static("text/css; charset=utf-8")
+    } else if path.ends_with(".json") {
+        HeaderValue::from_static("application/json")
+    } else if path.ends_with(".svg") {
+        HeaderValue::from_static("image/svg+xml")
+    } else {
+        HeaderValue::from_static("application/octet-stream")
+    }
 }
 
 fn safe_relative_path(path: &str) -> Option<PathBuf> {

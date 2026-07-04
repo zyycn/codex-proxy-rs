@@ -1,4 +1,3 @@
-//! 前端静态资源模块 —— SPA 路由、安全头与缓存策略。
+//! 前端静态资源模块 —— SPA 路由与构建产物服务。
 
 pub mod assets;
-pub mod headers;
