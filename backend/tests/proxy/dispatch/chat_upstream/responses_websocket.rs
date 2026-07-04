@@ -134,6 +134,92 @@ async fn responses_websocket_stream_should_synthesize_response_failed_when_close
 }
 
 #[tokio::test]
+async fn responses_websocket_stream_first_error_429_should_retry_fallback_account() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket =
+            accept_websocket_with_authorization(first_stream, "Bearer access-primary").await;
+        let first_payload = send_websocket_response_and_capture_payload(
+            &mut first_websocket,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "The usage limit has been reached",
+                    "retry_after_seconds": 77
+                },
+                "status_code": 429
+            })
+            .to_string(),
+        )
+        .await;
+        first_websocket.close(None).await.unwrap();
+
+        let second_payload = accept_successful_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-secondary",
+            "resp_after_ws_stream_rate_limit",
+        )
+        .await;
+        (first_payload, second_payload)
+    });
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [],
+                "stream": true,
+                "use_websocket": true
+            }),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = response_text(response).await;
+    let (first_payload, second_payload) = upstream.await.unwrap();
+    let primary_quota_state: (i64, Option<String>) = sqlx::query_as(
+        "select quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_primary")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let primary_usage: (i64,) =
+        sqlx::query_as("select request_count from account_usage where account_id = ?")
+            .bind("acct_primary")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let secondary_usage: (i64,) =
+        sqlx::query_as("select request_count from account_usage where account_id = ?")
+            .bind("acct_secondary")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/event-stream"));
+    assert!(body.contains("resp_after_ws_stream_rate_limit"));
+    assert_eq!(first_payload["type"], "response.create");
+    assert_eq!(second_payload["type"], "response.create");
+    assert_eq!(primary_quota_state.0, 1);
+    assert!(primary_quota_state.1.is_some());
+    assert_eq!(primary_usage.0, 1);
+    assert_eq!(secondary_usage.0, 1);
+}
+
+#[tokio::test]
 async fn responses_websocket_should_reuse_connection_for_recorded_conversation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

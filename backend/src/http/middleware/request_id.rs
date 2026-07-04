@@ -14,14 +14,8 @@ use uuid::Uuid;
 /// 请求 ID 头。
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 const MAX_REQUEST_ID_LEN: usize = 128;
-const CF_CONNECTING_IP_HEADER: &str = "cf-connecting-ip";
 const REAL_IP_HEADER: &str = "x-real-ip";
 const X_FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
-const UNTRUSTED_CLIENT_IP_HEADERS: &[&str] = &[
-    CF_CONNECTING_IP_HEADER,
-    REAL_IP_HEADER,
-    X_FORWARDED_FOR_HEADER,
-];
 
 /// 可信反向代理配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -77,6 +71,17 @@ impl RequestId {
     }
 }
 
+/// 由连接来源和可信代理链解析出的客户端 IP。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIp(String);
+
+impl ClientIp {
+    /// 返回 IP 字符串。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 fn valid_request_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_REQUEST_ID_LEN
@@ -117,10 +122,10 @@ async fn run_with_request_id(mut request: Request, next: Next) -> Response {
 }
 
 fn attach_request_context(trusted_proxies: &TrustedProxyConfig, request: &mut Request) {
-    attach_real_ip_from_connection(trusted_proxies, request);
+    attach_client_ip_from_connection(trusted_proxies, request);
 }
 
-fn attach_real_ip_from_connection(trusted_proxies: &TrustedProxyConfig, request: &mut Request) {
+fn attach_client_ip_from_connection(trusted_proxies: &TrustedProxyConfig, request: &mut Request) {
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -128,47 +133,45 @@ fn attach_real_ip_from_connection(trusted_proxies: &TrustedProxyConfig, request:
     let client_ip =
         peer_ip.map(|peer_ip| client_ip_from_peer(peer_ip, request.headers(), trusted_proxies));
 
-    for header in UNTRUSTED_CLIENT_IP_HEADERS {
-        request.headers_mut().remove(*header);
-    }
-
     let Some(client_ip) = client_ip else {
         return;
     };
-    if let Ok(value) = HeaderValue::from_str(&client_ip.to_string()) {
-        request.headers_mut().insert(REAL_IP_HEADER, value);
-    }
+    request.extensions_mut().insert(ClientIp(client_ip));
 }
 
 fn client_ip_from_peer(
     peer_ip: IpAddr,
     headers: &HeaderMap,
     trusted_proxies: &TrustedProxyConfig,
-) -> IpAddr {
+) -> String {
     if trusted_proxies.is_trusted(peer_ip) {
-        trusted_forwarded_client_ip(headers).unwrap_or(peer_ip)
+        trusted_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string())
     } else {
-        peer_ip
+        peer_ip.to_string()
     }
 }
 
-fn trusted_forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    header_ip(headers, CF_CONNECTING_IP_HEADER)
-        .or_else(|| first_forwarded_for_ip(headers))
-        .or_else(|| header_ip(headers, REAL_IP_HEADER))
+fn trusted_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
+    first_forwarded_for_value(headers).or_else(|| header_string(headers, REAL_IP_HEADER))
 }
 
-fn header_ip(headers: &HeaderMap, name: &str) -> Option<IpAddr> {
-    parse_ip(headers.get(name)?.to_str().ok()?)
+fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
-fn first_forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    let value = headers.get(X_FORWARDED_FOR_HEADER)?.to_str().ok()?;
-    parse_ip(value.split(',').next()?)
-}
-
-fn parse_ip(value: &str) -> Option<IpAddr> {
-    value.trim().parse().ok()
+fn first_forwarded_for_value(headers: &HeaderMap) -> Option<String> {
+    let value = header_string(headers, X_FORWARDED_FOR_HEADER)?;
+    value
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn parse_trusted_proxy_entry(entry: &str) -> Result<IpNet, TrustedProxyConfigError> {

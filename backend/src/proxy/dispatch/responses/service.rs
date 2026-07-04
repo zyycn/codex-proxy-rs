@@ -1231,6 +1231,140 @@ impl ResponseDispatchService {
                             history_recovery_used = true;
                             continue;
                         }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_rate_limit_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            rate_limited_count += 1;
+                            last_rate_limit_error = Some(upstream_error_body(&error));
+                            last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                            let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
+                            self.account_pool
+                                .mark_quota_limited_until(&release_account_id, cooldown_until)
+                                .await;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_quota_exhausted_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            quota_exhausted_count += 1;
+                            last_quota_error = Some(upstream_error_body(&error));
+                            last_exhausted_account_class =
+                                Some(ExhaustedAccountClass::QuotaExhausted);
+                            self.account_pool
+                                .set_status(&release_account_id, AccountStatus::QuotaExhausted)
+                                .await;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_auth_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            let upstream_error = upstream_error_body(&error);
+                            let account_status = auth_failure_account_status(&error);
+                            match account_status {
+                                AccountStatus::Disabled => {
+                                    disabled_count += 1;
+                                    last_disabled_auth_error = Some(upstream_error);
+                                    last_exhausted_account_class =
+                                        Some(ExhaustedAccountClass::Disabled);
+                                }
+                                AccountStatus::Banned => {
+                                    banned_count += 1;
+                                    last_banned_status_code =
+                                        Some(upstream_error_http_status(&error));
+                                    last_banned_auth_error = Some(upstream_error);
+                                    last_exhausted_account_class =
+                                        Some(ExhaustedAccountClass::Banned);
+                                }
+                                _ => {
+                                    expired_count += 1;
+                                    last_auth_error = Some(upstream_error);
+                                    last_exhausted_account_class =
+                                        Some(ExhaustedAccountClass::Expired);
+                                }
+                            }
+                            self.account_pool
+                                .set_status(&release_account_id, account_status)
+                                .await;
+                            trigger_refresh_after_auth_failure(
+                                &self.token_refresh,
+                                &release_account_id,
+                                account_status,
+                            );
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_cloudflare_challenge_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            cloudflare_challenge_count += 1;
+                            last_cloudflare_challenge_error =
+                                Some(cloudflare_challenge_error_message().to_string());
+                            last_exhausted_account_class =
+                                Some(ExhaustedAccountClass::CloudflareChallenge);
+                            self.cloudflare
+                                .apply_challenge(self.account_pool.as_ref(), &release_account_id)
+                                .await;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_cloudflare_path_block_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            cloudflare_path_block_count += 1;
+                            last_cloudflare_path_block_error =
+                                Some(cloudflare_path_block_error_message().to_string());
+                            last_exhausted_account_class =
+                                Some(ExhaustedAccountClass::CloudflarePathBlocked);
+                            self.cloudflare
+                                .apply_path_block(self.account_pool.as_ref(), &release_account_id)
+                                .await;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_model_unsupported_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            let upstream_error = upstream_error_body(&error);
+                            if model_unsupported_retry_used {
+                                return_stream_dispatch_error!(
+                                    ResponseDispatchError::ModelUnsupported {
+                                        count: model_unsupported_count + 1,
+                                        upstream_error,
+                                    },
+                                    account_id: Some(&release_account_id),
+                                    transport: Some(backend_transport_name(transport))
+                                );
+                            }
+                            model_unsupported_count += 1;
+                            last_model_unsupported_error = Some(upstream_error);
+                            last_exhausted_account_class =
+                                Some(ExhaustedAccountClass::ModelUnsupported);
+                            model_unsupported_retry_used = true;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
+                        Err(ResponseDispatchError::Upstream(error))
+                            if is_banned_upstream_error(&error) =>
+                        {
+                            self.account_pool.release(&release_account_id).await;
+                            banned_count += 1;
+                            last_banned_status_code = Some(upstream_error_http_status(&error));
+                            last_banned_auth_error = Some(upstream_error_body(&error));
+                            last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
+                            self.account_pool
+                                .set_status(&release_account_id, AccountStatus::Banned)
+                                .await;
+                            excluded_account_ids.push(release_account_id);
+                            continue;
+                        }
                         Err(error) => {
                             self.account_pool.release(&release_account_id).await;
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {

@@ -210,6 +210,130 @@ async fn runtime_account_pool_should_persist_expired_status_when_jwt_expiry_is_d
     assert_eq!(status.0, "expired");
 }
 
+#[tokio::test]
+async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_expires() {
+    let now = fixed_time();
+    let (pool, _dir) =
+        crate::support::sqlite::init_test_db("runtime-pool-quota-window-reset.sqlite").await;
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone());
+    store
+        .insert(codex_proxy_rs::upstream::accounts::store::NewAccount {
+            id: "acct_quota_reset".to_string(),
+            email: None,
+            account_id: Some("chatgpt-quota-reset".to_string()),
+            user_id: None,
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: secrecy::SecretString::new("access-token".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: Some(now + Duration::hours(1)),
+            status: AccountStatus::QuotaExhausted,
+            added_at: None,
+        })
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        update accounts
+        set
+          quota_limit_reached = 1,
+          quota_verify_required = 0,
+          quota_cooldown_until = ?,
+          cloudflare_cooldown_until = ?
+        where id = ?
+        "#,
+    )
+    .bind((now - Duration::seconds(1)).to_rfc3339())
+    .bind((now - Duration::seconds(1)).to_rfc3339())
+    .bind("acct_quota_reset")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        insert into account_usage (
+          account_id,
+          request_count,
+          window_request_count,
+          window_input_tokens,
+          window_output_tokens,
+          window_cached_tokens,
+          window_started_at,
+          window_reset_at,
+          limit_window_seconds
+        ) values (?, 9, 7, 11, 13, 17, ?, ?, 60)
+        "#,
+    )
+    .bind("acct_quota_reset")
+    .bind((now - Duration::seconds(120)).to_rfc3339())
+    .bind((now - Duration::seconds(1)).to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let runtime_pool = codex_proxy_rs::upstream::accounts::pool::RuntimeAccountPoolService::new(
+        std::sync::Arc::new(store),
+        AccountPoolOptions::default(),
+        0,
+    );
+    runtime_pool.restore_from_repository().await.unwrap();
+
+    let acquired = runtime_pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .await
+        .unwrap();
+    let stored: (
+        String,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<i64>,
+    ) = sqlx::query_as(
+        r#"
+        select
+          a.status,
+          a.quota_limit_reached,
+          a.quota_verify_required,
+          a.quota_cooldown_until,
+          a.cloudflare_cooldown_until,
+          au.window_request_count,
+          au.window_input_tokens,
+          au.window_output_tokens,
+          au.window_cached_tokens,
+          au.window_reset_at,
+          au.limit_window_seconds
+        from accounts a
+        left join account_usage au on au.account_id = a.id
+        where a.id = ?
+        "#,
+    )
+    .bind("acct_quota_reset")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let persisted_reset_at = stored
+        .9
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+
+    assert_eq!(acquired.account.id, "acct_quota_reset");
+    assert!(acquired.account.quota_verify_required);
+    assert_eq!(stored.0, "active");
+    assert_eq!(stored.1, 0);
+    assert_eq!(stored.2, 1);
+    assert!(stored.3.is_none());
+    assert!(stored.4.is_none());
+    assert_eq!((stored.5, stored.6, stored.7, stored.8), (0, 0, 0, 0));
+    assert!(persisted_reset_at.is_some_and(|reset_at| reset_at > now));
+    assert_eq!(stored.10, Some(60));
+}
+
 #[test]
 fn account_pool_should_prefer_configured_tier_priority() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {

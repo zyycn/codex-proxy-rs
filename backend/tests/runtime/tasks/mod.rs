@@ -97,6 +97,14 @@ impl AccountStore for FakeAccountStore {
         Ok(false)
     }
 
+    async fn sync_runtime_account_state(
+        &self,
+        _account: &Account,
+        _sync_usage_window: bool,
+    ) -> AccountStoreResult<bool> {
+        Ok(false)
+    }
+
     async fn sync_rate_limit_window(
         &self,
         _account_id: &str,

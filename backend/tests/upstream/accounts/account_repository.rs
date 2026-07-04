@@ -519,6 +519,99 @@ async fn account_repository_should_map_quota_snapshot_to_account_status() {
 }
 
 #[tokio::test]
+async fn account_repository_runtime_state_sync_should_not_clear_newer_future_quota_cooldown() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 42).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    let future_cooldown = Utc::now() + Duration::hours(1);
+    sqlx::query(
+        "update accounts set quota_limit_reached = 1, quota_verify_required = 0, quota_cooldown_until = ? where id = ?",
+    )
+    .bind(future_cooldown.to_rfc3339())
+    .bind("acct_a")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut stale_account = AccountStore::list_pool_accounts(&repo)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|account| account.id == "acct_a")
+        .unwrap();
+    stale_account.quota_limit_reached = false;
+    stale_account.quota_verify_required = true;
+    stale_account.quota_cooldown_until = None;
+
+    repo.sync_runtime_account_state(&stale_account, false)
+        .await
+        .unwrap();
+    let stored: (i64, i64, Option<String>) = sqlx::query_as(
+        "select quota_limit_reached, quota_verify_required, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(stored.0, 1);
+    assert_eq!(stored.1, 0);
+    assert_eq!(stored.2, Some(future_cooldown.to_rfc3339()));
+}
+
+#[tokio::test]
+async fn account_repository_runtime_state_sync_should_not_regress_newer_usage_window() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 43).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    let now = Utc::now();
+    let future_reset = now + Duration::hours(1);
+    let stale_reset = now + Duration::minutes(1);
+    sqlx::query(
+        r#"
+        insert into account_usage (
+          account_id,
+          window_request_count,
+          window_input_tokens,
+          window_reset_at,
+          limit_window_seconds
+        ) values (?, 5, 17, ?, 3600)
+        "#,
+    )
+    .bind("acct_a")
+    .bind(future_reset.to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut stale_account = AccountStore::list_pool_accounts(&repo)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|account| account.id == "acct_a")
+        .unwrap();
+    stale_account.window_request_count = 0;
+    stale_account.window_input_tokens = 0;
+    stale_account.window_reset_at = Some(stale_reset);
+    stale_account.window_started_at = Some(now);
+    stale_account.limit_window_seconds = Some(60);
+
+    repo.sync_runtime_account_state(&stale_account, true)
+        .await
+        .unwrap();
+    let stored: (i64, i64, Option<String>, Option<i64>) = sqlx::query_as(
+        "select window_request_count, window_input_tokens, window_reset_at, limit_window_seconds from account_usage where account_id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(stored.0, 5);
+    assert_eq!(stored.1, 17);
+    assert_eq!(stored.2, Some(future_reset.to_rfc3339()));
+    assert_eq!(stored.3, Some(3600));
+}
+
+#[tokio::test]
 async fn account_repository_should_not_override_disabled_status_from_quota_snapshot() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 38).await;
     let repo = SqliteAccountStore::new(pool.clone());

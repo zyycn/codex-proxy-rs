@@ -9,7 +9,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::net::IpAddr;
 
 use crate::{
     http::middleware::request_id::RequestId,
@@ -612,7 +611,6 @@ async fn handle_compact_responses(
         }
     };
     let mut compact_request = translate_response_to_compact(openai_request);
-    compact_request.client_ip = client_ip_from_headers(&headers);
     compact_request.client_user_agent = user_agent_from_headers(&headers);
 
     match state
@@ -694,62 +692,11 @@ fn fill_string_from_header(field: &mut Option<String>, headers: &HeaderMap, name
 }
 
 pub(crate) fn attach_client_context(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
-    request.client_ip = client_ip_from_headers(headers);
     request.client_user_agent = user_agent_from_headers(headers);
 }
 
 pub(crate) fn user_agent_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "user-agent")
-}
-
-pub(crate) fn client_ip_from_headers(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, "cf-connecting-ip")
-        .or_else(|| header_string(headers, "x-real-ip"))
-        .or_else(|| forwarded_client_ip(headers))
-        .and_then(|value| normalize_client_ip(&value))
-}
-
-fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
-    let value = header_string(headers, "x-forwarded-for")?;
-    let parts = value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    parts
-        .iter()
-        .find(|part| !is_private_ip(part))
-        .or_else(|| parts.first())
-        .map(|part| (*part).to_string())
-}
-
-fn normalize_client_ip(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    trimmed
-        .parse::<std::net::SocketAddr>()
-        .map(|addr| addr.ip().to_string())
-        .ok()
-        .or_else(|| Some(trimmed.to_string()))
-}
-
-fn is_private_ip(value: &str) -> bool {
-    let Some(ip) = normalize_client_ip(value).and_then(|value| value.parse::<IpAddr>().ok()) else {
-        return false;
-    };
-
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1])
-        }
-        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
-    }
 }
 
 fn openai_subagent_from_headers(headers: &HeaderMap) -> Option<String> {

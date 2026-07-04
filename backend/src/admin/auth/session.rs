@@ -4,7 +4,7 @@ use axum::{
     extract::{FromRequestParts, State},
     http::{header::SET_COOKIE, request::Parts, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,7 @@ use crate::{
         auth::service::AdminSessionError,
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
+    http::middleware::request_id::ClientIp,
     infra::time::china_rfc3339,
     runtime::state::AppState,
 };
@@ -57,10 +58,10 @@ struct AdminSessionStatusData {
 /// `POST /api/admin/login`
 pub(crate) async fn login(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    client_ip: Option<Extension<ClientIp>>,
     Json(payload): Json<AdminLoginRequest>,
 ) -> Result<Response, AdminError> {
-    let source = admin_login_source(&headers);
+    let source = admin_login_source(optional_client_ip(client_ip));
     let login_result = state
         .services
         .admin_sessions
@@ -191,12 +192,11 @@ fn admin_api_key_header(headers: &HeaderMap) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn admin_login_source(headers: &HeaderMap) -> String {
-    headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown")
-        .to_string()
+fn optional_client_ip(client_ip: Option<Extension<ClientIp>>) -> Option<String> {
+    let Extension(client_ip) = client_ip?;
+    Some(client_ip.as_str().to_string())
+}
+
+fn admin_login_source(fallback_client_ip: Option<String>) -> String {
+    fallback_client_ip.unwrap_or_else(|| "unknown".to_string())
 }
