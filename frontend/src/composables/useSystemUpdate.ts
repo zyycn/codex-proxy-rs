@@ -206,7 +206,18 @@ async function waitForServiceAndReload() {
     }
   }
 
-  window.location.reload()
+  updateError.value = '服务重启后暂不可用，请检查进程是否已被自重启或外部守护进程拉起'
+  restarting.value = false
+  restartCountdown.value = 0
+}
+
+function apiErrorStatus(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('status' in error)) {
+    return 0
+  }
+
+  const status = (error as { status?: unknown }).status
+  return typeof status === 'number' ? status : 0
 }
 
 async function restartNow() {
@@ -214,12 +225,19 @@ async function restartNow() {
 
   restarting.value = true
   restartCountdown.value = 8
+  updateError.value = ''
   clearRestartTimer()
 
   try {
     await restartSystem()
-  } catch {
+  } catch (error) {
     // The connection can drop immediately after the restart request is accepted.
+    if (apiErrorStatus(error) > 0) {
+      restarting.value = false
+      restartCountdown.value = 0
+      updateError.value = error instanceof Error ? error.message : '重启失败'
+      throw error
+    }
   }
 
   restartTimer = window.setInterval(() => {

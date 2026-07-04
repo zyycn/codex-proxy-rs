@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{env, error::Error, time::Duration};
 
 use axum::Router;
 use chrono::Utc;
@@ -15,7 +15,11 @@ use crate::runtime::state::{AppState, RuntimeConfig};
 use crate::runtime::tasks::coordinator::TaskCoordinator;
 use crate::upstream::fingerprint::{Fingerprint, FingerprintRepository};
 
+const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
+
 pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
+    wait_for_scheduled_restart().await;
+
     let config = AppConfig::load()?;
     let host = config.server.host.clone();
     let port = config.server.port;
@@ -115,4 +119,16 @@ fn init_logging(config: &AppConfig) -> Result<Option<LogGuard>, crate::infra::lo
 
     let rotation = RotationConfig::new(&config.logging.directory, config.logging.retention_days);
     Ok(Some(init_tracing(&rotation)?))
+}
+
+async fn wait_for_scheduled_restart() {
+    let Some(delay_ms) = env::var(RESTART_DELAY_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+    else {
+        return;
+    };
+
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }

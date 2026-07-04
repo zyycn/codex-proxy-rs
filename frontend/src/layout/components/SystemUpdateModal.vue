@@ -180,8 +180,14 @@ async function handleUpdate() {
 }
 
 async function handleRestart() {
-  toast.success('正在重启服务')
-  await restartNow()
+  try {
+    await restartNow()
+    if (restarting.value) {
+      toast.success('正在重启服务')
+    }
+  } catch (error: any) {
+    toast.error(error.message || '重启失败')
+  }
 }
 
 watch(open, (visible) => {
