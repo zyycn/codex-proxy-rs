@@ -259,9 +259,6 @@ pub enum RefreshFailure {
     /// 刷新令牌无效或已过期。
     #[error("refresh token is invalid or expired")]
     InvalidGrant,
-    /// 账号配额耗尽。
-    #[error("account quota is exhausted")]
-    QuotaExhausted,
     /// 账号被上游封禁。
     #[error("account is banned")]
     Banned,
@@ -350,7 +347,6 @@ where
 
         match self.client.refresh(refresh_token).await {
             Ok(token_pair) => Ok(apply_token_pair(account, token_pair)),
-            Err(RefreshFailure::QuotaExhausted) => Err(RefreshError::Transport),
             Err(RefreshFailure::RetryableTransport) => Err(RefreshError::RetryableTransport),
             Err(RefreshFailure::Transport) => Err(RefreshError::Transport),
             Err(error) => Ok(apply_refresh_failure(account, error)),
@@ -411,7 +407,6 @@ pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Acco
     let mut updated = account.clone();
     updated.status = match failure {
         RefreshFailure::InvalidGrant => AccountStatus::Expired,
-        RefreshFailure::QuotaExhausted => AccountStatus::QuotaExhausted,
         RefreshFailure::Banned => AccountStatus::Banned,
         RefreshFailure::RetryableTransport => AccountStatus::Active,
         RefreshFailure::Transport => AccountStatus::Active,

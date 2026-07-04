@@ -283,7 +283,7 @@ async fn test_app_state_with_pool_installation_id_and_usage_record_options(
         .initialize_hot_path_state()
         .await
         .expect("hot path state should initialize");
-    AppState { config, services }
+    AppState { services }
 }
 
 async fn test_app_with_account(base_url: String) -> (axum::Router, String, tempfile::TempDir) {

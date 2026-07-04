@@ -48,17 +48,6 @@ pub struct WebSocketAuditArtifact {
     pub opening: Option<OpeningAuditSnapshot>,
     /// 首个 `response.create` payload 快照。
     pub payload: Option<PayloadAuditSnapshot>,
-    /// 失败快照。
-    pub error: Option<WebSocketAuditErrorSnapshot>,
-}
-
-/// WebSocket audit error snapshot.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct WebSocketAuditErrorSnapshot {
-    /// 错误分类。
-    pub classification: String,
-    /// 错误消息。
-    pub message: String,
 }
 
 /// 从 WebSocket 错误帧推导出的上游错误分类。
@@ -978,7 +967,6 @@ pub fn websocket_audit_artifact_from_attempt(
         fallback_allowed: http_sse_fallback_allowed(request),
         opening: Some(opening),
         payload: Some(payload),
-        error: None,
     }
 }
 

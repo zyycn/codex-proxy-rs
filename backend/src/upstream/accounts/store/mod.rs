@@ -21,7 +21,7 @@ mod rows;
 use queries::*;
 use rows::{
     count_account_metadata, get_pool_account, list_pool_accounts, map_account_store_error,
-    metadata_from_row, model_usage_from_row, optional_positive_i64_to_u64, optional_update_value,
+    metadata_from_row, optional_positive_i64_to_u64, optional_update_value,
     push_account_metadata_search, quota_plan_type, quota_snapshot_from_row, sqlite_usage_delta,
     status_to_db, stored_account_from_row, to_page, u64_to_i64_saturating,
 };
@@ -196,27 +196,6 @@ impl AccountMetadataUpdate {
     }
 }
 
-/// 账号模型维度用量记录。
-#[derive(Debug, Clone)]
-pub struct AccountModelUsageRecord {
-    /// 账号 ID。
-    pub account_id: String,
-    /// 模型 ID。
-    pub model: String,
-    /// 历史请求总数。
-    pub request_count: i64,
-    /// 历史错误数。
-    pub error_count: i64,
-    /// 累计输入 token。
-    pub input_tokens: i64,
-    /// 累计输出 token。
-    pub output_tokens: i64,
-    /// 累计缓存 token。
-    pub cached_tokens: i64,
-    /// 最近使用时间。
-    pub last_used_at: Option<DateTime<Utc>>,
-}
-
 /// 账号配额快照。
 #[derive(Debug, Clone)]
 pub struct AccountQuotaSnapshot {
@@ -321,13 +300,6 @@ pub trait AccountStore: Send + Sync + 'static {
 
     /// 读取账号当前配额 JSON。
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>>;
-
-    /// 更新账号当前配额 JSON。
-    async fn update_quota_json(
-        &self,
-        account_id: &str,
-        quota_json: &str,
-    ) -> AccountStoreResult<bool>;
 
     /// 应用已经验证过的账号配额快照。
     async fn apply_quota_snapshot(
@@ -871,14 +843,6 @@ impl SqliteAccountStore {
         Ok(())
     }
 
-    /// 列出模型维度用量。
-    pub async fn list_model_usage(&self) -> SqliteAccountStoreResult<Vec<AccountModelUsageRecord>> {
-        let rows = sqlx::query(LIST_MODEL_USAGE_SQL)
-            .fetch_all(&self.pool)
-            .await?;
-        rows.iter().map(model_usage_from_row).collect()
-    }
-
     /// 读取配额快照列表。
     pub async fn list_quota_snapshots(
         &self,
@@ -1117,16 +1081,6 @@ impl AccountStore for SqliteAccountStore {
 
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>> {
         SqliteAccountStore::get_quota_json(self, account_id)
-            .await
-            .map_err(|error| map_account_store_error(&error))
-    }
-
-    async fn update_quota_json(
-        &self,
-        account_id: &str,
-        quota_json: &str,
-    ) -> AccountStoreResult<bool> {
-        SqliteAccountStore::update_quota_json(self, account_id, quota_json)
             .await
             .map_err(|error| map_account_store_error(&error))
     }

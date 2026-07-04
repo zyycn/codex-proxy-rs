@@ -163,6 +163,35 @@ fn chat_completion_from_codex_sse_should_convert_completed_response() {
 }
 
 #[test]
+fn chat_completion_from_codex_sse_should_include_reasoning_when_requested() {
+    let body = include_str!("../../fixtures/responses/http_sse/chat_reasoning_text_completed.sse");
+
+    let response = codex_proxy_rs::proxy::openai::chat::chat_completion_from_codex_sse(
+        body, "gpt-5.5", true, None,
+    )
+    .expect("conversion should succeed")
+    .expect("completed response");
+
+    assert_eq!(
+        response["choices"][0]["message"]["reasoning_content"],
+        "I considered the context."
+    );
+}
+
+#[test]
+fn chat_completion_from_codex_sse_should_omit_reasoning_when_not_requested() {
+    let body = include_str!("../../fixtures/responses/http_sse/chat_reasoning_text_completed.sse");
+
+    let response = codex_proxy_rs::proxy::openai::chat::chat_completion_from_codex_sse(
+        body, "gpt-5.5", false, None,
+    )
+    .expect("conversion should succeed")
+    .expect("completed response");
+
+    assert!(response["choices"][0]["message"]["reasoning_content"].is_null());
+}
+
+#[test]
 fn chat_completion_from_codex_sse_should_convert_incomplete_response() {
     let body = format!(
         "{}\n",

@@ -192,14 +192,6 @@ impl AccountStore for PlanAccountStore {
         Ok(None)
     }
 
-    async fn update_quota_json(
-        &self,
-        _account_id: &str,
-        _quota_json: &str,
-    ) -> AccountStoreResult<bool> {
-        Ok(false)
-    }
-
     async fn apply_quota_snapshot(
         &self,
         _account_id: &str,

@@ -29,8 +29,8 @@ const billingItems = computed(() => {
   return [
     { label: '服务档位', value: details.serviceTierDisplay, tone: 'info' },
     { label: '倍率', value: details.multiplierDisplay, tone: 'info' },
+    { label: '总费用', value: details.totalCostDisplay, tone: 'success' },
     { label: '原始', value: details.originalCostDisplay, tone: 'default' },
-    { label: '计费', value: details.billedCostDisplay, tone: 'success' },
   ]
 })
 

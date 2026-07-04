@@ -327,19 +327,6 @@ on conflict(account_id, model) do update set
   cached_tokens = cached_tokens + excluded.cached_tokens,
   last_used_at = excluded.last_used_at";
 
-pub(super) const LIST_MODEL_USAGE_SQL: &str = r"
-select
-  account_id,
-  model,
-  request_count,
-  error_count,
-  input_tokens,
-  output_tokens,
-  cached_tokens,
-  last_used_at
-from account_model_usage
-order by account_id asc, request_count desc, last_used_at desc, model asc";
-
 pub(super) const LIST_QUOTA_SNAPSHOTS_SQL: &str = r"
 select
   id,

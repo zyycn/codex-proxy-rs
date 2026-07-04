@@ -46,6 +46,8 @@ const REDACTED_HEADER_VALUE: &str = "<redacted>";
 const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+const WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const WEBSOCKET_STREAM_BUFFER: usize = 16;
 /// WebSocket audit artifact 输出目录环境变量。
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
@@ -110,8 +112,6 @@ pub struct CodexWebSocketExchange {
     pub set_cookie_headers: Vec<String>,
     /// 上游握手响应里的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
-    /// 打开握手响应状态码。
-    pub handshake_status: u16,
     /// 首个有效上游 WebSocket 事件到达代理的耗时。
     pub first_token_ms: Option<i64>,
     /// WebSocket 连接池决策。
@@ -132,8 +132,6 @@ pub struct CodexWebSocketStreamingExchange {
     pub rate_limit_header_updates: CodexWebSocketRateLimitHeaderUpdates,
     /// 上游内部 metadata 事件里的动态 turn state。
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
-    /// 打开握手响应状态码。
-    pub handshake_status: u16,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
 }
@@ -678,18 +676,18 @@ async fn first_reused_stream_text(
     websocket: &mut CodexWsStream,
 ) -> Result<String, CodexWebSocketExchangeError> {
     loop {
-        let message =
-            match next_websocket_message(websocket, Some(WEBSOCKET_RECEIVE_IDLE_TIMEOUT)).await {
-                Ok(Some(message)) => message,
-                Ok(None) => {
-                    return Err(
-                        CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
-                            message: "websocket closed".to_string(),
-                        },
-                    );
-                }
-                Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
-            };
+        let message = match next_websocket_message(websocket, WEBSOCKET_RECEIVE_IDLE_TIMEOUT).await
+        {
+            Ok(Some(message)) => message,
+            Ok(None) => {
+                return Err(
+                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+                        message: "websocket closed".to_string(),
+                    },
+                );
+            }
+            Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
+        };
         match message {
             Message::Text(text) => return Ok(text.to_string()),
             Message::Close(_) => {
@@ -738,18 +736,16 @@ async fn collect_websocket_response(
     let mut first_token_ms = None;
 
     loop {
-        let message = match next_websocket_message(
-            &mut websocket,
-            receive_timeout_before_first_response_frame(saw_response_frame),
-        )
-        .await
-        {
-            Ok(message) => message,
-            Err(error) if reused_connection && !saw_response_frame => {
-                return Err(reused_connection_died_before_first_frame(&error));
-            }
-            Err(error) => return Err(error),
-        };
+        let message =
+            match next_websocket_message(&mut websocket, receive_idle_timeout(saw_response_frame))
+                .await
+            {
+                Ok(message) => message,
+                Err(error) if reused_connection && !saw_response_frame => {
+                    return Err(reused_connection_died_before_first_frame(&error));
+                }
+                Err(error) => return Err(error),
+            };
         let Some(message) = message else {
             break;
         };
@@ -808,7 +804,6 @@ async fn collect_websocket_response(
                 turn_state: metadata.turn_state.clone(),
                 set_cookie_headers: metadata.set_cookie_headers.clone(),
                 rate_limit_headers: metadata.rate_limit_headers.clone(),
-                handshake_status: metadata.handshake_status,
                 first_token_ms,
                 pool_decision: None,
             };
@@ -842,7 +837,6 @@ fn websocket_connection_metadata(
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
         rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
-        handshake_status: response.status().as_u16(),
     }
 }
 
@@ -868,7 +862,7 @@ fn stream_websocket_response(
     let rate_limit_header_updates_for_task = Arc::clone(&rate_limit_header_updates);
     let turn_state_update = Arc::new(Mutex::new(metadata.turn_state.clone()));
     let turn_state_update_for_task = Arc::clone(&turn_state_update);
-    let (tx, rx) = mpsc::unbounded();
+    let (tx, rx) = mpsc::channel(WEBSOCKET_STREAM_BUFFER);
     tokio::spawn(async move {
         forward_websocket_response_stream(
             websocket,
@@ -889,7 +883,6 @@ fn stream_websocket_response(
         rate_limit_headers: response_metadata.rate_limit_headers,
         rate_limit_header_updates,
         turn_state_update,
-        handshake_status: response_metadata.handshake_status,
         pool_decision: None,
     }
 }
@@ -901,7 +894,7 @@ async fn forward_websocket_response_stream(
     prefetched_text: Option<String>,
     rate_limit_header_updates: CodexWebSocketRateLimitHeaderUpdates,
     turn_state_update: CodexWebSocketTurnStateUpdate,
-    tx: mpsc::UnboundedSender<Result<Bytes, CodexWebSocketExchangeError>>,
+    mut tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
 ) {
     let mut pool_return = pool_return;
     let mut prefetched_text = prefetched_text;
@@ -912,14 +905,14 @@ async fn forward_websocket_response_stream(
         } else {
             let message = match next_websocket_message(
                 &mut websocket,
-                receive_timeout_before_first_response_frame(saw_response_frame),
+                receive_idle_timeout(saw_response_frame),
             )
             .await
             {
                 Ok(message) => message,
                 Err(error) => {
                     discard_stream_websocket(websocket, pool_return).await;
-                    let _ = tx.unbounded_send(Err(error));
+                    let _ = tx.send(Err(error)).await;
                     return;
                 }
             };
@@ -930,14 +923,16 @@ async fn forward_websocket_response_stream(
                 Message::Text(text) => text.to_string(),
                 Message::Binary(_) => {
                     discard_stream_websocket(websocket, pool_return).await;
-                    let _ =
-                        tx.unbounded_send(Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent));
+                    let _ = tx
+                        .send(Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent))
+                        .await;
                     return;
                 }
                 Message::Close(_) => {
                     discard_stream_websocket(websocket, pool_return).await;
-                    let _ =
-                        tx.unbounded_send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal));
+                    let _ = tx
+                        .send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal))
+                        .await;
                     return;
                 }
                 _ => continue,
@@ -947,26 +942,32 @@ async fn forward_websocket_response_stream(
             discard_stream_websocket(websocket, pool_return).await;
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
-            let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::Upstream {
-                status_code: classified.status_code,
-                retry_after_seconds,
-                body: raw,
-                set_cookie_headers: Vec::new(),
-            }));
+            let _ = tx
+                .send(Err(CodexWebSocketExchangeError::Upstream {
+                    status_code: classified.status_code,
+                    retry_after_seconds,
+                    body: raw,
+                    set_cookie_headers: Vec::new(),
+                }))
+                .await;
             return;
         }
         if let Some(reason) = websocket_incomplete_response_reason(&raw) {
             discard_stream_websocket(websocket, pool_return).await;
-            let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::IncompleteResponse {
-                reason,
-            }));
+            let _ = tx
+                .send(Err(CodexWebSocketExchangeError::IncompleteResponse {
+                    reason,
+                }))
+                .await;
             return;
         }
         if let Some(message) = websocket_response_completed_parse_error(&raw) {
             discard_stream_websocket(websocket, pool_return).await;
-            let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::InvalidCompletedResponse {
-                message,
-            }));
+            let _ = tx
+                .send(Err(CodexWebSocketExchangeError::InvalidCompletedResponse {
+                    message,
+                }))
+                .await;
             return;
         }
         if let Some(headers) = websocket_rate_limit_event_headers(&raw) {
@@ -984,7 +985,7 @@ async fn forward_websocket_response_stream(
             continue;
         };
         let terminal = event.as_deref().is_some_and(is_terminal_websocket_event);
-        if tx.unbounded_send(Ok(Bytes::from(frame))).is_err() {
+        if tx.send(Ok(Bytes::from(frame))).await.is_err() {
             discard_stream_websocket(websocket, pool_return).await;
             return;
         }
@@ -996,25 +997,23 @@ async fn forward_websocket_response_stream(
     }
 
     discard_stream_websocket(websocket, pool_return).await;
-    let _ = tx.unbounded_send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal));
+    let _ = tx
+        .send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal))
+        .await;
 }
 
-fn receive_timeout_before_first_response_frame(saw_response_frame: bool) -> Option<Duration> {
+fn receive_idle_timeout(saw_response_frame: bool) -> Duration {
     if saw_response_frame {
-        None
+        WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT
     } else {
-        Some(WEBSOCKET_RECEIVE_IDLE_TIMEOUT)
+        WEBSOCKET_RECEIVE_IDLE_TIMEOUT
     }
 }
 
 async fn next_websocket_message(
     websocket: &mut CodexWsStream,
-    receive_timeout: Option<Duration>,
+    receive_timeout: Duration,
 ) -> Result<Option<Message>, CodexWebSocketExchangeError> {
-    let Some(receive_timeout) = receive_timeout else {
-        return websocket.next().await.transpose().map_err(Into::into);
-    };
-
     match timeout(receive_timeout, websocket.next()).await {
         Ok(message) => message.transpose().map_err(Into::into),
         Err(_) => Err(CodexWebSocketExchangeError::ReceiveIdleTimeout {

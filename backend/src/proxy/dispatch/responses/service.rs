@@ -34,6 +34,7 @@ use crate::{
             rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
             upstream_error_set_cookie_headers,
         },
+        exhaustion::AccountExhaustionTracker,
         reasoning_replay::ReasoningReplayCache,
         session_affinity::{
             compute_variant_hash, ensure_prompt_cache_key, hash_instructions,
@@ -96,18 +97,6 @@ use super::{
     },
     stream_lifecycle::LiveResponseStreamContext,
 };
-
-#[derive(Clone, Copy)]
-enum ExhaustedAccountClass {
-    QuotaExhausted,
-    RateLimited,
-    Expired,
-    Disabled,
-    Banned,
-    CloudflareChallenge,
-    CloudflarePathBlocked,
-    ModelUnsupported,
-}
 
 /// OpenAI Responses 调度服务。
 #[derive(Clone)]
@@ -394,29 +383,10 @@ impl ResponseDispatchService {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
         let mut excluded_account_ids = Vec::new();
-        let mut rate_limited_count = 0usize;
-        let mut last_rate_limit_error = None;
-        let mut quota_exhausted_count = 0usize;
-        let mut last_quota_error = None;
-        let mut expired_count = 0usize;
-        let mut last_auth_error = None;
-        let mut disabled_count = 0usize;
-        let mut last_disabled_auth_error = None;
-        let mut banned_count = 0usize;
-        let mut last_banned_auth_error = None;
-        let mut last_banned_status_code: Option<u16> = None;
-        let mut cloudflare_challenge_count = 0usize;
-        let mut last_cloudflare_challenge_error = None;
-        let mut cloudflare_path_block_count = 0usize;
-        let mut last_cloudflare_path_block_error = None;
-        let mut model_unsupported_count = 0usize;
-        let mut last_model_unsupported_error = None;
-        let mut model_unsupported_retry_used = false;
+        let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut history_recovery_used = false;
-        let mut last_exhausted_account_class = None;
         let mut empty_response_retries = 0u8;
         let mut quota_verify_attempts = 0usize;
-        let mut last_attempted_account_id = None;
         const MAX_EMPTY_RESPONSE_RETRIES: u8 = 2;
         let (account, response, collected_response): (
             Account,
@@ -432,59 +402,17 @@ impl ResponseDispatchService {
                 .acquire_with(&attempt_acquire_request)
                 .await
             else {
-                let error = match last_exhausted_account_class {
-                    Some(ExhaustedAccountClass::QuotaExhausted) => {
-                        ResponseDispatchError::QuotaExhausted {
-                            count: quota_exhausted_count,
-                            upstream_error: last_quota_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::RateLimited) => {
-                        ResponseDispatchError::RateLimited {
-                            count: rate_limited_count,
-                            upstream_error: last_rate_limit_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::Expired) => ResponseDispatchError::Expired {
-                        count: expired_count,
-                        upstream_error: last_auth_error.unwrap_or_default(),
-                    },
-                    Some(ExhaustedAccountClass::Disabled) => ResponseDispatchError::Disabled {
-                        count: disabled_count,
-                        upstream_error: last_disabled_auth_error.unwrap_or_default(),
-                    },
-                    Some(ExhaustedAccountClass::Banned) => ResponseDispatchError::Banned {
-                        count: banned_count,
-                        upstream_error: last_banned_auth_error.unwrap_or_default(),
-                        status_code: last_banned_status_code.unwrap_or(403),
-                    },
-                    Some(ExhaustedAccountClass::CloudflareChallenge) => {
-                        ResponseDispatchError::CloudflareChallenge {
-                            count: cloudflare_challenge_count,
-                            upstream_error: last_cloudflare_challenge_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::CloudflarePathBlocked) => {
-                        ResponseDispatchError::CloudflarePathBlocked {
-                            count: cloudflare_path_block_count,
-                            upstream_error: last_cloudflare_path_block_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::ModelUnsupported) => {
-                        ResponseDispatchError::ModelUnsupported {
-                            count: model_unsupported_count,
-                            upstream_error: last_model_unsupported_error.unwrap_or_default(),
-                        }
-                    }
-                    None => ResponseDispatchError::NoActiveAccount,
-                };
+                let error = exhausted_accounts
+                    .last_exhausted()
+                    .map(ResponseDispatchError::from_exhausted_account)
+                    .unwrap_or(ResponseDispatchError::NoActiveAccount);
                 self.record_response_dispatch_error(
                     request_id,
                     route,
                     requested_model,
                     started_at,
                     ResponseDispatchErrorDetails {
-                        account_id: last_attempted_account_id.as_deref(),
+                        account_id: exhausted_accounts.last_account_id(),
                         stream: false,
                         compact: false,
                         transport: Some(backend_transport_name(
@@ -515,16 +443,19 @@ impl ResponseDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                    exhausted_accounts
+                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
                 QuotaVerificationDecision::MaxAttemptsReached => {
-                    let error = ResponseDispatchError::RateLimited {
-                        count: rate_limited_count + 1,
-                        upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
-                    };
+                    exhausted_accounts.record_rate_limited(
+                        Some(&acquired_account_id),
+                        QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+                    );
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ResponseDispatchError::from_exhausted_account)
+                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
                     self.record_response_dispatch_error(
                         request_id,
                         route,
@@ -556,7 +487,6 @@ impl ResponseDispatchService {
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
             let release_account_id = account.id.clone();
-            last_attempted_account_id = Some(release_account_id.clone());
             let response_result = create_response_with_account_retrying_5xx(
                 &self.codex,
                 self.installation_id.as_deref(),
@@ -636,11 +566,11 @@ impl ResponseDispatchService {
                         }
                         if is_model_unsupported_sse_failure(failure) {
                             let upstream_error = sse_failure_error_body(failure);
-                            if model_unsupported_retry_used {
-                                let error = ResponseDispatchError::ModelUnsupported {
-                                    count: model_unsupported_count + 1,
-                                    upstream_error,
-                                };
+                            if let Some(exhausted) = exhausted_accounts
+                                .model_unsupported_retry_exhausted(upstream_error.clone())
+                            {
+                                let error =
+                                    ResponseDispatchError::from_exhausted_account(exhausted);
                                 self.record_response_dispatch_error(
                                     request_id,
                                     route,
@@ -657,19 +587,18 @@ impl ResponseDispatchService {
                                 .await;
                                 return Err(error);
                             }
-                            model_unsupported_count += 1;
-                            last_model_unsupported_error = Some(upstream_error);
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::ModelUnsupported);
-                            model_unsupported_retry_used = true;
+                            exhausted_accounts.record_model_unsupported(
+                                Some(&release_account_id),
+                                upstream_error,
+                            );
                             excluded_account_ids.push(release_account_id);
                             continue;
                         }
                         if is_quota_exhausted_sse_failure(failure) {
-                            quota_exhausted_count += 1;
-                            last_quota_error = Some(failure.message.clone());
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::QuotaExhausted);
+                            exhausted_accounts.record_quota_exhausted(
+                                Some(&release_account_id),
+                                failure.message.clone(),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                                 .await;
@@ -679,28 +608,12 @@ impl ResponseDispatchService {
                         if is_auth_sse_failure(failure) {
                             let upstream_error = sse_failure_error_body(failure);
                             let account_status = auth_sse_failure_account_status(failure);
-                            match account_status {
-                                AccountStatus::Disabled => {
-                                    disabled_count += 1;
-                                    last_disabled_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Disabled);
-                                }
-                                AccountStatus::Banned => {
-                                    banned_count += 1;
-                                    last_banned_status_code =
-                                        Some(stream_failure_http_status(failure));
-                                    last_banned_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Banned);
-                                }
-                                _ => {
-                                    expired_count += 1;
-                                    last_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Expired);
-                                }
-                            }
+                            exhausted_accounts.record_auth_failure(
+                                Some(&release_account_id),
+                                account_status,
+                                upstream_error,
+                                Some(stream_failure_http_status(failure)),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
@@ -716,9 +629,10 @@ impl ResponseDispatchService {
                     break (account, response, collected_response);
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                    exhausted_accounts.record_rate_limited(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
@@ -726,9 +640,10 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    quota_exhausted_count += 1;
-                    last_quota_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::QuotaExhausted);
+                    exhausted_accounts.record_quota_exhausted(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
@@ -748,24 +663,12 @@ impl ResponseDispatchService {
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
-                    match account_status {
-                        AccountStatus::Disabled => {
-                            disabled_count += 1;
-                            last_disabled_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Disabled);
-                        }
-                        AccountStatus::Banned => {
-                            banned_count += 1;
-                            last_banned_status_code = Some(upstream_error_http_status(&error));
-                            last_banned_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
-                        }
-                        _ => {
-                            expired_count += 1;
-                            last_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Expired);
-                        }
-                    }
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        account_status,
+                        upstream_error,
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
@@ -777,21 +680,20 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    cloudflare_challenge_count += 1;
-                    last_cloudflare_challenge_error =
-                        Some(cloudflare_challenge_error_message().to_string());
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::CloudflareChallenge);
+                    exhausted_accounts.record_cloudflare_challenge(
+                        Some(&release_account_id),
+                        cloudflare_challenge_error_message(),
+                    );
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    cloudflare_path_block_count += 1;
-                    last_cloudflare_path_block_error =
-                        Some(cloudflare_path_block_error_message().to_string());
-                    last_exhausted_account_class =
-                        Some(ExhaustedAccountClass::CloudflarePathBlocked);
+                    exhausted_accounts.record_cloudflare_path_blocked(
+                        Some(&release_account_id),
+                        cloudflare_path_block_error_message(),
+                    );
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
@@ -799,11 +701,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
-                    if model_unsupported_retry_used {
-                        let error = ResponseDispatchError::ModelUnsupported {
-                            count: model_unsupported_count + 1,
-                            upstream_error,
-                        };
+                    if let Some(exhausted) =
+                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
+                    {
+                        let error = ResponseDispatchError::from_exhausted_account(exhausted);
                         self.record_response_dispatch_error(
                             request_id,
                             route,
@@ -822,17 +723,17 @@ impl ResponseDispatchService {
                         .await;
                         return Err(error);
                     }
-                    model_unsupported_count += 1;
-                    last_model_unsupported_error = Some(upstream_error);
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::ModelUnsupported);
-                    model_unsupported_retry_used = true;
+                    exhausted_accounts
+                        .record_model_unsupported(Some(&release_account_id), upstream_error);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
-                    banned_count += 1;
-                    last_banned_status_code = Some(upstream_error_http_status(&error));
-                    last_banned_auth_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        AccountStatus::Banned,
+                        upstream_error_body(&error),
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;
@@ -1013,28 +914,9 @@ impl ResponseDispatchService {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
         let mut excluded_account_ids = Vec::new();
-        let mut rate_limited_count = 0usize;
-        let mut last_rate_limit_error = None;
-        let mut quota_exhausted_count = 0usize;
-        let mut last_quota_error = None;
-        let mut expired_count = 0usize;
-        let mut last_auth_error = None;
-        let mut disabled_count = 0usize;
-        let mut last_disabled_auth_error = None;
-        let mut banned_count = 0usize;
-        let mut last_banned_auth_error = None;
-        let mut last_banned_status_code: Option<u16> = None;
-        let mut cloudflare_challenge_count = 0usize;
-        let mut last_cloudflare_challenge_error = None;
-        let mut cloudflare_path_block_count = 0usize;
-        let mut last_cloudflare_path_block_error = None;
-        let mut model_unsupported_count = 0usize;
-        let mut last_model_unsupported_error = None;
-        let mut model_unsupported_retry_used = false;
+        let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut history_recovery_used = false;
-        let mut last_exhausted_account_class = None;
         let mut quota_verify_attempts = 0usize;
-        let mut last_attempted_account_id = None::<String>;
         macro_rules! return_stream_dispatch_error {
             ($error:expr) => {{
                 let error = $error;
@@ -1044,7 +926,7 @@ impl ResponseDispatchService {
                     requested_model,
                     started_at,
                     ResponseDispatchErrorDetails {
-                        account_id: last_attempted_account_id.as_deref(),
+                        account_id: exhausted_accounts.last_account_id(),
                         stream: true,
                         compact: false,
                         transport: Some(backend_transport_name(
@@ -1085,52 +967,10 @@ impl ResponseDispatchService {
                 .acquire_with(&attempt_acquire_request)
                 .await
             else {
-                let error = match last_exhausted_account_class {
-                    Some(ExhaustedAccountClass::QuotaExhausted) => {
-                        ResponseDispatchError::QuotaExhausted {
-                            count: quota_exhausted_count,
-                            upstream_error: last_quota_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::RateLimited) => {
-                        ResponseDispatchError::RateLimited {
-                            count: rate_limited_count,
-                            upstream_error: last_rate_limit_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::Expired) => ResponseDispatchError::Expired {
-                        count: expired_count,
-                        upstream_error: last_auth_error.unwrap_or_default(),
-                    },
-                    Some(ExhaustedAccountClass::Disabled) => ResponseDispatchError::Disabled {
-                        count: disabled_count,
-                        upstream_error: last_disabled_auth_error.unwrap_or_default(),
-                    },
-                    Some(ExhaustedAccountClass::Banned) => ResponseDispatchError::Banned {
-                        count: banned_count,
-                        upstream_error: last_banned_auth_error.unwrap_or_default(),
-                        status_code: last_banned_status_code.unwrap_or(403),
-                    },
-                    Some(ExhaustedAccountClass::CloudflareChallenge) => {
-                        ResponseDispatchError::CloudflareChallenge {
-                            count: cloudflare_challenge_count,
-                            upstream_error: last_cloudflare_challenge_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::CloudflarePathBlocked) => {
-                        ResponseDispatchError::CloudflarePathBlocked {
-                            count: cloudflare_path_block_count,
-                            upstream_error: last_cloudflare_path_block_error.unwrap_or_default(),
-                        }
-                    }
-                    Some(ExhaustedAccountClass::ModelUnsupported) => {
-                        ResponseDispatchError::ModelUnsupported {
-                            count: model_unsupported_count,
-                            upstream_error: last_model_unsupported_error.unwrap_or_default(),
-                        }
-                    }
-                    None => ResponseDispatchError::NoActiveAccount,
-                };
+                let error = exhausted_accounts
+                    .last_exhausted()
+                    .map(ResponseDispatchError::from_exhausted_account)
+                    .unwrap_or(ResponseDispatchError::NoActiveAccount);
                 return_stream_dispatch_error!(error);
             };
             let acquired_account_id = acquired.account.id.clone();
@@ -1150,17 +990,21 @@ impl ResponseDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                    exhausted_accounts
+                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
                 QuotaVerificationDecision::MaxAttemptsReached => {
+                    exhausted_accounts.record_rate_limited(
+                        Some(&acquired_account_id),
+                        QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+                    );
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ResponseDispatchError::from_exhausted_account)
+                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
                     return_stream_dispatch_error!(
-                        ResponseDispatchError::RateLimited {
-                            count: rate_limited_count + 1,
-                            upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
-                        },
+                        error,
                         account_id: Some(&acquired_account_id),
                         transport: Some(backend_transport_name(backend_transport_for_response_request(
                             &request
@@ -1181,7 +1025,6 @@ impl ResponseDispatchService {
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
             let release_account_id = account.id.clone();
-            last_attempted_account_id = Some(release_account_id.clone());
             let response_result = create_response_stream_with_account_retrying_5xx(
                 &self.codex,
                 self.installation_id.as_deref(),
@@ -1235,9 +1078,10 @@ impl ResponseDispatchService {
                             if is_rate_limit_upstream_error(&error) =>
                         {
                             self.account_pool.release(&release_account_id).await;
-                            rate_limited_count += 1;
-                            last_rate_limit_error = Some(upstream_error_body(&error));
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                            exhausted_accounts.record_rate_limited(
+                                Some(&release_account_id),
+                                upstream_error_body(&error),
+                            );
                             let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
                             self.account_pool
                                 .mark_quota_limited_until(&release_account_id, cooldown_until)
@@ -1249,10 +1093,10 @@ impl ResponseDispatchService {
                             if is_quota_exhausted_upstream_error(&error) =>
                         {
                             self.account_pool.release(&release_account_id).await;
-                            quota_exhausted_count += 1;
-                            last_quota_error = Some(upstream_error_body(&error));
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::QuotaExhausted);
+                            exhausted_accounts.record_quota_exhausted(
+                                Some(&release_account_id),
+                                upstream_error_body(&error),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                                 .await;
@@ -1265,28 +1109,12 @@ impl ResponseDispatchService {
                             self.account_pool.release(&release_account_id).await;
                             let upstream_error = upstream_error_body(&error);
                             let account_status = auth_failure_account_status(&error);
-                            match account_status {
-                                AccountStatus::Disabled => {
-                                    disabled_count += 1;
-                                    last_disabled_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Disabled);
-                                }
-                                AccountStatus::Banned => {
-                                    banned_count += 1;
-                                    last_banned_status_code =
-                                        Some(upstream_error_http_status(&error));
-                                    last_banned_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Banned);
-                                }
-                                _ => {
-                                    expired_count += 1;
-                                    last_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Expired);
-                                }
-                            }
+                            exhausted_accounts.record_auth_failure(
+                                Some(&release_account_id),
+                                account_status,
+                                upstream_error,
+                                Some(upstream_error_http_status(&error)),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
@@ -1302,11 +1130,10 @@ impl ResponseDispatchService {
                             if is_cloudflare_challenge_upstream_error(&error) =>
                         {
                             self.account_pool.release(&release_account_id).await;
-                            cloudflare_challenge_count += 1;
-                            last_cloudflare_challenge_error =
-                                Some(cloudflare_challenge_error_message().to_string());
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::CloudflareChallenge);
+                            exhausted_accounts.record_cloudflare_challenge(
+                                Some(&release_account_id),
+                                cloudflare_challenge_error_message(),
+                            );
                             self.cloudflare
                                 .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                                 .await;
@@ -1317,11 +1144,10 @@ impl ResponseDispatchService {
                             if is_cloudflare_path_block_upstream_error(&error) =>
                         {
                             self.account_pool.release(&release_account_id).await;
-                            cloudflare_path_block_count += 1;
-                            last_cloudflare_path_block_error =
-                                Some(cloudflare_path_block_error_message().to_string());
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::CloudflarePathBlocked);
+                            exhausted_accounts.record_cloudflare_path_blocked(
+                                Some(&release_account_id),
+                                cloudflare_path_block_error_message(),
+                            );
                             self.cloudflare
                                 .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                                 .await;
@@ -1333,21 +1159,19 @@ impl ResponseDispatchService {
                         {
                             self.account_pool.release(&release_account_id).await;
                             let upstream_error = upstream_error_body(&error);
-                            if model_unsupported_retry_used {
+                            if let Some(exhausted) = exhausted_accounts
+                                .model_unsupported_retry_exhausted(upstream_error.clone())
+                            {
                                 return_stream_dispatch_error!(
-                                    ResponseDispatchError::ModelUnsupported {
-                                        count: model_unsupported_count + 1,
-                                        upstream_error,
-                                    },
+                                    ResponseDispatchError::from_exhausted_account(exhausted),
                                     account_id: Some(&release_account_id),
                                     transport: Some(backend_transport_name(transport))
                                 );
                             }
-                            model_unsupported_count += 1;
-                            last_model_unsupported_error = Some(upstream_error);
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::ModelUnsupported);
-                            model_unsupported_retry_used = true;
+                            exhausted_accounts.record_model_unsupported(
+                                Some(&release_account_id),
+                                upstream_error,
+                            );
                             excluded_account_ids.push(release_account_id);
                             continue;
                         }
@@ -1355,10 +1179,12 @@ impl ResponseDispatchService {
                             if is_banned_upstream_error(&error) =>
                         {
                             self.account_pool.release(&release_account_id).await;
-                            banned_count += 1;
-                            last_banned_status_code = Some(upstream_error_http_status(&error));
-                            last_banned_auth_error = Some(upstream_error_body(&error));
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
+                            exhausted_accounts.record_auth_failure(
+                                Some(&release_account_id),
+                                AccountStatus::Banned,
+                                upstream_error_body(&error),
+                                Some(upstream_error_http_status(&error)),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, AccountStatus::Banned)
                                 .await;
@@ -1417,29 +1243,29 @@ impl ResponseDispatchService {
                         }
                         if is_model_unsupported_sse_failure(&failure) {
                             let upstream_error = sse_failure_error_body(&failure);
-                            if model_unsupported_retry_used {
+                            if let Some(exhausted) = exhausted_accounts
+                                .model_unsupported_retry_exhausted(upstream_error.clone())
+                            {
                                 self.account_pool.release(&release_account_id).await;
                                 return_stream_dispatch_error!(
-                                    ResponseDispatchError::ModelUnsupported {
-                                        count: model_unsupported_count + 1,
-                                        upstream_error,
-                                    },
+                                    ResponseDispatchError::from_exhausted_account(exhausted),
                                     account_id: Some(&release_account_id),
                                     transport: Some(backend_transport_name(transport))
                                 );
                             }
-                            model_unsupported_count += 1;
-                            last_model_unsupported_error = Some(upstream_error);
-                            model_unsupported_retry_used = true;
+                            exhausted_accounts.record_model_unsupported(
+                                Some(&release_account_id),
+                                upstream_error,
+                            );
                             excluded_account_ids.push(release_account_id);
                             self.account_pool.release(&account.id).await;
                             continue;
                         }
                         if is_quota_exhausted_sse_failure(&failure) {
-                            quota_exhausted_count += 1;
-                            last_quota_error = Some(failure.message.clone());
-                            last_exhausted_account_class =
-                                Some(ExhaustedAccountClass::QuotaExhausted);
+                            exhausted_accounts.record_quota_exhausted(
+                                Some(&release_account_id),
+                                failure.message.clone(),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                                 .await;
@@ -1450,28 +1276,12 @@ impl ResponseDispatchService {
                         if is_auth_sse_failure(&failure) {
                             let upstream_error = sse_failure_error_body(&failure);
                             let account_status = auth_sse_failure_account_status(&failure);
-                            match account_status {
-                                AccountStatus::Disabled => {
-                                    disabled_count += 1;
-                                    last_disabled_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Disabled);
-                                }
-                                AccountStatus::Banned => {
-                                    banned_count += 1;
-                                    last_banned_status_code =
-                                        Some(stream_failure_http_status(&failure));
-                                    last_banned_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Banned);
-                                }
-                                _ => {
-                                    expired_count += 1;
-                                    last_auth_error = Some(upstream_error);
-                                    last_exhausted_account_class =
-                                        Some(ExhaustedAccountClass::Expired);
-                                }
-                            }
+                            exhausted_accounts.record_auth_failure(
+                                Some(&release_account_id),
+                                account_status,
+                                upstream_error,
+                                Some(stream_failure_http_status(&failure)),
+                            );
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
@@ -1533,9 +1343,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::RateLimited);
+                    exhausted_accounts.record_rate_limited(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
@@ -1544,9 +1355,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
-                    quota_exhausted_count += 1;
-                    last_quota_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::QuotaExhausted);
+                    exhausted_accounts.record_quota_exhausted(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
@@ -1568,24 +1380,12 @@ impl ResponseDispatchService {
                     self.account_pool.release(&release_account_id).await;
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
-                    match account_status {
-                        AccountStatus::Disabled => {
-                            disabled_count += 1;
-                            last_disabled_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Disabled);
-                        }
-                        AccountStatus::Banned => {
-                            banned_count += 1;
-                            last_banned_status_code = Some(upstream_error_http_status(&error));
-                            last_banned_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
-                        }
-                        _ => {
-                            expired_count += 1;
-                            last_auth_error = Some(upstream_error);
-                            last_exhausted_account_class = Some(ExhaustedAccountClass::Expired);
-                        }
-                    }
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        account_status,
+                        upstream_error,
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
@@ -1598,10 +1398,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
-                    cloudflare_challenge_count += 1;
-                    last_cloudflare_challenge_error =
-                        Some(cloudflare_challenge_error_message().to_string());
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::CloudflareChallenge);
+                    exhausted_accounts.record_cloudflare_challenge(
+                        Some(&release_account_id),
+                        cloudflare_challenge_error_message(),
+                    );
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
@@ -1609,11 +1409,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
-                    cloudflare_path_block_count += 1;
-                    last_cloudflare_path_block_error =
-                        Some(cloudflare_path_block_error_message().to_string());
-                    last_exhausted_account_class =
-                        Some(ExhaustedAccountClass::CloudflarePathBlocked);
+                    exhausted_accounts.record_cloudflare_path_blocked(
+                        Some(&release_account_id),
+                        cloudflare_path_block_error_message(),
+                    );
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
@@ -1622,30 +1421,29 @@ impl ResponseDispatchService {
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
                     let upstream_error = upstream_error_body(&error);
-                    if model_unsupported_retry_used {
+                    if let Some(exhausted) =
+                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
+                    {
                         return_stream_dispatch_error!(
-                            ResponseDispatchError::ModelUnsupported {
-                                count: model_unsupported_count + 1,
-                                upstream_error,
-                            },
+                            ResponseDispatchError::from_exhausted_account(exhausted),
                             account_id: Some(&release_account_id),
                             transport: Some(backend_transport_name(backend_transport_for_response_request(
                                 &request
                             )))
                         );
                     }
-                    model_unsupported_count += 1;
-                    last_model_unsupported_error = Some(upstream_error);
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::ModelUnsupported);
-                    model_unsupported_retry_used = true;
+                    exhausted_accounts
+                        .record_model_unsupported(Some(&release_account_id), upstream_error);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
-                    banned_count += 1;
-                    last_banned_status_code = Some(upstream_error_http_status(&error));
-                    last_banned_auth_error = Some(upstream_error_body(&error));
-                    last_exhausted_account_class = Some(ExhaustedAccountClass::Banned);
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        AccountStatus::Banned,
+                        upstream_error_body(&error),
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;
@@ -1685,167 +1483,31 @@ impl ResponseDispatchService {
         let display_model = ModelCatalog::build_display_model_name(&parsed_model);
         request.model = parsed_model.model_id;
         let mut excluded_account_ids = Vec::new();
-        let mut rate_limited_count = 0usize;
-        let mut last_rate_limit_error = None;
-        let mut quota_exhausted_count = 0usize;
-        let mut last_quota_error = None;
-        let mut expired_count = 0usize;
-        let mut last_auth_error = None;
-        let mut disabled_count = 0usize;
-        let mut last_disabled_auth_error = None;
-        let mut banned_count = 0usize;
-        let mut last_banned_auth_error = None;
-        let mut last_banned_status_code: Option<u16> = None;
-        let mut cloudflare_challenge_count = 0usize;
-        let mut last_cloudflare_challenge_error = None;
-        let mut cloudflare_path_block_count = 0usize;
-        let mut last_cloudflare_path_block_error = None;
-        let mut model_unsupported_count = 0usize;
-        let mut last_model_unsupported_error = None;
-        let mut model_unsupported_retry_used = false;
+        let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut quota_verify_attempts = 0usize;
-        let mut last_attempted_account_id = None::<String>;
 
         loop {
             let acquire_request = AccountAcquireRequest::new(&request.model, Utc::now())
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
             let acquired = match self.account_pool.acquire_with(&acquire_request).await {
                 Some(acquired) => acquired,
-                None if quota_exhausted_count > 0 => {
-                    let error = ResponseDispatchError::QuotaExhausted {
-                        count: quota_exhausted_count,
-                        upstream_error: last_quota_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if rate_limited_count > 0 => {
-                    let error = ResponseDispatchError::RateLimited {
-                        count: rate_limited_count,
-                        upstream_error: last_rate_limit_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if expired_count > 0 => {
-                    let error = ResponseDispatchError::Expired {
-                        count: expired_count,
-                        upstream_error: last_auth_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if disabled_count > 0 => {
-                    let error = ResponseDispatchError::Disabled {
-                        count: disabled_count,
-                        upstream_error: last_disabled_auth_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if banned_count > 0 => {
-                    let error = ResponseDispatchError::Banned {
-                        count: banned_count,
-                        upstream_error: last_banned_auth_error.unwrap_or_default(),
-                        status_code: last_banned_status_code.unwrap_or(403),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if cloudflare_challenge_count > 0 => {
-                    let error = ResponseDispatchError::CloudflareChallenge {
-                        count: cloudflare_challenge_count,
-                        upstream_error: last_cloudflare_challenge_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if cloudflare_path_block_count > 0 => {
-                    let error = ResponseDispatchError::CloudflarePathBlocked {
-                        count: cloudflare_path_block_count,
-                        upstream_error: last_cloudflare_path_block_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
-                None if model_unsupported_count > 0 => {
-                    let error = ResponseDispatchError::ModelUnsupported {
-                        count: model_unsupported_count,
-                        upstream_error: last_model_unsupported_error.unwrap_or_default(),
-                    };
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        requested_model,
-                        started_at,
-                        last_attempted_account_id.as_deref(),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
-                }
                 None => {
-                    let error = ResponseDispatchError::NoActiveAccount;
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ResponseDispatchError::from_exhausted_account)
+                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
                     self.record_compact_dispatch_error(
                         request_id,
                         requested_model,
                         started_at,
-                        last_attempted_account_id.as_deref(),
+                        exhausted_accounts.last_account_id(),
                         &error,
                     )
                     .await;
                     return Err(error);
                 }
             };
-            last_attempted_account_id = Some(acquired.account.id.clone());
+            let acquired_account_id = acquired.account.id.clone();
             let acquired = match verify_acquired_quota_if_required(
                 QuotaVerificationContext {
                     account_pool: self.account_pool.as_ref(),
@@ -1862,20 +1524,24 @@ impl ResponseDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
+                    exhausted_accounts
+                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
                 QuotaVerificationDecision::MaxAttemptsReached => {
-                    let error = ResponseDispatchError::RateLimited {
-                        count: rate_limited_count + 1,
-                        upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
-                    };
+                    exhausted_accounts.record_rate_limited(
+                        Some(&acquired_account_id),
+                        QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+                    );
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ResponseDispatchError::from_exhausted_account)
+                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
                     self.record_compact_dispatch_error(
                         request_id,
                         requested_model,
                         started_at,
-                        last_attempted_account_id.as_deref(),
+                        Some(&acquired_account_id),
                         &error,
                     )
                     .await;
@@ -1947,8 +1613,10 @@ impl ResponseDispatchService {
                     return Ok(response.body);
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(upstream_error_body(&error));
+                    exhausted_accounts.record_rate_limited(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
@@ -1956,8 +1624,10 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    quota_exhausted_count += 1;
-                    last_quota_error = Some(upstream_error_body(&error));
+                    exhausted_accounts.record_quota_exhausted(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
@@ -1966,21 +1636,12 @@ impl ResponseDispatchService {
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
-                    match account_status {
-                        AccountStatus::Disabled => {
-                            disabled_count += 1;
-                            last_disabled_auth_error = Some(upstream_error);
-                        }
-                        AccountStatus::Banned => {
-                            banned_count += 1;
-                            last_banned_status_code = Some(upstream_error_http_status(&error));
-                            last_banned_auth_error = Some(upstream_error);
-                        }
-                        _ => {
-                            expired_count += 1;
-                            last_auth_error = Some(upstream_error);
-                        }
-                    }
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        account_status,
+                        upstream_error,
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
@@ -1992,18 +1653,20 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    cloudflare_challenge_count += 1;
-                    last_cloudflare_challenge_error =
-                        Some(cloudflare_challenge_error_message().to_string());
+                    exhausted_accounts.record_cloudflare_challenge(
+                        Some(&release_account_id),
+                        cloudflare_challenge_error_message(),
+                    );
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    cloudflare_path_block_count += 1;
-                    last_cloudflare_path_block_error =
-                        Some(cloudflare_path_block_error_message().to_string());
+                    exhausted_accounts.record_cloudflare_path_blocked(
+                        Some(&release_account_id),
+                        cloudflare_path_block_error_message(),
+                    );
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
@@ -2011,11 +1674,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
-                    if model_unsupported_retry_used {
-                        let error = ResponseDispatchError::ModelUnsupported {
-                            count: model_unsupported_count + 1,
-                            upstream_error,
-                        };
+                    if let Some(exhausted) =
+                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
+                    {
+                        let error = ResponseDispatchError::from_exhausted_account(exhausted);
                         self.record_compact_dispatch_error(
                             request_id,
                             requested_model,
@@ -2026,15 +1688,17 @@ impl ResponseDispatchService {
                         .await;
                         return Err(error);
                     }
-                    model_unsupported_count += 1;
-                    last_model_unsupported_error = Some(upstream_error);
-                    model_unsupported_retry_used = true;
+                    exhausted_accounts
+                        .record_model_unsupported(Some(&release_account_id), upstream_error);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
-                    banned_count += 1;
-                    last_banned_status_code = Some(upstream_error_http_status(&error));
-                    last_banned_auth_error = Some(upstream_error_body(&error));
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        AccountStatus::Banned,
+                        upstream_error_body(&error),
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;

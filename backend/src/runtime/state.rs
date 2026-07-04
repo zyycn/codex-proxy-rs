@@ -6,7 +6,6 @@ use crate::runtime::services::Services;
 /// HTTP handler 共享的运行时状态。
 #[derive(Clone)]
 pub struct AppState {
-    pub config: AppConfig,
     pub services: Services,
 }
 

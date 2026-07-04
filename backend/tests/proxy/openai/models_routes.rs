@@ -170,7 +170,6 @@ async fn build_test_app(
         .await
         .expect("hot path state should initialize");
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);

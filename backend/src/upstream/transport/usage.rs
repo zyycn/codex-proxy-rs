@@ -1,11 +1,10 @@
 use reqwest::StatusCode;
 use serde_json::Value;
 
+use crate::upstream::protocol::events::retry_after_seconds_from_body;
+
 use super::{
-    client::{
-        read_capped_error_body, retry_after_seconds, retry_after_seconds_from_body,
-        truncate_for_error,
-    },
+    client::{read_capped_error_body, retry_after_seconds, truncate_for_error},
     endpoints::usage_endpoint_urls,
     CodexBackendClient, CodexClientError, CodexClientResult, CodexRequestContext,
 };

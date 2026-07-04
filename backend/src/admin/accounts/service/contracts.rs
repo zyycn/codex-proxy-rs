@@ -113,12 +113,6 @@ pub enum AdminAccountError {
     Inactive(AcctStatus),
 }
 
-#[derive(Debug, Clone)]
-pub struct UpdatedAccountStatus {
-    pub id: String,
-    pub status: AcctStatus,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdminAccountRefreshOutcome {
     Alive,
@@ -233,6 +227,14 @@ pub(super) struct ManualCreateTokens {
     pub(super) access_token: String,
     pub(super) refresh_token_for_new: Option<String>,
     pub(super) refresh_token_for_existing: Option<String>,
+    pub(super) claims: crate::upstream::accounts::token_refresh::ManualAccountClaims,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RefreshedAccountTokens {
+    pub(super) access_token: String,
+    pub(super) refresh_token: Option<String>,
+    pub(super) claims: crate::upstream::accounts::token_refresh::ManualAccountClaims,
 }
 
 #[derive(Debug, Clone)]

@@ -863,11 +863,12 @@ fn response_format_text(response_format: Option<Value>) -> PreparedResponseForma
 pub fn chat_completion_from_codex_sse(
     body: &str,
     model: &str,
-    _include_reasoning: bool,
+    include_reasoning: bool,
     tuple_schema: Option<&Value>,
 ) -> Result<Option<Value>, ChatStreamTranslationError> {
     let events = parse_sse_events(body)?;
     let mut output_text = String::new();
+    let mut reasoning_text = String::new();
     let mut function_call_items: BTreeMap<String, FunctionCallInfo> = BTreeMap::new();
     let mut finished_call_ids: BTreeSet<String> = BTreeSet::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -902,6 +903,13 @@ pub fn chat_completion_from_codex_sse(
                     } else {
                         output_text.push_str(delta);
                     }
+                }
+            }
+            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta")
+                if include_reasoning =>
+            {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    reasoning_text.push_str(delta);
                 }
             }
             Some("response.output_item.added") => {
@@ -957,23 +965,26 @@ pub fn chat_completion_from_codex_sse(
 
     let mut choices = Vec::new();
     let finish_reason = openai_finish_reason_for_response(Some(&response), !tool_calls.is_empty());
+    let mut message = serde_json::Map::new();
+    message.insert("role".to_string(), Value::String("assistant".to_string()));
+    message.insert("content".to_string(), Value::String(output_text_value));
+    if include_reasoning && !reasoning_text.is_empty() {
+        message.insert(
+            "reasoning_content".to_string(),
+            Value::String(reasoning_text),
+        );
+    }
     if !tool_calls.is_empty() {
+        message.insert("tool_calls".to_string(), Value::Array(tool_calls));
         choices.push(json!({
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": output_text_value,
-                "tool_calls": tool_calls,
-            },
+            "message": Value::Object(message),
             "finish_reason": finish_reason,
         }));
     } else {
         choices.push(json!({
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": output_text_value,
-            },
+            "message": Value::Object(message),
             "finish_reason": finish_reason,
         }));
     }

@@ -154,7 +154,6 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
         .await
         .expect("hot path state should initialize");
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     (

@@ -397,7 +397,6 @@ async fn dashboard_test_app(
     };
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     (

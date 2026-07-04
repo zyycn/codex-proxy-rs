@@ -1220,7 +1220,6 @@ async fn admin_system_test_app(db_name: &str) -> (axum::Router, tempfile::TempDi
     let stores = stores(pool);
     let services = Arc::new(Services::new(&config, stores, test_fingerprint()));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);

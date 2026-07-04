@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::upstream::fingerprint::Fingerprint;
 use crate::upstream::models::backend_entry::BackendModelEntry;
-use crate::upstream::protocol::events::extract_sse_usage;
+use crate::upstream::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::protocol::responses::{
     http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,
     CodexTransport,
@@ -1010,18 +1010,6 @@ pub(super) fn retry_after_seconds(headers: &HeaderMap, body: Option<&str>) -> Op
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
         .or_else(|| body.and_then(retry_after_seconds_from_body))
-}
-
-pub(super) fn retry_after_seconds_from_body(body: &str) -> Option<u64> {
-    let value: Value = serde_json::from_str(body).ok()?;
-    value
-        .get("retry_after_seconds")
-        .or_else(|| value.get("retry_after"))
-        .and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-        })
-        .filter(|seconds| *seconds > 0)
 }
 
 pub(super) fn truncate_for_error(body: &str) -> String {

@@ -154,7 +154,6 @@ fn codex_websocket_audit_artifact_should_record_transport_opening_and_payload() 
         artifact.payload.expect("payload").body["input"],
         "<redacted>"
     );
-    assert_eq!(artifact.error, None);
 }
 
 #[test]

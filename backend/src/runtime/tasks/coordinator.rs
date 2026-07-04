@@ -1,6 +1,6 @@
 //! 后台任务协调器。
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio::task::JoinHandle;
 
@@ -120,22 +120,21 @@ impl TaskCoordinator {
 /// 后台任务关闭句柄。
 pub enum SchedulerHandle {
     /// 通过 channel 发送关闭信号。
-    Channel(tokio::sync::mpsc::Sender<()>),
-    /// 直接持有 tokio 任务句柄。
-    JoinHandle(JoinHandle<()>),
+    Channel {
+        shutdown_tx: tokio::sync::mpsc::Sender<()>,
+        handle: JoinHandle<()>,
+    },
     /// 关闭上游 WebSocket 连接池。
     WebSocketPool(Arc<crate::upstream::transport::CodexWebSocketPool>),
 }
 
 impl SchedulerHandle {
     /// 使用关闭 channel 构造句柄。
-    pub(crate) fn new(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Self {
-        Self::Channel(shutdown_tx)
-    }
-
-    /// 使用 `JoinHandle` 构造句柄。
-    pub(crate) fn from_join_handle(handle: JoinHandle<()>) -> Self {
-        Self::JoinHandle(handle)
+    pub(crate) fn new(shutdown_tx: tokio::sync::mpsc::Sender<()>, handle: JoinHandle<()>) -> Self {
+        Self::Channel {
+            shutdown_tx,
+            handle,
+        }
     }
 
     /// 使用 WebSocket 连接池构造句柄。
@@ -146,15 +145,45 @@ impl SchedulerHandle {
     /// 关闭任务。
     pub async fn shutdown(self) {
         match self {
-            Self::Channel(shutdown_tx) => {
+            Self::Channel {
+                shutdown_tx,
+                handle,
+            } => {
                 let _ = shutdown_tx.send(()).await;
-            }
-            Self::JoinHandle(handle) => {
-                handle.abort();
+                wait_for_task_shutdown(handle).await;
             }
             Self::WebSocketPool(pool) => {
                 pool.shutdown().await;
             }
+        }
+    }
+}
+
+const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn wait_for_task_shutdown(handle: JoinHandle<()>) {
+    let mut handle = handle;
+    let timeout = tokio::time::sleep(TASK_SHUTDOWN_TIMEOUT);
+    tokio::pin!(timeout);
+
+    tokio::select! {
+        result = &mut handle => {
+            log_task_shutdown_result(result);
+        }
+        () = &mut timeout => {
+            tracing::warn!(timeout_secs = TASK_SHUTDOWN_TIMEOUT.as_secs(), "等待后台任务关闭超时");
+            handle.abort();
+            log_task_shutdown_result(handle.await);
+        }
+    }
+}
+
+fn log_task_shutdown_result(result: Result<(), tokio::task::JoinError>) {
+    match result {
+        Ok(()) => {}
+        Err(error) if error.is_cancelled() => {}
+        Err(error) => {
+            tracing::warn!(error = %error, "后台任务关闭时异常退出");
         }
     }
 }

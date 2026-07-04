@@ -281,8 +281,7 @@ impl AdminAccountService {
         token: Option<String>,
         refresh_token: Option<String>,
     ) -> Result<Option<ResolvedImportTokens>, AdminAccountError> {
-        let mut refresh_token =
-            crate::upstream::accounts::importing::normalize_nonempty(refresh_token);
+        let refresh_token = crate::upstream::accounts::importing::normalize_nonempty(refresh_token);
         let Some(access_token) = crate::upstream::accounts::importing::normalize_nonempty(
             token
                 .as_deref()
@@ -292,26 +291,12 @@ impl AdminAccountService {
                 return Ok(None);
             };
             let refreshed = self
-                .token_refresher
-                .refresh(&existing_refresh_token)
-                .await
-                .map_err(AdminAccountError::RefreshTokenExchange)?;
-            let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
-                crate::upstream::accounts::importing::normalize_bearer_token(
-                    &refreshed.access_token,
-                ),
-            ))
-            .ok_or(AdminAccountError::TokenRequired)?;
-            refresh_token = refreshed.refresh_token;
-            let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
-                &access_token,
-                Utc::now(),
-            )
-            .map_err(AdminAccountError::InvalidToken)?;
+                .refresh_tokens_from_refresh_token(&existing_refresh_token)
+                .await?;
             return Ok(Some(ResolvedImportTokens {
-                access_token,
-                refresh_token,
-                claims: Some(claims),
+                access_token: refreshed.access_token,
+                refresh_token: refreshed.refresh_token,
+                claims: Some(refreshed.claims),
             }));
         };
 
@@ -334,24 +319,12 @@ impl AdminAccountService {
             }));
         };
         let refreshed = self
-            .token_refresher
-            .refresh(&existing_refresh_token)
-            .await
-            .map_err(AdminAccountError::RefreshTokenExchange)?;
-        let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
-            crate::upstream::accounts::importing::normalize_bearer_token(&refreshed.access_token),
-        ))
-        .ok_or(AdminAccountError::TokenRequired)?;
-        refresh_token = refreshed.refresh_token;
-        let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
-            &access_token,
-            Utc::now(),
-        )
-        .map_err(AdminAccountError::InvalidToken)?;
+            .refresh_tokens_from_refresh_token(&existing_refresh_token)
+            .await?;
         Ok(Some(ResolvedImportTokens {
-            access_token,
-            refresh_token,
-            claims: Some(claims),
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token,
+            claims: Some(refreshed.claims),
         }))
     }
     async fn import_target_account_id(

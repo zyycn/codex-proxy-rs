@@ -16,7 +16,6 @@ async fn websocket_audit_artifact_should_require_explicit_directory() {
             ..OpeningAuditSnapshot::default()
         }),
         payload: None,
-        error: None,
     };
 
     let disabled = write_websocket_audit_artifact_for_dir(None, &artifact)
@@ -1180,6 +1179,72 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
     assert!(std::str::from_utf8(&terminal)
         .unwrap()
         .contains("resp_after_active_gap"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "partial"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        futures::future::pending::<()>().await;
+    });
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "be brief",
+            Vec::new(),
+        );
+    request.previous_response_id = Some("resp_previous".to_string());
+    request.force_http_sse = false;
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+
+    let mut response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_stream_active_stall", Some("chatgpt-account")),
+        )
+        .await
+        .expect("websocket stream should open");
+    let first = response
+        .body
+        .next()
+        .await
+        .expect("stream should yield partial frame")
+        .expect("partial frame should be valid");
+    assert!(std::str::from_utf8(&first).unwrap().contains("partial"));
+    tokio::time::advance(Duration::from_secs(5 * 60)).await;
+    tokio::task::yield_now().await;
+    let error = response
+        .body
+        .next()
+        .await
+        .expect("stream should yield idle timeout after active stall")
+        .expect_err("active stall should time out");
+    server.abort();
+
+    assert!(matches!(
+        error,
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout })
+            if timeout == Duration::from_secs(5 * 60)
+    ));
 }
 
 #[tokio::test]

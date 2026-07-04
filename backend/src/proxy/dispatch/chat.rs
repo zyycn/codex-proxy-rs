@@ -20,10 +20,14 @@ use crate::{
             CloudflareRecovery,
         },
         errors::{
-            auth_failure_account_status, backend_transport_name, is_auth_upstream_error,
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
-            upstream_error_http_status,
+            auth_failure_account_status, backend_transport_name, insert_dispatch_error_metadata,
+            is_auth_upstream_error, is_model_unsupported_upstream_error,
+            is_quota_exhausted_upstream_error, is_rate_limit_upstream_error,
+            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            DispatchErrorMetadata, DispatchFailureClass,
+        },
+        exhaustion::{
+            AccountExhaustionTracker, ExhaustedAccount, ExhaustedAccountKind, ExhaustedAccountRef,
         },
         upstream::{
             create_response_with_account, verify_acquired_quota_if_required,
@@ -105,26 +109,8 @@ impl ChatDispatchService {
             .is_some_and(|effort| !effort.trim().is_empty());
         let tuple_schema = request.tuple_schema.clone();
         let mut excluded_account_ids = Vec::new();
-        let mut rate_limited_count = 0usize;
-        let mut last_rate_limit_error = None;
-        let mut quota_exhausted_count = 0usize;
-        let mut last_quota_error = None;
-        let mut expired_count = 0usize;
-        let mut last_auth_error = None;
-        let mut disabled_count = 0usize;
-        let mut last_disabled_auth_error = None;
-        let mut banned_count = 0usize;
-        let mut last_banned_auth_error = None;
-        let mut last_banned_status_code: Option<u16> = None;
-        let mut cloudflare_challenge_count = 0usize;
-        let mut last_cloudflare_challenge_error = None;
-        let mut cloudflare_path_block_count = 0usize;
-        let mut last_cloudflare_path_block_error = None;
-        let mut model_unsupported_count = 0usize;
-        let mut last_model_unsupported_error = None;
-        let mut model_unsupported_retry_used = false;
+        let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut quota_verify_attempts = 0usize;
-        let mut last_failed_account_id = None;
 
         macro_rules! return_dispatch_error {
             ($error:expr) => {{
@@ -133,7 +119,7 @@ impl ChatDispatchService {
                     request_id,
                     requested_model,
                     started_at,
-                    last_failed_account_id.as_deref(),
+                    exhausted_accounts.last_account_id(),
                     Some(backend_transport_name(
                         backend_transport_for_response_request(&request),
                     )),
@@ -162,56 +148,13 @@ impl ChatDispatchService {
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
             let acquired = match self.account_pool.acquire_with(&acquire_request).await {
                 Some(acquired) => acquired,
-                None if quota_exhausted_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::QuotaExhausted {
-                        count: quota_exhausted_count,
-                        upstream_error: last_quota_error.unwrap_or_default(),
-                    });
+                None => {
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ChatDispatchError::from_exhausted_account)
+                        .unwrap_or(ChatDispatchError::NoActiveAccount);
+                    return_dispatch_error!(error);
                 }
-                None if rate_limited_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::RateLimited {
-                        count: rate_limited_count,
-                        upstream_error: last_rate_limit_error.unwrap_or_default(),
-                    });
-                }
-                None if expired_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::Expired {
-                        count: expired_count,
-                        upstream_error: last_auth_error.unwrap_or_default(),
-                    });
-                }
-                None if disabled_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::Disabled {
-                        count: disabled_count,
-                        upstream_error: last_disabled_auth_error.unwrap_or_default(),
-                    });
-                }
-                None if banned_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::Banned {
-                        count: banned_count,
-                        upstream_error: last_banned_auth_error.unwrap_or_default(),
-                        status_code: last_banned_status_code.unwrap_or(403),
-                    });
-                }
-                None if cloudflare_challenge_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::CloudflareChallenge {
-                        count: cloudflare_challenge_count,
-                        upstream_error: last_cloudflare_challenge_error.unwrap_or_default(),
-                    });
-                }
-                None if cloudflare_path_block_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::CloudflarePathBlocked {
-                        count: cloudflare_path_block_count,
-                        upstream_error: last_cloudflare_path_block_error.unwrap_or_default(),
-                    });
-                }
-                None if model_unsupported_count > 0 => {
-                    return_dispatch_error!(ChatDispatchError::ModelUnsupported {
-                        count: model_unsupported_count,
-                        upstream_error: last_model_unsupported_error.unwrap_or_default(),
-                    });
-                }
-                None => return_dispatch_error!(ChatDispatchError::NoActiveAccount),
             };
             let acquired = match verify_acquired_quota_if_required(
                 QuotaVerificationContext {
@@ -229,15 +172,18 @@ impl ChatDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string());
+                    exhausted_accounts
+                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
                 QuotaVerificationDecision::MaxAttemptsReached => {
-                    return_dispatch_error!(ChatDispatchError::RateLimited {
-                        count: rate_limited_count + 1,
-                        upstream_error: QUOTA_VERIFY_LIMIT_REACHED_MESSAGE.to_string(),
-                    });
+                    exhausted_accounts
+                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
+                    let error = exhausted_accounts
+                        .last_exhausted()
+                        .map(ChatDispatchError::from_exhausted_account)
+                        .unwrap_or(ChatDispatchError::NoActiveAccount);
+                    return_dispatch_error!(error);
                 }
             };
             self.account_pool.wait_for_request_interval(&acquired).await;
@@ -258,9 +204,10 @@ impl ChatDispatchService {
             match response_result {
                 Ok(response) => break (account, response),
                 Err(error) if is_rate_limit_upstream_error(&error) => {
-                    rate_limited_count += 1;
-                    last_rate_limit_error = Some(upstream_error_body(&error));
-                    last_failed_account_id = Some(release_account_id.clone());
+                    exhausted_accounts.record_rate_limited(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
@@ -268,9 +215,10 @@ impl ChatDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    quota_exhausted_count += 1;
-                    last_quota_error = Some(upstream_error_body(&error));
-                    last_failed_account_id = Some(release_account_id.clone());
+                    exhausted_accounts.record_quota_exhausted(
+                        Some(&release_account_id),
+                        upstream_error_body(&error),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
@@ -279,22 +227,12 @@ impl ChatDispatchService {
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
-                    last_failed_account_id = Some(release_account_id.clone());
-                    match account_status {
-                        AccountStatus::Disabled => {
-                            disabled_count += 1;
-                            last_disabled_auth_error = Some(upstream_error);
-                        }
-                        AccountStatus::Banned => {
-                            banned_count += 1;
-                            last_banned_status_code = Some(upstream_error_http_status(&error));
-                            last_banned_auth_error = Some(upstream_error);
-                        }
-                        _ => {
-                            expired_count += 1;
-                            last_auth_error = Some(upstream_error);
-                        }
-                    }
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        account_status,
+                        upstream_error,
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
@@ -306,20 +244,20 @@ impl ChatDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    cloudflare_challenge_count += 1;
-                    last_cloudflare_challenge_error =
-                        Some(cloudflare_challenge_error_message().to_string());
-                    last_failed_account_id = Some(release_account_id.clone());
+                    exhausted_accounts.record_cloudflare_challenge(
+                        Some(&release_account_id),
+                        cloudflare_challenge_error_message(),
+                    );
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    cloudflare_path_block_count += 1;
-                    last_cloudflare_path_block_error =
-                        Some(cloudflare_path_block_error_message().to_string());
-                    last_failed_account_id = Some(release_account_id.clone());
+                    exhausted_accounts.record_cloudflare_path_blocked(
+                        Some(&release_account_id),
+                        cloudflare_path_block_error_message(),
+                    );
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
@@ -327,29 +265,28 @@ impl ChatDispatchService {
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
-                    if model_unsupported_retry_used {
+                    if let Some(exhausted) =
+                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
+                    {
                         return_dispatch_error!(
-                            ChatDispatchError::ModelUnsupported {
-                                count: model_unsupported_count + 1,
-                                upstream_error,
-                            },
+                            ChatDispatchError::from_exhausted_account(exhausted),
                             account_id: Some(&release_account_id),
                             transport: Some(backend_transport_name(backend_transport_for_response_request(
                                 &request
                             )))
                         );
                     }
-                    model_unsupported_count += 1;
-                    last_model_unsupported_error = Some(upstream_error);
-                    last_failed_account_id = Some(release_account_id.clone());
-                    model_unsupported_retry_used = true;
+                    exhausted_accounts
+                        .record_model_unsupported(Some(&release_account_id), upstream_error);
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
-                    banned_count += 1;
-                    last_banned_status_code = Some(upstream_error_http_status(&error));
-                    last_banned_auth_error = Some(upstream_error_body(&error));
-                    last_failed_account_id = Some(release_account_id.clone());
+                    exhausted_accounts.record_auth_failure(
+                        Some(&release_account_id),
+                        AccountStatus::Banned,
+                        upstream_error_body(&error),
+                        Some(upstream_error_http_status(&error)),
+                    );
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;
@@ -459,8 +396,6 @@ impl ChatDispatchService {
 /// Chat Completions 调度错误。
 #[derive(Debug, Error)]
 pub enum ChatDispatchError {
-    #[error("failed to list runtime accounts")]
-    AccountStore,
     #[error("no active account is available")]
     NoActiveAccount,
     #[error("all accounts exhausted by quota")]
@@ -513,9 +448,47 @@ pub enum ChatDispatchError {
 }
 
 impl ChatDispatchError {
+    pub(crate) fn from_exhausted_account(exhausted: ExhaustedAccount) -> Self {
+        match exhausted.kind {
+            ExhaustedAccountKind::QuotaExhausted => Self::QuotaExhausted {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::RateLimited => Self::RateLimited {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::Expired => Self::Expired {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::Disabled => Self::Disabled {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::Banned => Self::Banned {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+                status_code: exhausted.status_code.unwrap_or(403),
+            },
+            ExhaustedAccountKind::CloudflareChallenge => Self::CloudflareChallenge {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::CloudflarePathBlocked => Self::CloudflarePathBlocked {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+            ExhaustedAccountKind::ModelUnsupported => Self::ModelUnsupported {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
+        }
+    }
+
     pub fn http_status_code(&self) -> u16 {
         match self {
-            Self::NoActiveAccount | Self::AccountStore => 503,
+            Self::NoActiveAccount => 503,
             Self::QuotaExhausted { .. } => 429,
             Self::RateLimited { .. } => 429,
             Self::Expired { .. } | Self::Disabled { .. } => 401,
@@ -527,6 +500,151 @@ impl ChatDispatchError {
             Self::ModelUnsupported { .. } => 400,
             Self::Upstream(error) => upstream_error_http_status(error),
         }
+    }
+
+    pub(crate) fn metadata(&self) -> DispatchErrorMetadata {
+        match self {
+            Self::NoActiveAccount => DispatchErrorMetadata::no_available_accounts(),
+            Self::QuotaExhausted {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(
+                ExhaustedAccountKind::QuotaExhausted,
+                *count,
+                upstream_error,
+            ),
+            Self::RateLimited {
+                count,
+                upstream_error,
+            } => {
+                Self::exhausted_metadata(ExhaustedAccountKind::RateLimited, *count, upstream_error)
+            }
+            Self::Expired {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(ExhaustedAccountKind::Expired, *count, upstream_error),
+            Self::Disabled {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(ExhaustedAccountKind::Disabled, *count, upstream_error),
+            Self::Banned {
+                count,
+                upstream_error,
+                ..
+            } => Self::exhausted_metadata(ExhaustedAccountKind::Banned, *count, upstream_error),
+            Self::CloudflareChallenge {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(
+                ExhaustedAccountKind::CloudflareChallenge,
+                *count,
+                upstream_error,
+            ),
+            Self::CloudflarePathBlocked {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(
+                ExhaustedAccountKind::CloudflarePathBlocked,
+                *count,
+                upstream_error,
+            ),
+            Self::ModelUnsupported {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(
+                ExhaustedAccountKind::ModelUnsupported,
+                *count,
+                upstream_error,
+            ),
+            Self::Upstream(error) => DispatchErrorMetadata::upstream(error),
+            Self::InvalidSse(_) => DispatchErrorMetadata::simple(DispatchFailureClass::InvalidSse),
+            Self::EmptyUpstreamResponse => {
+                DispatchErrorMetadata::simple(DispatchFailureClass::EmptyUpstreamResponse)
+            }
+        }
+    }
+
+    pub(crate) fn exhausted_account(&self) -> Option<ExhaustedAccountRef<'_>> {
+        match self {
+            Self::QuotaExhausted {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::QuotaExhausted,
+                count: *count,
+                upstream_error,
+            }),
+            Self::RateLimited {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::RateLimited,
+                count: *count,
+                upstream_error,
+            }),
+            Self::Expired {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::Expired,
+                count: *count,
+                upstream_error,
+            }),
+            Self::Disabled {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::Disabled,
+                count: *count,
+                upstream_error,
+            }),
+            Self::Banned {
+                count,
+                upstream_error,
+                ..
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::Banned,
+                count: *count,
+                upstream_error,
+            }),
+            Self::CloudflareChallenge {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::CloudflareChallenge,
+                count: *count,
+                upstream_error,
+            }),
+            Self::CloudflarePathBlocked {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::CloudflarePathBlocked,
+                count: *count,
+                upstream_error,
+            }),
+            Self::ModelUnsupported {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::ModelUnsupported,
+                count: *count,
+                upstream_error,
+            }),
+            _ => None,
+        }
+    }
+
+    fn exhausted_metadata(
+        kind: ExhaustedAccountKind,
+        count: usize,
+        upstream_error: &str,
+    ) -> DispatchErrorMetadata {
+        DispatchErrorMetadata::exhausted_ref(ExhaustedAccountRef {
+            kind,
+            count,
+            upstream_error,
+        })
     }
 }
 
@@ -555,7 +673,7 @@ async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'
         "error": record.error.to_string(),
     });
     if let Some(object) = metadata.as_object_mut() {
-        enrich_chat_error_metadata(object, record.error);
+        insert_dispatch_error_metadata(object, record.error.metadata());
         if let Some(transport) = record.transport {
             object.insert("transport".to_string(), serde_json::json!(transport));
         }
@@ -572,100 +690,4 @@ async fn record_chat_dispatch_error_event(record: ChatDispatchErrorEventRecord<'
         metadata,
     })
     .await;
-}
-
-fn enrich_chat_error_metadata(
-    object: &mut serde_json::Map<String, Value>,
-    error: &ChatDispatchError,
-) {
-    let (failure_class, exhausted_count, upstream_error, upstream_status) = match error {
-        ChatDispatchError::AccountStore => ("account_store", None, None, None),
-        ChatDispatchError::NoActiveAccount => ("no_available_accounts", None, None, None),
-        ChatDispatchError::QuotaExhausted {
-            count,
-            upstream_error,
-        } => (
-            "quota_exhausted",
-            Some(*count),
-            Some(upstream_error.clone()),
-            None,
-        ),
-        ChatDispatchError::RateLimited {
-            count,
-            upstream_error,
-        } => (
-            "rate_limited",
-            Some(*count),
-            Some(upstream_error.clone()),
-            None,
-        ),
-        ChatDispatchError::Expired {
-            count,
-            upstream_error,
-        } => ("expired", Some(*count), Some(upstream_error.clone()), None),
-        ChatDispatchError::Disabled {
-            count,
-            upstream_error,
-        } => ("disabled", Some(*count), Some(upstream_error.clone()), None),
-        ChatDispatchError::Banned {
-            count,
-            upstream_error,
-            ..
-        } => ("banned", Some(*count), Some(upstream_error.clone()), None),
-        ChatDispatchError::CloudflareChallenge {
-            count,
-            upstream_error,
-        } => (
-            "cloudflare_challenge",
-            Some(*count),
-            Some(upstream_error.clone()),
-            None,
-        ),
-        ChatDispatchError::CloudflarePathBlocked {
-            count,
-            upstream_error,
-        } => (
-            "cloudflare_path_blocked",
-            Some(*count),
-            Some(upstream_error.clone()),
-            None,
-        ),
-        ChatDispatchError::ModelUnsupported {
-            count,
-            upstream_error,
-        } => (
-            "model_unsupported",
-            Some(*count),
-            Some(upstream_error.clone()),
-            None,
-        ),
-        ChatDispatchError::Upstream(error) => {
-            let upstream_status = match error {
-                CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
-                _ => None,
-            };
-            (
-                "upstream",
-                None,
-                Some(upstream_error_body(error)),
-                upstream_status,
-            )
-        }
-        ChatDispatchError::InvalidSse(_) => ("invalid_sse", None, None, None),
-        ChatDispatchError::EmptyUpstreamResponse => ("empty_upstream_response", None, None, None),
-    };
-
-    object.insert(
-        "failureClass".to_string(),
-        Value::String(failure_class.to_string()),
-    );
-    if let Some(count) = exhausted_count {
-        object.insert("exhaustedCount".to_string(), serde_json::json!(count));
-    }
-    if let Some(error) = upstream_error {
-        object.insert("upstreamError".to_string(), Value::String(error));
-    }
-    if let Some(status) = upstream_status {
-        object.insert("upstreamStatus".to_string(), serde_json::json!(status));
-    }
 }

@@ -283,7 +283,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     let services = Services::new(&config, stores, fingerprint);
     let services = std::sync::Arc::new(services);
     let state = AppState {
-        config: config.clone(),
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);
@@ -417,7 +416,6 @@ async fn admin_settings_update_should_apply_runtime_services() {
         .await
         .unwrap();
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);
@@ -526,7 +524,6 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);
@@ -569,7 +566,6 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     (

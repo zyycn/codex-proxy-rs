@@ -163,7 +163,7 @@ impl AdminAccountData {
             label: a.label,
             plan_type: a.plan_type,
             has_refresh_token: a.has_refresh_token,
-            status: account_status_str(a.status).to_string(),
+            status: a.status.as_str().to_string(),
             access_token_expires_at,
             access_token_expires_at_display,
             added_at: china_rfc3339(&a.added_at),
@@ -396,7 +396,7 @@ impl From<AdminAccountRefreshResult> for AccountRefreshData {
         Self {
             id: result.id,
             email: result.email,
-            previous_status: account_status_str(result.previous_status).to_string(),
+            previous_status: result.previous_status.as_str().to_string(),
             result: account_refresh_outcome_str(result.outcome),
             error: result.error,
             duration_ms: result.duration_ms,
@@ -472,8 +472,8 @@ pub(crate) async fn accounts(
 ) -> Result<impl IntoResponse, AdminError> {
     let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
     let use_numbered_page = params.page.is_some() || params.page_size.is_some();
-    let stats = account_list_stats(&state).await;
-    let summary = account_summary_data(&state, &stats).await;
+    let quota_by_account = quota_snapshots_by_account(&state).await;
+    let summary = account_summary_data(&state, &quota_by_account).await;
 
     if use_numbered_page {
         return match state
@@ -483,6 +483,7 @@ pub(crate) async fn accounts(
             .await
         {
             Ok(page) => {
+                let stats = account_list_stats(&state, &page.items, &quota_by_account).await;
                 let page = crate::infra::json::NumberedPage {
                     items: page
                         .items
@@ -509,6 +510,7 @@ pub(crate) async fn accounts(
         .await
     {
         Ok(page) => {
+            let stats = account_list_stats(&state, &page.items, &quota_by_account).await;
             let page = Page {
                 items: page
                     .items
@@ -658,7 +660,7 @@ pub(crate) async fn account_quota(
         Err(AdminAccountError::NotFound) => Err(account_not_found()),
         Err(AdminAccountError::Inactive(status)) => Err(AdminError::conflict(format!(
             "Account is {}, cannot query quota",
-            account_status_str(status)
+            status.as_str()
         ))),
         Err(AdminAccountError::FetchQuota(msg)) => Err(AdminError::bad_gateway(format!(
             "Failed to fetch quota from Codex API: {msg}"
@@ -841,13 +843,19 @@ pub(crate) async fn update_account(
     }
 }
 
-async fn account_list_stats(state: &AppState) -> AccountListStats {
-    let usage_records = list_all_usage_records(state).await;
-    let quota_snapshots = state
+async fn account_list_stats(
+    state: &AppState,
+    accounts: &[AdminAccountMetadata],
+    quota_by_account: &HashMap<String, AdminAccountQuotaData>,
+) -> AccountListStats {
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let usage_records = state
         .services
-        .background_tasks
-        .accounts
-        .list_quota_snapshots()
+        .usage
+        .list_by_account_ids(&account_ids)
         .await
         .unwrap_or_default();
     let models_by_account = list_current_window_model_usage(state, &usage_records).await;
@@ -857,22 +865,14 @@ async fn account_list_stats(state: &AppState) -> AccountListStats {
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect(),
-        quota_by_account: quota_snapshots
-            .into_iter()
-            .map(|snapshot| {
-                (
-                    snapshot.account_id,
-                    quota_data(&snapshot.quota_json, snapshot.quota_fetched_at),
-                )
-            })
-            .collect(),
+        quota_by_account: quota_by_account.clone(),
         models_by_account,
     }
 }
 
 async fn account_summary_data(
     state: &AppState,
-    stats: &AccountListStats,
+    quota_by_account: &HashMap<String, AdminAccountQuotaData>,
 ) -> AdminAccountSummaryData {
     let accounts = list_all_account_metadata(state).await;
     let total = accounts.len() as u64;
@@ -883,8 +883,7 @@ async fn account_summary_data(
     let high_usage = accounts
         .iter()
         .filter(|account| {
-            stats
-                .quota_by_account
+            quota_by_account
                 .get(&account.id)
                 .is_some_and(account_quota_has_high_usage)
         })
@@ -900,6 +899,24 @@ async fn account_summary_data(
         high_usage,
         attention,
     }
+}
+
+async fn quota_snapshots_by_account(state: &AppState) -> HashMap<String, AdminAccountQuotaData> {
+    state
+        .services
+        .background_tasks
+        .accounts
+        .list_quota_snapshots()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|snapshot| {
+            (
+                snapshot.account_id,
+                quota_data(&snapshot.quota_json, snapshot.quota_fetched_at),
+            )
+        })
+        .collect()
 }
 
 async fn list_all_account_metadata(state: &AppState) -> Vec<AdminAccountMetadata> {
@@ -932,26 +949,6 @@ fn account_summary_needs_attention(status: AccountStatus) -> bool {
         status,
         AccountStatus::Expired | AccountStatus::Disabled | AccountStatus::Banned
     )
-}
-
-async fn list_all_usage_records(state: &AppState) -> Vec<AdminUsageRecord> {
-    let mut cursor = None;
-    let mut records = Vec::new();
-    loop {
-        let Ok(page) = state
-            .services
-            .usage
-            .list(cursor, ACCOUNT_STATS_PAGE_LIMIT)
-            .await
-        else {
-            return Vec::new();
-        };
-        records.extend(page.items);
-        let Some(next_cursor) = page.next_cursor else {
-            return records;
-        };
-        cursor = Some(next_cursor);
-    }
 }
 
 async fn list_current_window_model_usage(
@@ -1201,15 +1198,4 @@ fn account_export_ids(value: Option<&str>) -> Vec<String> {
         .filter(|id| !id.is_empty())
         .map(ToString::to_string)
         .collect()
-}
-
-fn account_status_str(status: crate::upstream::accounts::model::AccountStatus) -> &'static str {
-    match status {
-        crate::upstream::accounts::model::AccountStatus::Active => "active",
-        crate::upstream::accounts::model::AccountStatus::Expired => "expired",
-        crate::upstream::accounts::model::AccountStatus::QuotaExhausted => "quota_exhausted",
-        crate::upstream::accounts::model::AccountStatus::Refreshing => "refreshing",
-        crate::upstream::accounts::model::AccountStatus::Disabled => "disabled",
-        crate::upstream::accounts::model::AccountStatus::Banned => "banned",
-    }
 }

@@ -20,7 +20,7 @@ use super::{
     contracts::{
         parse_account_status, stored_to_admin_metadata, AdminAccountError, AdminAccountHealthCheck,
         AdminAccountMetadata, AdminAccountRefreshOutcome, AdminAccountRefreshResult,
-        AdminAccountUpdate, BatchDeleteAccounts, ManualCreateTokens, UpdatedAccountStatus,
+        AdminAccountUpdate, BatchDeleteAccounts, ManualCreateTokens,
     },
     AdminAccountService,
 };
@@ -92,37 +92,32 @@ impl AdminAccountService {
                     .as_deref()
                     .map(crate::upstream::accounts::importing::normalize_bearer_token),
             ) {
+            let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
+                &access_token,
+                Utc::now(),
+            )
+            .map_err(AdminAccountError::InvalidToken)?;
             ManualCreateTokens {
                 access_token,
                 refresh_token_for_new: provided_refresh_token.clone(),
                 refresh_token_for_existing: provided_refresh_token,
+                claims,
             }
         } else if let Some(refresh_token) = provided_refresh_token {
-            let token_pair = self
-                .token_refresher
-                .refresh(&refresh_token)
-                .await
-                .map_err(AdminAccountError::RefreshTokenExchange)?;
-            let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
-                crate::upstream::accounts::importing::normalize_bearer_token(
-                    &token_pair.access_token,
-                ),
-            ))
-            .ok_or(AdminAccountError::TokenRequired)?;
+            let refreshed = self
+                .refresh_tokens_from_refresh_token(&refresh_token)
+                .await?;
             ManualCreateTokens {
-                access_token,
-                refresh_token_for_new: token_pair.refresh_token.clone(),
-                refresh_token_for_existing: token_pair.refresh_token,
+                access_token: refreshed.access_token,
+                refresh_token_for_new: refreshed.refresh_token.clone(),
+                refresh_token_for_existing: refreshed.refresh_token,
+                claims: refreshed.claims,
             }
         } else {
             return Err(AdminAccountError::TokenRequired);
         };
 
-        let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
-            &tokens.access_token,
-            Utc::now(),
-        )
-        .map_err(AdminAccountError::InvalidToken)?;
+        let claims = tokens.claims;
         let existing = if let Some(account_id) = claims.account_id.as_deref() {
             self.store
                 .find_by_chatgpt_identity(account_id, claims.user_id.as_deref())
@@ -194,45 +189,6 @@ impl AdminAccountService {
             .map_err(|_| AdminAccountError::Inspect)?
             .map(stored_to_admin_metadata)
             .ok_or(AdminAccountError::NotFound)
-    }
-    pub async fn update_label(
-        &self,
-        account_id: &str,
-        label: Option<String>,
-    ) -> Result<bool, AdminAccountError> {
-        if label.as_ref().is_some_and(|l| l.chars().count() > 64) {
-            return Err(AdminAccountError::LabelTooLong);
-        }
-        let updated = self
-            .store
-            .set_label(account_id, label)
-            .await
-            .map_err(|_| AdminAccountError::UpdateLabel)?;
-        if updated {
-            self.sync_account_pool_best_effort(account_id, "account label update")
-                .await;
-        }
-        Ok(updated)
-    }
-    pub async fn update_status(
-        &self,
-        account_id: &str,
-        status: &str,
-    ) -> Result<Option<UpdatedAccountStatus>, AdminAccountError> {
-        let status = parse_account_status(status)?;
-        match self.store.set_status(account_id, status).await {
-            Ok(true) => {
-                self.sync_account_pool_best_effort(account_id, "account status update")
-                    .await;
-                self.evict_account_websocket_pool(account_id).await;
-                Ok(Some(UpdatedAccountStatus {
-                    id: account_id.to_string(),
-                    status,
-                }))
-            }
-            Ok(false) => Ok(None),
-            Err(_) => Err(AdminAccountError::UpdateStatus),
-        }
     }
     pub async fn update_account(
         &self,
@@ -336,39 +292,28 @@ impl AdminAccountService {
         }
 
         match self
-            .token_refresher
-            .refresh(refresh_token.expose_secret())
+            .refresh_tokens_from_refresh_token(refresh_token.expose_secret())
             .await
         {
-            Ok(tokens) => {
-                let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
-                    crate::upstream::accounts::importing::normalize_bearer_token(
-                        &tokens.access_token,
-                    ),
-                ))
-                .ok_or(AdminAccountError::TokenRequired)?;
-                let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
-                    &access_token,
-                    Utc::now(),
-                )
-                .map_err(AdminAccountError::InvalidToken)?;
+            Ok(refreshed) => {
                 let updated = self
                     .store
                     .update_from_claims(
                         account_id,
                         crate::upstream::accounts::store::AccountClaimsUpdate {
-                            email: claims.email,
-                            account_id: claims.account_id.or(account.account_id),
-                            user_id: claims.user_id,
-                            plan_type: claims.plan_type,
-                            access_token: SecretString::new(access_token.into()),
-                            refresh_token: tokens
+                            email: refreshed.claims.email,
+                            account_id: refreshed.claims.account_id.or(account.account_id),
+                            user_id: refreshed.claims.user_id,
+                            plan_type: refreshed.claims.plan_type,
+                            access_token: SecretString::new(refreshed.access_token.into()),
+                            refresh_token: refreshed
                                 .refresh_token
                                 .map(|token| SecretString::new(token.into())),
-                            access_token_expires_at: Some(claims.expires_at),
-                            next_refresh_at: Some(
-                                self.next_refresh_at_for_expires_at(account_id, claims.expires_at),
-                            ),
+                            access_token_expires_at: Some(refreshed.claims.expires_at),
+                            next_refresh_at: Some(self.next_refresh_at_for_expires_at(
+                                account_id,
+                                refreshed.claims.expires_at,
+                            )),
                             status: crate::upstream::accounts::model::AccountStatus::Active,
                         },
                     )
@@ -387,7 +332,7 @@ impl AdminAccountService {
                     duration_ms: elapsed_millis_i64(started_at),
                 })
             }
-            Err(failure) => {
+            Err(AdminAccountError::RefreshTokenExchange(failure)) => {
                 if manual_refresh_failure_is_permanent(&failure) {
                     let status = crate::upstream::accounts::model::AccountStatus::Expired;
                     let updated = self
@@ -422,6 +367,7 @@ impl AdminAccountService {
                     duration_ms: elapsed_millis_i64(started_at),
                 })
             }
+            Err(error) => Err(error),
         }
     }
 
@@ -494,8 +440,7 @@ fn manual_refresh_failure_is_permanent(
     match failure {
         crate::upstream::accounts::token_refresh::RefreshFailure::InvalidGrant
         | crate::upstream::accounts::token_refresh::RefreshFailure::Banned => true,
-        crate::upstream::accounts::token_refresh::RefreshFailure::QuotaExhausted
-        | crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
+        crate::upstream::accounts::token_refresh::RefreshFailure::RetryableTransport
         | crate::upstream::accounts::token_refresh::RefreshFailure::Transport => false,
     }
 }
