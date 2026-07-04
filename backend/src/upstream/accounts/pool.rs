@@ -24,18 +24,6 @@ use crate::upstream::protocol::events::{
     parse_rate_limit_headers, rate_limit_quota, TokenUsage as CodexTokenUsage,
 };
 
-/// Token usage statistics.
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct TokenUsage {
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cached_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub total_tokens: i64,
-    pub image_input_tokens: i64,
-    pub image_output_tokens: i64,
-}
-
 /// 账号轮转策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationStrategy {
@@ -1288,6 +1276,9 @@ impl RuntimeAccountPoolService {
         let limit_reached = quota_snapshot_limit_reached(quota);
         let reset_at = quota_snapshot_reset_at(quota);
         let cooldown_until = limit_reached.then_some(reset_at).flatten();
+        let limit_window_seconds = reset_at.and_then(|_| {
+            crate::upstream::accounts::quota::quota_snapshot_limit_window_seconds(quota)
+        });
         let quota_json = quota.to_string();
         let persisted = match self
             .store
@@ -1304,15 +1295,8 @@ impl RuntimeAccountPoolService {
                 false
             }
         };
-        let in_memory =
-            self.pool
-                .lock()
-                .await
-                .apply_quota_state(account_id, limit_reached, cooldown_until);
 
         if let Some(reset_at) = reset_at {
-            let limit_window_seconds =
-                crate::upstream::accounts::quota::quota_snapshot_limit_window_seconds(quota);
             if let Err(error) = self
                 .store
                 .sync_rate_limit_window(account_id, reset_at, limit_window_seconds)
@@ -1324,11 +1308,12 @@ impl RuntimeAccountPoolService {
                     "failed to persist verified quota window"
                 );
             }
-            self.pool.lock().await.sync_rate_limit_window(
-                account_id,
-                reset_at,
-                limit_window_seconds,
-            );
+        }
+
+        let mut pool = self.pool.lock().await;
+        let in_memory = pool.apply_quota_state(account_id, limit_reached, cooldown_until);
+        if let Some(reset_at) = reset_at {
+            pool.sync_rate_limit_window(account_id, reset_at, limit_window_seconds);
         }
 
         persisted || in_memory

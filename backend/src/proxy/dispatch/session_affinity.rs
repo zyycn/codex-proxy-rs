@@ -125,14 +125,6 @@ impl SessionAffinityMap {
         self.entries.remove(response_id).is_some()
     }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     fn active_entry(&self, response_id: &str, now: DateTime<Utc>) -> Option<&SessionAffinityEntry> {
         self.entries
             .get(response_id)

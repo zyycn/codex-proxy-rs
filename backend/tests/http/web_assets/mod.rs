@@ -203,7 +203,6 @@ async fn router_with_dist_and_database(dist: &Path, database_url: &str) -> (Rout
         fingerprint,
     ));
     let state = codex_proxy_rs::runtime::state::AppState {
-        config,
         services: (*services).clone(),
     };
     (

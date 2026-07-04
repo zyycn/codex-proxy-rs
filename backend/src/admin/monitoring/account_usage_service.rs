@@ -37,6 +37,18 @@ impl AdminUsageService {
         })
     }
 
+    /// 按账号 ID 批量读取账号用量。
+    pub async fn list_by_account_ids(
+        &self,
+        account_ids: &[String],
+    ) -> Result<Vec<AdminUsageRecord>, AdminUsageError> {
+        self.store
+            .list_usage_by_account_ids(account_ids)
+            .await
+            .map(|records| records.into_iter().map(AdminUsageRecord::from).collect())
+            .map_err(|_| AdminUsageError::List)
+    }
+
     /// 汇总账号用量。
     pub async fn summary(&self) -> Result<AdminUsageSummary, AdminUsageError> {
         self.store

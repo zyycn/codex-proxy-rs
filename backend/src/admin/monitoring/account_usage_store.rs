@@ -245,6 +245,27 @@ impl SqliteUsageStore {
         Ok(to_page(&rows, limit))
     }
 
+    /// 按账号 ID 批量读取账号用量。
+    pub async fn list_usage_by_account_ids(
+        &self,
+        account_ids: &[String],
+    ) -> SqliteUsageStoreResult<Vec<UsageListRecord>> {
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(LIST_USAGE_SELECT_SQL);
+        builder.push("\nwhere au.account_id in (");
+        let mut separated = builder.separated(", ");
+        for account_id in account_ids {
+            separated.push_bind(account_id);
+        }
+        separated.push_unseparated(")");
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.iter().map(usage_list_from_row).collect()
+    }
+
     /// 汇总账号用量。
     pub async fn usage_summary(&self) -> SqliteUsageStoreResult<UsageSummary> {
         let row = sqlx::query(USAGE_SUMMARY_SQL).fetch_one(&self.pool).await?;

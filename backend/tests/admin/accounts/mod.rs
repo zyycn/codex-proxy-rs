@@ -172,7 +172,6 @@ async fn admin_accounts_test_app_with_overrides(
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state.clone());

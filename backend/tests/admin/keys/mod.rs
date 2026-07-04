@@ -43,7 +43,6 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     (

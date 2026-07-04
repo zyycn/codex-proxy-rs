@@ -281,7 +281,7 @@ async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_ex
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .await
         .unwrap();
-    let stored: (
+    type StoredQuotaResetState = (
         String,
         i64,
         i64,
@@ -293,7 +293,20 @@ async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_ex
         i64,
         Option<String>,
         Option<i64>,
-    ) = sqlx::query_as(
+    );
+    let (
+        stored_status,
+        stored_quota_limit_reached,
+        stored_quota_verify_required,
+        stored_quota_cooldown_until,
+        stored_cloudflare_cooldown_until,
+        stored_window_request_count,
+        stored_window_input_tokens,
+        stored_window_output_tokens,
+        stored_window_cached_tokens,
+        stored_window_reset_at,
+        stored_limit_window_seconds,
+    ): StoredQuotaResetState = sqlx::query_as(
         r#"
         select
           a.status,
@@ -316,22 +329,29 @@ async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_ex
     .fetch_one(&pool)
     .await
     .unwrap();
-    let persisted_reset_at = stored
-        .9
+    let persisted_reset_at = stored_window_reset_at
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc));
 
     assert_eq!(acquired.account.id, "acct_quota_reset");
     assert!(acquired.account.quota_verify_required);
-    assert_eq!(stored.0, "active");
-    assert_eq!(stored.1, 0);
-    assert_eq!(stored.2, 1);
-    assert!(stored.3.is_none());
-    assert!(stored.4.is_none());
-    assert_eq!((stored.5, stored.6, stored.7, stored.8), (0, 0, 0, 0));
+    assert_eq!(stored_status, "active");
+    assert_eq!(stored_quota_limit_reached, 0);
+    assert_eq!(stored_quota_verify_required, 1);
+    assert!(stored_quota_cooldown_until.is_none());
+    assert!(stored_cloudflare_cooldown_until.is_none());
+    assert_eq!(
+        (
+            stored_window_request_count,
+            stored_window_input_tokens,
+            stored_window_output_tokens,
+            stored_window_cached_tokens,
+        ),
+        (0, 0, 0, 0)
+    );
     assert!(persisted_reset_at.is_some_and(|reset_at| reset_at > now));
-    assert_eq!(stored.10, Some(60));
+    assert_eq!(stored_limit_window_seconds, Some(60));
 }
 
 #[test]

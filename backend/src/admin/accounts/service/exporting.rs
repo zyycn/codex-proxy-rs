@@ -4,10 +4,7 @@ use super::{
     contracts::{ExportedAccount, ExportedAccounts},
     AdminAccountError, AdminAccountService,
 };
-use crate::{
-    infra::time::china_rfc3339_str,
-    upstream::accounts::{model::AccountStatus, store::StoredAccount},
-};
+use crate::{infra::time::china_rfc3339_str, upstream::accounts::store::StoredAccount};
 
 impl AdminAccountService {
     pub async fn export(&self, ids: Vec<String>) -> Result<ExportedAccounts, AdminAccountError> {
@@ -58,20 +55,9 @@ impl From<StoredAccount> for ExportedAccount {
             access_token_expires_at: account
                 .access_token_expires_at
                 .map(|value| value.to_rfc3339()),
-            status: export_status_str(account.status).to_string(),
+            status: account.status.as_str().to_string(),
             added_at: china_rfc3339_str(&account.added_at),
             updated_at: china_rfc3339_str(&account.updated_at),
         }
-    }
-}
-
-fn export_status_str(status: AccountStatus) -> &'static str {
-    match status {
-        AccountStatus::Active => "active",
-        AccountStatus::Expired => "expired",
-        AccountStatus::QuotaExhausted => "quota_exhausted",
-        AccountStatus::Refreshing => "refreshing",
-        AccountStatus::Disabled => "disabled",
-        AccountStatus::Banned => "banned",
     }
 }

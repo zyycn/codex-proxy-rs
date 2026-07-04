@@ -11,7 +11,7 @@ mod testing;
 
 use std::sync::Arc as StdArc;
 
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 
 use crate::{
     upstream::accounts::{
@@ -27,7 +27,7 @@ use crate::{
 pub use contracts::{
     AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata, AdminAccountRefreshOutcome,
     AdminAccountRefreshResult, AdminAccountUpdate, BatchDeleteAccounts, ExportedAccounts,
-    ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput, UpdatedAccountStatus,
+    ImportedAccounts, OAuthAuthorizeResult, OAuthExchangeInput,
 };
 
 #[derive(Clone)]
@@ -80,6 +80,32 @@ impl AdminAccountService {
             expires_at,
             self.refresh_policy.refresh_margin_seconds(),
         )
+    }
+
+    async fn refresh_tokens_from_refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<contracts::RefreshedAccountTokens, AdminAccountError> {
+        let token_pair = self
+            .token_refresher
+            .refresh(refresh_token)
+            .await
+            .map_err(AdminAccountError::RefreshTokenExchange)?;
+        let access_token = crate::upstream::accounts::importing::normalize_nonempty(Some(
+            crate::upstream::accounts::importing::normalize_bearer_token(&token_pair.access_token),
+        ))
+        .ok_or(AdminAccountError::TokenRequired)?;
+        let claims = crate::upstream::accounts::token_refresh::manual_account_claims(
+            &access_token,
+            Utc::now(),
+        )
+        .map_err(AdminAccountError::InvalidToken)?;
+
+        Ok(contracts::RefreshedAccountTokens {
+            access_token,
+            refresh_token: token_pair.refresh_token,
+            claims,
+        })
     }
 
     pub(crate) async fn sync_account_pool(

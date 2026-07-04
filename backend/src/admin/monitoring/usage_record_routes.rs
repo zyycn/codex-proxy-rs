@@ -125,7 +125,6 @@ pub(crate) struct UsageRecordCostDetailsData {
     output_cost: f64,
     cache_read_cost: f64,
     total_cost: f64,
-    billed_cost: f64,
     original_cost: f64,
     input_price_per_mtoken: f64,
     output_price_per_mtoken: f64,
@@ -137,7 +136,6 @@ pub(crate) struct UsageRecordCostDetailsData {
     output_cost_display: String,
     cache_read_cost_display: String,
     total_cost_display: String,
-    billed_cost_display: String,
     original_cost_display: String,
     input_price_display: String,
     output_price_display: String,
@@ -332,19 +330,7 @@ pub(crate) async fn usage_records_token_trend(
     _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let filter = filter_from_query(query)?;
-    match state.services.usage_records.token_trend(filter).await {
-        Ok(points) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(
-                points
-                    .into_iter()
-                    .map(UsageRecordTrendPointData::from)
-                    .collect::<Vec<_>>(),
-            ),
-        )),
-        Err(error) => Err(log_error(&error)),
-    }
+    usage_records_trend_response(state, query).await
 }
 
 /// `GET /api/admin/usage/records/insights/latency-trend`
@@ -353,8 +339,15 @@ pub(crate) async fn usage_records_latency_trend(
     _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
+    usage_records_trend_response(state, query).await
+}
+
+async fn usage_records_trend_response(
+    state: AppState,
+    query: UsageRecordsQuery,
+) -> Result<AdminResponse<AdminEnvelope<Vec<UsageRecordTrendPointData>>>, AdminError> {
     let filter = filter_from_query(query)?;
-    match state.services.usage_records.latency_trend(filter).await {
+    match state.services.usage_records.trend(filter).await {
         Ok(points) => Ok(AdminResponse::new(
             StatusCode::OK,
             AdminEnvelope::ok(
@@ -607,7 +600,6 @@ fn usage_cost_details(
         output_cost: cost.output_cost,
         cache_read_cost: cost.cache_read_cost,
         total_cost: cost.total_cost,
-        billed_cost: cost.billed_cost,
         original_cost: cost.original_cost,
         input_price_per_mtoken: cost.input_price_per_mtoken,
         output_price_per_mtoken: cost.output_price_per_mtoken,
@@ -619,7 +611,6 @@ fn usage_cost_details(
         output_cost_display: format_precise_cost(cost.output_cost),
         cache_read_cost_display: format_precise_cost(cost.cache_read_cost),
         total_cost_display: format_precise_cost(cost.total_cost),
-        billed_cost_display: format_precise_cost(cost.billed_cost),
         original_cost_display: format_precise_cost(cost.original_cost),
         input_price_display: format_token_price(cost.input_price_per_mtoken),
         output_price_display: format_token_price(cost.output_price_per_mtoken),

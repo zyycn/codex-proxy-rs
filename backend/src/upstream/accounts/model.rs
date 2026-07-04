@@ -20,16 +20,23 @@ pub enum AccountStatus {
     Banned,
 }
 
+impl AccountStatus {
+    /// 返回账号状态的持久化/API 字符串。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::Refreshing => "refreshing",
+            Self::Disabled => "disabled",
+            Self::Banned => "banned",
+        }
+    }
+}
+
 impl std::fmt::Display for AccountStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Active => write!(f, "active"),
-            Self::Expired => write!(f, "expired"),
-            Self::QuotaExhausted => write!(f, "quota_exhausted"),
-            Self::Refreshing => write!(f, "refreshing"),
-            Self::Disabled => write!(f, "disabled"),
-            Self::Banned => write!(f, "banned"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

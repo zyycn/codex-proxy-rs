@@ -1,11 +1,135 @@
 //! Shared upstream error classification for dispatch routes.
 
 use chrono::{DateTime, Duration, Utc};
+use serde_json::{json, Map, Value};
 
 use crate::{
+    proxy::dispatch::exhaustion::{ExhaustedAccountKind, ExhaustedAccountRef},
     upstream::accounts::model::AccountStatus,
     upstream::transport::{is_banned_auth_signal, CodexBackendTransport, CodexClientError},
 };
+
+#[derive(Clone, Debug)]
+pub(crate) struct DispatchErrorMetadata {
+    pub failure_class: DispatchFailureClass,
+    pub exhausted_count: Option<usize>,
+    pub upstream_error: Option<String>,
+    pub upstream_status: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DispatchFailureClass {
+    NoAvailableAccounts,
+    QuotaExhausted,
+    RateLimited,
+    Expired,
+    Disabled,
+    Banned,
+    CloudflareChallenge,
+    CloudflarePathBlocked,
+    ModelUnsupported,
+    Upstream,
+    InvalidSse,
+    MissingCompleted,
+    EmptyUpstreamResponse,
+    ResponseFailed,
+}
+
+impl DispatchFailureClass {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NoAvailableAccounts => "no_available_accounts",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::RateLimited => "rate_limited",
+            Self::Expired => "expired",
+            Self::Disabled => "disabled",
+            Self::Banned => "banned",
+            Self::CloudflareChallenge => "cloudflare_challenge",
+            Self::CloudflarePathBlocked => "cloudflare_path_blocked",
+            Self::ModelUnsupported => "model_unsupported",
+            Self::Upstream => "upstream",
+            Self::InvalidSse => "invalid_sse",
+            Self::MissingCompleted => "missing_completed",
+            Self::EmptyUpstreamResponse => "empty_upstream_response",
+            Self::ResponseFailed => "response_failed",
+        }
+    }
+}
+
+impl DispatchErrorMetadata {
+    pub(crate) fn no_available_accounts() -> Self {
+        Self {
+            failure_class: DispatchFailureClass::NoAvailableAccounts,
+            exhausted_count: None,
+            upstream_error: None,
+            upstream_status: None,
+        }
+    }
+
+    pub(crate) fn exhausted_ref(exhausted: ExhaustedAccountRef<'_>) -> Self {
+        Self {
+            failure_class: DispatchFailureClass::from(exhausted.kind),
+            exhausted_count: Some(exhausted.count),
+            upstream_error: Some(exhausted.upstream_error.to_string()),
+            upstream_status: None,
+        }
+    }
+
+    pub(crate) fn upstream(error: &CodexClientError) -> Self {
+        Self {
+            failure_class: DispatchFailureClass::Upstream,
+            exhausted_count: None,
+            upstream_error: Some(upstream_error_body(error)),
+            upstream_status: match error {
+                CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
+                _ => None,
+            },
+        }
+    }
+
+    pub(crate) fn simple(failure_class: DispatchFailureClass) -> Self {
+        Self {
+            failure_class,
+            exhausted_count: None,
+            upstream_error: None,
+            upstream_status: None,
+        }
+    }
+}
+
+impl From<ExhaustedAccountKind> for DispatchFailureClass {
+    fn from(kind: ExhaustedAccountKind) -> Self {
+        match kind {
+            ExhaustedAccountKind::QuotaExhausted => Self::QuotaExhausted,
+            ExhaustedAccountKind::RateLimited => Self::RateLimited,
+            ExhaustedAccountKind::Expired => Self::Expired,
+            ExhaustedAccountKind::Disabled => Self::Disabled,
+            ExhaustedAccountKind::Banned => Self::Banned,
+            ExhaustedAccountKind::CloudflareChallenge => Self::CloudflareChallenge,
+            ExhaustedAccountKind::CloudflarePathBlocked => Self::CloudflarePathBlocked,
+            ExhaustedAccountKind::ModelUnsupported => Self::ModelUnsupported,
+        }
+    }
+}
+
+pub(crate) fn insert_dispatch_error_metadata(
+    object: &mut Map<String, Value>,
+    metadata: DispatchErrorMetadata,
+) {
+    object.insert(
+        "failureClass".to_string(),
+        Value::String(metadata.failure_class.as_str().to_string()),
+    );
+    if let Some(count) = metadata.exhausted_count {
+        object.insert("exhaustedCount".to_string(), json!(count));
+    }
+    if let Some(error) = metadata.upstream_error {
+        object.insert("upstreamError".to_string(), Value::String(error));
+    }
+    if let Some(status) = metadata.upstream_status {
+        object.insert("upstreamStatus".to_string(), json!(status));
+    }
+}
 
 pub(crate) fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
     matches!(

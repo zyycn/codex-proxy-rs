@@ -885,7 +885,6 @@ async fn admin_usage_records_test_app_with_config(
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     (

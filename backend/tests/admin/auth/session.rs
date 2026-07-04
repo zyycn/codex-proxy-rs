@@ -205,7 +205,6 @@ async fn admin_login_test_app(
         fingerprint,
     ));
     let state = codex_proxy_rs::runtime::state::AppState {
-        config,
         services: (*services).clone(),
     };
     (

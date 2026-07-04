@@ -92,7 +92,6 @@ pub(crate) struct AdminUsageRecordCostDetails {
     pub output_cost: f64,
     pub cache_read_cost: f64,
     pub total_cost: f64,
-    pub billed_cost: f64,
     pub original_cost: f64,
     pub input_price_per_mtoken: f64,
     pub output_price_per_mtoken: f64,
@@ -237,19 +236,8 @@ impl AdminUsageRecordService {
             .map_err(|_| AdminUsageRecordError::List)
     }
 
-    /// 聚合 Token 趋势。
-    pub async fn token_trend(
-        &self,
-        filter: AdminUsageRecordFilter,
-    ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
-        self.store
-            .trend(filter.into())
-            .await
-            .map_err(|_| AdminUsageRecordError::List)
-    }
-
-    /// 聚合延迟趋势。
-    pub async fn latency_trend(
+    /// 聚合使用记录趋势。
+    pub async fn trend(
         &self,
         filter: AdminUsageRecordFilter,
     ) -> Result<Vec<UsageRecordTrendPoint>, AdminUsageRecordError> {
@@ -343,7 +331,6 @@ pub(crate) fn usage_record_cost_details(
         output_cost: breakdown.output_cost,
         cache_read_cost: breakdown.cache_read_cost,
         total_cost: breakdown.total_cost,
-        billed_cost: breakdown.total_cost,
         original_cost,
         input_price_per_mtoken: breakdown.input_price_per_mtoken,
         output_price_per_mtoken: breakdown.output_price_per_mtoken,

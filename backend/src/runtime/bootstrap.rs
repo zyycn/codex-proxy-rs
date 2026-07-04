@@ -113,7 +113,7 @@ async fn build_application(
 
     let task_coordinator = TaskCoordinator::start(&runtime_config, &services);
     let trusted_proxies = TrustedProxyConfig::from_entries(&config.server.trusted_proxies)?;
-    let app_state = AppState { config, services };
+    let app_state = AppState { services };
 
     Ok((
         crate::http::router::router_with_trusted_proxies(trusted_proxies).with_state(app_state),

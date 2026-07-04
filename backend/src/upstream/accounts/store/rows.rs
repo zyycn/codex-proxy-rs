@@ -17,9 +17,8 @@ use crate::{
 
 use super::{
     queries::{GET_POOL_ACCOUNT_SQL, LIST_POOL_ACCOUNTS_SQL},
-    AccountModelUsageRecord, AccountQuotaSnapshot, AccountStoreError, SqliteAccountStore,
-    SqliteAccountStoreError, SqliteAccountStoreResult, StoredAccount, StoredAccountMetadata,
-    UsageDelta,
+    AccountQuotaSnapshot, AccountStoreError, SqliteAccountStore, SqliteAccountStoreError,
+    SqliteAccountStoreResult, StoredAccount, StoredAccountMetadata, UsageDelta,
 };
 
 pub(super) async fn list_pool_accounts(
@@ -230,23 +229,6 @@ pub(super) fn quota_plan_type(quota_json: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-pub(super) fn model_usage_from_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> SqliteAccountStoreResult<AccountModelUsageRecord> {
-    Ok(AccountModelUsageRecord {
-        account_id: row.get("account_id"),
-        model: row.get("model"),
-        request_count: row.get("request_count"),
-        error_count: row.get("error_count"),
-        input_tokens: row.get("input_tokens"),
-        output_tokens: row.get("output_tokens"),
-        cached_tokens: row.get("cached_tokens"),
-        last_used_at: parse_optional_rfc3339(
-            row.get::<Option<String>, _>("last_used_at").as_deref(),
-        )?,
-    })
-}
-
 pub(super) fn quota_snapshot_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> SqliteAccountStoreResult<AccountQuotaSnapshot> {
@@ -261,14 +243,7 @@ pub(super) fn quota_snapshot_from_row(
 }
 
 pub(super) fn status_to_db(status: AccountStatus) -> &'static str {
-    match status {
-        AccountStatus::Active => "active",
-        AccountStatus::Expired => "expired",
-        AccountStatus::QuotaExhausted => "quota_exhausted",
-        AccountStatus::Refreshing => "refreshing",
-        AccountStatus::Disabled => "disabled",
-        AccountStatus::Banned => "banned",
-    }
+    status.as_str()
 }
 
 pub(super) fn optional_update_value(value: &Option<Option<String>>) -> Option<&str> {

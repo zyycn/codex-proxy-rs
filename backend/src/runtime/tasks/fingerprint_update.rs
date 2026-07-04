@@ -2,9 +2,14 @@
 
 use std::path::PathBuf;
 
-use crate::upstream::fingerprint::{FingerprintRepository, UpdateChecker};
+use tracing::warn;
 
-use super::coordinator::SchedulerHandle;
+use crate::upstream::fingerprint::{FingerprintRepository, UpdateChecker, APPCAST_POLL_INTERVAL};
+
+use super::{
+    coordinator::SchedulerHandle,
+    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+};
 
 /// Codex Desktop 官方 appcast 地址。
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
@@ -28,5 +33,35 @@ pub fn start_fingerprint_update_task(
         current_version,
         current_build,
     );
-    SchedulerHandle::from_join_handle(update_checker.start_background_checker())
+    spawn_periodic_task(
+        FingerprintUpdateTask {
+            checker: update_checker,
+            first_tick: true,
+        },
+        PeriodicTaskConfig::new(
+            APPCAST_POLL_INTERVAL.as_secs(),
+            "fingerprint 后台版本检查器已启动",
+            "fingerprint 后台版本检查器已关闭",
+        ),
+    )
+}
+
+struct FingerprintUpdateTask {
+    checker: UpdateChecker,
+    first_tick: bool,
+}
+
+impl PeriodicTaskRunner for FingerprintUpdateTask {
+    fn tick(&mut self) -> super::periodic::TaskFuture<'_, ()> {
+        Box::pin(async move {
+            let first_tick = std::mem::take(&mut self.first_tick);
+            if let Err(error) = self.checker.check_and_apply_update().await {
+                if first_tick {
+                    warn!(error = %error, "fingerprint 首次版本检查失败");
+                } else {
+                    warn!(error = %error, "fingerprint 定期版本检查失败");
+                }
+            }
+        })
+    }
 }

@@ -8,7 +8,10 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::proxy::{
-    dispatch::{chat::ChatDispatchError, responses::errors::ResponseDispatchError},
+    dispatch::{
+        chat::ChatDispatchError, errors::DispatchFailureClass,
+        responses::errors::ResponseDispatchError,
+    },
     openai::responses::response_failed_sse_event as encode_response_failed_sse_event,
 };
 
@@ -113,7 +116,7 @@ pub fn chat_stream_dispatch_openai_error(error: &ResponseDispatchError) -> OpenA
 
 pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Response {
     match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
+        ResponseDispatchError::NoActiveAccount => {
             responses_no_available_accounts_response().into_response()
         }
         error => response_dispatch_openai_error_response(&error),
@@ -122,7 +125,7 @@ pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Respon
 
 pub fn responses_compact_dispatch_error_response(error: ResponseDispatchError) -> Response {
     match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
+        ResponseDispatchError::NoActiveAccount => {
             responses_no_available_accounts_response().into_response()
         }
         error => {
@@ -224,77 +227,21 @@ fn invalid_openai_request_response(message: &str) -> (StatusCode, Json<Value>) {
 
 fn chat_dispatch_openai_error(error: &ChatDispatchError) -> OpenAiErrorDetails {
     let status = chat_dispatch_status(error);
-    let (message, kind) = match error {
-        ChatDispatchError::NoActiveAccount | ChatDispatchError::AccountStore => (
-            NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE.to_owned(),
-            UPSTREAM_UNAVAILABLE_ERROR,
-        ),
-        ChatDispatchError::Upstream(_) => (
-            UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
-            UPSTREAM_ERROR,
-        ),
-        ChatDispatchError::QuotaExhausted {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "quota-exhausted", upstream_error, false),
-            INSUFFICIENT_QUOTA_ERROR,
-        ),
-        ChatDispatchError::RateLimited {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "rate-limited", upstream_error, false),
-            RATE_LIMIT_ERROR,
-        ),
-        ChatDispatchError::Expired {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "expired", upstream_error, false),
-            AUTHENTICATION_ERROR,
-        ),
-        ChatDispatchError::Disabled {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "disabled", upstream_error, false),
-            AUTHENTICATION_ERROR,
-        ),
-        ChatDispatchError::Banned {
-            count,
-            upstream_error,
-            ..
-        } => (
-            exhausted_dispatch_message(*count, "banned", upstream_error, false),
-            AUTHENTICATION_ERROR,
-        ),
-        ChatDispatchError::CloudflareChallenge {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "cloudflare-challenge", upstream_error, false),
-            UPSTREAM_ERROR,
-        ),
-        ChatDispatchError::CloudflarePathBlocked {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "cloudflare-path-block", upstream_error, false),
-            UPSTREAM_ERROR,
-        ),
-        ChatDispatchError::ModelUnsupported {
-            count,
-            upstream_error,
-        } => (
-            exhausted_dispatch_message(*count, "model-unsupported", upstream_error, false),
-            MODEL_NOT_FOUND_ERROR,
-        ),
-        ChatDispatchError::InvalidSse(_) | ChatDispatchError::EmptyUpstreamResponse => (
-            INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE.to_owned(),
-            INVALID_UPSTREAM_RESPONSE_ERROR,
-        ),
+    let metadata = error.metadata();
+    let message = if let Some(exhausted) = error.exhausted_account() {
+        exhausted_dispatch_message(
+            exhausted.count,
+            exhausted.kind.message_reason(),
+            exhausted.upstream_error,
+            false,
+        )
+    } else {
+        dispatch_failure_message(
+            metadata.failure_class,
+            DispatchFailureMessageStyle::Standard,
+        )
     };
+    let kind = dispatch_failure_openai_error_kind(metadata.failure_class, status);
 
     OpenAiErrorDetails {
         status,
@@ -321,27 +268,10 @@ fn response_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorD
 }
 
 fn response_dispatch_error_kind(error: &ResponseDispatchError) -> OpenAiErrorKind {
-    match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
-            UPSTREAM_UNAVAILABLE_ERROR
-        }
-        ResponseDispatchError::QuotaExhausted { .. } => INSUFFICIENT_QUOTA_ERROR,
-        ResponseDispatchError::RateLimited { .. } => RATE_LIMIT_ERROR,
-        ResponseDispatchError::Expired { .. }
-        | ResponseDispatchError::Disabled { .. }
-        | ResponseDispatchError::Banned { .. } => AUTHENTICATION_ERROR,
-        ResponseDispatchError::ModelUnsupported { .. } => MODEL_NOT_FOUND_ERROR,
-        ResponseDispatchError::InvalidSse(_)
-        | ResponseDispatchError::MissingCompleted
-        | ResponseDispatchError::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,
-        ResponseDispatchError::Failed(_) => responses_error_kind_for_status(status_from_u16(
-            error.http_status_code(),
-            StatusCode::BAD_GATEWAY,
-        )),
-        ResponseDispatchError::Upstream(_)
-        | ResponseDispatchError::CloudflareChallenge { .. }
-        | ResponseDispatchError::CloudflarePathBlocked { .. } => UPSTREAM_ERROR,
-    }
+    dispatch_failure_openai_error_kind(
+        error.metadata().failure_class,
+        status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
+    )
 }
 
 pub fn response_dispatch_http_error(
@@ -395,60 +325,75 @@ fn response_dispatch_message(
     error: &ResponseDispatchError,
     style: ResponseDispatchMessageStyle,
 ) -> String {
-    match error {
-        ResponseDispatchError::NoActiveAccount | ResponseDispatchError::AccountStore => {
-            NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE.to_owned()
-        }
-        ResponseDispatchError::Upstream(_) => UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
-        ResponseDispatchError::QuotaExhausted {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(*count, "quota-exhausted", upstream_error, false),
-        ResponseDispatchError::RateLimited {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(*count, "rate-limited", upstream_error, false),
-        ResponseDispatchError::Expired {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(*count, "expired", upstream_error, false),
-        ResponseDispatchError::Disabled {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(*count, "disabled", upstream_error, false),
-        ResponseDispatchError::Banned {
-            count,
-            upstream_error,
-            ..
-        } => exhausted_dispatch_message(*count, "banned", upstream_error, false),
-        ResponseDispatchError::CloudflareChallenge {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(*count, "cloudflare-challenge", upstream_error, false),
-        ResponseDispatchError::CloudflarePathBlocked {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(
-            *count,
-            "cloudflare-path-block",
-            upstream_error,
-            matches!(style, ResponseDispatchMessageStyle::ResponsesStream),
-        ),
-        ResponseDispatchError::ModelUnsupported {
-            count,
-            upstream_error,
-        } => exhausted_dispatch_message(
-            *count,
-            "model-unsupported",
-            upstream_error,
-            matches!(style, ResponseDispatchMessageStyle::ResponsesStream),
-        ),
-        ResponseDispatchError::InvalidSse(_)
-        | ResponseDispatchError::MissingCompleted
-        | ResponseDispatchError::EmptyUpstreamResponse => {
+    let metadata = error.metadata();
+    if let Some(exhausted) = error.exhausted_account() {
+        return exhausted_dispatch_message(
+            exhausted.count,
+            exhausted.kind.message_reason(),
+            exhausted.upstream_error,
+            matches!(
+                (metadata.failure_class, style),
+                (
+                    DispatchFailureClass::CloudflarePathBlocked
+                        | DispatchFailureClass::ModelUnsupported,
+                    ResponseDispatchMessageStyle::ResponsesStream,
+                )
+            ),
+        );
+    }
+    dispatch_failure_message(
+        metadata.failure_class,
+        match style {
+            ResponseDispatchMessageStyle::Standard => DispatchFailureMessageStyle::Standard,
+            ResponseDispatchMessageStyle::ResponsesStream => {
+                DispatchFailureMessageStyle::ResponsesStream
+            }
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum DispatchFailureMessageStyle {
+    Standard,
+    ResponsesStream,
+}
+
+fn dispatch_failure_message(
+    failure_class: DispatchFailureClass,
+    _style: DispatchFailureMessageStyle,
+) -> String {
+    match failure_class {
+        DispatchFailureClass::NoAvailableAccounts => NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE.to_owned(),
+        DispatchFailureClass::Upstream => UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
+        DispatchFailureClass::InvalidSse
+        | DispatchFailureClass::MissingCompleted
+        | DispatchFailureClass::EmptyUpstreamResponse => {
             INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE.to_owned()
         }
-        ResponseDispatchError::Failed(_) => UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE.to_owned(),
+        DispatchFailureClass::ResponseFailed => UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE.to_owned(),
+        _ => UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
+    }
+}
+
+fn dispatch_failure_openai_error_kind(
+    failure_class: DispatchFailureClass,
+    status: StatusCode,
+) -> OpenAiErrorKind {
+    match failure_class {
+        DispatchFailureClass::NoAvailableAccounts => UPSTREAM_UNAVAILABLE_ERROR,
+        DispatchFailureClass::QuotaExhausted => INSUFFICIENT_QUOTA_ERROR,
+        DispatchFailureClass::RateLimited => RATE_LIMIT_ERROR,
+        DispatchFailureClass::Expired
+        | DispatchFailureClass::Disabled
+        | DispatchFailureClass::Banned => AUTHENTICATION_ERROR,
+        DispatchFailureClass::ModelUnsupported => MODEL_NOT_FOUND_ERROR,
+        DispatchFailureClass::InvalidSse
+        | DispatchFailureClass::MissingCompleted
+        | DispatchFailureClass::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,
+        DispatchFailureClass::ResponseFailed => responses_error_kind_for_status(status),
+        DispatchFailureClass::Upstream
+        | DispatchFailureClass::CloudflareChallenge
+        | DispatchFailureClass::CloudflarePathBlocked => UPSTREAM_ERROR,
     }
 }
 

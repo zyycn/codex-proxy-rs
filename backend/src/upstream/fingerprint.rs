@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 /// 运行时当前指纹槽位。
@@ -17,7 +17,7 @@ pub const CURRENT_FINGERPRINT_ID: &str = "current";
 const AUTO_UPDATE_SOURCE: &str = "auto_update";
 const CONFIG_SEED_SOURCE: &str = "config_seed";
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
-const POLL_INTERVAL: Duration = Duration::from_hours(72);
+pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_hours(72);
 
 type AppcastFields = (Option<String>, Option<String>, Option<String>);
 
@@ -440,29 +440,6 @@ impl UpdateChecker {
         state.current_build = build.to_string();
 
         Ok(true)
-    }
-
-    /// 启动后台轮询任务。
-    pub fn start_background_checker(self) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(POLL_INTERVAL);
-
-            info!(
-                interval_secs = POLL_INTERVAL.as_secs(),
-                "fingerprint 后台版本检查器已启动"
-            );
-
-            if let Err(error) = self.check_and_apply_update().await {
-                warn!(error = %error, "fingerprint 首次版本检查失败");
-            }
-
-            loop {
-                ticker.tick().await;
-                if let Err(error) = self.check_and_apply_update().await {
-                    warn!(error = %error, "fingerprint 定期版本检查失败");
-                }
-            }
-        })
     }
 
     async fn fetch_appcast(&self) -> Result<String, UpdateError> {

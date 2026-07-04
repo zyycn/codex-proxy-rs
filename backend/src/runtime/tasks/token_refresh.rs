@@ -1,8 +1,5 @@
 //! 令牌刷新后台任务接线器。
 
-use std::time::Duration;
-
-use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 use crate::upstream::accounts::{
@@ -12,7 +9,10 @@ use crate::upstream::accounts::{
     },
 };
 
-use super::coordinator::SchedulerHandle;
+use super::{
+    coordinator::SchedulerHandle,
+    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+};
 
 const DEFAULT_INTERVAL_SECS: u64 = 60;
 
@@ -53,46 +53,48 @@ where
 
     /// 启动后台任务。
     pub fn start(self) -> SchedulerHandle {
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
+        let config = PeriodicTaskConfig::new(
+            self.interval_secs,
+            "token 刷新任务已启动",
+            "token 刷新任务已关闭",
+        );
+        spawn_periodic_task(self, config)
+    }
+}
 
-        tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(self.interval_secs));
-            info!(interval_secs = self.interval_secs, "token 刷新任务已启动");
-
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        match self.service.schedule_account_timers_once().await {
-                            Ok(summary) if summary.changed() > 0 => {
-                                info!(
-                                    scheduled = summary.scheduled,
-                                    immediate = summary.immediate,
-                                    recovery_scheduled = summary.recovery_scheduled,
-                                    replaced = summary.replaced,
-                                    "token 刷新定时器已调度"
-                                );
-                            }
-                            Ok(summary) => {
-                                debug!(
-                                    scanned = summary.scanned,
-                                    skipped = summary.skipped,
-                                    "没有需要调度刷新的 token"
-                                );
-                            }
-                            Err(error) => {
-                                warn!(error = %error, "token 刷新定时器调度失败");
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        self.service.clear_scheduled_timers().await;
-                        info!("token 刷新任务已关闭");
-                        break;
-                    }
+impl<C> PeriodicTaskRunner for TokenRefreshTask<C>
+where
+    C: TokenRefresher,
+{
+    fn tick(&mut self) -> super::periodic::TaskFuture<'_, ()> {
+        Box::pin(async move {
+            match self.service.schedule_account_timers_once().await {
+                Ok(summary) if summary.changed() > 0 => {
+                    info!(
+                        scheduled = summary.scheduled,
+                        immediate = summary.immediate,
+                        recovery_scheduled = summary.recovery_scheduled,
+                        replaced = summary.replaced,
+                        "token 刷新定时器已调度"
+                    );
+                }
+                Ok(summary) => {
+                    debug!(
+                        scanned = summary.scanned,
+                        skipped = summary.skipped,
+                        "没有需要调度刷新的 token"
+                    );
+                }
+                Err(error) => {
+                    warn!(error = %error, "token 刷新定时器调度失败");
                 }
             }
-        });
+        })
+    }
 
-        SchedulerHandle::new(shutdown_tx)
+    fn shutdown(&mut self) -> super::periodic::TaskFuture<'_, ()> {
+        Box::pin(async move {
+            self.service.clear_scheduled_timers().await;
+        })
     }
 }

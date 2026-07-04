@@ -104,7 +104,6 @@ const costItems = computed(() => {
     { label: '输入', value: details.inputCostDisplay, mono: true },
     { label: '输出', value: details.outputCostDisplay, mono: true },
     { label: '缓存读取', value: details.cacheReadCostDisplay, mono: true },
-    { label: '计费', value: details.billedCostDisplay, mono: true },
     { label: '原始', value: details.originalCostDisplay, mono: true },
     { label: '输入单价', value: details.inputPriceDisplay, mono: true },
     { label: '输出单价', value: details.outputPriceDisplay, mono: true },

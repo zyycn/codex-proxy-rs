@@ -141,61 +141,55 @@ fn explicit_account_import_source(
 fn parse_cpr_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
     Ok(ParsedAccountImport {
         source: AccountImportSource::Cpr,
-        entries: parse_cpr_entries(payload)?,
+        entries: parse_account_entries(
+            payload,
+            cpr_account_import_entry_from_value,
+            Some(ACCOUNT_IMPORT_CONTAINER_KEYS),
+        )?,
     })
-}
-
-fn parse_cpr_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
-    if let Some(accounts) = payload.get("accounts") {
-        ensure_account_import_keys(payload, ACCOUNT_IMPORT_CONTAINER_KEYS)?;
-        let accounts = accounts.as_array().ok_or("no importable accounts")?;
-        return parse_entries(accounts, cpr_account_import_entry_from_value);
-    }
-    if let Some(accounts) = payload.as_array() {
-        return parse_entries(accounts, cpr_account_import_entry_from_value);
-    }
-    cpr_account_import_entry_from_value(payload).map(option_to_vec)
 }
 
 fn parse_sub2api_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
     Ok(ParsedAccountImport {
         source: AccountImportSource::Sub2Api,
-        entries: parse_sub2api_entries(payload)?,
+        entries: parse_account_entries(payload, sub2api_account_import_entry_from_value, None)?,
     })
-}
-
-fn parse_sub2api_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
-    if let Some(accounts) = payload.get("accounts") {
-        let accounts = accounts.as_array().ok_or("no importable accounts")?;
-        return parse_entries(accounts, sub2api_account_import_entry_from_value);
-    }
-    if let Some(accounts) = payload.as_array() {
-        return parse_entries(accounts, sub2api_account_import_entry_from_value);
-    }
-    sub2api_account_import_entry_from_value(payload).map(option_to_vec)
 }
 
 fn parse_cli_proxy_api_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
     Ok(ParsedAccountImport {
         source: AccountImportSource::CliProxyApi,
-        entries: parse_cli_proxy_api_entries(payload)?,
+        entries: parse_account_entries(
+            payload,
+            cli_proxy_api_account_import_entry_from_value,
+            None,
+        )?,
     })
 }
 
-fn parse_cli_proxy_api_entries(payload: &Value) -> Result<Vec<AccountImportEntry>, &'static str> {
+type AccountImportEntryParser = fn(&Value) -> Result<Option<AccountImportEntry>, &'static str>;
+
+fn parse_account_entries(
+    payload: &Value,
+    parser: AccountImportEntryParser,
+    container_keys: Option<&[&str]>,
+) -> Result<Vec<AccountImportEntry>, &'static str> {
     if let Some(accounts) = payload.get("accounts") {
+        if let Some(container_keys) = container_keys {
+            ensure_account_import_keys(payload, container_keys)?;
+        }
         let accounts = accounts.as_array().ok_or("no importable accounts")?;
-        return parse_entries(accounts, cli_proxy_api_account_import_entry_from_value);
+        return parse_entries(accounts, parser);
     }
     if let Some(accounts) = payload.as_array() {
-        return parse_entries(accounts, cli_proxy_api_account_import_entry_from_value);
+        return parse_entries(accounts, parser);
     }
-    cli_proxy_api_account_import_entry_from_value(payload).map(option_to_vec)
+    parser(payload).map(option_to_vec)
 }
 
 fn parse_entries(
     accounts: &[Value],
-    parser: fn(&Value) -> Result<Option<AccountImportEntry>, &'static str>,
+    parser: AccountImportEntryParser,
 ) -> Result<Vec<AccountImportEntry>, &'static str> {
     let mut entries = Vec::new();
     for account in accounts {

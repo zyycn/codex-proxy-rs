@@ -25,7 +25,6 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);
@@ -768,7 +767,6 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state.clone());
@@ -812,7 +810,6 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
     let fingerprint = crate::support::fingerprint::test_fingerprint();
     let services = Arc::new(Services::new(&config, stores, fingerprint));
     let state = AppState {
-        config,
         services: (*services).clone(),
     };
     let app = codex_proxy_rs::http::router::router().with_state(state);

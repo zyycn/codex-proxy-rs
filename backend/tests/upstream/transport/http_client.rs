@@ -146,6 +146,65 @@ async fn codex_backend_client_should_cap_non_success_error_body_at_one_mib() {
 }
 
 #[tokio::test]
+async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_body() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/codex/responses"))
+        .respond_with(wiremock::ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "code": "rate_limit_exceeded",
+                "message": "Rate limit exceeded, try again in 12s"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "",
+            Vec::new(),
+        );
+    request.force_http_sse = true;
+
+    let result = client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                access_token: "access-token",
+                account_id: Some("chatgpt-account"),
+                request_id: "req_http_retry_after_body",
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+                installation_id: None,
+                session_id: None,
+            },
+        )
+        .await;
+
+    let Err(CodexClientError::Upstream {
+        status,
+        retry_after_seconds,
+        ..
+    }) = result
+    else {
+        panic!("expected upstream error");
+    };
+    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(retry_after_seconds, Some(12));
+}
+
+#[tokio::test]
 async fn build_reqwest_client_should_reuse_cached_connection_pool() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
