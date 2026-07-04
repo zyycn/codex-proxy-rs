@@ -137,6 +137,7 @@ const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.not
 const showUpdateProgress = computed(
   () => hasUpdate.value || updating.value || restarting.value || updateLogRows.value.length > 0,
 )
+const shouldConnectUpdateEvents = computed(() => (open.value && hasUpdate.value) || updating.value)
 
 const updateConfirmRows = computed(() => [
   {
@@ -296,18 +297,24 @@ async function handleRestart() {
 }
 
 watch(open, (visible) => {
-  if (visible) {
-    connectUpdateEvents()
-  } else if (!updating.value && !restarting.value) {
-    disconnectUpdateEvents()
-  }
-
   if (visible && !loadedOnce.value) {
     void loadSystem(false).catch((error: any) => {
       toast.error(error.message || '加载系统更新信息失败')
     })
   }
 })
+
+watch(
+  shouldConnectUpdateEvents,
+  (shouldConnect) => {
+    if (shouldConnect) {
+      connectUpdateEvents()
+    } else {
+      disconnectUpdateEvents()
+    }
+  },
+  { immediate: true },
+)
 
 watch(
   () => updateLogs.value.at(-1)?.id,
