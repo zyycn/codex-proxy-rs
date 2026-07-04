@@ -245,7 +245,7 @@ async fn request_context_should_attach_client_ip_from_connection() {
 }
 
 #[tokio::test]
-async fn request_context_should_preserve_forwarded_headers_from_untrusted_peer() {
+async fn request_context_should_auto_detect_forwarded_ip_without_trusted_proxy_config() {
     let app = Router::new()
         .route(
             "/ip",
@@ -285,10 +285,37 @@ async fn request_context_should_preserve_forwarded_headers_from_untrusted_peer()
     let response = app.oneshot(request).await.expect("response");
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
 
+    // 未配置可信代理时进入自动模式：CF-Connecting-IP 优先于 X-Real-IP / X-Forwarded-For。
     assert_eq!(
         std::str::from_utf8(&bytes).unwrap(),
-        "127.0.0.1|cf=203.0.113.43|xff=203.0.113.42, 10.0.0.2|real=203.0.113.44"
+        "203.0.113.43|cf=203.0.113.43|xff=203.0.113.42, 10.0.0.2|real=203.0.113.44"
     );
+}
+
+#[tokio::test]
+async fn request_context_should_skip_private_forwarded_hops_in_auto_mode() {
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|Extension(client_ip): Extension<ClientIp>| async move {
+                client_ip.as_str().to_string()
+            }),
+        )
+        .layer(from_fn(attach_request_id));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-forwarded-for", "10.0.0.2, 172.16.0.3, 203.0.113.42")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    // 自动模式下应跳过 X-Forwarded-For 链中的内网跳板，取首个公网 IP。
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "203.0.113.42");
 }
 
 #[tokio::test]

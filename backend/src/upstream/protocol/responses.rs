@@ -1,12 +1,11 @@
 use std::{collections::BTreeSet, time::Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::{
     infra::time::elapsed_millis_i64,
     upstream::{
-        models::catalog::ParsedModelName,
         protocol::{
             schema::reconvert_tuple_values,
             sse::{parse_sse_events, SseError, SseEvent},
@@ -15,96 +14,58 @@ use crate::{
 };
 
 /// Codex Responses 上游请求体。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、
+/// 含未知字段）透传上游，是上游请求体的唯一来源；`use_websocket`/`force_http_sse`
+/// 仅用于本地传输选择，不写入 body。常用字段通过访问器方法读写。
+/// 代理只做最小 patch（`stream`/`store` 由传输层控制，`input` 字符串做官方兼容转换，
+/// implicit resume 时替换 `input`，模型后缀路由时写 `model`/`reasoning`/`service_tier`）。
+///
+/// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
+#[derive(Debug, Clone)]
 pub struct CodexResponsesRequest {
-    /// 模型名。
-    pub model: String,
-    /// 指令文本。
-    pub instructions: String,
-    /// 输入消息与结构化条目。
-    pub input: Vec<Value>,
-    /// 是否流式返回。
-    pub stream: bool,
-    /// 是否要求上游存储响应。
-    pub store: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// reasoning 配置。
-    pub reasoning: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 工具定义。
-    pub tools: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 工具选择策略。
-    pub tool_choice: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 是否允许并行工具调用。
-    pub parallel_tool_calls: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 输出文本格式配置。
-    pub text: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 图片生成开关。
-    pub generate: Option<bool>,
-    #[serde(skip)]
+    /// 上游请求体（唯一真相源）。
+    body: Map<String, Value>,
     /// tuple schema 原始定义，仅供响应重构时使用。
     pub tuple_schema: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// service tier。
-    pub service_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 用于显式续链的前一个 response ID。
-    pub previous_response_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 提示缓存键。
-    pub prompt_cache_key: Option<String>,
-    #[serde(skip)]
     /// 是否由客户端显式提供了 prompt cache key。
     pub explicit_prompt_cache_key: bool,
-    #[serde(skip)]
     /// 客户端会话 ID。
     pub client_conversation_id: Option<String>,
-    #[serde(skip)]
     /// 变体身份键。
     pub variant_identity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// include 列表。
-    pub include: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 传给上游的 client metadata。
-    pub client_metadata: Option<Value>,
-    #[serde(skip)]
     /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
     pub client_ip: Option<String>,
-    #[serde(skip)]
     /// 客户端 User-Agent，仅用于管理端使用记录展示。
     pub client_user_agent: Option<String>,
-    #[serde(skip)]
     /// 是否偏好 WebSocket 传输。
     pub use_websocket: bool,
-    #[serde(skip)]
     /// 是否强制 HTTP SSE。
     pub force_http_sse: bool,
-    #[serde(skip)]
     /// turn state 透传头。
     pub turn_state: Option<String>,
-    #[serde(skip)]
     /// turn metadata 透传头。
     pub turn_metadata: Option<String>,
-    #[serde(skip)]
     /// beta features 透传头。
     pub beta_features: Option<String>,
-    #[serde(skip)]
     /// 客户端版本头。
     pub version: Option<String>,
-    #[serde(skip)]
     /// timing metrics 透传头。
     pub include_timing_metrics: Option<String>,
-    #[serde(skip)]
     /// codex window id。
     pub codex_window_id: Option<String>,
-    #[serde(skip)]
     /// 父线程 ID。
     pub parent_thread_id: Option<String>,
+}
+
+impl Serialize for CodexResponsesRequest {
+    /// 上游 body 序列化即原始 `body` map（HTTP SSE 直发；WebSocket 在外层前置 `type`）。
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.body.serialize(serializer)
+    }
 }
 
 /// Codex Responses 请求的上游传输决策。
@@ -124,7 +85,7 @@ pub fn transport_for_request(request: &CodexResponsesRequest) -> CodexTransport 
         return CodexTransport::HttpSse;
     }
 
-    if request.previous_response_id.is_some() {
+    if request.previous_response_id().is_some() {
         return CodexTransport::WebSocketRequired;
     }
 
@@ -567,112 +528,21 @@ fn failure_code(value: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// 将模型名后缀和模型配置应用到 Codex Responses 上游请求。
-pub fn apply_response_model_options(
-    request: &mut CodexResponsesRequest,
-    parsed_model: &ParsedModelName,
-) {
-    request.model = parsed_model.model_id.clone();
-    apply_reasoning_options(request, parsed_model);
-    apply_service_tier_options(request, parsed_model);
-}
-
-fn apply_reasoning_options(request: &mut CodexResponsesRequest, parsed_model: &ParsedModelName) {
-    let existing_reasoning = request.reasoning.take();
-    let existing_object = match existing_reasoning {
-        Some(Value::Object(object)) => object,
-        Some(_) | None => Map::new(),
-    };
-    let effort = existing_object
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| non_empty_string(parsed_model.reasoning_effort.as_deref()));
-    if effort.is_none() && existing_object.is_empty() {
-        request.reasoning = None;
-        return;
-    }
-
-    let summary = existing_object
-        .get("summary")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("auto");
-    let mut reasoning = Map::new();
-    reasoning.insert("summary".to_string(), Value::String(summary.to_string()));
-    if let Some(effort) = effort {
-        reasoning.insert("effort".to_string(), Value::String(effort));
-    }
-    request.reasoning = Some(Value::Object(reasoning));
-    ensure_reasoning_include(request);
-}
-
-pub(crate) fn ensure_reasoning_include(request: &mut CodexResponsesRequest) {
-    if request.reasoning.is_none() {
-        return;
-    }
-    if request
-        .include
-        .as_ref()
-        .is_some_and(|include| !include.is_empty())
-    {
-        return;
-    }
-    request.include = Some(vec!["reasoning.encrypted_content".to_string()]);
-}
-
-fn apply_service_tier_options(request: &mut CodexResponsesRequest, parsed_model: &ParsedModelName) {
-    request.service_tier = request
-        .service_tier
-        .take()
-        .and_then(|value| non_empty_string(Some(&value)))
-        .or_else(|| non_empty_string(parsed_model.service_tier.as_deref()))
-        .map(normalize_service_tier_for_upstream);
-}
-
-fn normalize_service_tier_for_upstream(service_tier: String) -> String {
-    if service_tier == "fast" {
-        "priority".to_string()
-    } else {
-        service_tier
-    }
-}
-
-fn non_empty_string(value: Option<&str>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
 impl CodexResponsesRequest {
-    /// 构造默认的 HTTP SSE 请求。
-    pub fn new_http_sse(
-        model: impl Into<String>,
-        instructions: impl Into<String>,
-        input: Vec<Value>,
-    ) -> Self {
+    /// 从客户端原始 Responses JSON object 构造上游请求。
+    ///
+    /// 只做最小规范化：`input` 缺省为 `[]`、`stream` 缺省 `true`、`store` 缺省 `false`。
+    /// 其余字段（含未知字段）原样保留在 `body` 中透传上游。
+    pub fn from_body(mut body: Map<String, Value>) -> Self {
+        body.entry("input").or_insert_with(|| Value::Array(Vec::new()));
+        body.entry("stream").or_insert(Value::Bool(true));
+        body.entry("store").or_insert(Value::Bool(false));
         Self {
-            model: model.into(),
-            instructions: instructions.into(),
-            input,
-            stream: true,
-            store: false,
-            reasoning: None,
-            tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            text: None,
-            generate: None,
+            body,
             tuple_schema: None,
-            service_tier: None,
-            previous_response_id: None,
-            prompt_cache_key: None,
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             variant_identity: None,
-            include: None,
-            client_metadata: None,
             client_ip: None,
             client_user_agent: None,
             use_websocket: false,
@@ -687,9 +557,170 @@ impl CodexResponsesRequest {
         }
     }
 
+    /// 构造默认的 HTTP SSE 请求（测试与内部构造用）。
+    pub fn new_http_sse(
+        model: impl Into<String>,
+        instructions: impl Into<String>,
+        input: Vec<Value>,
+    ) -> Self {
+        let mut body = Map::new();
+        body.insert("model".to_string(), Value::String(model.into()));
+        body.insert("instructions".to_string(), Value::String(instructions.into()));
+        body.insert("input".to_string(), Value::Array(input));
+        Self::from_body(body)
+    }
+
+    /// 上游 body 的只读视图。
+    pub fn body(&self) -> &Map<String, Value> {
+        &self.body
+    }
+
+    // --- body 字段类型化访问器（上游语义字段，透传不重写）---
+
+    /// 模型名。
+    pub fn model(&self) -> &str {
+        self.body.get("model").and_then(Value::as_str).unwrap_or_default()
+    }
+
+    /// 设置模型名（模型后缀路由归一）。
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.body.insert("model".to_string(), Value::String(model.into()));
+    }
+
+    /// 指令文本（缺省空串）。
+    pub fn instructions(&self) -> &str {
+        self.body.get("instructions").and_then(Value::as_str).unwrap_or_default()
+    }
+
+    /// 输入条目切片（非数组时为空）。
+    pub fn input(&self) -> &[Value] {
+        self.body.get("input").and_then(Value::as_array).map_or(&[], Vec::as_slice)
+    }
+
+    /// 替换输入条目（implicit resume / 字符串输入兼容）。
+    pub fn set_input(&mut self, input: Vec<Value>) {
+        self.body.insert("input".to_string(), Value::Array(input));
+    }
+
+    /// 是否流式返回。
+    pub fn stream(&self) -> bool {
+        self.body.get("stream").and_then(Value::as_bool).unwrap_or(true)
+    }
+
+    /// 设置流式标志。
+    pub fn set_stream(&mut self, stream: bool) {
+        self.body.insert("stream".to_string(), Value::Bool(stream));
+    }
+
+    /// 是否要求上游存储响应。
+    pub fn store(&self) -> bool {
+        self.body.get("store").and_then(Value::as_bool).unwrap_or(false)
+    }
+
+    /// reasoning 配置（透传，不规整）。
+    pub fn reasoning(&self) -> Option<&Value> {
+        self.body.get("reasoning")
+    }
+
+    /// 设置 reasoning 配置（模型后缀路由）。
+    pub fn set_reasoning(&mut self, reasoning: Option<Value>) {
+        match reasoning {
+            Some(value) => {
+                self.body.insert("reasoning".to_string(), value);
+            }
+            None => {
+                self.body.remove("reasoning");
+            }
+        }
+    }
+
+    /// 工具定义数组（非数组或空时 None）。
+    pub fn tools(&self) -> Option<&[Value]> {
+        self.body
+            .get("tools")
+            .and_then(Value::as_array)
+            .filter(|tools| !tools.is_empty())
+            .map(Vec::as_slice)
+    }
+
+    /// include 列表（透传原值）。
+    pub fn include(&self) -> Option<&Value> {
+        self.body.get("include")
+    }
+
+    /// service tier（透传原值）。
+    pub fn service_tier(&self) -> Option<&str> {
+        self.body.get("service_tier").and_then(Value::as_str)
+    }
+
+    /// 设置 service tier（模型后缀路由 / 归一）。
+    pub fn set_service_tier(&mut self, service_tier: Option<String>) {
+        match service_tier {
+            Some(value) => {
+                self.body.insert("service_tier".to_string(), Value::String(value));
+            }
+            None => {
+                self.body.remove("service_tier");
+            }
+        }
+    }
+
+    /// 前一个 response ID。
+    pub fn previous_response_id(&self) -> Option<&str> {
+        self.body.get("previous_response_id").and_then(Value::as_str)
+    }
+
+    /// 设置 / 清除前一个 response ID。
+    pub fn set_previous_response_id(&mut self, previous_response_id: Option<String>) {
+        match previous_response_id {
+            Some(value) => {
+                self.body
+                    .insert("previous_response_id".to_string(), Value::String(value));
+            }
+            None => {
+                self.body.remove("previous_response_id");
+            }
+        }
+    }
+
+    /// 提示缓存键。
+    pub fn prompt_cache_key(&self) -> Option<&str> {
+        self.body.get("prompt_cache_key").and_then(Value::as_str)
+    }
+
+    /// 设置提示缓存键。
+    pub fn set_prompt_cache_key(&mut self, prompt_cache_key: Option<String>) {
+        match prompt_cache_key {
+            Some(value) => {
+                self.body
+                    .insert("prompt_cache_key".to_string(), Value::String(value));
+            }
+            None => {
+                self.body.remove("prompt_cache_key");
+            }
+        }
+    }
+
+    /// client metadata（透传原值）。
+    pub fn client_metadata(&self) -> Option<&Value> {
+        self.body.get("client_metadata")
+    }
+
+    /// 设置 / 合并 client metadata。
+    pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
+        match client_metadata {
+            Some(value) => {
+                self.body.insert("client_metadata".to_string(), value);
+            }
+            None => {
+                self.body.remove("client_metadata");
+            }
+        }
+    }
+
     /// 判断请求是否声明了图片生成工具。
     pub fn expects_image_generation(&self) -> bool {
-        self.tools.as_deref().is_some_and(|tools| {
+        self.tools().is_some_and(|tools| {
             tools
                 .iter()
                 .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation"))
@@ -698,30 +729,43 @@ impl CodexResponsesRequest {
 }
 
 /// Codex compact 端点请求体。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 发往上游的 Responses compact 请求。`body` 持有客户端原始 JSON object
+/// （已剥离 compact 上游不接受的字段），逐字段透传上游；
+/// `client_ip`/`client_user_agent` 仅供管理端使用记录展示，不进上游 body。
+#[derive(Debug, Clone)]
 pub struct CodexCompactRequest {
-    /// 模型名。
-    pub model: String,
-    /// 输入消息与结构化条目。
-    pub input: Vec<Value>,
-    /// 指令文本。
-    pub instructions: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 工具定义。
-    pub tools: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 是否允许并行工具调用。
-    pub parallel_tool_calls: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// reasoning 配置。
-    pub reasoning: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// 输出文本格式配置。
-    pub text: Option<Value>,
-    #[serde(skip)]
+    /// 上游请求体（唯一真相源）。
+    pub body: Map<String, Value>,
     /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
     pub client_ip: Option<String>,
-    #[serde(skip)]
     /// 客户端 User-Agent，仅用于管理端使用记录展示。
     pub client_user_agent: Option<String>,
+}
+
+impl Serialize for CodexCompactRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.body.serialize(serializer)
+    }
+}
+
+impl CodexCompactRequest {
+    /// 模型名。
+    pub fn model(&self) -> &str {
+        self.body.get("model").and_then(Value::as_str).unwrap_or_default()
+    }
+
+    /// 设置模型名（模型后缀路由归一）。
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.body
+            .insert("model".to_string(), Value::String(model.into()));
+    }
+
+    /// reasoning 配置（透传原值）。
+    pub fn reasoning(&self) -> Option<&Value> {
+        self.body.get("reasoning")
+    }
 }

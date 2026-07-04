@@ -451,12 +451,12 @@ async fn admin_settings_update_should_apply_runtime_services() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let parsed = services
+    let resolved = services
         .models
         .catalog()
         .await
-        .parse_model_name("runtime-alias");
-    assert_eq!(parsed.model_id, "gpt-5.5");
+        .resolve_model_id("runtime-alias");
+    assert_eq!(resolved, "gpt-5.5");
 
     let refresh_policy = services.refresh_policy.snapshot();
     assert_eq!(refresh_policy.refresh_margin_seconds, 120);

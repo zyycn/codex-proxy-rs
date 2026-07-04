@@ -678,10 +678,9 @@ impl CodexBackendClient {
     ) -> Option<CodexWebSocketPoolKey> {
         let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request
-            .prompt_cache_key
-            .as_deref()
+            .prompt_cache_key()
             .or(request.client_conversation_id.as_deref())
-            .or(request.previous_response_id.as_deref())?;
+            .or(request.previous_response_id())?;
         Some(CodexWebSocketPoolKey::new(
             &self.base_url,
             account_id,
@@ -778,7 +777,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.request_headers(context)?;
-        if let Some(subagent) = openai_subagent_from_metadata(request.client_metadata.as_ref()) {
+        if let Some(subagent) = openai_subagent_from_metadata(request.client_metadata()) {
             headers.insert(
                 HeaderName::from_static("x-openai-subagent"),
                 HeaderValue::from_str(&subagent)?,
@@ -1070,9 +1069,9 @@ fn response_upstream_request(
 ) -> CodexResponsesRequest {
     let mut upstream = request.clone();
     if let Some(session_id) = context.session_id {
-        upstream.prompt_cache_key = Some(session_id.to_string());
+        upstream.set_prompt_cache_key(Some(session_id.to_string()));
     }
-    upstream.client_metadata = response_client_metadata(request.client_metadata.as_ref(), context);
+    upstream.set_client_metadata(response_client_metadata(request.client_metadata(), context));
     upstream
 }
 
@@ -1083,15 +1082,15 @@ fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponses
 }
 
 fn stamp_ws_stream_request_start_ms(request: &mut CodexResponsesRequest) {
-    let mut metadata = match request.client_metadata.take() {
-        Some(Value::Object(metadata)) => metadata,
+    let mut metadata = match request.client_metadata() {
+        Some(Value::Object(metadata)) => metadata.clone(),
         _ => Map::new(),
     };
     metadata.insert(
         X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
         Value::String(now_unix_timestamp_millis().to_string()),
     );
-    request.client_metadata = Some(Value::Object(metadata));
+    request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
 fn now_unix_timestamp_millis() -> u128 {
@@ -1105,14 +1104,12 @@ fn response_client_metadata(
     client_metadata: Option<&Value>,
     context: CodexRequestContext<'_>,
 ) -> Option<Value> {
-    let mut metadata = Map::new();
-    if let Some(Value::Object(input)) = client_metadata {
-        for (key, value) in input {
-            if let Some(value) = value.as_str() {
-                metadata.insert(key.clone(), Value::String(value.to_string()));
-            }
-        }
-    }
+    // 以客户端原始 client_metadata 为基础（保留 number/bool/object 等所有值类型），
+    // 在其上追加代理自身的上下文字段。
+    let mut metadata = match client_metadata {
+        Some(Value::Object(input)) => input.clone(),
+        _ => Map::new(),
+    };
 
     insert_metadata_string(
         &mut metadata,

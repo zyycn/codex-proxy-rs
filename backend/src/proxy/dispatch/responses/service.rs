@@ -58,12 +58,12 @@ use crate::{
         token_refresh::RuntimeTokenRefreshService,
     },
     upstream::{
-        models::{catalog::ModelCatalog, service::ModelService},
+        models::service::ModelService,
         protocol::{
             events::{extract_usage, TokenUsage},
             responses::{
-                apply_response_model_options, response_from_codex_sse, CodexCompactRequest,
-                CodexResponsesRequest, CollectedResponse,
+                response_from_codex_sse, CodexCompactRequest, CodexResponsesRequest,
+                CollectedResponse,
             },
         },
         token_client::OpenAiTokenClient,
@@ -158,12 +158,13 @@ impl ResponseDispatchService {
         request: &mut CodexResponsesRequest,
     ) -> Option<ImplicitResumeSnapshot> {
         prepare_variant_identity(request);
-        if let Some(previous_response_id) = request.previous_response_id.clone() {
-            if request.prompt_cache_key.is_none() {
-                request.prompt_cache_key = self
+        if let Some(previous_response_id) = request.previous_response_id().map(ToString::to_string) {
+            if request.prompt_cache_key().is_none() {
+                let conversation_id = self
                     .session_affinity
                     .lookup_conversation_id(&previous_response_id, Utc::now())
                     .await;
+                request.set_prompt_cache_key(conversation_id);
             }
             if request.turn_state.as_deref().is_none_or(str::is_empty) {
                 request.turn_state = self
@@ -183,13 +184,12 @@ impl ResponseDispatchService {
         &self,
         request: &mut CodexResponsesRequest,
     ) -> Option<ImplicitResumeSnapshot> {
-        let continuation_start = continuation_input_start(&request.input);
-        if continuation_start == 0 || continuation_start >= request.input.len() {
+        let continuation_start = continuation_input_start(request.input());
+        if continuation_start == 0 || continuation_start >= request.input().len() {
             return None;
         }
         let conversation_id = request
-            .prompt_cache_key
-            .as_deref()
+            .prompt_cache_key()
             .map(str::trim)
             .filter(|value| !value.is_empty())?
             .to_string();
@@ -205,7 +205,7 @@ impl ResponseDispatchService {
                 now,
             )
             .await?;
-        let current_instructions_hash = hash_instructions(Some(&request.instructions));
+        let current_instructions_hash = hash_instructions(Some(request.instructions()));
         if self
             .session_affinity
             .lookup_instructions_hash(&previous_response_id, now)
@@ -220,8 +220,8 @@ impl ResponseDispatchService {
             .lookup_function_call_ids(&previous_response_id, now)
             .await;
         if !implicit_resume_allowed(
-            &request.input[continuation_start..],
-            &request.input,
+            &request.input()[continuation_start..],
+            request.input(),
             &stored_function_call_ids,
         ) {
             return None;
@@ -237,14 +237,14 @@ impl ResponseDispatchService {
             &variant_hash,
             now,
         );
-        let continuation = request.input[continuation_start..].to_vec();
+        let continuation = request.input()[continuation_start..].to_vec();
         let mut input = replay_items;
         input.extend(continuation);
 
-        request.previous_response_id = Some(previous_response_id.clone());
+        request.set_previous_response_id(Some(previous_response_id.clone()));
         request.use_websocket = true;
         request.force_http_sse = false;
-        request.input = input;
+        request.set_input(input);
         if let Some(turn_state) = self
             .session_affinity
             .lookup_turn_state(&previous_response_id, now)
@@ -261,7 +261,7 @@ impl ResponseDispatchService {
         request: &CodexResponsesRequest,
         now: DateTime<Utc>,
     ) -> Option<String> {
-        let previous_response_id = request.previous_response_id.as_deref()?;
+        let previous_response_id = request.previous_response_id()?;
         self.session_affinity
             .lookup_account(previous_response_id, now)
             .await
@@ -272,12 +272,14 @@ impl ResponseDispatchService {
         request: &mut CodexResponsesRequest,
         implicit_resume: &mut Option<ImplicitResumeSnapshot>,
     ) {
-        if let Some(previous_response_id) = request.previous_response_id.as_deref() {
-            self.session_affinity.forget(previous_response_id).await;
+        if let Some(previous_response_id) = request.previous_response_id() {
+            self.session_affinity
+                .forget(previous_response_id)
+                .await;
         }
         if let Some(snapshot) = implicit_resume.take() {
             snapshot.restore(request);
-            request.previous_response_id = None;
+            request.set_previous_response_id(None);
             request.turn_state = None;
         } else {
             strip_request_history(request);
@@ -297,7 +299,7 @@ impl ResponseDispatchService {
         else {
             return false;
         };
-        let has_history = request.previous_response_id.is_some()
+        let has_history = request.previous_response_id().is_some()
             || request
                 .turn_state
                 .as_deref()
@@ -320,11 +322,11 @@ impl ResponseDispatchService {
         }
 
         let response_id_to_forget = explicit_previous_response_id
-            .or(request.previous_response_id.as_deref())
+            .or(request.previous_response_id())
             .map(str::to_string);
         if let Some(snapshot) = implicit_resume.take() {
             snapshot.restore(request);
-            request.previous_response_id = None;
+            request.set_previous_response_id(None);
             request.turn_state = None;
         } else {
             strip_request_history(request);
@@ -369,16 +371,16 @@ impl ResponseDispatchService {
     ) -> Result<Value, ResponseDispatchError> {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
-        let parsed_model = catalog.parse_model_name(requested_model);
-        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
-        apply_response_model_options(&mut request, &parsed_model);
+        let display_model = catalog.resolve_model_id(requested_model);
+        request.set_model(display_model.clone());
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
-        let explicit_previous_response_id = request.previous_response_id.clone();
+        let explicit_previous_response_id =
+            request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
         let preferred_account_id = self.preferred_account_id_for_request(&request, now).await;
-        let mut acquire_request = AccountAcquireRequest::new(&request.model, now);
+        let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
         if let Some(preferred_account_id) = preferred_account_id.as_deref() {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
@@ -544,7 +546,7 @@ impl ResponseDispatchService {
                         self.account_pool
                             .record_empty_response_attempt(
                                 &release_account_id,
-                                &request.model,
+                                request.model(),
                                 image_generation_requested,
                             )
                             .await;
@@ -766,7 +768,7 @@ impl ResponseDispatchService {
                     self.account_pool
                         .record_response_usage(
                             &account.id,
-                            &request.model,
+                            request.model(),
                             usage,
                             image_generation_requested,
                         )
@@ -798,7 +800,7 @@ impl ResponseDispatchService {
                     client_ip: request.client_ip.as_deref(),
                     client_user_agent: request.client_user_agent.as_deref(),
                     reasoning_effort: reasoning_effort_from_request(&request),
-                    service_tier: request.service_tier.as_deref(),
+                    service_tier: request.service_tier(),
                     started_at,
                     status_code: 200,
                     level: UsageRecordLevel::Info,
@@ -900,16 +902,15 @@ impl ResponseDispatchService {
     ) -> Result<ResponseDispatchStream, ResponseDispatchError> {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
-        let parsed_model = catalog.parse_model_name(requested_model);
-        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
-        apply_response_model_options(&mut request, &parsed_model);
-        request.stream = true;
+        let display_model = catalog.resolve_model_id(requested_model);
+        request.set_model(display_model.clone());
+        request.set_stream(true);
         let tuple_schema = request.tuple_schema.clone();
         let now = Utc::now();
-        let explicit_previous_response_id = request.previous_response_id.clone();
+        let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
         let preferred_account_id = self.preferred_account_id_for_request(&request, now).await;
-        let mut acquire_request = AccountAcquireRequest::new(&request.model, now);
+        let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
         if let Some(preferred_account_id) = preferred_account_id.as_deref() {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
@@ -1325,7 +1326,7 @@ impl ResponseDispatchService {
                         account_plan_type: account.plan_type,
                         request_id: request_id.to_string(),
                         route: route.to_string(),
-                        model: request.model.clone(),
+                        model: request.model().to_string(),
                         display_model: display_model.clone(),
                         requested_model: requested_model.to_string(),
                         client_ip: request.client_ip.clone(),
@@ -1479,15 +1480,14 @@ impl ResponseDispatchService {
     ) -> Result<Value, ResponseDispatchError> {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
-        let parsed_model = catalog.parse_model_name(requested_model);
-        let display_model = ModelCatalog::build_display_model_name(&parsed_model);
-        request.model = parsed_model.model_id;
+        let display_model = catalog.resolve_model_id(requested_model);
+        request.set_model(display_model.clone());
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut quota_verify_attempts = 0usize;
 
         loop {
-            let acquire_request = AccountAcquireRequest::new(&request.model, Utc::now())
+            let acquire_request = AccountAcquireRequest::new(request.model(), Utc::now())
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
             let acquired = match self.account_pool.acquire_with(&acquire_request).await {
                 Some(acquired) => acquired,
@@ -1584,7 +1584,7 @@ impl ResponseDispatchService {
                     let usage = extract_usage(&response.body);
                     if let Some(usage) = usage {
                         self.account_pool
-                            .record_token_usage(&account.id, &request.model, &usage)
+                            .record_token_usage(&account.id, request.model(), &usage)
                             .await;
                     }
                     record_response_event(ResponseUsageRecord {
@@ -1745,6 +1745,6 @@ impl ResponseDispatchService {
 }
 
 fn strip_request_history(request: &mut CodexResponsesRequest) {
-    request.previous_response_id = None;
+    request.set_previous_response_id(None);
     request.turn_state = None;
 }

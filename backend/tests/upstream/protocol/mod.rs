@@ -1,14 +1,13 @@
+use axum::http::HeaderMap;
 use codex_proxy_rs::proxy::openai::responses::{
-    response_failed_sse_event, translate_response_to_codex, translate_response_to_compact,
-    OpenAiResponsesRequest,
+    build_codex_request, build_compact_request, response_failed_sse_event,
 };
-use codex_proxy_rs::upstream::models::catalog::ParsedModelName;
 use codex_proxy_rs::upstream::protocol::events::{
     extract_sse_usage, extract_usage, parse_rate_limit_headers, parse_rate_limits_event,
     rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow, TokenUsage,
 };
 use codex_proxy_rs::upstream::protocol::responses::{
-    apply_response_model_options, http_sse_fallback_allowed, response_body_has_first_event,
+    http_sse_fallback_allowed, response_body_has_first_event,
     response_from_codex_sse, response_sse_event_is_terminal, transport_for_request,
     CodexResponsesRequest, CodexTransport, CollectedResponse,
 };

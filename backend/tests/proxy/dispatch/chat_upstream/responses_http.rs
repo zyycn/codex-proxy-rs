@@ -251,7 +251,8 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
     assert!(body.contains("\"id\":\"resp_ws_default\""));
     assert_eq!(captured.payload["type"], "response.create");
     assert_eq!(captured.payload["model"], "gpt-5.5");
-    assert!(captured.payload.get("generate").is_none());
+    // 透明代理：`generate` 原样透传上游，不再被剥离。
+    assert_eq!(captured.payload["generate"], false);
     assert!(captured.payload.get("previous_response_id").is_none());
     assert!(captured.payload["prompt_cache_key"]
         .as_str()
@@ -328,14 +329,18 @@ async fn responses_should_ignore_camel_case_use_websocket_field() {
         .unwrap();
     let captured = upstream.await.unwrap();
 
+    // 透明代理：只有 snake_case `use_websocket` 是代理 transport 提示并被剥离；
+    // camelCase `useWebSocket` 是未知字段，不影响传输决策（请求仍走 WebSocket），
+    // 且原样透传上游。
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(captured.payload["type"], "response.create");
-    assert!(captured.payload.get("useWebSocket").is_none());
+    assert_eq!(captured.payload["useWebSocket"], false);
     assert!(captured.payload.get("use_websocket").is_none());
 }
 
 #[tokio::test]
-async fn responses_should_convert_tuple_schema_before_upstream() {
+async fn responses_should_forward_text_schema_verbatim_to_upstream() {
+    // 透明代理：`text.format.schema` 原样透传上游，不再把 tuple prefixItems 转成 object。
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -368,24 +373,23 @@ async fn responses_should_convert_tuple_schema_before_upstream() {
     let requests = server.received_requests().await.unwrap();
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let schema = &upstream_body["text"]["format"]["schema"];
-    assert!(schema["properties"]["point"].get("prefixItems").is_none());
-    assert!(schema["properties"]["point"].get("items").is_none());
     assert_eq!(
         schema["properties"]["point"],
         json!({
-            "type": "object",
-            "properties": {
-                "0": {"type": "number"},
-                "1": {"type": "number"}
-            },
-            "required": ["0", "1"],
-            "additionalProperties": false
+            "type": "array",
+            "prefixItems": [
+                {"type": "number"},
+                {"type": "number"}
+            ],
+            "items": false
         })
     );
 }
 
 #[tokio::test]
-async fn responses_should_reconvert_tuple_schema_output_for_client() {
+async fn responses_should_pass_through_tuple_schema_output_verbatim() {
+    // 透明代理：不再重写请求 schema，因此也不再对响应做 tuple 回转换——
+    // 上游返回的 object 形态 `{"point":{"0":1,"1":2}}` 原样透传给客户端。
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -416,12 +420,16 @@ async fn responses_should_reconvert_tuple_schema_output_for_client() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], "resp_tuple");
-    assert_eq!(body["output_text"], "{\"point\":[1,2]}");
-    assert_eq!(body["output"][0]["content"][0]["text"], "{\"point\":[1,2]}");
+    assert_eq!(body["output_text"], "{\"point\":{\"0\":1,\"1\":2}}");
+    assert_eq!(
+        body["output"][0]["content"][0]["text"],
+        "{\"point\":{\"0\":1,\"1\":2}}"
+    );
 }
 
 #[tokio::test]
-async fn responses_stream_should_reconvert_tuple_schema_output_for_client() {
+async fn responses_stream_should_pass_through_tuple_schema_output_verbatim() {
+    // 透明代理：流式响应同样原样透传上游 object 形态，不做 tuple 回转换。
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -451,9 +459,9 @@ async fn responses_stream_should_reconvert_tuple_schema_output_for_client() {
     let body = response_text(response).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains(r#""delta":"{\"point\":[1,2]}""#));
-    assert!(body.contains(r#""output_text":"{\"point\":[1,2]}""#));
-    assert!(!body.contains(r#""point\":{\"0":1,"1":2}"#));
+    // 透明代理 HTTP SSE 为字节透传：上游 object 形态的 delta 与 output item 原样出现。
+    assert!(body.contains(r#""delta":"{\"point\":{\"0\":1,\"1\":2}}""#));
+    assert!(body.contains(r#""text":"{\"point\":{\"0\":1,\"1\":2}}""#));
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 
@@ -486,10 +494,12 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
                 .header("x-openai-subagent", "review")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-5.5-high-fast",
+                        "model": "gpt-5.5",
                         "stream": false,
                         "use_websocket": false,
                         "input": [],
+                        "reasoning": {"effort": "high"},
+                        "service_tier": "priority",
                         "prompt_cache_key": "pcache",
                         "client_metadata": {
                             "safe": "yes",
@@ -521,8 +531,9 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         .find(|request| request.url.path() == "/codex/responses")
         .expect("responses upstream request should be sent");
     let upstream_body: Value = serde_json::from_slice(&upstream.body).unwrap();
-    let identity =
-        build_conversation_identity(Some("pcache"), Some("window-metadata"), "acct_chat");
+    // 透明代理：window-id 不再从 client_metadata 回退读取，客户端未通过 body
+    // `codexWindowId` 或 `x-codex-window-id` 请求头提供时，window-id 由会话派生（`:0` 后缀）。
+    let identity = build_conversation_identity(Some("pcache"), None, "acct_chat");
     let conversation_id = identity
         .conversation_id
         .as_deref()
@@ -538,16 +549,11 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
             .and_then(|value| value.to_str().ok())
     };
 
+    // 透明代理：model/reasoning/service_tier 原样透传，不做后缀路由、不注入默认值。
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["service_tier"], "priority");
-    assert_eq!(
-        upstream_body["reasoning"],
-        json!({"summary": "auto", "effort": "high"})
-    );
-    assert_eq!(
-        upstream_body["include"],
-        json!(["reasoning.encrypted_content"])
-    );
+    assert_eq!(upstream_body["reasoning"], json!({"effort": "high"}));
+    assert!(upstream_body.get("include").is_none());
     assert_eq!(upstream_body["prompt_cache_key"], conversation_id);
     assert_eq!(upstream_body["client_metadata"]["safe"], "yes");
     assert_eq!(
@@ -583,37 +589,32 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     assert_eq!(upstream_header("session_id"), None);
     assert_eq!(upstream_header("x-codex-window-id"), Some(window_id));
     assert_eq!(upstream_header("x-codex-turn-state"), Some("turn-body"));
-    assert_eq!(
-        upstream_header("x-codex-turn-metadata"),
-        Some("meta-metadata")
-    );
+    // 透明代理：turnMetadata/parentThreadId 仅出现在 client_metadata 中（旧的
+    // client_metadata→context fallback 已移除），不再落到请求头。
+    assert_eq!(upstream_header("x-codex-turn-metadata"), None);
     assert_eq!(upstream_header("x-codex-beta-features"), Some("beta-body"));
     assert_eq!(
         upstream_header("x-responsesapi-include-timing-metrics"),
         Some("true")
     );
     assert_eq!(upstream_header("version"), Some("2026-06-12"));
-    assert_eq!(
-        upstream_header("x-codex-parent-thread-id"),
-        Some("parent-metadata")
-    );
+    assert_eq!(upstream_header("x-codex-parent-thread-id"), None);
     assert_eq!(upstream_header("x-openai-subagent"), Some("review"));
-    for local_field in [
-        "turnState",
-        "turnMetadata",
-        "betaFeatures",
-        "includeTimingMetrics",
-        "version",
-        "codexWindowId",
-        "parentThreadId",
-        "use_websocket",
+    // 透明代理：上下文透传字段提取到代理控制状态用于加请求头，body 中同时原样保留。
+    for context_field in [
+        ("turnState", "turn-body"),
+        ("betaFeatures", "beta-body"),
+        ("includeTimingMetrics", "true"),
+        ("version", "2026-06-12"),
     ] {
-        assert!(upstream_body.get(local_field).is_none());
+        assert_eq!(upstream_body[context_field.0], context_field.1);
     }
+    // transport-only 字段不进上游 body。
+    assert!(upstream_body.get("use_websocket").is_none());
 }
 
 #[tokio::test]
-async fn responses_should_preserve_non_empty_include_when_reasoning_defaults_apply() {
+async fn responses_should_pass_through_reasoning_and_include_verbatim() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -636,12 +637,12 @@ async fn responses_should_preserve_non_empty_include_when_reasoning_defaults_app
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "model": "gpt-5.5-high",
+                        "model": "gpt-5.5",
                         "stream": false,
                         "use_websocket": false,
                         "input": [],
-                        "include": ["file_search_call.results"],
-                        "use_websocket": false
+                        "reasoning": {"effort": "high"},
+                        "include": ["file_search_call.results"]
                     })
                     .to_string(),
                 ))
@@ -653,10 +654,8 @@ async fn responses_should_preserve_non_empty_include_when_reasoning_defaults_app
     assert_eq!(response.status(), StatusCode::OK);
     let requests = server.received_requests().await.unwrap();
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(
-        upstream_body["reasoning"],
-        json!({"summary": "auto", "effort": "high"})
-    );
+    // 透明代理：reasoning 与 include 原样透传上游，不改写、不注入。
+    assert_eq!(upstream_body["reasoning"], json!({"effort": "high"}));
     assert_eq!(
         upstream_body["include"],
         json!(["file_search_call.results"])

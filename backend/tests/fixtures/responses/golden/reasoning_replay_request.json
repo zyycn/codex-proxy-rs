@@ -21,8 +21,6 @@
     }
   ],
   "store": false,
-  "stream": true,
-  "previous_response_id": "resp_implicit_resume_first",
-  "tool_choice": "auto",
-  "parallel_tool_calls": true
+  "stream": false,
+  "previous_response_id": "resp_implicit_resume_first"
 }

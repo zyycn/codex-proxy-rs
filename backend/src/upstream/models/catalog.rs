@@ -9,19 +9,6 @@ use super::{
     snapshot::ModelPlanSnapshot,
 };
 
-/// 解析模型名后得到的标准化结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedModelName {
-    /// 最终模型 ID。
-    pub model_id: String,
-    /// 推理强度后缀。
-    pub reasoning_effort: Option<String>,
-    /// 服务层级后缀。
-    pub service_tier: Option<String>,
-}
-
-const SERVICE_TIER_SUFFIXES: [&str; 2] = ["fast", "flex"];
-const REASONING_EFFORT_SUFFIXES: [&str; 6] = ["none", "minimal", "low", "medium", "high", "xhigh"];
 const BUILTIN_CODEX_MODELS: [(&str, &str, bool); 8] = [
     ("gpt-5.5", "GPT-5.5", true),
     ("gpt-5.4", "GPT-5.4", false),
@@ -170,10 +157,9 @@ impl ModelCatalog {
             .cloned()
     }
 
-    /// 按对外模型名查询模型信息，支持别名和已知后缀。
+    /// 按对外模型名查询模型信息，支持别名映射。
     pub fn model_info_for_name(&self, input: &str) -> Option<CodexModelInfo> {
-        let parsed = self.parse_model_name(input);
-        self.model_info(&parsed.model_id)
+        self.model_info(&self.resolve_model_id(input))
     }
 
     /// 返回 model -> plans allowlist。
@@ -192,54 +178,14 @@ impl ModelCatalog {
         if trimmed.is_empty() {
             return false;
         }
-        if self.model_aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
-            return true;
-        }
-
-        let stripped = strip_known_model_suffixes(trimmed);
-        if stripped.model_name == trimmed
-            || (stripped.reasoning_effort.is_none() && stripped.service_tier.is_none())
-        {
-            return false;
-        }
-        self.model_aliases.contains_key(&stripped.model_name)
-            || self.model_info(&stripped.model_name).is_some()
+        self.model_aliases.contains_key(trimmed) || self.model_info(trimmed).is_some()
     }
 
-    /// 解析外部传入的模型名，提取别名、推理强度和服务层级后缀。
-    pub fn parse_model_name(&self, input: &str) -> ParsedModelName {
-        let trimmed = input.trim();
-        if self.model_aliases.contains_key(trimmed) || self.model_info(trimmed).is_some() {
-            return ParsedModelName {
-                model_id: self.resolve_model_id(trimmed),
-                reasoning_effort: None,
-                service_tier: None,
-            };
-        }
-
-        let stripped = strip_known_model_suffixes(trimmed);
-        ParsedModelName {
-            model_id: self.resolve_model_id(&stripped.model_name),
-            reasoning_effort: stripped.reasoning_effort,
-            service_tier: stripped.service_tier,
-        }
-    }
-
-    /// 将标准化模型名重新拼成展示名。
-    pub fn build_display_model_name(parsed: &ParsedModelName) -> String {
-        let mut name = parsed.model_id.clone();
-        if let Some(reasoning_effort) = &parsed.reasoning_effort {
-            name.push('-');
-            name.push_str(reasoning_effort);
-        }
-        if let Some(service_tier) = &parsed.service_tier {
-            name.push('-');
-            name.push_str(service_tier);
-        }
-        name
-    }
-
-    fn resolve_model_id(&self, input: &str) -> String {
+    /// 沿 alias 链将外部模型名解析为真实 model ID。
+    ///
+    /// 模型名只承载 model 身份；reasoning effort、service tier 等运行参数由请求
+    /// body 携带并原样透传上游。
+    pub fn resolve_model_id(&self, input: &str) -> String {
         self.resolve_alias_chain(input)
     }
 
@@ -258,33 +204,6 @@ impl ModelCatalog {
         }
         original.to_string()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StrippedModelName {
-    model_name: String,
-    reasoning_effort: Option<String>,
-    service_tier: Option<String>,
-}
-
-fn strip_known_model_suffixes(input: &str) -> StrippedModelName {
-    let mut remaining = input.trim().to_string();
-    let service_tier = take_suffix(&mut remaining, &SERVICE_TIER_SUFFIXES);
-    let reasoning_effort = take_suffix(&mut remaining, &REASONING_EFFORT_SUFFIXES);
-    StrippedModelName {
-        model_name: remaining,
-        reasoning_effort,
-        service_tier,
-    }
-}
-
-fn take_suffix(remaining: &mut String, suffixes: &[&str]) -> Option<String> {
-    let suffix = suffixes
-        .iter()
-        .find(|suffix| remaining.ends_with(&format!("-{suffix}")))?;
-    let truncate_to = remaining.len() - suffix.len() - 1;
-    remaining.truncate(truncate_to);
-    Some((*suffix).to_string())
 }
 
 fn normalize_aliases(input: &BTreeMap<String, String>) -> BTreeMap<String, String> {

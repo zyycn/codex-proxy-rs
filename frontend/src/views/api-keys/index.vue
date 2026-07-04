@@ -1,23 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { Trash2 } from '@lucide/vue'
+import { computed, ref, shallowRef } from 'vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { API_BASE_URL } from '@/api/constants'
 import { apiKeyColumns } from './constants'
 import { useApiKeyFilters } from './composables/useApiKeyFilters'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
 import { useApiKeysTable } from './composables/useApiKeysTable'
+import { buildCodexCcSwitchImportDeeplink } from './utils/ccswitchImport'
+import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
-import ApiKeyStatusToggle from './components/ApiKeyStatusToggle.vue'
+import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
+import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 
 const selectedIds = ref<Set<string>>(new Set())
+const showUseKeyModal = shallowRef(false)
+const selectedUseKey = shallowRef<any | null>(null)
 const {
   loading,
   apiKeys,
@@ -55,6 +59,43 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
   pagedKeys,
   selectedIds,
 )
+
+const serviceRootUrl = computed(() => resolveServiceRootUrl())
+const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
+
+function resolveServiceRootUrl() {
+  const normalizedApiBase = API_BASE_URL.trim().replace(/\/+$/, '')
+
+  if (normalizedApiBase.match(/^https?:\/\//i)) {
+    return normalizedApiBase
+  }
+
+  if (typeof window === 'undefined') {
+    return normalizedApiBase || ''
+  }
+
+  const origin = window.location.origin.replace(/\/+$/, '')
+  if (!normalizedApiBase) {
+    return origin
+  }
+
+  return `${origin}${normalizedApiBase.startsWith('/') ? normalizedApiBase : `/${normalizedApiBase}`}`
+}
+
+function openUseKeyModal(apiKey: any) {
+  selectedUseKey.value = apiKey
+  showUseKeyModal.value = true
+}
+
+function importToCcs(apiKey: any) {
+  const deeplink = buildCodexCcSwitchImportDeeplink({
+    apiKey: apiKey.key,
+    baseUrl: openAiBaseUrl.value,
+    providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
+  })
+
+  window.location.href = deeplink
+}
 </script>
 
 <template>
@@ -95,7 +136,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
           :selected-row-keys="selectedRowKeys"
           :pagination="apiKeyPagination"
           empty-text="暂无 API Key"
-          min-width="1240px"
+          min-width="1320px"
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
         >
@@ -138,26 +179,19 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
           </template>
 
           <template #enabled="{ row }">
-            <ApiKeyStatusToggle
-              :api-key="row"
-              :loading="updatingStatusKeyIds.has(row.id)"
-              @toggle="handleToggleStatus"
-            />
+            <ApiKeyStatusBadge :api-key="row" />
           </template>
 
           <template #actions="{ row }">
-            <div class="flex items-center justify-start">
-              <BaseButton
-                icon-only
-                variant="ghost"
-                size="sm"
-                label="删除密钥"
-                :disabled="deletingKey"
-                @click="requestDeleteKey(row)"
-              >
-                <Trash2 class="size-3.5" />
-              </BaseButton>
-            </div>
+            <ApiKeyActions
+              :api-key="row"
+              :deleting="deletingKey"
+              :updating-status="updatingStatusKeyIds.has(row.id)"
+              @delete="requestDeleteKey"
+              @import-ccs="importToCcs"
+              @toggle="handleToggleStatus"
+              @use="openUseKeyModal"
+            />
           </template>
         </BaseTable>
       </template>
@@ -171,6 +205,14 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       :saving="creatingKey"
       @copy="copyToClipboard"
       @create="handleCreate"
+    />
+
+    <ApiKeyUseModal
+      v-model="showUseKeyModal"
+      :api-key="selectedUseKey"
+      :service-root-url="serviceRootUrl"
+      :api-base-url="openAiBaseUrl"
+      @copy="copyToClipboard"
     />
 
     <BaseConfirmModal

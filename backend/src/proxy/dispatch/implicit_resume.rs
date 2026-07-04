@@ -20,8 +20,8 @@ impl ImplicitResumeSnapshot {
     /// 捕获当前请求中隐式续接会改写的字段。
     pub fn capture(request: &CodexResponsesRequest) -> Self {
         Self {
-            input: request.input.clone(),
-            previous_response_id: request.previous_response_id.clone(),
+            input: request.input().to_vec(),
+            previous_response_id: request.previous_response_id().map(ToString::to_string),
             turn_state: request.turn_state.clone(),
             use_websocket: request.use_websocket,
             force_http_sse: request.force_http_sse,
@@ -30,8 +30,8 @@ impl ImplicitResumeSnapshot {
 
     /// 恢复隐式续接前的请求字段。
     pub fn restore(self, request: &mut CodexResponsesRequest) {
-        request.input = self.input;
-        request.previous_response_id = self.previous_response_id;
+        request.set_input(self.input);
+        request.set_previous_response_id(self.previous_response_id);
         request.turn_state = self.turn_state;
         request.use_websocket = self.use_websocket;
         request.force_http_sse = self.force_http_sse;

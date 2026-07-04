@@ -206,8 +206,8 @@ pub(crate) fn pooled_websocket_request(
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
-    request.prompt_cache_key = Some(conversation_id.to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some(conversation_id.to_string()));
     request.client_conversation_id = Some(conversation_id.to_string());
     request
 }

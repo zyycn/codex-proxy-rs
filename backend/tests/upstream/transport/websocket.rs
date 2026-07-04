@@ -116,7 +116,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
 
     let response = backend
         .create_response(
@@ -180,11 +180,11 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
                 "content": "private capture prompt",
             })],
         );
-    request.prompt_cache_key = Some("session-1".to_string());
-    request.client_metadata = Some(json!({
+    request.set_prompt_cache_key(Some("session-1".to_string()));
+    request.set_client_metadata(Some(json!({
         "thread_id": "capture-thread-secret",
         "safe": "capture",
-    }));
+    })));
 
     let prepared = CodexWebSocketConnection::responses_create_request(
         "https://chatgpt.com/backend-api",
@@ -204,10 +204,8 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"store\":false",
             "\"stream\":true",
-            "\"tool_choice\":\"auto\"",
-            "\"parallel_tool_calls\":true",
+            "\"store\":false",
             "\"prompt_cache_key\":\"session-1\"",
             "\"client_metadata\":",
         ],
@@ -543,13 +541,14 @@ async fn websocket_execute_response_create_request_should_surface_connection_lim
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_skip_invalid_stream_events() {
+async fn websocket_execute_response_create_request_should_forward_typed_events_without_filtering() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
+        // 透明代理：缺官方必需字段的 delta 事件不再被丢弃，原样转发。
         websocket
             .send(Message::Text(
                 json!({
@@ -598,7 +597,7 @@ async fn websocket_execute_response_create_request_should_skip_invalid_stream_ev
         .expect("websocket exchange should succeed");
     server.await.unwrap();
 
-    assert!(!response.body.contains("response.output_text.delta"));
+    assert!(response.body.contains("event: response.output_text.delta"));
     assert!(response.body.contains("event: response.completed"));
     assert!(response.body.contains("\"id\":\"resp_after_invalid\""));
 }
@@ -797,7 +796,7 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_ignore_completed_without_response_until_close(
+async fn websocket_execute_response_create_request_should_forward_completed_without_response_as_terminal(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -834,15 +833,14 @@ async fn websocket_execute_response_create_request_should_ignore_completed_witho
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    // 透明代理：WS 输出侧不再按 schema 丢弃事件，缺 `response` 的 `response.completed`
+    // 也被原样转发，并作为终止事件结束交换（信任上游终止信号）。
+    let response = execute_response_create_request(&prepared)
         .await
-        .expect_err("response.completed without response should not finish the stream");
+        .expect("completed frame should terminate the exchange");
     server.await.unwrap();
 
-    assert!(matches!(
-        error,
-        CodexWebSocketExchangeError::ClosedBeforeTerminal
-    ));
+    assert!(response.body.contains("event: response.completed"));
 }
 
 #[tokio::test]
@@ -1018,7 +1016,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1074,7 +1072,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1144,7 +1142,7 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1208,7 +1206,7 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1304,7 +1302,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
             "be brief",
             Vec::new(),
         );
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),

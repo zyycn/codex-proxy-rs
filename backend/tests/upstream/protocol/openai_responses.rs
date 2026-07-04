@@ -1,10 +1,12 @@
+use serde_json::Value;
+
 use super::*;
 
 #[test]
 fn codex_responses_request_should_enable_http_sse_defaults() {
     let request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
 
-    assert!(request.stream);
+    assert!(request.stream());
 }
 
 #[test]
@@ -32,7 +34,7 @@ fn codex_responses_transport_should_prefer_websocket_when_requested_without_hist
 fn codex_responses_transport_should_require_websocket_for_previous_response_id() {
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
     request.force_http_sse = false;
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
 
     assert_eq!(
         transport_for_request(&request),
@@ -44,7 +46,7 @@ fn codex_responses_transport_should_require_websocket_for_previous_response_id()
 #[test]
 fn codex_responses_transport_should_allow_forced_http_sse() {
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", vec![json!({})]);
-    request.previous_response_id = Some("resp_previous".to_string());
+    request.set_previous_response_id(Some("resp_previous".to_string()));
     request.use_websocket = true;
     request.force_http_sse = true;
 
@@ -161,39 +163,43 @@ fn response_failed_sse_event_should_encode_openai_failure_shape() {
         .is_some_and(|id| id.starts_with("resp_proxy_")));
 }
 
+fn responses_body(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => map,
+        _ => panic!("responses body fixture must be a JSON object"),
+    }
+}
+
 #[test]
-fn openai_response_request_should_translate_to_codex_request() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
-        "model": "gpt-5.5",
-        "input": "hello",
-        "previous_response_id": "resp_previous",
-        "turnState": "turn_previous",
-        "stream": false
-    }))
-    .expect("responses request should deserialize");
-
-    let codex = translate_response_to_codex(request);
-
-    assert_eq!(codex.model, "gpt-5.5");
-    assert_eq!(
-        codex.input,
-        vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_text",
-                "text": "hello"
-            }]
-        })]
+fn build_codex_request_should_pass_through_input_and_preserve_context_fields() {
+    let codex = build_codex_request(
+        responses_body(json!({
+            "model": "gpt-5.5",
+            "input": "hello",
+            "previous_response_id": "resp_previous",
+            "turnState": "turn_previous",
+            "stream": false
+        })),
+        &HeaderMap::new(),
+        None,
     );
-    assert_eq!(codex.previous_response_id.as_deref(), Some("resp_previous"));
+
+    assert_eq!(codex.model(), "gpt-5.5");
+    // input 原样透传：客户端发字符串就保持字符串，不改写成 message 数组。
+    assert_eq!(codex.body().get("input"), Some(&json!("hello")));
+    assert_eq!(codex.previous_response_id(), Some("resp_previous"));
+    // 透明代理：turnState 既提取到代理控制状态，又原样保留在 body 中透传上游。
     assert_eq!(codex.turn_state.as_deref(), Some("turn_previous"));
+    assert_eq!(
+        codex.body().get("turnState").and_then(Value::as_str),
+        Some("turn_previous")
+    );
     assert!(!codex.use_websocket);
     assert!(!codex.force_http_sse);
 }
 
 #[test]
-fn openai_response_request_should_preserve_array_input_items_for_transparent_proxy() {
+fn build_codex_request_should_pass_through_array_input_items_verbatim() {
     let input = json!([
         {
             "type": "reasoning",
@@ -218,18 +224,17 @@ fn openai_response_request_should_preserve_array_input_items_for_transparent_pro
         {"type": "compaction", "id": "cmp_missing_encrypted", "extra": "preserve"},
         "hello"
     ]);
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+    let body = responses_body(json!({
         "model": "gpt-5.5",
         "input": input,
         "stream": false
-    }))
-    .expect("responses request should deserialize");
+    }));
 
-    let codex = translate_response_to_codex(request);
+    let codex = build_codex_request(body, &HeaderMap::new(), None);
 
     assert_eq!(
-        codex.input,
-        vec![
+        codex.input(),
+        &[
             json!({
                 "type": "reasoning",
                 "id": "rs_1",
@@ -251,85 +256,64 @@ fn openai_response_request_should_preserve_array_input_items_for_transparent_pro
                 "summary": [{"type": "summary_text", "text": "preserve invalid item"}]
             }),
             json!({"type": "compaction", "id": "cmp_missing_encrypted", "extra": "preserve"}),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": "hello"
-                }]
-            })
+            json!("hello")
         ]
     );
 }
 
 #[test]
 fn openai_response_request_should_default_missing_stream_to_true() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+    let body = responses_body(json!({
         "model": "gpt-5.5",
         "input": "hello"
-    }))
-    .expect("responses request should deserialize");
+    }));
 
-    let codex = translate_response_to_codex(request);
+    let codex = build_codex_request(body, &HeaderMap::new(), None);
 
-    assert!(codex.stream);
+    assert!(codex.stream());
 }
 
 #[test]
-fn openai_response_request_should_prepare_tuple_schema_before_upstream() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+fn openai_response_request_should_preserve_text_schema_verbatim() {
+    // 透明代理：`text` 原样透传，不再重写 tuple schema（prefixItems → object），
+    // 也不再填充 `tuple_schema`（响应侧回转换已不适用）。
+    let text = json!({
+        "format": {
+            "type": "json_schema",
+            "name": "TupleAnswer",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "point": {
+                        "type": "array",
+                        "prefixItems": [
+                            {"type": "number"},
+                            {"type": "number"}
+                        ],
+                        "items": false
+                    }
+                },
+                "required": ["point"]
+            },
+            "strict": true
+        }
+    });
+    let mut body = responses_body(json!({
         "model": "gpt-5.5",
         "input": [],
-        "stream": false,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "TupleAnswer",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "point": {
-                            "type": "array",
-                            "prefixItems": [
-                                {"type": "number"},
-                                {"type": "number"}
-                            ],
-                            "items": false
-                        }
-                    },
-                    "required": ["point"]
-                },
-                "strict": true
-            }
-        }
-    }))
-    .expect("responses request should deserialize");
+        "stream": false
+    }));
+    body.insert("text".to_string(), text.clone());
 
-    let codex = translate_response_to_codex(request);
-    let schema = &codex.text.as_ref().unwrap()["format"]["schema"];
+    let codex = build_codex_request(body, &HeaderMap::new(), None);
 
-    assert_eq!(
-        schema["properties"]["point"],
-        json!({
-            "type": "object",
-            "properties": {
-                "0": {"type": "number"},
-                "1": {"type": "number"}
-            },
-            "required": ["0", "1"],
-            "additionalProperties": false
-        })
-    );
-    assert_eq!(
-        codex.tuple_schema.unwrap()["properties"]["point"]["type"],
-        "array"
-    );
+    assert_eq!(codex.body().get("text"), Some(&text));
+    assert!(codex.tuple_schema.is_none());
 }
 
 #[test]
-fn openai_response_request_should_forward_parity_fields_to_codex() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+fn build_codex_request_should_pass_through_body_fields_verbatim() {
+    let body = json!({
         "model": "gpt-5.5-fast",
         "stream": false,
         "input": [],
@@ -350,33 +334,32 @@ fn openai_response_request_should_forward_parity_fields_to_codex() {
         "codexWindowId": "window-body",
         "parentThreadId": "parent-body",
         "use_websocket": false
-    }))
-    .expect("responses request should deserialize");
+    })
+    .as_object()
+    .cloned()
+    .unwrap();
 
-    let codex = translate_response_to_codex(request);
+    let codex = build_codex_request(body, &HeaderMap::new(), None);
+    let upstream = serde_json::to_value(&codex).expect("upstream body should serialize");
 
-    assert_eq!(codex.instructions, "be terse");
+    // 透明代理：语义字段原样透传，不注入默认值、不过滤 client_metadata 非字符串项。
+    assert_eq!(upstream["instructions"], "be terse");
+    assert_eq!(upstream["reasoning"], json!({"effort": "high"}));
+    assert_eq!(upstream["service_tier"], "priority");
     assert_eq!(
-        codex.reasoning,
-        Some(json!({"effort": "high", "summary": "auto"}))
+        upstream["tool_choice"],
+        json!({"type": "function", "function": {"name": "lookup"}})
     );
-    assert_eq!(codex.service_tier.as_deref(), Some("priority"));
-    assert_eq!(
-        codex.tool_choice,
-        Some(json!({"type": "function", "function": {"name": "lookup"}}))
-    );
-    assert_eq!(codex.parallel_tool_calls, Some(true));
-    assert_eq!(
-        codex.tools,
-        Some(vec![json!({"type": "function", "name": "lookup"})])
-    );
-    assert_eq!(codex.prompt_cache_key.as_deref(), Some("pcache"));
+    assert_eq!(upstream["parallel_tool_calls"], true);
+    assert_eq!(upstream["tools"], json!([{"type": "function", "name": "lookup"}]));
+    assert_eq!(upstream["prompt_cache_key"], "pcache");
+    assert_eq!(upstream["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(upstream["client_metadata"], json!({"safe": "yes", "drop": 42}));
+    // transport-only 字段不进上游 body。
+    assert!(upstream.get("use_websocket").is_none());
+
     assert!(codex.explicit_prompt_cache_key);
-    assert_eq!(
-        codex.include,
-        Some(vec!["reasoning.encrypted_content".to_string()])
-    );
-    assert_eq!(codex.client_metadata, Some(json!({"safe": "yes"})));
+    // 上下文透传字段提取到代理控制状态用于加请求头（body 中同时保留原值）。
     assert_eq!(codex.turn_state.as_deref(), Some("turn-body"));
     assert_eq!(codex.turn_metadata.as_deref(), Some("meta-body"));
     assert_eq!(codex.beta_features.as_deref(), Some("beta-body"));
@@ -384,90 +367,50 @@ fn openai_response_request_should_forward_parity_fields_to_codex() {
     assert_eq!(codex.version.as_deref(), Some("2026-06-12"));
     assert_eq!(codex.codex_window_id.as_deref(), Some("window-body"));
     assert_eq!(codex.parent_thread_id.as_deref(), Some("parent-body"));
+    assert_eq!(upstream["turnState"], "turn-body");
     assert!(codex.force_http_sse);
 }
 
 #[test]
-fn openai_response_request_should_fallback_context_fields_to_client_metadata() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_headers() {
+    let body = json!({
         "model": "gpt-5.5",
         "stream": false,
         "input": [],
-        "client_metadata": {
-            "x-codex-turn-metadata": " meta-from-metadata ",
-            "x-codex-beta-features": " beta-from-metadata ",
-            "x-responsesapi-include-timing-metrics": " true ",
-            "x-codex-window-id": " window-from-metadata ",
-            "x-codex-parent-thread-id": " parent-from-metadata "
-        },
         "betaFeatures": "beta-direct"
-    }))
-    .expect("responses request should deserialize");
+    })
+    .as_object()
+    .cloned()
+    .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-codex-turn-metadata", " meta-from-header ".parse().unwrap());
+    headers.insert("x-codex-beta-features", " beta-from-header ".parse().unwrap());
+    headers.insert(
+        "x-responsesapi-include-timing-metrics",
+        " true ".parse().unwrap(),
+    );
+    headers.insert("x-codex-window-id", " window-from-header ".parse().unwrap());
+    headers.insert(
+        "x-codex-parent-thread-id",
+        " parent-from-header ".parse().unwrap(),
+    );
 
-    let codex = translate_response_to_codex(request);
+    let codex = build_codex_request(body, &headers, None);
 
-    assert_eq!(codex.turn_metadata.as_deref(), Some("meta-from-metadata"));
+    // body 顶层字段优先，缺失时回退请求头（trim 后使用）。
     assert_eq!(codex.beta_features.as_deref(), Some("beta-direct"));
+    assert_eq!(codex.turn_metadata.as_deref(), Some("meta-from-header"));
     assert_eq!(codex.include_timing_metrics.as_deref(), Some("true"));
-    assert_eq!(
-        codex.codex_window_id.as_deref(),
-        Some("window-from-metadata")
-    );
-    assert_eq!(
-        codex.parent_thread_id.as_deref(),
-        Some("parent-from-metadata")
-    );
+    assert_eq!(codex.codex_window_id.as_deref(), Some("window-from-header"));
+    assert_eq!(codex.parent_thread_id.as_deref(), Some("parent-from-header"));
 }
 
 #[test]
-fn codex_responses_model_options_should_apply_suffix_defaults_and_include_reasoning() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5-high-fast", "", Vec::new());
-    let parsed = ParsedModelName {
-        model_id: "gpt-5.5".to_string(),
-        reasoning_effort: Some("high".to_string()),
-        service_tier: Some("fast".to_string()),
-    };
-    apply_response_model_options(&mut request, &parsed);
-
-    assert_eq!(request.model, "gpt-5.5");
-    assert_eq!(
-        request.reasoning,
-        Some(json!({"summary": "auto", "effort": "high"}))
-    );
-    assert_eq!(request.service_tier.as_deref(), Some("priority"));
-    assert_eq!(
-        request.include,
-        Some(vec!["reasoning.encrypted_content".to_string()])
-    );
-}
-
-#[test]
-fn codex_responses_model_options_should_preserve_client_include_and_normalize_body_tier() {
-    let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "", Vec::new());
-    request.reasoning = Some(json!({"summary": "detailed"}));
-    request.service_tier = Some("fast".to_string());
-    request.include = Some(vec!["file_search_call.results".to_string()]);
-    let parsed = ParsedModelName {
-        model_id: "gpt-5.5".to_string(),
-        reasoning_effort: Some("low".to_string()),
-        service_tier: Some("flex".to_string()),
-    };
-    apply_response_model_options(&mut request, &parsed);
-
-    assert_eq!(
-        request.reasoning,
-        Some(json!({"summary": "detailed", "effort": "low"}))
-    );
-    assert_eq!(request.service_tier.as_deref(), Some("priority"));
-    assert_eq!(
-        request.include,
-        Some(vec!["file_search_call.results".to_string()])
-    );
-}
-
-#[test]
-fn openai_compact_request_should_drop_responses_only_fields_and_preserve_input_items() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+fn openai_compact_request_should_strip_only_stream_and_pass_through_rest() {
+    // compact 端点仅支持非流式响应，故只剥离 transport 控制字段 `stream`；
+    // 其余字段（store/prompt_cache_key/previous_response_id/include/client_metadata、
+    // reasoning 未知键、text、input item）作为业务语义原样透传上游。
+    let body = json!({
         "model": "gpt-5.5-fast",
         "instructions": "compress the session",
         "input": [
@@ -477,14 +420,14 @@ fn openai_compact_request_should_drop_responses_only_fields_and_preserve_input_i
                 "id": "rs_1",
                 "status": "completed",
                 "summary": [{"type": "summary_text", "text": "kept"}],
-                "ignored": "drop"
+                "ignored": "keep"
             },
             {"type": "compaction", "encrypted_content": "enc_compact"},
-            {"type": "compaction", "id": "drop_missing_encrypted"}
+            {"type": "compaction", "id": "keep_missing_encrypted"}
         ],
         "tools": [{"type": "function", "name": "lookup"}],
         "parallel_tool_calls": false,
-        "reasoning": {"effort": "high", "summary": "auto", "extra": "drop"},
+        "reasoning": {"effort": "high", "summary": "auto", "extra": "keep"},
         "text": {
             "format": {
                 "type": "json_schema",
@@ -495,11 +438,16 @@ fn openai_compact_request_should_drop_responses_only_fields_and_preserve_input_i
         },
         "stream": true,
         "store": true,
-        "prompt_cache_key": "must_not_forward"
-    }))
-    .expect("responses request should deserialize");
+        "prompt_cache_key": "keep",
+        "previous_response_id": "resp_previous",
+        "include": ["reasoning.encrypted_content"],
+        "client_metadata": {"keep": "yes"}
+    })
+    .as_object()
+    .unwrap()
+    .clone();
 
-    let compact = translate_response_to_compact(request);
+    let compact = build_compact_request(body, &HeaderMap::new());
     let body = serde_json::to_value(&compact).expect("compact request should serialize");
 
     assert_eq!(body["model"], "gpt-5.5-fast");
@@ -507,35 +455,44 @@ fn openai_compact_request_should_drop_responses_only_fields_and_preserve_input_i
     assert_eq!(body["parallel_tool_calls"], false);
     assert_eq!(
         body["reasoning"],
-        json!({"effort": "high", "summary": "auto"})
+        json!({"effort": "high", "summary": "auto", "extra": "keep"})
     );
     assert_eq!(
         body["tools"],
         json!([{"type": "function", "name": "lookup"}])
     );
     assert_eq!(body["text"]["format"]["type"], "json_schema");
+    // 仅 stream 被剥离。
     assert!(body.get("stream").is_none());
-    assert!(body.get("store").is_none());
-    assert!(body.get("prompt_cache_key").is_none());
+    // 其余字段原样透传。
+    assert_eq!(body["store"], true);
+    assert_eq!(body["prompt_cache_key"], "keep");
+    assert_eq!(body["previous_response_id"], "resp_previous");
+    assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(body["client_metadata"], json!({"keep": "yes"}));
     assert_eq!(body["input"].as_array().unwrap().len(), 4);
-    assert_eq!(body["input"][1]["ignored"], "drop");
+    assert_eq!(body["input"][1]["ignored"], "keep");
     assert_eq!(body["input"][2]["encrypted_content"], "enc_compact");
-    assert_eq!(body["input"][3]["id"], "drop_missing_encrypted");
+    assert_eq!(body["input"][3]["id"], "keep_missing_encrypted");
 }
 
 #[test]
 fn openai_streaming_response_with_previous_response_should_require_websocket() {
-    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+    let body = json!({
         "model": "gpt-5.5",
         "input": "hello",
         "previous_response_id": "resp_previous",
         "stream": true
-    }))
-    .expect("responses request should deserialize");
+    });
 
-    let codex = translate_response_to_codex(request);
+    let codex = build_codex_request(
+        body.as_object().unwrap().clone(),
+        &HeaderMap::new(),
+        None,
+    );
 
-    assert_eq!(codex.previous_response_id.as_deref(), Some("resp_previous"));
-    assert!(codex.stream);
+    assert_eq!(codex.previous_response_id(), Some("resp_previous"));
+    assert!(codex.stream());
     assert!(!codex.force_http_sse);
+    assert_eq!(transport_for_request(&codex), CodexTransport::WebSocketRequired);
 }
