@@ -22,6 +22,11 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
         "<!doctype html><main id=\"app\">Codex Proxy Admin</main>",
     )
     .expect("index should be written");
+    std::fs::write(
+        dist.join("favicon.svg"),
+        "<svg><title>Codex Proxy</title></svg>",
+    )
+    .expect("favicon should be written");
     std::fs::write(dist.join("assets").join("app.js"), "window.__asset = true;")
         .expect("asset should be written");
     let db = dir.path().join("assets-routes.sqlite");
@@ -29,6 +34,21 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     let (app, _pool) = router_with_dist_and_database(&dist, &database_url).await;
 
     let index = app.clone().oneshot(request("/")).await.expect("index");
+    let route_fallback = app
+        .clone()
+        .oneshot(request("/dashboard"))
+        .await
+        .expect("route fallback");
+    let favicon = app
+        .clone()
+        .oneshot(request("/favicon.svg"))
+        .await
+        .expect("favicon");
+    let missing_static = app
+        .clone()
+        .oneshot(request("/missing.svg"))
+        .await
+        .expect("missing static response");
     let asset = app
         .clone()
         .oneshot(request("/assets/app.js"))
@@ -45,12 +65,23 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
         .expect("health response");
 
     assert_eq!(index.status(), StatusCode::OK);
+    assert_eq!(route_fallback.status(), StatusCode::OK);
+    assert_eq!(favicon.status(), StatusCode::OK);
+    assert_eq!(missing_static.status(), StatusCode::NOT_FOUND);
     assert_eq!(asset.status(), StatusCode::OK);
     assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(health.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        favicon.headers().get(header::CONTENT_TYPE),
+        Some(&header::HeaderValue::from_static("image/svg+xml"))
+    );
     assert_no_static_policy_headers(&index);
+    assert_no_static_policy_headers(&route_fallback);
+    assert_no_static_policy_headers(&favicon);
     assert_no_static_policy_headers(&asset);
     assert_body_contains(index, "Codex Proxy Admin").await;
+    assert_body_contains(route_fallback, "Codex Proxy Admin").await;
+    assert_body_contains(favicon, "Codex Proxy").await;
     assert_body_contains(asset, "__asset").await;
     assert_eq!(response_json(api).await["code"], Value::from(40101));
 }

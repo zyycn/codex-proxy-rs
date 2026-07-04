@@ -1,41 +1,32 @@
 use std::{
-    path::{Component, Path, PathBuf},
-    sync::Arc,
+    convert::Infallible,
+    path::{Path, PathBuf},
 };
 
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, State},
-    http::{header, HeaderValue, StatusCode, Uri},
+    http::{Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
     Json, Router,
 };
 use serde_json::json;
-
-#[derive(Clone)]
-struct AssetState {
-    dist_dir: Arc<PathBuf>,
-}
+use tower::service_fn;
+use tower_http::services::ServeDir;
 
 pub fn spa_router(dist_dir: impl AsRef<Path>) -> Router {
-    let state = AssetState {
-        dist_dir: Arc::new(dist_dir.as_ref().to_path_buf()),
-    };
+    let dist_dir = dist_dir.as_ref().to_path_buf();
+    let index_file = dist_dir.join("index.html");
+    let fallback = service_fn(move |request: Request<Body>| {
+        let index_file = index_file.clone();
+        async move { Ok::<_, Infallible>(spa_fallback_response(request, index_file).await) }
+    });
 
-    Router::new()
-        .route("/", get(serve_index))
-        .route("/assets/{*path}", get(serve_asset))
-        .fallback(serve_spa_fallback)
-        .with_state(state)
+    Router::new().fallback_service(ServeDir::new(dist_dir).fallback(fallback))
 }
 
-async fn serve_index(State(state): State<AssetState>) -> Response {
-    serve_file(&state.dist_dir.join("index.html")).await
-}
-
-async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Response {
-    if is_api_path(uri.path()) {
+async fn spa_fallback_response(request: Request<Body>, index_file: PathBuf) -> Response {
+    let path = request.uri().path();
+    if is_api_path(path) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -47,61 +38,32 @@ async fn serve_spa_fallback(State(state): State<AssetState>, uri: Uri) -> Respon
             .into_response();
     }
 
-    serve_file(&state.dist_dir.join("index.html")).await
+    if is_static_file_path(path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    serve_index_file(&index_file).await
 }
 
 fn is_api_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/") || path == "/v1" || path.starts_with("/v1/")
 }
 
-async fn serve_asset(
-    State(state): State<AssetState>,
-    AxumPath(path): AxumPath<String>,
-) -> Response {
-    let Some(relative_path) = safe_relative_path(&path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    serve_file(&state.dist_dir.join("assets").join(relative_path)).await
-}
-
-async fn serve_file(path: &Path) -> Response {
+async fn serve_index_file(path: &Path) -> Response {
     let Ok(bytes) = tokio::fs::read(path).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     let mut response = Response::new(Body::from(bytes));
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        content_type_for_path(&path.to_string_lossy()),
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/html; charset=utf-8"),
     );
     response
 }
 
-fn content_type_for_path(path: &str) -> HeaderValue {
-    if path.ends_with(".html") || path == "/" {
-        HeaderValue::from_static("text/html; charset=utf-8")
-    } else if path.ends_with(".js") {
-        HeaderValue::from_static("text/javascript; charset=utf-8")
-    } else if path.ends_with(".css") {
-        HeaderValue::from_static("text/css; charset=utf-8")
-    } else if path.ends_with(".json") {
-        HeaderValue::from_static("application/json")
-    } else if path.ends_with(".svg") {
-        HeaderValue::from_static("image/svg+xml")
-    } else {
-        HeaderValue::from_static("application/octet-stream")
-    }
-}
-
-fn safe_relative_path(path: &str) -> Option<PathBuf> {
-    let mut sanitized = PathBuf::new();
-    for component in Path::new(path).components() {
-        match component {
-            Component::Normal(segment) => sanitized.push(segment),
-            _ => return None,
-        }
-    }
-
-    (!sanitized.as_os_str().is_empty()).then_some(sanitized)
+fn is_static_file_path(path: &str) -> bool {
+    Path::new(path.trim_start_matches('/'))
+        .extension()
+        .is_some()
 }
