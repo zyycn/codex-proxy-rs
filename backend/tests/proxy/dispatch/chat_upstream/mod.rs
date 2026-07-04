@@ -111,7 +111,6 @@ where
     .await
 }
 
-const CHAT_SUCCESS_SSE: &str = concat!(include_str!("../../../fixtures/chat/success.sse"), "\n");
 const RESPONSES_SUCCESS_SSE: &str = concat!(
     include_str!("../../../fixtures/responses/http_sse/success.sse"),
     "\n"
@@ -234,7 +233,6 @@ const WEBSOCKET_UNANSWERED_FUNCTION_CALL: &str =
 const REASONING_REPLAY_REQUEST_GOLDEN: &str =
     include_str!("../../../fixtures/responses/golden/reasoning_replay_request.json");
 
-mod chat_routes;
 mod compact_routes;
 mod responses_http;
 mod responses_recovery;
@@ -433,35 +431,6 @@ async fn test_app_with_account_pool_config(
         .await
         .expect("account pool should restore");
     (router::router().with_state(state), api_key, pool, dir)
-}
-
-async fn test_app_with_restored_pool_then_disabled_account(
-    base_url: String,
-) -> (axum::Router, String, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("openai-chat-restored-pool.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-    let api_key = insert_client_api_key(&pool).await;
-    insert_account(&pool).await;
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(url, base_url),
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
-    state
-        .services
-        .account_pool
-        .restore_from_repository()
-        .await
-        .expect("account pool should restore");
-    sqlx::query("update accounts set status = 'disabled' where id = ?")
-        .bind("acct_chat")
-        .execute(&pool)
-        .await
-        .unwrap();
-    (router::router().with_state(state), api_key, dir)
 }
 
 async fn test_app_with_two_accounts_and_affinity(

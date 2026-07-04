@@ -87,58 +87,6 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
 }
 
 #[tokio::test]
-async fn chat_completions_non_stream_should_record_first_token_latency() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/codex/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(RESPONSES_COMPLETED_USAGE_SSE),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("authorization", format!("Bearer {api_key}"))
-                .header("content-type", "application/json")
-                .header("x-request-id", "req_chat_non_stream_first_token")
-                .body(Body::from(
-                    json!({
-                        "model": "gpt-5.5",
-                        "messages": [{"role": "user", "content": "Say hello"}]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let body = response_json(response).await;
-    let event = latest_usage_record(&pool, "v1.chat").await;
-    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["usage"]["prompt_tokens"], 7);
-    assert_eq!(metadata["stream"], false);
-    assert_eq!(metadata["transport"], "http_sse");
-    assert!(
-        metadata["firstTokenMs"]
-            .as_i64()
-            .is_some_and(|value| value > 0),
-        "chat non-stream usage metadata should include first token latency: {metadata:?}",
-    );
-}
-
-#[tokio::test]
 async fn responses_usage_record_should_store_resolved_upstream_model_after_alias_mapping() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

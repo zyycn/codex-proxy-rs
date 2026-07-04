@@ -8,10 +8,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::proxy::{
-    dispatch::{
-        chat::ChatDispatchError, errors::DispatchFailureClass,
-        responses::errors::ResponseDispatchError,
-    },
+    dispatch::{errors::DispatchFailureClass, responses::errors::ResponseDispatchError},
     openai::responses::response_failed_sse_event as encode_response_failed_sse_event,
 };
 
@@ -102,16 +99,6 @@ pub fn openai_error_response(
             }
         })),
     )
-}
-
-pub fn chat_dispatch_error_response(error: &ChatDispatchError) -> Response {
-    let error = chat_dispatch_openai_error(error);
-    openai_error_response(error.status, &error.message, error.error_type, error.code)
-        .into_response()
-}
-
-pub fn chat_stream_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorDetails {
-    response_dispatch_openai_error(error)
 }
 
 pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Response {
@@ -206,11 +193,6 @@ pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
     )
 }
 
-/// Chat Completions 请求无效。
-pub fn invalid_chat_completion_request_response() -> (StatusCode, Json<Value>) {
-    invalid_openai_request_response("Invalid chat completion request")
-}
-
 /// Responses 请求无效。
 pub fn invalid_responses_request_response() -> (StatusCode, Json<Value>) {
     invalid_openai_request_response("Invalid responses request")
@@ -223,32 +205,6 @@ fn invalid_openai_request_response(message: &str) -> (StatusCode, Json<Value>) {
         "invalid_request_error",
         "invalid_request",
     )
-}
-
-fn chat_dispatch_openai_error(error: &ChatDispatchError) -> OpenAiErrorDetails {
-    let status = chat_dispatch_status(error);
-    let metadata = error.metadata();
-    let message = if let Some(exhausted) = error.exhausted_account() {
-        exhausted_dispatch_message(
-            exhausted.count,
-            exhausted.kind.message_reason(),
-            exhausted.upstream_error,
-            false,
-        )
-    } else {
-        dispatch_failure_message(
-            metadata.failure_class,
-            DispatchFailureMessageStyle::Standard,
-        )
-    };
-    let kind = dispatch_failure_openai_error_kind(metadata.failure_class, status);
-
-    OpenAiErrorDetails {
-        status,
-        message,
-        error_type: kind.error_type,
-        code: kind.code,
-    }
 }
 
 fn response_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorDetails {
@@ -299,13 +255,6 @@ fn responses_error_kind_for_status(status: StatusCode) -> OpenAiErrorKind {
         }
     } else {
         CODEX_API_ERROR
-    }
-}
-
-fn chat_dispatch_status(error: &ChatDispatchError) -> StatusCode {
-    match error {
-        ChatDispatchError::Upstream(_) => StatusCode::BAD_GATEWAY,
-        _ => status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
     }
 }
 

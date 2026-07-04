@@ -664,7 +664,7 @@ async fn responses_should_preserve_non_empty_include_when_reasoning_defaults_app
 }
 
 #[tokio::test]
-async fn responses_should_sanitize_reasoning_and_compaction_input_before_upstream() {
+async fn responses_should_preserve_input_items_before_upstream() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -737,16 +737,30 @@ async fn responses_should_sanitize_reasoning_and_compaction_input_before_upstrea
             {
                 "type": "reasoning",
                 "id": "rs_1",
-                "summary": [{"type": "summary_text", "text": "valid summary"}],
                 "status": "completed",
+                "summary": [
+                    {"type": "summary_text", "text": "valid summary"},
+                    {"type": "ignored", "text": "drop"}
+                ],
                 "encrypted_content": "enc_reasoning",
-                "content": [{"type": "reasoning_text", "text": "valid reasoning"}]
+                "content": [
+                    {"type": "reasoning_text", "text": "valid reasoning"},
+                    {"type": "ignored", "text": "drop"}
+                ],
+                "extra": "drop"
+            },
+            {
+                "type": "reasoning",
+                "id": "",
+                "summary": [{"type": "summary_text", "text": "drop"}]
             },
             {
                 "type": "compaction",
+                "id": "cmp_1",
                 "encrypted_content": "enc_compaction",
-                "id": "cmp_1"
+                "extra": "drop"
             },
+            {"type": "compaction", "id": "cmp_drop"},
             {"type": "message", "role": "user", "content": "keep me", "extra": 42}
         ])
     );

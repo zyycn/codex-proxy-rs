@@ -55,7 +55,7 @@ flowchart LR
 
 - `admin/`：管理端 API，包括登录 session、账号、API Key、监控、运行设置和系统更新。
 - `proxy/`：OpenAI 兼容 HTTP 入口、客户端 API Key 鉴权、请求分派。
-- `proxy/openai/`：Responses、Chat Completions 和 Models 的协议入口。
+- `proxy/openai/`：Responses 和 Models 的协议入口。
 - `proxy/dispatch/`：账号选择、quota/限流处理、错误映射、session affinity 和失败回退。
 - `upstream/`：ChatGPT/Codex 上游账号、模型、协议、传输、token 刷新和 fingerprint。
 - `config/`：启动配置、运行时设置和管理端设置落库。

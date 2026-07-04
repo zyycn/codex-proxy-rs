@@ -106,7 +106,6 @@ docker compose -f deploy/docker-compose.yml up -d
 | 端点 | 说明 |
 | --- | --- |
 | `POST /v1/responses` | OpenAI Responses 兼容接口 |
-| `POST /v1/chat/completions` | Chat Completions 兼容接口 |
 | `GET /v1/models` | 模型列表 |
 | `GET /v1/models/{id}` | 模型详情 |
 | `GET /v1/models/catalog` | 管理端可见模型目录 |

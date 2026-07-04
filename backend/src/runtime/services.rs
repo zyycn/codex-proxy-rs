@@ -25,7 +25,6 @@ use crate::{
         settings::{account_pool_options_from_config, RuntimeSettingsService},
     },
     proxy::dispatch::{
-        chat::ChatDispatchService,
         responses::service::{ResponseDispatchService, ResponseDispatchServiceParts},
         session_affinity::{RuntimeSessionAffinityService, SqliteSessionAffinityStore},
     },
@@ -98,7 +97,6 @@ pub struct Services {
     pub usage: StdArc<AdminUsageService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub token_refresh: StdArc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
-    pub chat: StdArc<ChatDispatchService>,
     pub responses: StdArc<ResponseDispatchService>,
     pub session_affinity: StdArc<RuntimeSessionAffinityService>,
     pub codex: StdArc<CodexBackendClient>,
@@ -261,15 +259,6 @@ impl Services {
 
         let cloudflare_recovery =
             crate::proxy::dispatch::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
-        let chat = StdArc::new(ChatDispatchService::new(
-            account_pool.clone(),
-            models.clone(),
-            codex.clone(),
-            usage_records.clone(),
-            token_refresh.clone(),
-            installation_id.clone(),
-            cloudflare_recovery.clone(),
-        ));
         let responses = StdArc::new(ResponseDispatchService::new(ResponseDispatchServiceParts {
             account_pool: account_pool.clone(),
             models: models.clone(),
@@ -294,7 +283,6 @@ impl Services {
             usage,
             account_pool,
             token_refresh,
-            chat,
             responses,
             session_affinity,
             codex,
