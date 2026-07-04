@@ -4,6 +4,7 @@ use std::{
     convert::Infallible,
     env, fmt, fs, io,
     path::{Path, PathBuf},
+    process::Command,
     sync::OnceLock,
     time::Duration,
 };
@@ -49,6 +50,8 @@ const APP_BINARY_NAME: &str = "codex-proxy-rs";
 const DEFAULT_WEB_DIST_DIR: &str = "/app/web/dist";
 const GITHUB_API_BASE: &str = "https://api.github.com/repos";
 const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024;
+const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
+const REPLACEMENT_START_DELAY_MS: &str = "1200";
 
 static SYSTEM_OPERATION_LOCK: Mutex<()> = Mutex::const_new(());
 static UPDATE_EVENT_SENDER: OnceLock<broadcast::Sender<SystemUpdateEvent>> = OnceLock::new();
@@ -314,6 +317,9 @@ pub(crate) async fn restart(_auth: AdminAuth) -> Result<impl IntoResponse, Admin
         ));
     }
 
+    let config = SystemUpdateConfig::from_env();
+    let message = schedule_restart(&config)?;
+
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(500)).await;
         request_shutdown();
@@ -322,9 +328,29 @@ pub(crate) async fn restart(_auth: AdminAuth) -> Result<impl IntoResponse, Admin
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({
-            "message": "已安排重启",
+            "message": message,
             "operationId": operation_id("restart")
         })),
+    ))
+}
+
+fn schedule_restart(config: &SystemUpdateConfig) -> Result<&'static str, AdminError> {
+    if config.deployment_mode == "docker" {
+        return Ok("已安排重启");
+    }
+
+    spawn_replacement_process(config)?;
+    Ok("已安排自重启")
+}
+
+fn spawn_replacement_process(config: &SystemUpdateConfig) -> Result<(), AdminError> {
+    let executable_path = config.executable_path()?;
+    let mut command = Command::new(executable_path);
+    command
+        .args(env::args_os().skip(1))
+        .env(RESTART_DELAY_ENV, REPLACEMENT_START_DELAY_MS);
+    command.spawn().map(|_| ()).map_err(internal_error_with(
+        "Failed to schedule replacement process",
     ))
 }
 

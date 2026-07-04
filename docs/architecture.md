@@ -85,6 +85,7 @@ flowchart LR
 ```text
 .runtime/config.yaml
 .runtime/data/codex-proxy-rs.sqlite
+.runtime/data/installation_id
 .runtime/data/update-state.json
 .runtime/data/update.lock
 .runtime/logs/
@@ -196,7 +197,7 @@ GHCR 镜像发布 `linux/amd64` 和 `linux/arm64` 多平台 manifest。
 6. 替换当前二进制和前端静态资源。
 7. 写入 `.runtime/data/update-state.json`。
 8. 通过 SSE 推送中文更新日志。
-9. 管理端触发重启；Docker 模式依靠 `restart: unless-stopped` 拉起新进程。
+9. 管理端触发重启；Docker 模式依靠 `restart: unless-stopped` 拉起新容器进程，非 Docker 模式先安排新进程延迟启动，再关闭当前进程。
 
 替换逻辑必须支持跨文件系统 fallback，因为容器环境中 `rename` 可能遇到 `Invalid cross-device link`。
 

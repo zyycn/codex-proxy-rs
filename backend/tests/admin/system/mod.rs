@@ -199,6 +199,87 @@ async fn restart_should_request_graceful_shutdown() {
 }
 
 #[tokio::test]
+async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let replacement = Path::new("/bin/true");
+    if !replacement.exists() {
+        return;
+    }
+    set_system_update_env(
+        "zyycn/codex-proxy-rs-binary-restart-route",
+        "http://127.0.0.1:9",
+    );
+    std::env::set_var("CPR_DEPLOYMENT_MODE", "binary");
+    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
+    std::env::set_var("CPR_UPDATE_EXE_PATH", replacement);
+    let (app, _dir) = admin_system_test_app("system-binary-restart.sqlite").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/restart")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_binary_restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let shutdown = tokio::time::timeout(
+        Duration::from_secs(2),
+        codex_proxy_rs::runtime::shutdown::shutdown_signal(),
+    )
+    .await;
+
+    assert!(body["data"]["message"] == "已安排自重启" && shutdown.is_ok());
+}
+
+#[tokio::test]
+async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    set_system_update_env(
+        "zyycn/codex-proxy-rs-restart-spawn-failure-route",
+        "http://127.0.0.1:9",
+    );
+    std::env::set_var("CPR_DEPLOYMENT_MODE", "binary");
+    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
+    std::env::set_var(
+        "CPR_UPDATE_EXE_PATH",
+        "/tmp/codex-proxy-rs-missing-restart-binary",
+    );
+    let (app, _dir) = admin_system_test_app("system-restart-spawn-failure.sqlite").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/restart")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_restart_spawn_failure")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let shutdown = tokio::time::timeout(
+        Duration::from_millis(100),
+        codex_proxy_rs::runtime::shutdown::shutdown_signal(),
+    )
+    .await;
+    let message = body["message"].as_str().unwrap_or_default();
+
+    assert!(
+        status == StatusCode::INTERNAL_SERVER_ERROR
+            && message.starts_with("Failed to schedule replacement process:")
+            && shutdown.is_err()
+    );
+}
+
+#[tokio::test]
 async fn update_should_replace_local_release_files_with_latest_asset() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-update-route";

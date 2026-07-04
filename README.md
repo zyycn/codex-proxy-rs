@@ -154,6 +154,7 @@ CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.tom
 ```text
 .runtime/config.yaml                # 本地或 Docker 启动配置，按实际运行环境写路径
 .runtime/data/codex-proxy-rs.sqlite # SQLite 数据库
+.runtime/data/installation_id       # 上游 installation id
 .runtime/data/update-state.json     # 在线更新状态
 .runtime/data/update.lock           # 在线更新锁
 .runtime/logs/                      # 日志
@@ -177,7 +178,7 @@ release/publish 0.1.5
 - 下载匹配当前平台的归档和 `checksums.txt`。
 - 校验 checksum。
 - 替换二进制和 `web/dist`。
-- Docker 模式下依赖 `restart: unless-stopped` 和自重启重新拉起服务。
+- 重启时，Docker 模式依赖 `restart: unless-stopped` 拉起新容器进程；非 Docker 模式会先安排新进程延迟启动，再关闭当前进程。
 
 ## 项目结构
 
