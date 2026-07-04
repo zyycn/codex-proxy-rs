@@ -172,7 +172,7 @@ async fn update_detail_should_reject_untrusted_github_api_base() {
 }
 
 #[tokio::test]
-async fn restart_should_request_graceful_shutdown() {
+async fn restart_should_request_process_restart_inside_docker() {
     let _guard = SYSTEM_ENV_LOCK.lock().await;
     set_system_update_env("zyycn/codex-proxy-rs-restart-route", "http://127.0.0.1:9");
     std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
@@ -201,6 +201,7 @@ async fn restart_should_request_graceful_shutdown() {
         body["data"]["operationId"]
             .as_str()
             .is_some_and(|id| id.starts_with("sysop-restart-"))
+            && body["data"]["message"] == "已安排进程内重启"
             && shutdown.is_ok()
     );
 }
@@ -310,7 +311,8 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
                 .uri("/api/admin/system/update")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_system_update_latest")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
                 .unwrap(),
         )
         .await
@@ -332,6 +334,52 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
                 == "old-binary"
             && std::fs::read_to_string(deploy.path().join("web/dist.backup/index.html")).unwrap()
                 == "old-web"
+    );
+}
+
+#[tokio::test]
+async fn update_should_reject_when_confirmed_target_differs_from_remote_latest() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-update-target-changed-route";
+    let initial_github = MockServer::start().await;
+    let latest_github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release(&initial_github, repository, "0.4.0").await;
+    mount_latest_release(&latest_github, repository, "0.5.0").await;
+    set_system_update_env(repository, &initial_github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-target-changed.sqlite").await;
+    let initial = get_update_detail(&app, true, "req_system_update_target_initial").await;
+    set_system_update_env(repository, &latest_github.uri());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/system/update")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_target_changed")
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert!(
+        initial["latestVersion"] == "0.4.0"
+            && status == StatusCode::CONFLICT
+            && body["message"] == "远端最新版本已变更为 v0.5.0，请重新检查并确认"
+            && std::fs::read_to_string(&exe_path).unwrap() == "old-binary"
+            && std::fs::read_to_string(web_dist.join("index.html")).unwrap() == "old-web"
     );
 }
 
@@ -564,7 +612,8 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
                 .uri("/api/admin/system/update")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_system_update_binary_backup_failure")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
                 .unwrap(),
         )
         .await
@@ -622,7 +671,8 @@ async fn update_should_remove_stale_file_lock_and_continue() {
                 .uri("/api/admin/system/update")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_system_update_stale_lock")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
                 .unwrap(),
         )
         .await
@@ -666,7 +716,8 @@ async fn update_should_replace_web_assets_across_filesystems() {
                 .uri("/api/admin/system/update")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_system_cross_device_update")
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
                 .unwrap(),
         )
         .await
@@ -788,6 +839,10 @@ async fn get_update_detail(app: &axum::Router, refresh: bool, request_id: &str) 
     response_json(response).await["data"].clone()
 }
 
+fn confirmed_update_body(version: &str) -> Body {
+    Body::from(json!({ "targetVersion": version }).to_string())
+}
+
 async fn assert_update_failure_preserves_files(
     app: &axum::Router,
     request_id: &str,
@@ -804,7 +859,8 @@ async fn assert_update_failure_preserves_files(
                 .uri("/api/admin/system/update")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", request_id)
-                .body(Body::empty())
+                .header(CONTENT_TYPE, "application/json")
+                .body(confirmed_update_body("0.4.0"))
                 .unwrap(),
         )
         .await

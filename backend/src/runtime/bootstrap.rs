@@ -1,4 +1,4 @@
-use std::{env, error::Error, time::Duration};
+use std::{env, error::Error, process::Command, time::Duration};
 
 use axum::Router;
 use chrono::Utc;
@@ -10,7 +10,7 @@ use crate::infra::database::connect_sqlite;
 use crate::infra::logging::{init_tracing, LogGuard, RotationConfig};
 use crate::infra::paths::{ensure_data_dir, load_or_create_installation_id};
 use crate::runtime::services::{BackgroundTaskStores, Services};
-use crate::runtime::shutdown::shutdown_signal;
+use crate::runtime::shutdown::{restart_executable_path, shutdown_signal};
 use crate::runtime::state::{AppState, RuntimeConfig};
 use crate::runtime::tasks::coordinator::TaskCoordinator;
 use crate::upstream::fingerprint::{Fingerprint, FingerprintRepository};
@@ -23,7 +23,7 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = AppConfig::load()?;
     let host = config.server.host.clone();
     let port = config.server.port;
-    let _log_guard = init_logging(&config)?;
+    let log_guard = init_logging(&config)?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let (app, task_coordinator) = build_application(config).await?;
 
@@ -36,6 +36,15 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     task_coordinator.shutdown().await;
     serve_result?;
+
+    if let Some(executable_path) = restart_executable_path() {
+        tracing::info!(
+            executable = %executable_path.display(),
+            "正在以更新后的二进制替换当前进程"
+        );
+        drop(log_guard);
+        exec_replacement_process(executable_path)?;
+    }
 
     Ok(())
 }
@@ -131,4 +140,26 @@ async fn wait_for_scheduled_restart() {
     };
 
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+}
+
+#[cfg(unix)]
+fn exec_replacement_process(
+    executable_path: std::path::PathBuf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    use std::os::unix::process::CommandExt;
+
+    let error = Command::new(executable_path)
+        .args(env::args_os().skip(1))
+        .exec();
+    Err(Box::new(error))
+}
+
+#[cfg(not(unix))]
+fn exec_replacement_process(
+    _executable_path: std::path::PathBuf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    Err(Box::new(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process exec restart is only supported on Unix",
+    )))
 }
