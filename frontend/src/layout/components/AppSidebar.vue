@@ -265,7 +265,7 @@ watch(
         <strong class="text-base leading-[1.1] font-[760] text-(--cp-text-primary)">
           Codex Proxy
         </strong>
-        <span class="mt-1.5 flex min-w-0 items-center gap-2">
+        <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
           <span class="shrink-0 text-xs leading-none font-[650] text-(--cp-text-secondary)">
             Rust build
           </span>
