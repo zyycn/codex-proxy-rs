@@ -161,9 +161,7 @@ fn compute_variant_hash_with_identity(
     request: &CodexResponsesRequest,
     identity: Option<&str>,
 ) -> String {
-    let tools_json = request
-        .tools()
-        .map_or_else(|| "[]".to_string(), tools_json);
+    let tools_json = request.tools().map_or_else(|| "[]".to_string(), tools_json);
     let mut hasher = Sha256::new();
     hasher.update(request.instructions().as_bytes());
     hasher.update(b"\0");
@@ -270,7 +268,11 @@ pub fn ensure_prompt_cache_key(request: &mut CodexResponsesRequest) {
 
 /// 按原版 `stable-conversation-key.ts` 的规则派生稳定 conversation key。
 pub fn derive_stable_conversation_key(request: &CodexResponsesRequest) -> Option<String> {
-    let instructions = request.instructions().chars().take(2000).collect::<String>();
+    let instructions = request
+        .instructions()
+        .chars()
+        .take(2000)
+        .collect::<String>();
     let first_user_text = first_user_text(request.input());
     let normalized_first_user_text = normalize_conversation_anchor_text(&first_user_text);
     let first_user_text = if normalized_first_user_text.is_empty() {

@@ -5,11 +5,9 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     infra::time::elapsed_millis_i64,
-    upstream::{
-        protocol::{
-            schema::reconvert_tuple_values,
-            sse::{parse_sse_events, SseError, SseEvent},
-        },
+    upstream::protocol::{
+        schema::reconvert_tuple_values,
+        sse::{parse_sse_events, SseError, SseEvent},
     },
 };
 
@@ -534,7 +532,8 @@ impl CodexResponsesRequest {
     /// 只做最小规范化：`input` 缺省为 `[]`、`stream` 缺省 `true`、`store` 缺省 `false`。
     /// 其余字段（含未知字段）原样保留在 `body` 中透传上游。
     pub fn from_body(mut body: Map<String, Value>) -> Self {
-        body.entry("input").or_insert_with(|| Value::Array(Vec::new()));
+        body.entry("input")
+            .or_insert_with(|| Value::Array(Vec::new()));
         body.entry("stream").or_insert(Value::Bool(true));
         body.entry("store").or_insert(Value::Bool(false));
         Self {
@@ -565,7 +564,10 @@ impl CodexResponsesRequest {
     ) -> Self {
         let mut body = Map::new();
         body.insert("model".to_string(), Value::String(model.into()));
-        body.insert("instructions".to_string(), Value::String(instructions.into()));
+        body.insert(
+            "instructions".to_string(),
+            Value::String(instructions.into()),
+        );
         body.insert("input".to_string(), Value::Array(input));
         Self::from_body(body)
     }
@@ -579,22 +581,32 @@ impl CodexResponsesRequest {
 
     /// 模型名。
     pub fn model(&self) -> &str {
-        self.body.get("model").and_then(Value::as_str).unwrap_or_default()
+        self.body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     }
 
     /// 设置模型名（模型后缀路由归一）。
     pub fn set_model(&mut self, model: impl Into<String>) {
-        self.body.insert("model".to_string(), Value::String(model.into()));
+        self.body
+            .insert("model".to_string(), Value::String(model.into()));
     }
 
     /// 指令文本（缺省空串）。
     pub fn instructions(&self) -> &str {
-        self.body.get("instructions").and_then(Value::as_str).unwrap_or_default()
+        self.body
+            .get("instructions")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     }
 
     /// 输入条目切片（非数组时为空）。
     pub fn input(&self) -> &[Value] {
-        self.body.get("input").and_then(Value::as_array).map_or(&[], Vec::as_slice)
+        self.body
+            .get("input")
+            .and_then(Value::as_array)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// 替换输入条目（implicit resume / 字符串输入兼容）。
@@ -604,7 +616,10 @@ impl CodexResponsesRequest {
 
     /// 是否流式返回。
     pub fn stream(&self) -> bool {
-        self.body.get("stream").and_then(Value::as_bool).unwrap_or(true)
+        self.body
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     /// 设置流式标志。
@@ -614,7 +629,10 @@ impl CodexResponsesRequest {
 
     /// 是否要求上游存储响应。
     pub fn store(&self) -> bool {
-        self.body.get("store").and_then(Value::as_bool).unwrap_or(false)
+        self.body
+            .get("store")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     /// reasoning 配置（透传，不规整）。
@@ -657,7 +675,8 @@ impl CodexResponsesRequest {
     pub fn set_service_tier(&mut self, service_tier: Option<String>) {
         match service_tier {
             Some(value) => {
-                self.body.insert("service_tier".to_string(), Value::String(value));
+                self.body
+                    .insert("service_tier".to_string(), Value::String(value));
             }
             None => {
                 self.body.remove("service_tier");
@@ -667,7 +686,9 @@ impl CodexResponsesRequest {
 
     /// 前一个 response ID。
     pub fn previous_response_id(&self) -> Option<&str> {
-        self.body.get("previous_response_id").and_then(Value::as_str)
+        self.body
+            .get("previous_response_id")
+            .and_then(Value::as_str)
     }
 
     /// 设置 / 清除前一个 response ID。
@@ -755,7 +776,10 @@ impl Serialize for CodexCompactRequest {
 impl CodexCompactRequest {
     /// 模型名。
     pub fn model(&self) -> &str {
-        self.body.get("model").and_then(Value::as_str).unwrap_or_default()
+        self.body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
     }
 
     /// 设置模型名（模型后缀路由归一）。

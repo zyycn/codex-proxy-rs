@@ -158,7 +158,8 @@ impl ResponseDispatchService {
         request: &mut CodexResponsesRequest,
     ) -> Option<ImplicitResumeSnapshot> {
         prepare_variant_identity(request);
-        if let Some(previous_response_id) = request.previous_response_id().map(ToString::to_string) {
+        if let Some(previous_response_id) = request.previous_response_id().map(ToString::to_string)
+        {
             if request.prompt_cache_key().is_none() {
                 let conversation_id = self
                     .session_affinity
@@ -273,9 +274,7 @@ impl ResponseDispatchService {
         implicit_resume: &mut Option<ImplicitResumeSnapshot>,
     ) {
         if let Some(previous_response_id) = request.previous_response_id() {
-            self.session_affinity
-                .forget(previous_response_id)
-                .await;
+            self.session_affinity.forget(previous_response_id).await;
         }
         if let Some(snapshot) = implicit_resume.take() {
             snapshot.restore(request);
@@ -376,8 +375,7 @@ impl ResponseDispatchService {
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
-        let explicit_previous_response_id =
-            request.previous_response_id().map(ToString::to_string);
+        let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
         let preferred_account_id = self.preferred_account_id_for_request(&request, now).await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
