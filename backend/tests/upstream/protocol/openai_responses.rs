@@ -351,10 +351,16 @@ fn build_codex_request_should_pass_through_body_fields_verbatim() {
         json!({"type": "function", "function": {"name": "lookup"}})
     );
     assert_eq!(upstream["parallel_tool_calls"], true);
-    assert_eq!(upstream["tools"], json!([{"type": "function", "name": "lookup"}]));
+    assert_eq!(
+        upstream["tools"],
+        json!([{"type": "function", "name": "lookup"}])
+    );
     assert_eq!(upstream["prompt_cache_key"], "pcache");
     assert_eq!(upstream["include"], json!(["reasoning.encrypted_content"]));
-    assert_eq!(upstream["client_metadata"], json!({"safe": "yes", "drop": 42}));
+    assert_eq!(
+        upstream["client_metadata"],
+        json!({"safe": "yes", "drop": 42})
+    );
     // transport-only 字段不进上游 body。
     assert!(upstream.get("use_websocket").is_none());
 
@@ -383,8 +389,14 @@ fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_heade
     .cloned()
     .unwrap();
     let mut headers = HeaderMap::new();
-    headers.insert("x-codex-turn-metadata", " meta-from-header ".parse().unwrap());
-    headers.insert("x-codex-beta-features", " beta-from-header ".parse().unwrap());
+    headers.insert(
+        "x-codex-turn-metadata",
+        " meta-from-header ".parse().unwrap(),
+    );
+    headers.insert(
+        "x-codex-beta-features",
+        " beta-from-header ".parse().unwrap(),
+    );
     headers.insert(
         "x-responsesapi-include-timing-metrics",
         " true ".parse().unwrap(),
@@ -402,7 +414,10 @@ fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_heade
     assert_eq!(codex.turn_metadata.as_deref(), Some("meta-from-header"));
     assert_eq!(codex.include_timing_metrics.as_deref(), Some("true"));
     assert_eq!(codex.codex_window_id.as_deref(), Some("window-from-header"));
-    assert_eq!(codex.parent_thread_id.as_deref(), Some("parent-from-header"));
+    assert_eq!(
+        codex.parent_thread_id.as_deref(),
+        Some("parent-from-header")
+    );
 }
 
 #[test]
@@ -485,14 +500,13 @@ fn openai_streaming_response_with_previous_response_should_require_websocket() {
         "stream": true
     });
 
-    let codex = build_codex_request(
-        body.as_object().unwrap().clone(),
-        &HeaderMap::new(),
-        None,
-    );
+    let codex = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
 
     assert_eq!(codex.previous_response_id(), Some("resp_previous"));
     assert!(codex.stream());
     assert!(!codex.force_http_sse);
-    assert_eq!(transport_for_request(&codex), CodexTransport::WebSocketRequired);
+    assert_eq!(
+        transport_for_request(&codex),
+        CodexTransport::WebSocketRequired
+    );
 }

@@ -114,7 +114,10 @@ pub fn build_codex_request(
 /// transport 控制字段，避免上游返回代理无法解析的 SSE 形态。业务语义字段
 /// （`reasoning`/`text`/`store`/`prompt_cache_key`/`previous_response_id`/
 /// `include`/`client_metadata`/未知字段）一律原样透传。
-pub fn build_compact_request(mut body: Map<String, Value>, headers: &HeaderMap) -> CodexCompactRequest {
+pub fn build_compact_request(
+    mut body: Map<String, Value>,
+    headers: &HeaderMap,
+) -> CodexCompactRequest {
     body.remove(COMPACT_STREAM_KEY);
     for key in TRANSPORT_ONLY_KEYS {
         body.remove(key);
@@ -277,7 +280,14 @@ pub async fn compact_responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_compact_responses(state, request_id, client_ip_string(client_ip), headers, body).await
+    handle_compact_responses(
+        state,
+        request_id,
+        client_ip_string(client_ip),
+        headers,
+        body,
+    )
+    .await
 }
 
 /// 从可选的 `ClientIp` extension 提取 IP 字符串。
@@ -387,7 +397,9 @@ fn parse_responses_body(body: &Bytes) -> Option<Map<String, Value>> {
 }
 
 fn request_model(body: &Map<String, Value>) -> &str {
-    body.get("model").and_then(Value::as_str).unwrap_or_default()
+    body.get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 async fn validated_responses_model(
