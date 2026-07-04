@@ -88,19 +88,13 @@ pub(super) async fn record_response_event(record: ResponseUsageRecord<'_>) {
 }
 
 pub(super) fn event_kind(route: &str) -> &'static str {
-    if route == "/v1/chat/completions" {
-        "v1.chat"
-    } else {
-        "v1.response"
-    }
+    let _ = route;
+    "v1.response"
 }
 
 pub(super) fn api_kind(route: &str) -> &'static str {
-    if route == "/v1/chat/completions" {
-        "chat"
-    } else {
-        "responses"
-    }
+    let _ = route;
+    "responses"
 }
 
 pub(super) fn enrich_event_route_metadata(metadata: &mut Value, route: &str) {

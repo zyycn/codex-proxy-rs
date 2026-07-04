@@ -763,6 +763,7 @@ async fn responses_websocket_should_implicitly_resume_full_history_with_reasonin
         second_payload["input"][0]["encrypted_content"],
         "enc_reasoning_replay"
     );
+    assert!(second_payload["input"][0].get("content").is_none());
     assert_eq!(second_payload["input"][1]["content"], "continue");
     assert_eq!(second_payload["input"].as_array().unwrap().len(), 2);
 

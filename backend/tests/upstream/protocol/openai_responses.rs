@@ -193,6 +193,77 @@ fn openai_response_request_should_translate_to_codex_request() {
 }
 
 #[test]
+fn openai_response_request_should_preserve_array_input_items_for_transparent_proxy() {
+    let input = json!([
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "status": "completed",
+            "summary": [
+                {"type": "summary_text", "text": "valid summary"},
+                {"type": "ignored", "text": "preserve"}
+            ],
+            "encrypted_content": "enc_reasoning",
+            "content": [
+                {"type": "reasoning_text", "text": "raw reasoning"},
+                {"type": "ignored", "text": "preserve"}
+            ],
+            "extra": "preserve"
+        },
+        {
+            "type": "reasoning",
+            "id": "",
+            "summary": [{"type": "summary_text", "text": "preserve invalid item"}]
+        },
+        {"type": "compaction", "id": "cmp_missing_encrypted", "extra": "preserve"},
+        "hello"
+    ]);
+    let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
+        "model": "gpt-5.5",
+        "input": input,
+        "stream": false
+    }))
+    .expect("responses request should deserialize");
+
+    let codex = translate_response_to_codex(request);
+
+    assert_eq!(
+        codex.input,
+        vec![
+            json!({
+                "type": "reasoning",
+                "id": "rs_1",
+                "status": "completed",
+                "summary": [
+                    {"type": "summary_text", "text": "valid summary"},
+                    {"type": "ignored", "text": "preserve"}
+                ],
+                "encrypted_content": "enc_reasoning",
+                "content": [
+                    {"type": "reasoning_text", "text": "raw reasoning"},
+                    {"type": "ignored", "text": "preserve"}
+                ],
+                "extra": "preserve"
+            }),
+            json!({
+                "type": "reasoning",
+                "id": "",
+                "summary": [{"type": "summary_text", "text": "preserve invalid item"}]
+            }),
+            json!({"type": "compaction", "id": "cmp_missing_encrypted", "extra": "preserve"}),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "hello"
+                }]
+            })
+        ]
+    );
+}
+
+#[test]
 fn openai_response_request_should_default_missing_stream_to_true() {
     let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
         "model": "gpt-5.5",
@@ -395,7 +466,7 @@ fn codex_responses_model_options_should_preserve_client_include_and_normalize_bo
 }
 
 #[test]
-fn openai_compact_request_should_drop_responses_only_fields_and_sanitize_input() {
+fn openai_compact_request_should_drop_responses_only_fields_and_preserve_input_items() {
     let request = serde_json::from_value::<OpenAiResponsesRequest>(json!({
         "model": "gpt-5.5-fast",
         "instructions": "compress the session",
@@ -446,9 +517,10 @@ fn openai_compact_request_should_drop_responses_only_fields_and_sanitize_input()
     assert!(body.get("stream").is_none());
     assert!(body.get("store").is_none());
     assert!(body.get("prompt_cache_key").is_none());
-    assert_eq!(body["input"].as_array().unwrap().len(), 3);
-    assert!(body["input"][1].get("ignored").is_none());
+    assert_eq!(body["input"].as_array().unwrap().len(), 4);
+    assert_eq!(body["input"][1]["ignored"], "drop");
     assert_eq!(body["input"][2]["encrypted_content"], "enc_compact");
+    assert_eq!(body["input"][3]["id"], "drop_missing_encrypted");
 }
 
 #[test]

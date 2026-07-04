@@ -14,6 +14,12 @@
             "text": "cached reasoning"
           }
         ],
+        "content": [
+          {
+            "type": "reasoning_text",
+            "text": "raw reasoning should not be replayed"
+          }
+        ],
         "encrypted_content": "enc_reasoning_replay"
       }
     ],

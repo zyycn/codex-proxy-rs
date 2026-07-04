@@ -307,7 +307,7 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
 
     let mut second = UsageRecord::new("request", UsageRecordLevel::Error, "insight failure");
     second.id = "usage_insight_failure".to_string();
-    second.route = Some("/v1/chat/completions".to_string());
+    second.route = Some("/v1/responses/review".to_string());
     second.model = Some("gpt-5.5-mini".to_string());
     second.status_code = Some(500);
     second.latency_ms = Some(120);
@@ -315,8 +315,8 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
         "stream": false,
         "requestedModel": "gpt-5.5-mini",
         "upstreamModel": "gpt-5.5-mini",
-        "upstreamEndpoint": "/backend/chat",
-        "endpointPath": "/v1/chat/completions",
+        "upstreamEndpoint": "/backend/responses/review",
+        "endpointPath": "/v1/responses/review",
         "usage": {
             "inputTokens": 5,
             "outputTokens": 1
@@ -402,7 +402,7 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
         .map(|item| item["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert!(endpoint_paths.contains(&"/v1/responses -> /backend/responses"));
-    assert!(endpoint_paths.contains(&"/v1/chat/completions -> /backend/chat"));
+    assert!(endpoint_paths.contains(&"/v1/responses/review -> /backend/responses/review"));
 
     let token_trend = app
         .clone()
@@ -532,14 +532,14 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
 
     let mut second = UsageRecord::new("request", UsageRecordLevel::Info, "card mini");
     second.id = "usage_card_mini".to_string();
-    second.route = Some("/v1/chat/completions".to_string());
+    second.route = Some("/v1/responses/compact".to_string());
     second.model = Some("gpt-5.5-mini".to_string());
     second.latency_ms = Some(120);
     second.metadata = json!({
         "stream": false,
         "requestedModel": "gpt-5.5-mini",
         "upstreamModel": "gpt-5.5-mini",
-        "upstreamEndpoint": "/backend/chat",
+        "upstreamEndpoint": "/backend/responses/compact",
         "usage": {
             "inputTokens": 5,
             "outputTokens": 1
@@ -602,7 +602,7 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
         .map(|item| item["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert!(endpoint_paths.contains(&"/v1/responses -> /backend/responses"));
-    assert!(endpoint_paths.contains(&"/v1/chat/completions -> /backend/chat"));
+    assert!(endpoint_paths.contains(&"/v1/responses/compact -> /backend/responses/compact"));
 
     let token_trend = app
         .clone()

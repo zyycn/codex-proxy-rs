@@ -113,7 +113,7 @@ pub fn translate_response_to_codex(request: OpenAiResponsesRequest) -> CodexResp
     let mut codex_request = CodexResponsesRequest::new_http_sse(
         request.model,
         request.instructions.unwrap_or_default(),
-        sanitize_responses_input(request.input),
+        responses_input_items(request.input),
     );
     codex_request.previous_response_id = request.previous_response_id;
     codex_request.turn_state = request.turn_state;
@@ -168,7 +168,7 @@ pub fn translate_response_to_codex(request: OpenAiResponsesRequest) -> CodexResp
 pub fn translate_response_to_compact(request: OpenAiResponsesRequest) -> CodexCompactRequest {
     CodexCompactRequest {
         model: request.model,
-        input: sanitize_responses_input(request.input),
+        input: responses_input_items(request.input),
         instructions: request.instructions.unwrap_or_default(),
         tools: non_empty_array(request.tools),
         parallel_tool_calls: request.parallel_tool_calls,
@@ -232,32 +232,20 @@ fn prepare_text_format(text: Option<Value>, prepare_tuple_schema: bool) -> Prepa
     }
 }
 
-fn sanitize_responses_input(input: Value) -> Vec<Value> {
+fn responses_input_items(input: Value) -> Vec<Value> {
     match input {
-        Value::Array(items) => sanitize_codex_input_items(items),
+        Value::Array(items) => items.into_iter().map(normalize_input_item).collect(),
         Value::Null => Vec::new(),
         Value::String(text) => vec![responses_input_text_message(&text)],
         value => vec![value],
     }
 }
 
-fn sanitize_codex_input_items(input: Vec<Value>) -> Vec<Value> {
-    input
-        .into_iter()
-        .filter_map(|item| {
-            if let Value::String(text) = item {
-                return Some(responses_input_text_message(&text));
-            }
-            let Value::Object(object) = item else {
-                return Some(item);
-            };
-            match object.get("type").and_then(Value::as_str) {
-                Some("reasoning") => sanitize_reasoning_item(&object),
-                Some("compaction") => sanitize_compaction_item(&object),
-                _ => Some(Value::Object(object)),
-            }
-        })
-        .collect()
+fn normalize_input_item(item: Value) -> Value {
+    match item {
+        Value::String(text) => responses_input_text_message(&text),
+        item => item,
+    }
 }
 
 fn responses_input_text_message(text: &str) -> Value {
@@ -271,87 +259,6 @@ fn responses_input_text_message(text: &str) -> Value {
             }
         ]
     })
-}
-
-fn sanitize_reasoning_item(item: &Map<String, Value>) -> Option<Value> {
-    let id = non_empty_str(item.get("id"))?;
-    let summary = sanitize_summary(item.get("summary"))?;
-    let mut sanitized = Map::new();
-    sanitized.insert("type".to_string(), Value::String("reasoning".to_string()));
-    sanitized.insert("id".to_string(), Value::String(id.to_string()));
-    sanitized.insert("summary".to_string(), Value::Array(summary));
-    if let Some(status) = item
-        .get("status")
-        .and_then(Value::as_str)
-        .filter(|status| matches!(*status, "in_progress" | "completed" | "incomplete"))
-    {
-        sanitized.insert("status".to_string(), Value::String(status.to_string()));
-    }
-    if let Some(encrypted_content) = non_empty_str(item.get("encrypted_content")) {
-        sanitized.insert(
-            "encrypted_content".to_string(),
-            Value::String(encrypted_content.to_string()),
-        );
-    }
-    if let Some(content) = sanitize_reasoning_content(item.get("content")) {
-        sanitized.insert("content".to_string(), Value::Array(content));
-    }
-    Some(Value::Object(sanitized))
-}
-
-fn sanitize_summary(value: Option<&Value>) -> Option<Vec<Value>> {
-    let Value::Array(parts) = value? else {
-        return None;
-    };
-    Some(
-        parts
-            .iter()
-            .filter_map(|part| {
-                let Value::Object(part) = part else {
-                    return None;
-                };
-                if part.get("type").and_then(Value::as_str) != Some("summary_text") {
-                    return None;
-                }
-                let text = part.get("text").and_then(Value::as_str)?;
-                Some(json!({"type": "summary_text", "text": text}))
-            })
-            .collect(),
-    )
-}
-
-fn sanitize_reasoning_content(value: Option<&Value>) -> Option<Vec<Value>> {
-    let Value::Array(parts) = value? else {
-        return None;
-    };
-    let content = parts
-        .iter()
-        .filter_map(|part| {
-            let Value::Object(part) = part else {
-                return None;
-            };
-            if part.get("type").and_then(Value::as_str) != Some("reasoning_text") {
-                return None;
-            }
-            let text = part.get("text").and_then(Value::as_str)?;
-            Some(json!({"type": "reasoning_text", "text": text}))
-        })
-        .collect::<Vec<_>>();
-    (!content.is_empty()).then_some(content)
-}
-
-fn sanitize_compaction_item(item: &Map<String, Value>) -> Option<Value> {
-    let encrypted_content = non_empty_str(item.get("encrypted_content"))?;
-    let mut sanitized = Map::new();
-    sanitized.insert("type".to_string(), Value::String("compaction".to_string()));
-    sanitized.insert(
-        "encrypted_content".to_string(),
-        Value::String(encrypted_content.to_string()),
-    );
-    if let Some(id) = non_empty_str(item.get("id")) {
-        sanitized.insert("id".to_string(), Value::String(id.to_string()));
-    }
-    Some(Value::Object(sanitized))
 }
 
 fn responses_reasoning(reasoning: Option<Value>) -> Option<Value> {
@@ -444,11 +351,6 @@ fn non_empty_string(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
-}
-
-fn non_empty_str(value: Option<&Value>) -> Option<&str> {
-    let value = value?.as_str()?;
-    (!value.trim().is_empty()).then_some(value)
 }
 
 /// 编码 OpenAI Responses `response.failed` SSE 事件。

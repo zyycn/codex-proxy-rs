@@ -207,9 +207,6 @@ fn sanitize_reasoning_item(value: &Value) -> Option<Value> {
     }
     sanitized.insert("summary".to_string(), Value::Array(summary));
     sanitized.insert("encrypted_content".to_string(), json!(encrypted_content));
-    if let Some(content) = object.get("content").and_then(sanitize_content) {
-        sanitized.insert("content".to_string(), Value::Array(content));
-    }
     Some(Value::Object(sanitized))
 }
 
@@ -248,22 +245,6 @@ fn sanitize_summary(value: &Value) -> Option<Vec<Value>> {
             })
             .collect(),
     )
-}
-
-fn sanitize_content(value: &Value) -> Option<Vec<Value>> {
-    let content = value
-        .as_array()?
-        .iter()
-        .filter_map(|part| {
-            let object = part.as_object()?;
-            if object.get("type").and_then(Value::as_str) != Some("reasoning_text") {
-                return None;
-            }
-            let text = object.get("text")?.as_str()?;
-            Some(json!({"type": "reasoning_text", "text": text}))
-        })
-        .collect::<Vec<_>>();
-    (!content.is_empty()).then_some(content)
 }
 
 fn replay_item_key(item: &Value) -> Option<String> {

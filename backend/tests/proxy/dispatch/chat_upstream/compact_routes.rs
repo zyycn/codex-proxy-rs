@@ -205,12 +205,13 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
     assert!(upstream_body.get("stream").is_none());
     assert!(upstream_body.get("store").is_none());
     assert!(upstream_body.get("prompt_cache_key").is_none());
-    assert_eq!(upstream_body["input"].as_array().unwrap().len(), 3);
-    assert!(upstream_body["input"][1].get("ignored").is_none());
+    assert_eq!(upstream_body["input"].as_array().unwrap().len(), 4);
+    assert_eq!(upstream_body["input"][1]["ignored"], "drop");
     assert_eq!(
         upstream_body["input"][2]["encrypted_content"],
         "enc_compact"
     );
+    assert_eq!(upstream_body["input"][3]["id"], "drop_missing_encrypted");
     let event = latest_response_usage_record(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.request_id.as_deref(), Some("req_compact_success_log"));

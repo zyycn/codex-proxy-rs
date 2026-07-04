@@ -111,24 +111,6 @@ async fn responses_route_should_default_omitted_stream_to_sse() {
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 
-#[tokio::test]
-async fn chat_completions_route_should_reject_empty_messages_with_bad_request() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/chat/completions")
-                .header("authorization", format!("Bearer {api_key}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"gpt-5.5","messages":[]}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
 async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("openai-responses-routes.sqlite");

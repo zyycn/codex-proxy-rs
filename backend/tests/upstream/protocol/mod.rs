@@ -12,9 +12,7 @@ use codex_proxy_rs::upstream::protocol::responses::{
     response_from_codex_sse, response_sse_event_is_terminal, transport_for_request,
     CodexResponsesRequest, CodexTransport, CollectedResponse,
 };
-use codex_proxy_rs::upstream::protocol::sse::{
-    parse_sse_events, sse_body_has_done, DONE_SSE_FRAME,
-};
+use codex_proxy_rs::upstream::protocol::sse::parse_sse_events;
 use codex_proxy_rs::upstream::protocol::websocket::{
     classify_websocket_error_frame, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers,
@@ -49,7 +47,6 @@ use serde_json::json;
 use crate::support::assertions::assert_substrings_appear_in_order;
 
 mod codex_websocket;
-mod openai_chat;
 mod openai_responses;
 mod response_first_event;
 mod usage_rate_limits;
