@@ -10,7 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{SinkExt, Stream, StreamExt};
+use futures::Stream;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::{sync::Mutex, time::timeout};
@@ -38,9 +38,10 @@ use crate::upstream::protocol::websocket::{
 
 use super::response_meta;
 use super::websocket_pool::{
-    CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey, CodexWsStream,
+    CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey,
     PooledWebSocketConnection, WebSocketPoolAcquire, WebSocketPoolDecision,
 };
+use super::websocket_pump::{PumpKeepalive, PumpedWebSocket, RawWsStream};
 use uuid::Uuid;
 
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
@@ -318,7 +319,7 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
 
 async fn connect_websocket(
     connection: &CodexWebSocketConnection,
-) -> Result<(CodexWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
+) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
     let connector = super::tls::maybe_build_rustls_client_config_with_custom_ca()
         .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?
@@ -328,6 +329,18 @@ async fn connect_websocket(
         Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
         Err(error) => Err(error.into()),
     }
+}
+
+/// 建立连接并交给后台 pump 托管；`keepalive` 决定该连接是否做主动保活。
+///
+/// 非池化（即用即弃）连接用 [`PumpKeepalive::disabled`]；池化连接用连接池派生的保活策略，
+/// 让空闲期在后台完成 ping/pong 与失活检测，从而复用前可零成本判活。
+async fn connect_pumped_websocket(
+    connection: &CodexWebSocketConnection,
+    keepalive: PumpKeepalive,
+) -> Result<(PumpedWebSocket, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
+    let (raw, response) = connect_websocket(connection).await?;
+    Ok((PumpedWebSocket::new(raw, keepalive), response))
 }
 
 fn websocket_handshake_request(
@@ -400,7 +413,8 @@ async fn execute_fresh_response_create_request(
     request: &CodexWebSocketRequest,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) = connect_websocket(request.connection()).await?;
+    let (websocket, response) =
+        connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
@@ -414,7 +428,8 @@ async fn execute_fresh_response_create_request(
 async fn execute_fresh_response_create_request_stream(
     request: &CodexWebSocketRequest,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) = connect_websocket(request.connection()).await?;
+    let (websocket, response) =
+        connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
@@ -543,7 +558,8 @@ async fn execute_fresh_pooled_response_create_request(
     key: CodexWebSocketPoolKey,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) = connect_websocket(request.connection()).await?;
+    let (websocket, response) =
+        connect_pumped_websocket(request.connection(), pool.keepalive()).await?;
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
@@ -552,15 +568,12 @@ async fn execute_fresh_pooled_response_create_request(
     let metadata = websocket_connection_metadata(&response);
     let (exchange, websocket, metadata) =
         collect_websocket_response(websocket, metadata, false, started_at).await?;
-    let last_activity_at = Instant::now();
     pool.put(
         key,
         PooledWebSocketConnection {
             websocket,
             metadata,
             created_at: now,
-            last_activity_at,
-            last_ping_at: None,
         },
     )
     .await;
@@ -572,7 +585,8 @@ async fn execute_fresh_pooled_response_create_request_stream(
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (mut websocket, response) = connect_websocket(request.connection()).await?;
+    let (websocket, response) =
+        connect_pumped_websocket(request.connection(), pool.keepalive()).await?;
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
@@ -586,7 +600,6 @@ async fn execute_fresh_pooled_response_create_request_stream(
             pool,
             key,
             created_at: now,
-            last_ping_at: None,
         }),
         None,
     ))
@@ -596,7 +609,7 @@ async fn execute_pooled_response_create_request(
     request: &CodexWebSocketRequest,
     pool: &CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
-    mut connection: PooledWebSocketConnection,
+    connection: PooledWebSocketConnection,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     if let Err(error) = connection
@@ -613,20 +626,16 @@ async fn execute_pooled_response_create_request(
     }
 
     let created_at = connection.created_at;
-    let last_ping_at = connection.last_ping_at;
     match collect_websocket_response(connection.websocket, connection.metadata, true, started_at)
         .await
     {
         Ok((exchange, websocket, metadata)) => {
-            let last_activity_at = Instant::now();
             pool.put(
                 key,
                 PooledWebSocketConnection {
                     websocket,
                     metadata,
                     created_at,
-                    last_activity_at,
-                    last_ping_at,
                 },
             )
             .await;
@@ -667,14 +676,13 @@ async fn execute_pooled_response_create_request_stream(
             pool,
             key,
             created_at: connection.created_at,
-            last_ping_at: connection.last_ping_at,
         }),
         Some(prefetched_text),
     ))
 }
 
 async fn first_reused_stream_text(
-    websocket: &mut CodexWsStream,
+    websocket: &mut PumpedWebSocket,
 ) -> Result<String, CodexWebSocketExchangeError> {
     loop {
         let message = match next_websocket_message(websocket, WEBSOCKET_RECEIVE_IDLE_TIMEOUT).await
@@ -720,14 +728,14 @@ pub async fn execute_response_create_request(
 // ---------------------------------------------------------------------------
 
 async fn collect_websocket_response(
-    mut websocket: CodexWsStream,
+    mut websocket: PumpedWebSocket,
     mut metadata: CodexWebSocketConnectionMetadata,
     reused_connection: bool,
     started_at: Instant,
 ) -> Result<
     (
         CodexWebSocketExchange,
-        CodexWsStream,
+        PumpedWebSocket,
         CodexWebSocketConnectionMetadata,
     ),
     CodexWebSocketExchangeError,
@@ -849,11 +857,10 @@ struct WebSocketStreamPoolReturn {
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
     created_at: Instant,
-    last_ping_at: Option<Instant>,
 }
 
 fn stream_websocket_response(
-    websocket: CodexWsStream,
+    websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
     prefetched_text: Option<String>,
@@ -893,7 +900,7 @@ fn stream_websocket_response(
 }
 
 async fn forward_websocket_response_stream(
-    mut websocket: CodexWsStream,
+    mut websocket: PumpedWebSocket,
     mut metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
     prefetched_text: Option<String>,
@@ -1024,7 +1031,7 @@ fn receive_idle_timeout(saw_response_frame: bool) -> Duration {
 }
 
 async fn next_websocket_message(
-    websocket: &mut CodexWsStream,
+    websocket: &mut PumpedWebSocket,
     receive_timeout: Duration,
 ) -> Result<Option<Message>, CodexWebSocketExchangeError> {
     match timeout(receive_timeout, websocket.next()).await {
@@ -1036,12 +1043,12 @@ async fn next_websocket_message(
 }
 
 async fn finish_stream_websocket(
-    mut websocket: CodexWsStream,
+    mut websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
 ) {
     let Some(pool_return) = pool_return else {
-        let _ = websocket.close(None).await;
+        websocket.close().await;
         return;
     };
     pool_return
@@ -1052,21 +1059,19 @@ async fn finish_stream_websocket(
                 websocket,
                 metadata,
                 created_at: pool_return.created_at,
-                last_activity_at: Instant::now(),
-                last_ping_at: pool_return.last_ping_at,
             },
         )
         .await;
 }
 
 async fn discard_stream_websocket(
-    mut websocket: CodexWsStream,
+    mut websocket: PumpedWebSocket,
     pool_return: Option<WebSocketStreamPoolReturn>,
 ) {
     if let Some(pool_return) = pool_return {
         pool_return.pool.discard(&pool_return.key).await;
     }
-    let _ = websocket.close(None).await;
+    websocket.close().await;
 }
 
 // ---------------------------------------------------------------------------

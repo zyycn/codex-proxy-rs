@@ -8,6 +8,7 @@ pub mod tls;
 pub mod usage;
 pub mod websocket;
 pub mod websocket_pool;
+pub(crate) mod websocket_pump;
 
 pub use self::{
     client::{
