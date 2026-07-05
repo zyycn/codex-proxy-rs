@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { clamp } from 'es-toolkit'
 import { computed } from 'vue'
+import type { Component } from 'vue'
 
 interface SegmentedOption {
   label: string
   value: string
+  icon?: Component
 }
 
 const props = withDefaults(
@@ -54,7 +56,7 @@ function selectOption(value: string) {
     <button
       v-for="option in options"
       :key="option.value"
-      class="relative z-10 h-7 min-w-0 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+      class="relative z-10 inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-(--cp-input-radius-base) border-0 bg-transparent px-3 text-xs leading-none font-[650] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
       :class="[
         model === option.value
           ? 'text-(--cp-text-primary)'
@@ -67,6 +69,7 @@ function selectOption(value: string) {
       :disabled="disabled"
       @click="selectOption(option.value)"
     >
+      <component :is="option.icon" v-if="option.icon" class="size-3.5 shrink-0" />
       {{ option.label }}
     </button>
   </div>

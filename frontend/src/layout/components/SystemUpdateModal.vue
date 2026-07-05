@@ -356,7 +356,7 @@ onUnmounted(() => {
     variant="success"
     width="820px"
     scrollable
-    body-max-height="72vh"
+    body-max-height="72dvh"
     body-view-class="pr-3"
     :close-disabled="updating || restarting"
   >

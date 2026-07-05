@@ -16,6 +16,7 @@ const props = defineProps<{
   scrollable?: boolean
   bodyMaxHeight?: string
   bodyViewClass?: string
+  hideFooter?: boolean
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -123,7 +124,7 @@ function closeModal() {
             </BaseScrollbar>
             <slot v-else />
           </div>
-          <footer class="flex justify-end gap-3 px-7 pb-7">
+          <footer v-if="!hideFooter" class="flex justify-end gap-3 px-7 pb-7">
             <slot name="footer">
               <BaseButton variant="default" @click="open = false">取消</BaseButton>
               <BaseButton variant="primary" @click="open = false">确认</BaseButton>

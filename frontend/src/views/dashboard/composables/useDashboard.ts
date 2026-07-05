@@ -250,7 +250,7 @@ export function useDashboard(): any {
           { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
             label: '计费',
-            value: `${tokens.totalCostUsd} / ${tokens.todayCostUsd}`,
+            value: tokens.todayCostUsd,
             tone: 'success',
           },
         ],

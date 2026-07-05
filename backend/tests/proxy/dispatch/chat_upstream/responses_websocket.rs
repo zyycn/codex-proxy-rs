@@ -781,15 +781,37 @@ async fn responses_websocket_should_implicitly_resume_full_history_with_reasonin
 
 #[tokio::test]
 async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switching_accounts() {
+    responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
+        AccountStatus::Disabled,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn responses_websocket_should_strip_implicit_banned_affinity_when_switching_accounts() {
+    responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
+        AccountStatus::Banned,
+    )
+    .await;
+}
+
+async fn responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
+    status: AccountStatus,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let status_name = status.as_str();
+    let first_response_id = format!("resp_implicit_{status_name}_first");
+    let second_response_id = format!("resp_implicit_{status_name}_second");
+    let upstream_first_response_id = first_response_id.clone();
+    let upstream_second_response_id = second_response_id.clone();
     let upstream = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         let mut first_websocket =
             accept_websocket_with_authorization(first_stream, "Bearer access-primary").await;
         let first_payload = send_websocket_response_and_capture_payload(
             &mut first_websocket,
-            websocket_completed_response("resp_implicit_ban_first", 4, 1),
+            websocket_completed_response(&upstream_first_response_id, 4, 1),
         )
         .await;
         first_websocket.close(None).await.unwrap();
@@ -804,7 +826,7 @@ async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switch
         .unwrap();
         let second_payload = send_websocket_response_and_capture_payload(
             &mut second_websocket,
-            websocket_completed_response("resp_implicit_ban_second", 3, 1),
+            websocket_completed_response(&upstream_second_response_id, 3, 1),
         )
         .await;
         second_websocket.close(None).await.unwrap();
@@ -812,8 +834,7 @@ async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switch
 
         (first_payload, second_payload, captured_second_headers)
     });
-    let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
-    seed_openai_admin_session(&pool, "session_status_cycle").await;
+    let (app, state, api_key, pool, _dir) = test_app_with_two_accounts_and_state(base_url).await;
 
     let first_response = app
         .clone()
@@ -831,9 +852,15 @@ async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switch
     assert_eq!(first_response.status(), StatusCode::OK);
     assert!(response_text(first_response)
         .await
-        .contains("\"id\":\"resp_implicit_ban_first\""));
+        .contains(&format!("\"id\":\"{first_response_id}\"")));
 
-    update_admin_account_status(&app, "acct_primary", "disabled").await;
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_primary", status)
+            .await
+    );
 
     let second_response = app
         .oneshot(responses_json_request(
@@ -854,11 +881,11 @@ async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switch
     assert_eq!(second_response.status(), StatusCode::OK);
     assert!(response_text(second_response)
         .await
-        .contains("\"id\":\"resp_implicit_ban_second\""));
+        .contains(&format!("\"id\":\"{second_response_id}\"")));
     let (first_payload, second_payload, second_headers) = upstream.await.unwrap();
     let affinity_count: (i64,) =
         sqlx::query_as("select count(*) from session_affinities where response_id = ?")
-            .bind("resp_implicit_ban_first")
+            .bind(&first_response_id)
             .fetch_one(&pool)
             .await
             .unwrap();

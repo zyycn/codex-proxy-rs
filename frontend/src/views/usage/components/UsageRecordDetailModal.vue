@@ -216,7 +216,7 @@ function themeColor(name: string, fallback: string) {
     variant="info"
     width="960px"
     scrollable
-    body-max-height="min(76vh,820px)"
+    body-max-height="min(76dvh,820px)"
     body-view-class="grid gap-3"
   >
     <template v-if="record">
@@ -365,7 +365,7 @@ function themeColor(name: string, fallback: string) {
 
       <section v-if="record.metadata" :class="[panelClass, 'min-h-0']">
         <h3 class="mb-3" :class="panelTitleClass">元数据</h3>
-        <BaseScrollbar max-height="min(32vh, 340px)" :view-class="codeBlockViewClass">
+        <BaseScrollbar max-height="min(32dvh, 340px)" :view-class="codeBlockViewClass">
           <pre :class="codeBlockClass">{{ JSON.stringify(record.metadata, null, 2) }}</pre>
         </BaseScrollbar>
       </section>

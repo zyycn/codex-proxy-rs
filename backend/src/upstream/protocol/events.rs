@@ -540,11 +540,10 @@ fn quota_snapshot_from_windows(
     if primary.is_none() && secondary.is_none() {
         return None;
     }
-    let blocked = limit_reached.unwrap_or_else(|| {
-        allowed.is_some_and(|allowed| !allowed)
-            || primary.is_some_and(|window| window.used_percent >= 100.0)
-            || secondary.is_some_and(|window| window.used_percent >= 100.0)
-    });
+    let blocked = limit_reached.unwrap_or(false)
+        || allowed.is_some_and(|allowed| !allowed)
+        || primary.is_some_and(|window| window.used_percent >= 100.0)
+        || secondary.is_some_and(|window| window.used_percent >= 100.0);
     Some(json!({
         "source": source,
         "limit_name": limit_name,

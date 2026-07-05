@@ -227,6 +227,53 @@ fn quota_snapshot_limit_reached_should_block_explicit_credit_overage_limit() {
     assert!(quota_snapshot_limit_reached(&quota));
 }
 
+#[test]
+fn quota_snapshot_limit_reached_should_block_any_exhausted_window() {
+    let quota = json!({
+        "snapshots": [{
+            "source": "additional",
+            "blocked": false,
+            "allowed": true,
+            "primary": {
+                "used_percent": 100,
+                "remaining_percent": 0,
+                "reset_at": 1_893_456_300,
+                "window_minutes": 300,
+                "limit_reached": false
+            },
+            "secondary": null
+        }]
+    });
+
+    assert!(quota_snapshot_limit_reached(&quota));
+}
+
+#[test]
+fn quota_snapshot_window_should_follow_blocking_window() {
+    let quota = json!({
+        "snapshots": [{
+            "source": "additional",
+            "blocked": false,
+            "primary": {
+                "used_percent": 100,
+                "remaining_percent": 0,
+                "reset_at": 1_893_456_300,
+                "window_minutes": 10_080,
+                "limit_reached": false
+            },
+            "secondary": null
+        }]
+    });
+
+    assert_eq!(
+        (
+            quota_snapshot_reset_at(&quota).map(|reset_at| reset_at.timestamp()),
+            quota_snapshot_limit_window_seconds(&quota),
+        ),
+        (Some(1_893_456_300), Some(604_800))
+    );
+}
+
 #[tokio::test]
 async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_configured() {
     let server = MockServer::start().await;

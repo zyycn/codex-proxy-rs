@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy } from '@lucide/vue'
+import { Apple, Copy, Monitor } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -22,136 +22,57 @@ const emit = defineEmits<{
   copy: [text: string]
 }>()
 
-const activeTab = shallowRef('codex')
+const activePlatform = shallowRef('unix')
 
-const tabOptions = [
-  { label: 'Codex', value: 'codex' },
-  { label: '环境变量', value: 'env' },
-  { label: 'curl', value: 'curl' },
+const platformOptions = [
+  { label: 'MacOS / Linux', value: 'unix', icon: Apple },
+  { label: 'Windows', value: 'windows', icon: Monitor },
 ]
 
 const keyValue = computed(() => props.apiKey?.key ?? '')
-const displayName = computed(() => props.apiKey?.name || 'API Key')
+const configPath = computed(() =>
+  activePlatform.value === 'windows' ? '%userprofile%\\.codex/config.toml' : '~/.codex/config.toml',
+)
+const authPath = computed(() =>
+  activePlatform.value === 'windows' ? '%userprofile%\\.codex/auth.json' : '~/.codex/auth.json',
+)
 const codexAuthJson = computed(() => JSON.stringify({ OPENAI_API_KEY: keyValue.value }, null, 2))
 
 const codexConfigToml = computed(
-  () => `model_provider = "codex-proxy-rs"
+  () => `model_provider = "OpenAI"
 model = "gpt-5.5"
 review_model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
+network_access = "enabled"
+windows_wsl_setup_acknowledged = true
 
-[model_providers.codex-proxy-rs]
-name = "codex-proxy-rs"
-base_url = "${props.apiBaseUrl}"
+[model_providers.OpenAI]
+name = "OpenAI"
+base_url = "${props.serviceRootUrl}"
 wire_api = "responses"
-requires_openai_auth = true`,
+requires_openai_auth = true
+
+[features]
+goals = true`,
 )
 
-const envConfig = computed(
-  () => `export OPENAI_API_KEY="${keyValue.value}"
-export OPENAI_BASE_URL="${props.apiBaseUrl}"`,
-)
-
-const curlExample = computed(
-  () => `curl "${props.apiBaseUrl}/responses" \\
-  -H "Authorization: Bearer ${keyValue.value}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gpt-5.5",
-    "input": "ping",
-    "stream": false
-  }'`,
-)
-
-const visibleFiles = computed(() => {
-  if (activeTab.value === 'env') {
-    return [{ path: 'Shell', content: envConfig.value }]
-  }
-
-  if (activeTab.value === 'curl') {
-    return [{ path: '/v1/responses', content: curlExample.value }]
-  }
-
-  return [
-    { path: '~/.codex/config.toml', content: codexConfigToml.value },
-    { path: '~/.codex/auth.json', content: codexAuthJson.value },
-  ]
-})
+const visibleFiles = computed(() => [
+  { path: configPath.value, content: codexConfigToml.value },
+  { path: authPath.value, content: codexAuthJson.value },
+])
 </script>
 
 <template>
-  <BaseModal v-model="open" title="使用密钥" :description="displayName" width="760px">
+  <BaseModal
+    v-model="open"
+    title="使用密钥"
+    description="将以下配置文件添加到 Codex CLI 配置目录中"
+    width="760px"
+  >
     <div class="flex flex-col gap-5">
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
-          <p class="m-0 text-[11px] leading-none font-bold text-(--cp-text-muted)">服务根地址</p>
-          <div class="mt-2 flex min-w-0 items-center gap-2">
-            <code
-              class="min-w-0 flex-1 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)"
-              :title="serviceRootUrl"
-            >
-              {{ serviceRootUrl }}
-            </code>
-            <BaseButton
-              icon-only
-              variant="ghost"
-              size="sm"
-              label="复制服务根地址"
-              @click="emit('copy', serviceRootUrl)"
-            >
-              <Copy class="size-3.5" />
-            </BaseButton>
-          </div>
-        </section>
-
-        <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
-          <p class="m-0 text-[11px] leading-none font-bold text-(--cp-text-muted)">
-            OpenAI Base URL
-          </p>
-          <div class="mt-2 flex min-w-0 items-center gap-2">
-            <code
-              class="min-w-0 flex-1 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)"
-              :title="apiBaseUrl"
-            >
-              {{ apiBaseUrl }}
-            </code>
-            <BaseButton
-              icon-only
-              variant="ghost"
-              size="sm"
-              label="复制 Base URL"
-              @click="emit('copy', apiBaseUrl)"
-            >
-              <Copy class="size-3.5" />
-            </BaseButton>
-          </div>
-        </section>
-      </div>
-
-      <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
-        <p class="m-0 text-[11px] leading-none font-bold text-(--cp-text-muted)">Bearer Key</p>
-        <div class="mt-2 flex min-w-0 items-center gap-2">
-          <code
-            class="min-w-0 flex-1 truncate font-mono text-[12px] font-[650] text-(--cp-text-primary)"
-            :title="keyValue"
-          >
-            {{ keyValue }}
-          </code>
-          <BaseButton
-            icon-only
-            variant="ghost"
-            size="sm"
-            label="复制 Bearer Key"
-            @click="emit('copy', keyValue)"
-          >
-            <Copy class="size-3.5" />
-          </BaseButton>
-        </div>
-      </section>
-
       <div class="flex flex-wrap items-center gap-3">
-        <BaseSegmented v-model="activeTab" :options="tabOptions" />
+        <BaseSegmented v-model="activePlatform" :options="platformOptions" />
       </div>
 
       <div class="flex flex-col gap-3">
@@ -177,7 +98,7 @@ const visibleFiles = computed(() => {
             </BaseButton>
           </div>
           <BaseScrollbar
-            max-height="180px"
+            max-height="360px"
             view-class="mx-3 mb-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-input)"
           >
             <pre

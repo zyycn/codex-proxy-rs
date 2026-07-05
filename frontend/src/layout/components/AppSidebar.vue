@@ -8,6 +8,7 @@ import {
   Cat,
   ChartNoAxesColumn,
   ArrowUpCircle,
+  Info,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -24,6 +25,7 @@ import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useUiStore } from '@/stores/modules/ui'
 
+import AppAboutModal from './AppAboutModal.vue'
 import SystemUpdateModal from './SystemUpdateModal.vue'
 
 const route = useRoute()
@@ -34,6 +36,23 @@ const { effectiveTheme } = storeToRefs(uiStore)
 const { toggleTheme } = uiStore
 const preferredMotion = usePreferredReducedMotion()
 const { version, hasUpdate, loadedOnce, loadVersion, loadSystem } = useSystemUpdate()
+
+const props = withDefaults(
+  defineProps<{
+    collapsed?: boolean
+    mobile?: boolean
+  }>(),
+  {
+    collapsed: false,
+    mobile: false,
+  },
+)
+
+const emit = defineEmits<{
+  close: []
+  navigate: []
+  toggle: []
+}>()
 
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
@@ -49,7 +68,8 @@ const isActive = (path: string) => {
 }
 
 function navigate(path: string) {
-  router.push(path)
+  void router.push(path)
+  emit('navigate')
 }
 
 const systemUpdateOpening = shallowRef(false)
@@ -72,26 +92,17 @@ async function openSystemUpdate() {
 
 async function handleLogout() {
   await authStore.logout()
-  router.push('/login')
+  await router.push('/login')
+  emit('navigate')
 }
-
-const props = withDefaults(
-  defineProps<{
-    collapsed?: boolean
-  }>(),
-  {
-    collapsed: false,
-  },
-)
-
-defineEmits<{
-  toggle: []
-}>()
 
 const sidebarEl = ref<HTMLElement | null>(null)
 const brandLabelEl = ref<HTMLElement | null>(null)
-const brandLabelVisible = shallowRef(!props.collapsed)
 const systemUpdateOpen = shallowRef(false)
+const aboutOpen = shallowRef(false)
+const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
+const sidebarWidth = computed(() => (isCollapsed.value ? 88 : 256))
+const brandLabelVisible = shallowRef(!isCollapsed.value)
 const themeToggleLabel = computed(() =>
   effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
 )
@@ -208,10 +219,10 @@ function animateSidebarWidth(collapsed: boolean) {
 
 onMounted(() => {
   gsap.set(sidebarEl.value, {
-    width: props.collapsed ? 88 : 256,
-    flexBasis: props.collapsed ? 88 : 256,
+    width: sidebarWidth.value,
+    flexBasis: sidebarWidth.value,
   })
-  if (props.collapsed) {
+  if (isCollapsed.value) {
     hideBrandLabel()
   } else {
     gsap.set(brandLabelEl.value, {
@@ -219,12 +230,12 @@ onMounted(() => {
       x: 0,
     })
   }
-  animateSidebarLabels(Boolean(props.collapsed))
+  animateSidebarLabels(isCollapsed.value)
   void loadVersion().catch(() => undefined)
 })
 
 watch(
-  () => props.collapsed,
+  () => isCollapsed.value,
   async (collapsed) => {
     if (collapsed) {
       hideBrandLabel()
@@ -245,12 +256,15 @@ watch(
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 hidden h-screen shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar) min-[961px]:flex"
-    :class="collapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64'"
+    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar)"
+    :class="[
+      mobile ? 'flex' : 'hidden min-[961px]:flex',
+      isCollapsed ? 'w-22 basis-22 items-center' : 'w-64 basis-64',
+    ]"
   >
     <div
       class="mt-6 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
-      :class="collapsed ? 'w-11 justify-start' : 'w-full gap-3'"
+      :class="isCollapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
       <span
         class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius) bg-(--cp-bg-muted) text-(--cp-text-primary)"
@@ -290,14 +304,14 @@ watch(
       </span>
     </div>
 
-    <nav class="mt-7 grid gap-3" :class="collapsed ? '' : 'w-full'" aria-label="主导航">
+    <nav class="mt-7 grid gap-3" :class="isCollapsed ? '' : 'w-full'" aria-label="主导航">
       <button
         v-for="item in navItems"
         :key="item.label"
         type="button"
         class="inline-flex h-11.5 items-center rounded-(--cp-icon-button-radius) text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
         :class="[
-          collapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
+          isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
             ? 'bg-(--cp-bg-nav-active) font-bold text-(--cp-text-primary)'
             : 'bg-transparent font-semibold text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) hover:text-(--cp-text-primary)',
@@ -307,32 +321,32 @@ watch(
         <component :is="item.icon" class="shrink-0" :size="20" />
         <span
           class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
-          :class="collapsed ? 'pointer-events-none w-0' : 'w-auto'"
+          :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
           >{{ item.label }}</span
         >
       </button>
     </nav>
 
-    <div class="mt-auto mb-6" :class="collapsed ? 'w-11' : 'w-full'">
+    <div class="mt-auto mb-6" :class="isCollapsed ? 'w-11' : 'w-full'">
       <div
         class="bg-(--cp-bg-subtle)"
         :class="
-          collapsed
+          isCollapsed
             ? 'grid gap-1 rounded-(--cp-icon-button-radius) p-1'
             : 'flex h-11 items-center justify-between rounded-(--cp-panel-radius) px-2'
         "
       >
         <span
-          v-if="!collapsed"
+          v-if="!isCollapsed"
           class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-[650] text-(--cp-success-text)"
         >
           <i class="size-1.5 rounded-full bg-(--cp-success)" />
           在线
         </span>
 
-        <div class="flex items-center" :class="collapsed ? 'grid gap-1' : 'gap-1'">
+        <div class="flex items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
           <BaseButton
-            v-if="collapsed"
+            v-if="isCollapsed && hasUpdate"
             icon-only
             :variant="hasUpdate ? 'success' : 'ghost'"
             size="default"
@@ -346,34 +360,56 @@ watch(
           <BaseButton
             icon-only
             variant="ghost"
-            :size="collapsed ? 'default' : 'sm'"
+            :size="isCollapsed ? 'default' : 'sm'"
             label="退出登录"
             class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
             @click="handleLogout"
           >
-            <LogOut :size="collapsed ? 19 : 18" />
+            <LogOut :size="isCollapsed ? 19 : 18" />
           </BaseButton>
 
           <BaseButton
             icon-only
             variant="ghost"
-            :size="collapsed ? 'default' : 'sm'"
+            :size="isCollapsed ? 'default' : 'sm'"
             :label="themeToggleLabel"
             @click="toggleTheme($event)"
           >
-            <Sun v-if="effectiveTheme === 'dark'" :size="collapsed ? 19 : 18" />
-            <Moon v-else :size="collapsed ? 19 : 18" />
+            <Sun v-if="effectiveTheme === 'dark'" :size="isCollapsed ? 19 : 18" />
+            <Moon v-else :size="isCollapsed ? 19 : 18" />
           </BaseButton>
 
           <BaseButton
             icon-only
             variant="ghost"
-            :size="collapsed ? 'default' : 'sm'"
-            data-sidebar-toggle
-            :label="collapsed ? '展开侧边栏' : '收缩侧边栏'"
-            @click="$emit('toggle')"
+            :size="isCollapsed ? 'default' : 'sm'"
+            label="关于"
+            @click="aboutOpen = true"
           >
-            <PanelLeftOpen v-if="collapsed" :size="19" />
+            <Info :size="isCollapsed ? 19 : 18" />
+          </BaseButton>
+
+          <BaseButton
+            v-if="mobile"
+            icon-only
+            variant="ghost"
+            size="sm"
+            label="关闭侧边栏"
+            @click="emit('close')"
+          >
+            <PanelLeftClose :size="18" />
+          </BaseButton>
+
+          <BaseButton
+            v-else
+            icon-only
+            variant="ghost"
+            :size="isCollapsed ? 'default' : 'sm'"
+            data-sidebar-toggle
+            :label="isCollapsed ? '展开侧边栏' : '收缩侧边栏'"
+            @click="emit('toggle')"
+          >
+            <PanelLeftOpen v-if="isCollapsed" :size="19" />
             <PanelLeftClose v-else :size="18" />
           </BaseButton>
         </div>
@@ -381,5 +417,6 @@ watch(
     </div>
   </aside>
 
+  <AppAboutModal v-model="aboutOpen" />
   <SystemUpdateModal v-model="systemUpdateOpen" />
 </template>
