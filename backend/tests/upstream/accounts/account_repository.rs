@@ -3,10 +3,12 @@ use codex_proxy_rs::{
     infra::database::connect_sqlite,
     upstream::accounts::{
         model::{AccountStatus, AccountUsageDelta},
+        quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at},
         store::{AccountClaimsUpdate, AccountStore, NewAccount, SqliteAccountStore},
     },
 };
 use secrecy::{ExposeSecret, SecretString};
+use serde_json::json;
 
 #[tokio::test]
 async fn account_repository_should_store_plain_tokens_and_load_secret_wrappers() {
@@ -516,6 +518,48 @@ async fn account_repository_should_map_quota_snapshot_to_account_status() {
     assert_eq!(restored_status.0, "active");
     assert_eq!(restored_status.1, 0);
     assert!(restored_status.2.is_none());
+}
+
+#[tokio::test]
+async fn account_repository_should_mark_quota_exhausted_for_any_exhausted_window() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 47).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    let quota = json!({
+        "plan_type": "plus",
+        "snapshots": [{
+            "source": "additional",
+            "blocked": false,
+            "allowed": true,
+            "primary": {
+                "used_percent": 100,
+                "remaining_percent": 0,
+                "reset_at": 1_893_456_300,
+                "window_minutes": 300,
+                "limit_reached": false
+            },
+            "secondary": null
+        }]
+    });
+    let limit_reached = quota_snapshot_limit_reached(&quota);
+    let cooldown_until = quota_snapshot_reset_at(&quota);
+
+    let updated = repo
+        .apply_quota_snapshot("acct_a", &quota.to_string(), limit_reached, cooldown_until)
+        .await
+        .unwrap();
+    let status: (String, i64, Option<String>) = sqlx::query_as(
+        "select status, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (updated, status.0, status.1, status.2.is_some()),
+        (true, "quota_exhausted".to_string(), 1, true)
+    );
 }
 
 #[tokio::test]

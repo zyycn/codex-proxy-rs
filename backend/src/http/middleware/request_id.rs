@@ -214,8 +214,9 @@ fn forwarded_for_public_ip(headers: &HeaderMap) -> Option<String> {
 
 fn trusted_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
     header_string(headers, CF_CONNECTING_IP_HEADER)
-        .or_else(|| first_forwarded_for_value(headers))
         .or_else(|| header_string(headers, REAL_IP_HEADER))
+        .or_else(|| forwarded_for_public_ip(headers))
+        .or_else(|| first_forwarded_for_value(headers))
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {

@@ -29,7 +29,8 @@ use codex_proxy_rs::{
     runtime::services::{BackgroundTaskStores, Services, UsageRecordOptions},
     runtime::state::AppState,
     upstream::accounts::{
-        cookies::SqliteCookieStore, store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
+        cookies::SqliteCookieStore, model::AccountStatus, store::SqliteAccountStore,
+        token_refresh::RefreshLeaseStore,
     },
     upstream::fingerprint::FingerprintRepository,
 };
@@ -549,6 +550,19 @@ async fn test_app_with_two_accounts_and_affinity_status(
 async fn test_app_with_two_accounts(
     base_url: String,
 ) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
+    let (app, _state, api_key, pool, dir) = test_app_with_two_accounts_and_state(base_url).await;
+    (app, api_key, pool, dir)
+}
+
+async fn test_app_with_two_accounts_and_state(
+    base_url: String,
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    SqlitePool,
+    tempfile::TempDir,
+) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("openai-responses-fallback.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -574,7 +588,13 @@ async fn test_app_with_two_accounts(
         .restore_from_repository()
         .await
         .expect("account pool should restore");
-    (router::router().with_state(state), api_key, pool, dir)
+    (
+        router::router().with_state(state.clone()),
+        state,
+        api_key,
+        pool,
+        dir,
+    )
 }
 
 async fn seed_openai_admin_session(pool: &SqlitePool, session_id: &str) {

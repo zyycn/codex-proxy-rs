@@ -18,7 +18,9 @@ cp deploy/config.example.yaml .runtime/config.yaml
 - `.runtime/logs` -> `/app/logs`
 
 复制后必须设置 `admin.default_password`，空值或常见弱口令会被后端拒绝启动。
-如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，只在该代理会覆盖或清理 `X-Forwarded-For` / `X-Real-IP` / `CF-Connecting-IP` 时，把代理的 IP 或 CIDR 写入 `server.trusted_proxies`；默认空列表会剥离这些客户端可伪造的头并使用 TCP peer IP。
+如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，建议把后端实际看到的代理 peer IP 或 CIDR 写入 `server.trusted_proxies`。Docker 端口映射经宿主反代访问时，这个 peer 通常是 Compose 网络网关，例如 `172.18.0.1/32`，不是宿主 `127.0.0.1/32`。
+
+`server.trusted_proxies` 非空时，只有这些 peer 的 `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` 会被采信；为空时进入兼容自动模式，按同一组头解析真实 IP。
 
 构建并启动：
 

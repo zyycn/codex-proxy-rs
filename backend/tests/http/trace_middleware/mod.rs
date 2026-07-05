@@ -385,6 +385,37 @@ async fn request_context_should_accept_real_ip_from_trusted_proxy_when_forwarded
 }
 
 #[tokio::test]
+async fn request_context_should_prefer_real_ip_over_forwarded_for_from_trusted_proxy() {
+    let trusted_proxies =
+        TrustedProxyConfig::from_entries(&["127.0.0.1".to_string()]).expect("trusted proxy");
+    let app = Router::new()
+        .route(
+            "/ip",
+            get(|Extension(client_ip): Extension<ClientIp>| async move {
+                client_ip.as_str().to_string()
+            }),
+        )
+        .layer(from_fn_with_state(
+            trusted_proxies,
+            attach_request_id_with_proxy_config,
+        ));
+    let mut request = Request::builder()
+        .uri("/ip")
+        .header("x-forwarded-for", "198.51.100.99, 203.0.113.42")
+        .header("x-real-ip", "203.0.113.42")
+        .body(Body::empty())
+        .expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let response = app.oneshot(request).await.expect("response");
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "203.0.113.42");
+}
+
+#[tokio::test]
 async fn request_context_should_ignore_forwarded_ip_from_untrusted_peer() {
     let trusted_proxies =
         TrustedProxyConfig::from_entries(&["10.0.0.0/8".to_string()]).expect("trusted proxy");

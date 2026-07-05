@@ -32,7 +32,6 @@ export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | s
   const minWidthPixels = minWidth === undefined ? 0 : numericPixelWidth(minWidth)
   const flexibleColumns = columns.filter((column) => column.width === undefined)
   const flexTotal = sumBy(flexibleColumns, (column) => column.flex ?? 1)
-  const flexibleColumnCount = clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)
   const available = clamp(100 - fixedPercentTotal, 0, Number.POSITIVE_INFINITY)
   const availablePixels = clamp(minWidthPixels - fixedPixelTotal, 0, Number.POSITIVE_INFINITY)
 
@@ -41,10 +40,12 @@ export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | s
     const width =
       column.width === undefined
         ? minWidthPixels > 0 && fixedPercentTotal === 0
-          ? `${availablePixels / flexibleColumnCount}px`
+          ? flexTotal > 0
+            ? `${(availablePixels * flex) / flexTotal}px`
+            : `${availablePixels / clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)}px`
           : flexTotal > 0
             ? `${(available * flex) / flexTotal}%`
-            : `${available / flexibleColumnCount}%`
+            : `${available / clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)}%`
         : normalizeWidth(column.width)
 
     return {

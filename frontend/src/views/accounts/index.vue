@@ -126,7 +126,7 @@ bindAccountLoader(loadAccounts)
 
     <BaseCard
       :padded="false"
-      class="mt-4 flex h-[calc(100vh-248px)] min-h-125 flex-col"
+      class="mt-4 flex h-[calc(100dvh-248px)] min-h-125 flex-col"
       header-class="px-4 pt-4 pb-2 md:px-5"
       body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
     >
@@ -182,6 +182,7 @@ bindAccountLoader(loadAccounts)
           :expanded-row-keys="expandedRowKeys"
           :pagination="accountPagination"
           empty-text="暂无账号数据"
+          min-width="1480px"
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
         >

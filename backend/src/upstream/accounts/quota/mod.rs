@@ -10,7 +10,7 @@ const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
 
 /// 判断配额快照是否已经触顶。
 pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
-    core_snapshot_blocked(quota)
+    snapshot_blocked(quota)
         || spend_control_limit_reached(quota)
         || monthly_limit_reached(quota)
         || credits_overage_limit_reached(quota)
@@ -20,8 +20,10 @@ pub fn quota_snapshot_limit_reached(quota: &Value) -> bool {
 pub fn quota_snapshot_reset_at(quota: &Value) -> Option<DateTime<Utc>> {
     let reset_at = if monthly_limit_reached(quota) || spend_control_limit_reached(quota) {
         monthly_limit_reset_at(quota)
-            .or_else(|| blocking_core_bucket(quota).and_then(bucket_reset_at))
+            .or_else(|| blocking_bucket(quota).and_then(bucket_reset_at))
             .or_else(|| core_bucket_with_reset_at(quota).and_then(bucket_reset_at))
+    } else if let Some(reset_at) = blocking_bucket(quota).and_then(bucket_reset_at) {
+        Some(reset_at)
     } else {
         core_bucket_with_reset_at(quota)
             .and_then(bucket_reset_at)
@@ -35,9 +37,14 @@ pub fn quota_snapshot_limit_window_seconds(quota: &Value) -> Option<u64> {
     if monthly_limit_reached(quota) || spend_control_limit_reached(quota) {
         return monthly_limit_window_seconds(quota).or(Some(MONTH_WINDOW_SECONDS));
     }
-    core_bucket_with_window_minutes(quota)
+    blocking_bucket(quota)
         .and_then(bucket_window_minutes)
         .and_then(|minutes| minutes.checked_mul(60))
+        .or_else(|| {
+            core_bucket_with_window_minutes(quota)
+                .and_then(bucket_window_minutes)
+                .and_then(|minutes| minutes.checked_mul(60))
+        })
         .or_else(|| monthly_limit_window_seconds(quota))
 }
 
@@ -266,41 +273,66 @@ fn monthly_limit_reached(quota: &Value) -> bool {
         .pointer("/monthly_limit/limit_reached")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+        || quota
+            .pointer("/monthly_limit/used_percent")
+            .and_then(number_value)
+            .is_some_and(|used_percent| used_percent >= 100.0)
 }
 
-fn core_snapshot_blocked(quota: &Value) -> bool {
+fn quota_bucket_limit_reached(bucket: &Value) -> bool {
+    !bucket.is_null()
+        && (bucket
+            .get("limit_reached")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || bucket
+                .get("used_percent")
+                .and_then(number_value)
+                .is_some_and(|used_percent| used_percent >= 100.0))
+}
+
+fn quota_snapshot_blocked(snapshot: &Value) -> bool {
+    snapshot
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || snapshot
+            .get("allowed")
+            .and_then(Value::as_bool)
+            .is_some_and(|allowed| !allowed)
+        || snapshot_buckets(snapshot).any(quota_bucket_limit_reached)
+}
+
+fn snapshot_blocked(quota: &Value) -> bool {
     quota
         .get("snapshots")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .any(|snapshot| {
-            snapshot.get("source").and_then(Value::as_str) == Some("core")
-                && snapshot
-                    .get("blocked")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
+        .any(quota_snapshot_blocked)
+}
+
+fn blocking_bucket(quota: &Value) -> Option<&Value> {
+    let snapshots = quota.get("snapshots").and_then(Value::as_array)?;
+    snapshots
+        .iter()
+        .filter(|snapshot| quota_snapshot_blocked(snapshot))
+        .flat_map(snapshot_buckets)
+        .find(|bucket| quota_bucket_limit_reached(bucket))
+        .or_else(|| {
+            snapshots
+                .iter()
+                .filter(|snapshot| quota_snapshot_blocked(snapshot))
+                .flat_map(snapshot_buckets)
+                .find(|bucket| bucket_reset_at(bucket).is_some())
         })
 }
 
-fn blocking_core_bucket(quota: &Value) -> Option<&Value> {
-    quota
-        .get("snapshots")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter(|snapshot| snapshot.get("source").and_then(Value::as_str) == Some("core"))
-        .flat_map(|snapshot| {
-            ["primary", "secondary"]
-                .into_iter()
-                .filter_map(|key| snapshot.get(key))
-        })
-        .find(|bucket| {
-            !bucket.is_null()
-                && bucket
-                    .get("limit_reached")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-        })
+fn snapshot_buckets(snapshot: &Value) -> impl Iterator<Item = &Value> {
+    ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|key| snapshot.get(key))
+        .filter(|bucket| !bucket.is_null())
 }
 
 fn core_bucket_with_reset_at(quota: &Value) -> Option<&Value> {
@@ -318,12 +350,7 @@ fn core_buckets<'a>(quota: &'a Value) -> impl Iterator<Item = &'a Value> + 'a {
         .into_iter()
         .flatten()
         .filter(|snapshot| snapshot.get("source").and_then(Value::as_str) == Some("core"))
-        .flat_map(|snapshot| {
-            ["primary", "secondary"]
-                .into_iter()
-                .filter_map(|key| snapshot.get(key))
-        })
-        .filter(|bucket| !bucket.is_null())
+        .flat_map(snapshot_buckets)
 }
 
 fn bucket_reset_at(bucket: &Value) -> Option<i64> {

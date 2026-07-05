@@ -344,6 +344,26 @@ fn rate_limit_quota_should_preserve_existing_monthly_and_credits_when_passive_da
     assert_eq!(quota["credits"]["balance"], 12);
 }
 
+#[test]
+fn rate_limit_quota_should_block_when_window_is_exhausted_even_if_flag_is_false() {
+    let event = json!({
+        "type": "codex.rate_limits",
+        "rate_limits": {
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 100,
+                "window_minutes": 300,
+                "reset_at": 1893456300
+            }
+        }
+    });
+    let parsed = parse_rate_limits_event(&event).expect("event should parse");
+
+    let quota = rate_limit_quota(&parsed, Some("plus"), None);
+
+    assert_eq!(quota["snapshots"][0]["blocked"], true);
+}
+
 #[tokio::test]
 async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_token() {
     use async_trait::async_trait;

@@ -3,7 +3,10 @@ server:
   host: '0.0.0.0'
   # 容器内服务端口，需与 docker-compose.yml 的 target port 一致。
   port: 8080
-  # 可信反向代理 IP 或 CIDR。为空时会忽略并剥离客户端传入的转发 IP 头。
+  # 可信反向代理 IP 或 CIDR。非空时只有这些 peer 的转发 IP 头会被采信。
+  # Docker 端口映射经宿主反代访问时，后端看到的 peer 通常是 Compose 网络网关
+  # （例如 172.18.0.1），不是宿主 127.0.0.1。
+  # 为空时进入兼容自动模式，按 CF-Connecting-IP / X-Real-IP / X-Forwarded-For 解析。
   trusted_proxies: []
 
 api:
