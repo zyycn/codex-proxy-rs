@@ -50,10 +50,6 @@ function quotaWindowBarClass(window?: any) {
   return 'bg-(--cp-success)'
 }
 
-function quotaWindowUsageText(window?: any) {
-  return `${windowPercentDisplay(window)}/${windowUsageDisplay(window)}`
-}
-
 function windowUsageDisplay(window?: any) {
   const display = window?.tokenUsageDisplay
   return typeof display === 'string' && display.trim() ? display : '-'
@@ -62,6 +58,19 @@ function windowUsageDisplay(window?: any) {
 function windowPercentDisplay(window?: any) {
   const display = window?.usedPercentDisplay
   return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function quotaWindowPercentTextClass(window?: any) {
+  if (window?.usedPercent === null || window?.usedPercent === undefined) {
+    return 'text-(--cp-text-muted)'
+  }
+  if (window.usedPercent >= 95) {
+    return 'text-(--cp-danger-text)'
+  }
+  if (window.usedPercent >= 80) {
+    return 'text-(--cp-warning-text)'
+  }
+  return 'text-(--cp-success-text)'
 }
 
 function quotaWindowOrder(window?: any) {
@@ -86,11 +95,19 @@ function quotaWindowMatches(actual: unknown, expected: number) {
   <div v-if="quotaWindows.length > 0" :class="summaryClass">
     <div v-for="window in visibleQuotaWindows" :key="window.key" class="min-w-0">
       <div class="mb-1 flex items-center justify-between gap-2 text-[10px] leading-none font-[760]">
-        <span class="text-(--cp-text-secondary)">
+        <span class="min-w-0 text-(--cp-text-secondary)">
           {{ window.labelDisplay }}
         </span>
-        <span class="shrink-0 text-(--cp-text-secondary)">
-          {{ quotaWindowUsageText(window) }}
+        <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+          <span
+            class="text-[10px] leading-none font-[780]"
+            :class="quotaWindowPercentTextClass(window)"
+          >
+            {{ windowPercentDisplay(window) }}
+          </span>
+          <span class="text-[10px] leading-none font-[680] text-(--cp-text-muted)">
+            {{ windowUsageDisplay(window) }}
+          </span>
         </span>
       </div>
       <div class="h-1 w-full overflow-hidden rounded-full bg-(--cp-default-border)">
