@@ -15,11 +15,11 @@
 
 ## 概览
 
-Codex Proxy RS 是一个单进程服务：
+Codex Proxy RS 是一个单进程网关：
 
-- Rust/Axum 后端提供 OpenAI 兼容 `/v1/*` 代理、管理端 API、SQLite 持久化和静态前端托管。
-- Vue 管理端用于账号导入、API Key、用量统计、请求记录、运行参数、模型映射和系统更新。
-- 运行数据默认收敛到仓库 `.runtime/`，Docker 也使用同一套宿主机目录做 bind mount。
+- Rust/Axum 后端提供 Responses 兼容代理、管理端 API、SQLite 持久化和静态前端托管。
+- Vue 管理端负责账号导入、API Key、用量统计、请求记录、运行参数、模型映射和系统更新。
+- 运行数据默认写入仓库 `.runtime/`；Docker 部署也使用这套宿主机目录挂载。
 
 ## 环境
 
@@ -55,7 +55,7 @@ mkdir -p .runtime/data .runtime/logs
 CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
 ```
 
-服务默认监听 `http://0.0.0.0:8080`。
+服务默认监听 `0.0.0.0:8080`。本机访问通常使用 `http://127.0.0.1:8080`。
 
 ## Docker 部署
 
@@ -106,8 +106,11 @@ docker compose -f deploy/docker-compose.yml up -d
 | 端点 | 说明 |
 | --- | --- |
 | `POST /v1/responses` | OpenAI Responses 兼容接口 |
+| `POST /v1/responses/review` | Review 模型请求入口 |
+| `POST /v1/responses/compact` | Compact 请求入口 |
 | `GET /v1/models` | 模型列表 |
 | `GET /v1/models/{id}` | 模型详情 |
+| `GET /v1/models/{id}/info` | 模型运行信息 |
 | `GET /v1/models/catalog` | 管理端可见模型目录 |
 | `/api/admin/*` | 管理端 API |
 
@@ -136,11 +139,11 @@ pnpm --dir frontend build
 CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
 ```
 
-管理端主要功能：
+管理端功能：
 
 - 账号导入、OAuth 授权、连接测试、quota 刷新、token 刷新。
 - 客户端 API Key 管理。
-- 请求记录、Token 用量、模型用量和账号额度。
+- Dashboard、请求记录、Token 用量、模型用量和账号额度。
 - 运行参数、模型别名、账号选择策略。
 - 版本检查、在线更新、更新日志、重启和回滚。
 
@@ -151,7 +154,7 @@ CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.tom
 `.runtime` 约定：
 
 ```text
-.runtime/config.yaml                # 本地或 Docker 启动配置，按实际运行环境写路径
+.runtime/config.yaml                # 本地或 Docker 启动配置，路径按运行环境写
 .runtime/data/codex-proxy-rs.sqlite # SQLite 数据库
 .runtime/data/installation_id       # 上游 installation id
 .runtime/data/update-state.json     # 在线更新状态
@@ -161,22 +164,21 @@ CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.tom
 
 ## 发布与更新
 
-版本信息在 `release/version.yaml`，发布平台在 `release/platforms.yaml`。
+当前版本记录在 `release/version.yaml`，发布平台记录在 `release/platforms.yaml`。
 
 发布命令：
 
 ```bash
-release/publish 0.1.5
+release/publish 1.0.4
 ```
 
-该命令会更新版本文件、生成版本提交、创建 `v<version>` tag 并推送，随后 GitHub Actions 构建 Release 归档和 GHCR 多平台镜像。
+该命令会更新版本文件、生成版本提交、创建 `v<version>` tag 并推送。GitHub Actions 随后构建 Release 归档和 GHCR 多平台镜像。
 
 在线更新由主服务处理，管理端调用 `/api/admin/system/*`：
 
-- 检查 GitHub Release。
-- 下载匹配当前平台的归档和 `checksums.txt`。
-- 校验 checksum。
-- 替换二进制和 `web/dist`。
+- 查询 GitHub Release。
+- 下载当前平台对应的归档和 `checksums.txt`。
+- 校验 checksum 后替换二进制和 `web/dist`。
 - 重启时，Docker 模式依赖 `restart: unless-stopped` 拉起新容器进程；非 Docker 模式会先安排新进程延迟启动，再关闭当前进程。
 
 ## 项目结构
@@ -185,7 +187,7 @@ release/publish 0.1.5
 backend/       Rust/Axum 后端、SQLite migration、集成测试
 frontend/      Vue 3 管理端
 deploy/        Dockerfile、Compose、部署配置模板
-docs/          架构、审计和维护文档
+docs/          架构和维护文档
 release/       版本、平台和发布脚本
 skills/        项目本地 Codex skill
 ```

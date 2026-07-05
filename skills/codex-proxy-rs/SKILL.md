@@ -5,7 +5,7 @@ description: Codex Proxy RS 项目专用指南。Use when working in the codex-p
 
 # Codex Proxy RS
 
-使用这个 skill 来开发 Codex Proxy RS，避免每次重新摸索项目结构、开发流程和约束。
+这个 skill 记录 Codex Proxy RS 的仓库结构、开发命令和约束。
 
 ## 开始前
 
@@ -20,7 +20,7 @@ description: Codex Proxy RS 项目专用指南。Use when working in the codex-p
 - 后端：遵循 `backend/src` 里的 Rust/Axum 模式；集成测试放 `backend/tests`，禁止把测试代码放进 `backend/src`。
 - 前端：使用 Vue 3 `<script setup>`、TypeScript、Tailwind v4 utilities 和已有 CSS 主题 token。
 - Docker / 发布：保持 runtime 镜像最小化，并维护现有 GitHub Release、GHCR、在线更新契约。
-- 文档：文档要短、准、和真实行为一致；除非用户要求，不新增冗余文档文件。
+- 文档：短、准、和真实行为一致；除非用户要求，不新增冗余文档文件。
 
 ## 验证
 

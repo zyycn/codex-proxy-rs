@@ -18,7 +18,7 @@
 - `backend/tests/`：集成测试和 fixtures。测试代码只放这里，禁止放进 `backend/src`。
 - `frontend/`：Vue 3 管理端 SPA，使用 Vite 8、Tailwind v4、Pinia、Vue Router、Axios、lucide icons、ECharts。
 - `deploy/`：Dockerfile、Dockerfile 专用 ignore 文件、Compose 文件、`config.example.yaml`。
-- `docs/`：只放长期维护文档，例如架构说明；不要保留过程型迁移文档作为开发约束。
+- `docs/`：长期维护文档；不要保留过程型迁移文档作为开发约束。
 - `skills/`：项目本地 Codex skills。
 
 ## 后端规范
@@ -75,15 +75,16 @@ cargo run --manifest-path backend/Cargo.toml --bin codex-proxy-rs
 - 本地 Docker 首次部署命令：
 
 ```bash
-cp deploy/config.example.yaml deploy/config.yaml
+mkdir -p .runtime/data .runtime/logs
+cp deploy/config.example.yaml .runtime/config.yaml
 docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
 - 运行时挂载关系：
-  - `deploy/config.yaml` -> `/app/config.yaml`
-  - `deploy/data` -> `/app/data`
-  - `deploy/logs` -> `/app/logs`
+  - `.runtime/config.yaml` -> `/app/config.yaml`
+  - `.runtime/data` -> `/app/data`
+  - `.runtime/logs` -> `/app/logs`
 
 ## 发布和版本契约
 
@@ -99,7 +100,6 @@ docker compose -f deploy/docker-compose.yml up -d
 ```text
 codex-proxy-rs_<version>_linux_amd64.tar.gz
 codex-proxy-rs_<version>_linux_arm64.tar.gz
-codex-proxy-rs_<version>_darwin_amd64.tar.gz
 codex-proxy-rs_<version>_darwin_arm64.tar.gz
 codex-proxy-rs_<version>_windows_amd64.zip
 checksums.txt
@@ -114,10 +114,11 @@ checksums.txt
 
 - 后端接口：
   - `GET /api/admin/system/version`
-  - `GET /api/admin/system/check-updates`
+  - `GET /api/admin/system/update-detail`
   - `GET /api/admin/system/update-events`
   - `GET /api/admin/system/update-status`
   - `POST /api/admin/system/update`
+  - `POST /api/admin/system/rollback`
   - `POST /api/admin/system/restart`
 - 前端更新 UI：`frontend/src/layout/components/SystemUpdateModal.vue`。
 - SSE 日志由后端生成中文消息；前端只负责展示，不做状态文案映射。

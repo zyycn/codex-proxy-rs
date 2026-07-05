@@ -1,17 +1,17 @@
-# Codex Proxy RS 架构说明
+# Codex Proxy RS 架构
 
 ## 总览
 
-Codex Proxy RS 是一个单主进程应用。Rust 后端同时承担 OpenAI 兼容代理、管理端 API、SQLite 持久化、后台任务、静态前端托管和在线更新；Vue 管理端作为 SPA 由同一个后端进程服务。
+Codex Proxy RS 是单进程应用。Rust 后端同时处理 Responses 兼容代理、管理端 API、SQLite 持久化、后台任务、静态前端托管和在线更新；Vue 管理端作为 SPA 由同一个进程托管。
 
 ```mermaid
 flowchart LR
-    Client["客户端 / OpenAI SDK"] -->|"Authorization: Bearer<br/>/v1/*"| Http["Axum Router"]
+    Client["客户端 / OpenAI SDK"] -->|"Authorization: Bearer<br/>/v1/responses"| Http["Axum Router"]
     Browser["浏览器"] -->|"管理端 SPA"| Web["web/dist"]
     Browser -->|"/api/admin/*"| Http
 
     subgraph App["codex-proxy-rs"]
-        Http --> Proxy["proxy<br/>OpenAI 兼容入口<br/>客户端 API Key 鉴权"]
+        Http --> Proxy["proxy<br/>Responses / Models 入口<br/>客户端 API Key 鉴权"]
         Http --> Admin["admin<br/>账号 / Key / 设置 / 监控 / 系统更新"]
         Http --> Web
 
@@ -36,11 +36,11 @@ flowchart LR
 - `backend/`：Rust/Axum 后端、SQLite migration、构建脚本和集成测试。
 - `frontend/`：Vue 3 管理端，使用 Vite 8、Tailwind v4、Pinia、Vue Router、ECharts 和 lucide 图标。
 - `deploy/`：Dockerfile、Compose 和 Docker 部署配置模板。
-- `docs/`：长期维护文档和审计记录，只记录当前有效结构与决策。
+- `docs/`：长期维护文档，记录当前有效结构与决策。
 - `release/`：版本号、平台矩阵和发布脚本。
 - `skills/`：项目本地 Codex skill。
 
-当前后端是 `backend/` 单 crate。不要在文档里保留旧迁移布局或兼容性重导出约束，除非代码重新引入对应结构。
+当前后端是 `backend/` 单 crate。历史迁移布局不再作为当前架构的一部分记录。
 
 ## 后端结构
 
@@ -54,7 +54,7 @@ flowchart LR
 主要模块：
 
 - `admin/`：管理端 API，包括登录 session、账号、API Key、监控、运行设置和系统更新。
-- `proxy/`：OpenAI 兼容 HTTP 入口、客户端 API Key 鉴权、请求分派。
+- `proxy/`：Responses/Models HTTP 入口、客户端 API Key 鉴权、请求分派。
 - `proxy/openai/`：Responses 和 Models 的协议入口。
 - `proxy/dispatch/`：账号选择、quota/限流处理、错误映射、session affinity 和失败回退。
 - `upstream/`：ChatGPT/Codex 上游账号、模型、协议、传输、token 刷新和 fingerprint。
@@ -103,14 +103,14 @@ Docker 也使用宿主机 `.runtime`，但容器内配置路径仍然写 `/app/d
 
 ## 代理请求链路
 
-客户端请求进入 `/v1/*`：
+客户端请求进入 `/v1/responses`、`/v1/responses/review`、`/v1/responses/compact` 或 `/v1/models*`：
 
 1. `proxy/auth` 校验客户端 API Key，并记录调用上下文。
-2. `proxy/openai` 解析 OpenAI 兼容请求。
+2. `proxy/openai` 解析 Responses 或 Models 请求。
 3. `proxy/dispatch` 按模型、quota、账号状态和选择策略挑选账号。
 4. `upstream/protocol` 转换为 ChatGPT/Codex 上游协议。
 5. `upstream/transport` 使用 HTTP、SSE 或 WebSocket 访问上游。
-6. 响应和错误被转换回 OpenAI 兼容格式。
+6. 响应和错误被转换回 OpenAI Responses/Models 兼容格式。
 7. 用量、模型维度统计、请求记录、账号窗口和失败状态写回 SQLite/账号池。
 
 账号状态由 SQLite 恢复到内存账号池，并在请求、token 刷新、quota 刷新、Cloudflare 处理和失败回退时同步更新。
@@ -132,7 +132,7 @@ Docker 也使用宿主机 `.runtime`，但容器内配置路径仍然写 `/app/d
 
 - 账号管理：导入、OAuth、连接测试、额度、模型、调度状态、刷新能力。
 - API Key 管理：客户端 Key 和管理员 API Key。
-- Dashboard：请求趋势、账号概览、服务状态。
+- Dashboard：核心指标、请求趋势、账号概览、服务状态和健康时间线。
 - 请求明细：网关调用、上游状态、Token 消耗、错误和详情。
 - 设置：运行参数、模型映射、账号选择策略。
 - 系统更新：版本、检查更新、SSE 更新日志、更新、重启、回滚。
@@ -148,7 +148,7 @@ Docker 也使用宿主机 `.runtime`，但容器内配置路径仍然写 `/app/d
 发布命令：
 
 ```bash
-release/publish 0.1.5
+release/publish 1.0.4
 ```
 
 发布 workflow 校验触发 tag 必须等于 `v` + `release/version.yaml`。构建时注入：
