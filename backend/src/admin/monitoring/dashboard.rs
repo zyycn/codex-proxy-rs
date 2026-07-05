@@ -219,10 +219,10 @@ struct UsageWindow {
     errors: u64,
     first_token_latency_sum: u64,
     first_token_latency_count: u64,
+    max_first_token_bucket_latency: u64,
+    min_first_token_bucket_latency: u64,
     latency_sum: u64,
     latency_count: u64,
-    max_latency: u64,
-    min_latency: u64,
 }
 
 impl UsageWindow {
@@ -243,6 +243,14 @@ impl UsageWindow {
             .checked_div(self.first_token_latency_count)
     }
 
+    fn max_first_token_bucket_latency(self) -> Option<u64> {
+        (self.max_first_token_bucket_latency > 0).then_some(self.max_first_token_bucket_latency)
+    }
+
+    fn min_first_token_bucket_latency(self) -> Option<u64> {
+        (self.min_first_token_bucket_latency > 0).then_some(self.min_first_token_bucket_latency)
+    }
+
     fn avg_latency(self) -> Option<u64> {
         self.latency_sum.checked_div(self.latency_count)
     }
@@ -252,6 +260,7 @@ impl UsageWindow {
 pub(crate) async fn dashboard_summary(
     State(state): State<AppState>,
     _auth: AdminAuth,
+    Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     let accounts = state
         .services
@@ -288,7 +297,7 @@ pub(crate) async fn dashboard_summary(
     let now = Utc::now();
     let time_buckets = dashboard_time_buckets(&state, now).await;
     let pool_summary = account_pool_summary(&accounts);
-    let trend = dashboard_trend_data(&time_buckets, DashboardTrendKind::Usage);
+    let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
     let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
     let settings = state.services.settings.current();
     let recent_usage_records = recent_events.into_iter().take(10).collect::<Vec<_>>();
@@ -483,7 +492,9 @@ fn dashboard_trend_data_at(
     let points = buckets
         .iter()
         .map(|(bucket_start, bucket)| {
-            let latency = bucket.avg_latency().unwrap_or(0);
+            let latency = bucket.avg_first_token_latency().unwrap_or(0);
+            let max_latency = bucket.max_first_token_bucket_latency().unwrap_or(0);
+            let min_latency = bucket.min_first_token_bucket_latency().unwrap_or(0);
             let tokens = bucket.tokens();
             let success_rate = if bucket.requests > 0 {
                 ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0).round()
@@ -507,10 +518,10 @@ fn dashboard_trend_data_at(
                 errors_value: bucket.errors,
                 latency: format_optional_duration_ms(Some(latency)),
                 latency_value: latency,
-                max_latency: format_optional_duration_ms(Some(bucket.max_latency)),
-                max_latency_value: bucket.max_latency,
-                min_latency: format_optional_duration_ms(Some(bucket.min_latency)),
-                min_latency_value: bucket.min_latency,
+                max_latency: format_optional_duration_ms(Some(max_latency)),
+                max_latency_value: max_latency,
+                min_latency: format_optional_duration_ms(Some(min_latency)),
+                min_latency_value: min_latency,
                 success_rate: format_percent(success_rate),
                 success_rate_value: success_rate,
             }
@@ -772,20 +783,23 @@ fn apply_bucket(window: &mut UsageWindow, record: &AdminUsageTimeBucketRecord) {
     window.errors += nonnegative_i64_to_u64(record.error_count);
     window.first_token_latency_sum += nonnegative_i64_to_u64(record.first_token_latency_sum);
     window.first_token_latency_count += nonnegative_i64_to_u64(record.first_token_latency_count);
-    window.latency_sum += nonnegative_i64_to_u64(record.latency_sum);
-    window.latency_count += nonnegative_i64_to_u64(record.latency_count);
-    let max_latency = nonnegative_i64_to_u64(record.max_latency_ms);
-    if max_latency > 0 {
-        window.max_latency = window.max_latency.max(max_latency);
-    }
-    let min_latency = nonnegative_i64_to_u64(record.min_latency_ms);
-    if min_latency > 0 {
-        window.min_latency = if window.min_latency == 0 {
-            min_latency
+    let bucket_first_token_latency = first_token_bucket_latency(record);
+    if let Some(latency) = bucket_first_token_latency {
+        window.max_first_token_bucket_latency = window.max_first_token_bucket_latency.max(latency);
+        window.min_first_token_bucket_latency = if window.min_first_token_bucket_latency == 0 {
+            latency
         } else {
-            window.min_latency.min(min_latency)
+            window.min_first_token_bucket_latency.min(latency)
         };
     }
+    window.latency_sum += nonnegative_i64_to_u64(record.latency_sum);
+    window.latency_count += nonnegative_i64_to_u64(record.latency_count);
+}
+
+fn first_token_bucket_latency(record: &AdminUsageTimeBucketRecord) -> Option<u64> {
+    let sum = nonnegative_i64_to_u64(record.first_token_latency_sum);
+    let count = nonnegative_i64_to_u64(record.first_token_latency_count);
+    sum.checked_div(count).filter(|latency| *latency > 0)
 }
 
 fn account_pool_summary(accounts: &[Account]) -> AccountPoolDiagnostics {

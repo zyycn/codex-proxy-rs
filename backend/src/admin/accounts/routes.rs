@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,10 @@ use crate::{
     },
     admin::update_payload::{parse_editable_update, EditableUpdateMessages},
     admin::{
-        accounts::quota_view::{quota_data, AdminAccountQuotaData},
+        accounts::quota_view::{
+            quota_data, AdminAccountQuotaData, AdminAccountQuotaUsageWindow,
+            AdminAccountQuotaWindowTokenUsage,
+        },
         accounts::service::{
             AdminAccountError, AdminAccountHealthCheck, AdminAccountMetadata,
             AdminAccountRefreshOutcome, AdminAccountRefreshResult, AdminAccountUpdate,
@@ -38,7 +41,10 @@ use crate::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
         },
         json::{clamp_limit, clamp_page, total_pages, Page},
-        time::{china_datetime, china_quarter_hour_start, china_relative_time, china_rfc3339},
+        time::{
+            china_datetime, china_quarter_hour_start, china_relative_time, china_rfc3339,
+            parse_rfc3339_utc,
+        },
     },
     runtime::state::AppState,
     upstream::accounts::model::AccountStatus,
@@ -295,6 +301,12 @@ struct AccountModelUsageRecord {
     cached_tokens: i64,
     total_cost_usd: f64,
     last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+struct AccountQuotaUsageWindow {
+    account_id: String,
+    window: AdminAccountQuotaUsageWindow,
 }
 
 impl AccountListStats {
@@ -642,7 +654,8 @@ pub(crate) async fn account_quota(
             let quota = data.get("quota").cloned().unwrap_or(Value::Null);
             let raw = data.get("raw").cloned().unwrap_or(Value::Null);
             let quota_json = quota.to_string();
-            let quota_data = quota_data(&quota_json, Some(Utc::now()));
+            let mut quota_data = quota_data(&quota_json, Some(Utc::now()));
+            apply_account_quota_window_token_usage(&state, &account_id, &mut quota_data).await;
             let plan_type = quota
                 .get("plan_type")
                 .and_then(Value::as_str)
@@ -858,6 +871,8 @@ async fn account_list_stats(
         .list_by_account_ids(&account_ids)
         .await
         .unwrap_or_default();
+    let mut quota_by_account = quota_by_account.clone();
+    apply_quota_window_token_usage(state, accounts, &mut quota_by_account).await;
     let models_by_account = list_current_window_model_usage(state, &usage_records).await;
 
     AccountListStats {
@@ -865,9 +880,136 @@ async fn account_list_stats(
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect(),
-        quota_by_account: quota_by_account.clone(),
+        quota_by_account,
         models_by_account,
     }
+}
+
+async fn apply_account_quota_window_token_usage(
+    state: &AppState,
+    account_id: &str,
+    quota: &mut AdminAccountQuotaData,
+) {
+    let windows = quota
+        .usage_windows()
+        .into_iter()
+        .map(|window| AccountQuotaUsageWindow {
+            account_id: account_id.to_string(),
+            window,
+        })
+        .collect::<Vec<_>>();
+    let usage_by_account = quota_window_token_usage_by_account(state, &windows).await;
+    let empty_usage = HashMap::new();
+    quota.apply_token_usage(usage_by_account.get(account_id).unwrap_or(&empty_usage));
+}
+
+async fn apply_quota_window_token_usage(
+    state: &AppState,
+    accounts: &[AdminAccountMetadata],
+    quota_by_account: &mut HashMap<String, AdminAccountQuotaData>,
+) {
+    let windows = accounts
+        .iter()
+        .filter_map(|account| {
+            quota_by_account
+                .get(&account.id)
+                .map(|quota| (account.id.as_str(), quota))
+        })
+        .flat_map(|(account_id, quota)| {
+            quota
+                .usage_windows()
+                .into_iter()
+                .map(move |window| AccountQuotaUsageWindow {
+                    account_id: account_id.to_string(),
+                    window,
+                })
+        })
+        .collect::<Vec<_>>();
+    let usage_by_account = quota_window_token_usage_by_account(state, &windows).await;
+
+    for account in accounts {
+        if let Some(quota) = quota_by_account.get_mut(&account.id) {
+            let empty_usage = HashMap::new();
+            quota.apply_token_usage(usage_by_account.get(&account.id).unwrap_or(&empty_usage));
+        }
+    }
+}
+
+async fn quota_window_token_usage_by_account(
+    state: &AppState,
+    windows: &[AccountQuotaUsageWindow],
+) -> HashMap<String, HashMap<String, AdminAccountQuotaWindowTokenUsage>> {
+    let Some(min_start) = windows.iter().map(|window| window.window.start).min() else {
+        return HashMap::new();
+    };
+    let Some(max_end) = windows.iter().map(|window| window.window.end).max() else {
+        return HashMap::new();
+    };
+
+    let account_ids = windows
+        .iter()
+        .map(|window| window.account_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut windows_by_account = HashMap::<&str, Vec<&AdminAccountQuotaUsageWindow>>::new();
+    for window in windows {
+        windows_by_account
+            .entry(window.account_id.as_str())
+            .or_default()
+            .push(&window.window);
+    }
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "select
+          account_id,
+          bucket_start,
+          coalesce(sum(input_tokens), 0) as input_tokens,
+          coalesce(sum(output_tokens), 0) as output_tokens
+        from usage_time_buckets
+        where account_id in (",
+    );
+    let mut separated = builder.separated(", ");
+    for account_id in &account_ids {
+        separated.push_bind(*account_id);
+    }
+    separated.push_unseparated(")");
+    builder.push(" and bucket_start >= ");
+    builder.push_bind(min_start.to_rfc3339());
+    builder.push(" and bucket_start <= ");
+    builder.push_bind(max_end.to_rfc3339());
+    builder.push(" group by account_id, bucket_start");
+
+    let rows = builder
+        .build()
+        .fetch_all(state.services.background_tasks.accounts.pool())
+        .await
+        .unwrap_or_default();
+    let mut usage_by_account =
+        HashMap::<String, HashMap<String, AdminAccountQuotaWindowTokenUsage>>::new();
+
+    for row in rows {
+        let account_id: String = row.get("account_id");
+        let Ok(bucket_start) = parse_rfc3339_utc(row.get::<&str, _>("bucket_start")) else {
+            continue;
+        };
+        let total_tokens = nonnegative_i64_to_u64(row.get::<i64, _>("input_tokens"))
+            .saturating_add(nonnegative_i64_to_u64(row.get::<i64, _>("output_tokens")));
+        let Some(account_windows) = windows_by_account.get(account_id.as_str()) else {
+            continue;
+        };
+
+        for window in account_windows
+            .iter()
+            .filter(|window| bucket_start >= window.start && bucket_start <= window.end)
+        {
+            usage_by_account
+                .entry(account_id.clone())
+                .or_default()
+                .entry(window.key.clone())
+                .or_default()
+                .add_tokens(total_tokens);
+        }
+    }
+
+    usage_by_account
 }
 
 async fn account_summary_data(

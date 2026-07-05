@@ -18,6 +18,11 @@ async fn admin_account_quota_should_send_usage_cookie() {
                     "used_percent": 12,
                     "reset_at": 1_800_000_000,
                     "limit_window_seconds": 18_000
+                },
+                "secondary_window": {
+                    "used_percent": 34,
+                    "reset_at": 1_800_604_800,
+                    "limit_window_seconds": 604_800
                 }
             }
         })))
@@ -46,6 +51,29 @@ async fn admin_account_quota_should_send_usage_cookie() {
         },
     )
     .await;
+    sqlx::query(
+        "insert into usage_time_buckets (
+            bucket_start,
+            account_id,
+            model,
+            request_count,
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2027-01-15T04:00:00+00:00")
+    .bind("acct_quota_cookie")
+    .bind("gpt-5")
+    .bind(1)
+    .bind(1_500)
+    .bind(500)
+    .bind(300)
+    .bind("2027-01-15T04:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
     SqliteCookieStore::new(pool.clone())
         .capture_set_cookie(
             "acct_quota_cookie",
@@ -86,5 +114,17 @@ async fn admin_account_quota_should_send_usage_cookie() {
     assert_eq!(
         body["data"]["quotaData"]["windows"][0]["group"],
         "shortTerm"
+    );
+    assert_eq!(
+        body["data"]["quotaData"]["windows"][0]["tokenUsageDisplay"],
+        "2K"
+    );
+    assert_eq!(
+        body["data"]["quotaData"]["windows"][1]["labelDisplay"],
+        "周限额"
+    );
+    assert_eq!(
+        body["data"]["quotaData"]["windows"][1]["tokenUsageDisplay"],
+        "0"
     );
 }

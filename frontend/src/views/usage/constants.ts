@@ -170,14 +170,6 @@ export function formatLatencyAverage(value: number | null) {
   return `${Math.round(value)} ms`
 }
 
-export function formatCostMetric(value: number) {
-  if (!value) {
-    return '$0.000000'
-  }
-
-  return `$${Number(value || 0).toFixed(6)}`
-}
-
 export function usageRecordType(record: any) {
   if (record?.transport === 'websocket') {
     return 'WS'

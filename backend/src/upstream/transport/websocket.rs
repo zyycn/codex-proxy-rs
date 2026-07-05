@@ -10,8 +10,9 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{channel::mpsc, SinkExt, Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio::{sync::Mutex, time::timeout};
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tungstenite::{
@@ -876,8 +877,12 @@ fn stream_websocket_response(
         .await;
     });
 
+    let body = futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+
     CodexWebSocketStreamingExchange {
-        body: Box::pin(rx),
+        body: Box::pin(body),
         turn_state: response_metadata.turn_state,
         set_cookie_headers: response_metadata.set_cookie_headers,
         rate_limit_headers: response_metadata.rate_limit_headers,
@@ -894,7 +899,7 @@ async fn forward_websocket_response_stream(
     prefetched_text: Option<String>,
     rate_limit_header_updates: CodexWebSocketRateLimitHeaderUpdates,
     turn_state_update: CodexWebSocketTurnStateUpdate,
-    mut tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
+    tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
 ) {
     let mut pool_return = pool_return;
     let mut prefetched_text = prefetched_text;
@@ -903,12 +908,20 @@ async fn forward_websocket_response_stream(
         let raw = if let Some(text) = prefetched_text.take() {
             text
         } else {
-            let message = match next_websocket_message(
-                &mut websocket,
-                receive_idle_timeout(saw_response_frame),
-            )
-            .await
-            {
+            let message = tokio::select! {
+                biased;
+                // 客户端断开下游 SSE 流：立即丢弃连接并释放池 slot，
+                // 不再傻等上游 idle 超时（否则同会话后续请求会一直 bypass/busy）。
+                () = tx.closed() => {
+                    discard_stream_websocket(websocket, pool_return).await;
+                    return;
+                }
+                message = next_websocket_message(
+                    &mut websocket,
+                    receive_idle_timeout(saw_response_frame),
+                ) => message,
+            };
+            let message = match message {
                 Ok(message) => message,
                 Err(error) => {
                     discard_stream_websocket(websocket, pool_return).await;

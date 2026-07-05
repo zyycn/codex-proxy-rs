@@ -107,11 +107,6 @@ const {
 } = useAccountsTable(accounts, selectedIds)
 
 bindAccountLoader(loadAccounts)
-
-function quotaTokenDisplay(account: any) {
-  const display = account?.usage?.totalTokensDisplay
-  return typeof display === 'string' && display.trim() ? display : '0'
-}
 </script>
 
 <template>
@@ -235,12 +230,6 @@ function quotaTokenDisplay(account: any) {
 
           <template #usage="{ row }">
             <AccountQuotaSummaryCell :account="row" />
-          </template>
-
-          <template #quota="{ row }">
-            <span class="font-mono text-[12px] font-[760] text-(--cp-text-primary)">
-              {{ quotaTokenDisplay(row) }}
-            </span>
           </template>
 
           <template #actions="{ row }">

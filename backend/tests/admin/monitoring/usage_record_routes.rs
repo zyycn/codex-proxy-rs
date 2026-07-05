@@ -183,10 +183,10 @@ async fn admin_usage_records_should_return_table_display_fields() {
     assert_eq!(row["tokenDetails"]["reasoningTokens"], 12);
     assert_eq!(row["tokenDetails"]["totalTokens"], 1200);
     assert_eq!(row["tokenDetails"]["inputTokensDisplay"], "1,000");
-    assert_eq!(row["costDetails"]["inputCostDisplay"], "$0.004500");
-    assert_eq!(row["costDetails"]["outputCostDisplay"], "$0.006000");
-    assert_eq!(row["costDetails"]["cacheReadCostDisplay"], "$0.000050");
-    assert_eq!(row["costDetails"]["totalCostDisplay"], "$0.010550");
+    assert_eq!(row["costDetails"]["inputCostDisplay"], "$0.00");
+    assert_eq!(row["costDetails"]["outputCostDisplay"], "$0.01");
+    assert_eq!(row["costDetails"]["cacheReadCostDisplay"], "$0.00");
+    assert_eq!(row["costDetails"]["totalCostDisplay"], "$0.01");
     assert_eq!(
         row["costDetails"]["inputPriceDisplay"],
         "$5.0000 / 1M Token"
@@ -343,7 +343,7 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
     assert_eq!(requested_body["data"][0]["totalTokensValue"], 42);
     assert_eq!(requested_body["data"][0]["totalTokensTotal"], "48");
     assert_eq!(requested_body["data"][0]["totalTokensTotalValue"], 48);
-    assert_eq!(requested_body["data"][0]["actualCost"], "$0.000483");
+    assert_eq!(requested_body["data"][0]["actualCost"], "$0.00");
 
     let upstream_models = app
         .clone()
@@ -422,8 +422,8 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
     assert_eq!(token_body["data"][0]["outputTokens"], "13");
     assert_eq!(token_body["data"][0]["cacheCreationTokens"], "0");
     assert_eq!(token_body["data"][0]["cachedTokens"], "6");
-    assert_eq!(token_body["data"][0]["actualCost"], "$0.000538");
-    assert_eq!(token_body["data"][0]["cost"], "$0.000538");
+    assert_eq!(token_body["data"][0]["actualCost"], "$0.00");
+    assert_eq!(token_body["data"][0]["cost"], "$0.00");
 
     let latency_trend = app
         .oneshot(

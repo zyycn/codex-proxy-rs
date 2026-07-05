@@ -17,7 +17,10 @@ import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 
+type DashboardTrendKind = 'usage' | 'latency' | 'errors'
+
 export function useDashboard(): any {
+  const activeTrendKind = ref<DashboardTrendKind>('usage')
   const metrics = ref<any[]>(metricCards(emptyDashboardSummary()))
   const trendPoints = ref<any[]>([])
   const trendSummary = ref<any[]>([])
@@ -32,6 +35,7 @@ export function useDashboard(): any {
   const refreshing = ref(false)
   const trendLoading = ref(false)
   const lastRefreshedAt = ref('')
+  let trendRequestId = 0
   const { resume: startAutoRefresh } = useIntervalFn(
     () => {
       void loadDashboardData()
@@ -41,10 +45,10 @@ export function useDashboard(): any {
   )
 
   async function loadDashboardData() {
+    if (loading.value || refreshing.value) return
     try {
       loading.value = true
-      const summary = await getDashboardSummary()
-      applySummary(summary)
+      await loadDashboardSnapshot()
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
     } finally {
@@ -57,8 +61,7 @@ export function useDashboard(): any {
     refreshing.value = true
     try {
       await withMinimumDuration(async () => {
-        const summary = await getDashboardSummary()
-        applySummary(summary)
+        await loadDashboardSnapshot()
       })
     } catch (error) {
       console.error('Failed to refresh dashboard data:', error)
@@ -67,21 +70,43 @@ export function useDashboard(): any {
     }
   }
 
-  async function loadTrend(tab: string) {
-    const kind = trendKindFromTab(tab)
+  async function loadTrend(kind: string) {
+    const trendKind = normalizeTrendKind(kind)
+    activeTrendKind.value = trendKind
+    const requestId = nextTrendRequestId()
     try {
       trendLoading.value = true
-      applyTrend(await getDashboardTrend({ kind }))
+      const trend = await getDashboardTrend({ kind: trendKind })
+      if (isCurrentTrendRequest(requestId, trendKind)) {
+        applyTrend(trend)
+      }
     } catch (error) {
       console.error('Failed to load dashboard trend:', error)
     } finally {
-      trendLoading.value = false
+      if (isCurrentTrendRequest(requestId, trendKind)) {
+        trendLoading.value = false
+      }
+    }
+  }
+
+  async function loadDashboardSnapshot() {
+    const trendKind = activeTrendKind.value
+    const requestId = nextTrendRequestId()
+    try {
+      const summary = await getDashboardSummary({ kind: trendKind })
+      applySummary(summary)
+      if (isCurrentTrendRequest(requestId, trendKind)) {
+        applyTrend(summary.trend)
+      }
+    } finally {
+      if (isCurrentTrendRequest(requestId, trendKind)) {
+        trendLoading.value = false
+      }
     }
   }
 
   function applySummary(summary: any) {
     metrics.value = metricCards(summary)
-    applyTrend(summary.trend)
     healthTimeline.value = summary.healthTimeline
     accountUsage.value = summary.accountUsage.map(accountUsageItem)
     serviceStatuses.value = summary.serviceStatuses.map(serviceStatusItem)
@@ -294,7 +319,7 @@ export function useDashboard(): any {
     return {
       name: item.name,
       email: item.email || '-',
-      plan: item.plan || 'free',
+      planType: item.plan || 'free',
       requests: item.requests,
       tokens: item.tokens,
       lastUsed: item.lastUsed || '-',
@@ -333,10 +358,18 @@ export function useDashboard(): any {
     return previous > 0 || current > 0 ? { direction: 'flat', tone: fallbackTone } : undefined
   }
 
-  function trendKindFromTab(tab: string) {
-    if (tab === '延迟') return 'latency'
-    if (tab === '错误') return 'errors'
+  function normalizeTrendKind(kind: string): DashboardTrendKind {
+    if (kind === 'latency' || kind === 'errors') return kind
     return 'usage'
+  }
+
+  function nextTrendRequestId() {
+    trendRequestId += 1
+    return trendRequestId
+  }
+
+  function isCurrentTrendRequest(requestId: number, kind: DashboardTrendKind) {
+    return requestId === trendRequestId && activeTrendKind.value === kind
   }
 
   function trendSummaryTone(label: string) {
@@ -380,6 +413,7 @@ export function useDashboard(): any {
     loading,
     refreshing,
     trendLoading,
+    activeTrendKind,
     lastRefreshedAt,
     metrics,
     trendPoints,

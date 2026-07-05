@@ -36,8 +36,8 @@ const billingItems = computed(() => {
 
 function itemValueClass(tone?: string, accent?: boolean) {
   if (tone === 'success') return 'text-(--cp-success-text)'
-  if (tone === 'info' || accent) return 'text-[#93c5fd]'
-  return 'text-white'
+  if (tone === 'info' || accent) return 'text-(--cp-info-text)'
+  return 'text-(--cp-text-primary)'
 }
 </script>
 
@@ -52,7 +52,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
       trigger="hover"
       placement="right"
       width="248px"
-      panel-class="!bg-[#111827] !p-3 text-white shadow-(--cp-shadow-popover)"
+      panel-class="!p-3 text-(--cp-text-primary)"
     >
       <template #trigger>
         <button
@@ -64,9 +64,11 @@ function itemValueClass(tone?: string, accent?: boolean) {
         </button>
       </template>
 
-      <div class="grid gap-2 text-[12px] leading-none [&_span:first-child]:whitespace-nowrap">
-        <p class="m-0 font-[760] text-white">成本明细</p>
-        <div class="grid gap-1.5 text-[#cbd5e1]">
+      <div
+        class="grid gap-2 text-[12px] leading-none [&_span:first-child]:whitespace-nowrap [&_span:last-child]:whitespace-nowrap"
+      >
+        <p class="m-0 font-[760] text-(--cp-text-primary)">成本明细</p>
+        <div class="grid gap-1.5 text-(--cp-text-secondary)">
           <div v-for="item in mainCostItems" :key="item.label" class="flex justify-between gap-4">
             <span>{{ item.label }}</span>
             <span class="font-mono font-[760]" :class="itemValueClass(undefined, item.accent)">
@@ -74,7 +76,9 @@ function itemValueClass(tone?: string, accent?: boolean) {
             </span>
           </div>
         </div>
-        <div class="mt-1 grid gap-1.5 border-t border-white/12 pt-2 text-[#cbd5e1]">
+        <div
+          class="mt-1 grid gap-1.5 border-t border-(--cp-divider-subtle) pt-2 text-(--cp-text-secondary)"
+        >
           <div v-for="item in billingItems" :key="item.label" class="flex justify-between gap-4">
             <span>{{ item.label }}</span>
             <span class="font-mono font-[760]" :class="itemValueClass(item.tone)">

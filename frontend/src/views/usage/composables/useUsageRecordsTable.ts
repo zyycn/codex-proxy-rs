@@ -153,7 +153,7 @@ export function useUsageRecordsTable(options: {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
     try {
-      await withMinimumDuration(loadUsageRecords)
+      await withMinimumDuration(() => loadUsageRecords('table'))
     } finally {
       refreshingList.value = false
     }

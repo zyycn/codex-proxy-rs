@@ -63,6 +63,15 @@ pub fn format_percent(value: f64) -> String {
     }
 }
 
+/// 展示百分比，并去掉无意义的尾随 0。
+pub fn format_compact_percent(value: f64) -> String {
+    if value.is_finite() {
+        format!("{}%", trim_trailing_zeroes(&format!("{value:.1}")))
+    } else {
+        "—".to_string()
+    }
+}
+
 /// 将 0 到 1 的比例展示为百分比。
 pub fn format_rate(value: Option<f64>) -> String {
     value.map_or_else(|| "—".to_string(), |value| format_percent(value * 100.0))
@@ -84,15 +93,6 @@ pub fn format_cost(value: f64) -> String {
         return format!("${:.2}K", value / 1_000.0);
     }
     format!("${value:.2}")
-}
-
-/// 使用六位小数展示美元成本。
-pub fn format_precise_cost(value: f64) -> String {
-    if value.is_finite() {
-        format!("${value:.6}")
-    } else {
-        "—".to_string()
-    }
 }
 
 /// 展示每百万 token 的美元单价。
@@ -160,7 +160,8 @@ fn format_compact_scaled(value: f64, unit: &str) -> String {
     format!("{}{unit}", trim_trailing_zeroes(&rounded))
 }
 
-fn trim_trailing_zeroes(value: &str) -> String {
+/// 去掉小数字符串中无意义的尾随 0 和小数点。
+pub fn trim_trailing_zeroes(value: &str) -> String {
     value
         .trim_end_matches('0')
         .trim_end_matches('.')
