@@ -74,6 +74,87 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
+/// idle 连接被上游静默关闭后，后台 pump 会实时把它标记为 closed。
+/// 复用前的零成本 `is_closed` 检查应直接丢弃它并新建连接，不经过
+/// “发请求 → 等首帧超时 → stale-reuse 重试” 的长尾（无需任何 maintenance sweep）。
+#[tokio::test]
+async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocket_died_silently() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        // 第一条连接：完成一次响应后由服务端主动关闭（模拟 idle 期间被上游/中间盒断开）。
+        let (first_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_silent_first", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        first_websocket.close(None).await.unwrap();
+
+        // 第二条连接：证明复用被跳过、直接新建。
+        let (second_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_silent_second", 4, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+    });
+    // 无 maintenance、无主动 ping：完全依赖 pump 后台读取感知连接死亡。
+    let pool = Arc::new(CodexWebSocketPool::with_config(
+        websocket_pool_config_for_tests(None, None, None),
+    ));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "be brief",
+            Vec::new(),
+        );
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.set_prompt_cache_key(Some("conversation-pool-silent".to_string()));
+
+    let first = backend
+        .create_response(
+            &request,
+            request_context("req_pool_silent_first", Some("chatgpt-account")),
+        )
+        .await
+        .expect("first pooled websocket response should succeed");
+    // 给后台 pump 一点时间观察到服务端的 close 帧并标记连接死亡。
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_pool_silent_second", Some("chatgpt-account")),
+        )
+        .await
+        .expect("second websocket response should open a fresh socket");
+    server.await.unwrap();
+
+    assert!(first.body.contains("resp_silent_first"));
+    assert!(second.body.contains("resp_silent_second"));
+    // 死连接在 acquire 处被零成本识别 → 直接新建，而非 stale-reuse 重试。
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
 #[tokio::test]
 async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_accounts() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -403,112 +484,10 @@ async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_ping_idle_pooled_websocket_during_maintenance() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let ping_count = Arc::new(AtomicUsize::new(0));
-    let ping_count_for_server = Arc::clone(&ping_count);
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_codex_test_websocket(stream).await;
-        let _first_message = websocket.next().await.unwrap().unwrap();
-        websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_pool_keepalive_first",
-                        "object": "response",
-                        "output": [],
-                        "usage": {
-                            "input_tokens": 3,
-                            "output_tokens": 1,
-                            "total_tokens": 4
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-
-        let ping = timeout(Duration::from_secs(1), websocket.next())
-            .await
-            .expect("pool maintenance should probe the idle websocket")
-            .expect("pool maintenance should send a websocket frame")
-            .expect("pool maintenance frame should be valid");
-        let Message::Ping(payload) = ping else {
-            panic!("expected pool maintenance ping frame, got {ping:?}");
-        };
-        ping_count_for_server.fetch_add(1, Ordering::SeqCst);
-        websocket.send(Message::Pong(payload)).await.unwrap();
-
-        let _second_message = websocket.next().await.unwrap().unwrap();
-        websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_pool_keepalive_second",
-                        "object": "response",
-                        "output": [],
-                        "usage": {
-                            "input_tokens": 3,
-                            "output_tokens": 1,
-                            "total_tokens": 4
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .unwrap();
-        websocket.close(None).await.unwrap();
-    });
-    let pool = Arc::new(CodexWebSocketPool::with_config(
-        websocket_pool_config_for_tests(None, Some(Duration::from_millis(1)), None),
-    ));
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
-    )
-    .with_websocket_pool(Arc::clone(&pool));
-    let mut request =
-        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
-            "gpt-5.5",
-            "be brief",
-            Vec::new(),
-        );
-    request.set_previous_response_id(Some("resp_previous".to_string()));
-    request.set_prompt_cache_key(Some("conversation-pool-keepalive".to_string()));
-
-    let first = backend
-        .create_response(
-            &request,
-            request_context("req_pool_keepalive_first", Some("chatgpt-account")),
-        )
-        .await
-        .expect("first pooled websocket response should succeed");
-    pool.maintain_idle_connections().await;
-    let second = backend
-        .create_response(
-            &request,
-            request_context("req_pool_keepalive_second", Some("chatgpt-account")),
-        )
-        .await
-        .expect("second pooled websocket response should reuse the probed socket");
-    server.await.unwrap();
-
-    assert!(first.body.contains("resp_pool_keepalive_first"));
-    assert!(second.body.contains("resp_pool_keepalive_second"));
-    assert_eq!(ping_count.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
+async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despite_pings() {
+    // 不变量：pump 自己发出的 keepalive ping 不算“入站活动”，因此一个只收 ping、
+    // 从不回 pong / 从不发帧的静默连接，仍会被 liveness watchdog 判定失活并驱逐；
+    // 复用前 acquire 读到 is_closed 即开新连接。
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -524,6 +503,7 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
             ))
             .await
             .unwrap();
+        // 故意不再读取该连接：既不回 pong，也不发任何帧，模拟静默失活。
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
         let mut second_websocket = accept_codex_test_websocket(second_stream).await;
@@ -539,7 +519,7 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
         ping_interval: Some(Duration::from_millis(1)),
-        ping_timeout: Duration::from_millis(20),
+        liveness_timeout: Some(Duration::from_millis(20)),
         maintenance_interval: None,
         ..websocket_pool_config_for_tests(None, None, None)
     }));
@@ -558,7 +538,8 @@ async fn websocket_pool_should_evict_idle_connection_when_ping_times_out() {
         )
         .await
         .expect("first websocket response should succeed");
-    pool.maintain_idle_connections().await;
+    // 等待 pump 的 liveness watchdog 判定静默连接失活。
+    tokio::time::sleep(Duration::from_millis(60)).await;
     let second = backend
         .create_response(
             &request,
@@ -648,7 +629,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_maintenance() {
+async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_repeated_pings() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let ping_count = Arc::new(AtomicUsize::new(0));
@@ -678,18 +659,23 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
             .await
             .unwrap();
 
-        let ping = timeout(Duration::from_secs(1), websocket.next())
-            .await
-            .expect("background maintenance should probe the idle websocket")
-            .expect("background maintenance should send a websocket frame")
-            .expect("background maintenance frame should be valid");
-        let Message::Ping(payload) = ping else {
-            panic!("expected background maintenance ping frame, got {ping:?}");
-        };
-        ping_count_for_server.fetch_add(1, Ordering::SeqCst);
-        websocket.send(Message::Pong(payload)).await.unwrap();
-
-        let _second_message = websocket.next().await.unwrap().unwrap();
+        // pump 会在 idle 期间反复发送 keepalive ping；服务端计数并回 pong，
+        // 直到下一个业务请求（response.create）到达为止。
+        loop {
+            let message = timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("pump keepalive / second request should arrive")
+                .expect("frame should be present")
+                .expect("frame should be valid");
+            match message {
+                Message::Ping(payload) => {
+                    ping_count_for_server.fetch_add(1, Ordering::SeqCst);
+                    websocket.send(Message::Pong(payload)).await.unwrap();
+                }
+                Message::Text(_) => break,
+                other => panic!("unexpected frame while idle: {other:?}"),
+            }
+        }
         websocket
             .send(Message::Text(
                 json!({
@@ -713,11 +699,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
         websocket.close(None).await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(
-        websocket_pool_config_for_tests(
-            Some(Duration::from_millis(20)),
-            Some(Duration::from_mins(1)),
-            None,
-        ),
+        websocket_pool_config_for_tests(None, Some(Duration::from_millis(10)), None),
     ));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -741,6 +723,7 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
         )
         .await
         .expect("first pooled websocket response should succeed");
+    // 让 pump 有时间发出多轮 keepalive ping。
     tokio::time::sleep(Duration::from_millis(80)).await;
     let second = backend
         .create_response(
@@ -748,13 +731,13 @@ async fn codex_backend_client_should_ping_idle_pooled_websocket_from_background_
             request_context("req_pool_background_second", Some("chatgpt-account")),
         )
         .await
-        .expect("second pooled websocket response should reuse the background-probed socket");
+        .expect("second pooled websocket response should reuse the kept-alive socket");
     server.await.unwrap();
     pool.shutdown().await;
 
     assert!(first.body.contains("resp_pool_background_first"));
     assert!(second.body.contains("resp_pool_background_second"));
-    assert_eq!(ping_count.load(Ordering::SeqCst), 1);
+    assert!(ping_count.load(Ordering::SeqCst) >= 1);
 }
 
 #[tokio::test]
