@@ -73,16 +73,16 @@ function cellClass(point: string) {
 
     <template #body>
       <div class="mt-4.25">
-        <div class="grid w-full grid-cols-[repeat(24,minmax(0,1fr))] items-end gap-[3px]">
+        <div class="grid w-full grid-cols-24 items-end gap-0.75">
           <div
             v-for="(group, groupIndex) in pointGroups"
             :key="groupIndex"
-            class="grid grid-cols-4 items-end gap-[2px]"
+            class="grid grid-cols-4 items-end gap-0.5"
           >
             <i
               v-for="(point, pointIndex) in group"
               :key="groupIndex * 4 + pointIndex"
-              class="h-3.5 min-w-[2px] rounded-[2px]"
+              class="h-3.5 min-w-0.5 rounded-xs"
               :class="cellClass(point)"
             />
           </div>
