@@ -1,15 +1,44 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
+import type { Component } from 'vue'
 import { computed } from 'vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseChart from '../../../components/charts/BaseChart.vue'
 
+import AnimatedMetricValue from './AnimatedMetricValue.vue'
+
+type MetricTone = 'normal' | 'info' | 'success' | 'warning' | 'danger'
+
+interface MetricDetail {
+  label: string
+  value: string
+  tone?: MetricTone
+}
+
+interface Metric {
+  title: string
+  value: string
+  valueRaw?: number | null
+  valueFormatter?: (value: number) => string
+  icon: Component
+  tone: MetricTone
+  sparkline?: {
+    values: number[]
+    tone: MetricTone
+  }
+  trend?: {
+    direction: 'up' | 'down' | 'flat'
+    tone: MetricTone
+  }
+  details: MetricDetail[]
+}
+
 const props = defineProps<{
-  metric: any
+  metric: Metric
 }>()
 
-const iconToneClasses: Record<string, string> = {
+const iconToneClasses: Record<MetricTone, string> = {
   normal: 'bg-(--cp-normal-bg) text-(--cp-normal)',
   info: 'bg-(--cp-info-bg) text-(--cp-info)',
   success: 'bg-(--cp-success-bg) text-(--cp-success)',
@@ -17,7 +46,7 @@ const iconToneClasses: Record<string, string> = {
   danger: 'bg-(--cp-danger-bg) text-(--cp-danger)',
 }
 
-const detailToneClasses: Record<string, string> = {
+const detailToneClasses: Record<MetricTone, string> = {
   normal: 'text-(--cp-normal-text)',
   info: 'text-(--cp-info-text)',
   success: 'text-(--cp-success-text)',
@@ -25,7 +54,7 @@ const detailToneClasses: Record<string, string> = {
   danger: 'text-(--cp-danger-text)',
 }
 
-const trendToneClasses: Record<string, string> = {
+const trendToneClasses: Record<MetricTone, string> = {
   normal: 'bg-(--cp-normal-text)',
   info: 'bg-(--cp-info-text)',
   success: 'bg-(--cp-success-text)',
@@ -33,7 +62,7 @@ const trendToneClasses: Record<string, string> = {
   danger: 'bg-(--cp-danger-text)',
 }
 
-const sparklineColors: Record<string, string> = {
+const sparklineColors: Record<MetricTone, string> = {
   normal: '#94A3B8',
   info: '#60A5FA',
   success: '#5CCB8A',
@@ -96,7 +125,11 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       <strong
         class="font-mono text-[28px] leading-[1.05] font-[780] tabular-nums text-(--cp-text-primary)"
       >
-        {{ metric.value }}
+        <AnimatedMetricValue
+          :value="metric.value"
+          :raw-value="metric.valueRaw"
+          :formatter="metric.valueFormatter"
+        />
       </strong>
       <i
         v-if="metric.trend && metric.trend.direction !== 'flat'"

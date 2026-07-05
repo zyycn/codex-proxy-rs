@@ -202,6 +202,8 @@ export function useDashboard(): any {
       {
         title: '账号',
         value: accounts.total,
+        valueRaw: accounts.totalValue,
+        valueFormatter: formatDashboardCompactNumber,
         icon: Users,
         tone: 'normal',
         details: [
@@ -211,7 +213,7 @@ export function useDashboard(): any {
             tone: accounts.enabledValue > 0 ? 'success' : 'normal',
           },
           {
-            label: '异常',
+            label: '不可用',
             value: accounts.abnormal,
             tone: accounts.abnormalValue > 0 ? 'danger' : 'normal',
           },
@@ -220,6 +222,8 @@ export function useDashboard(): any {
       {
         title: '今日请求',
         value: traffic.todayRequests,
+        valueRaw: traffic.todayRequestsValue,
+        valueFormatter: formatDashboardCompactNumber,
         icon: Activity,
         tone: 'info',
         sparkline: sparkline(
@@ -239,6 +243,8 @@ export function useDashboard(): any {
       {
         title: '今日 Token',
         value: tokens.todayTokens,
+        valueRaw: tokens.todayTokensValue,
+        valueFormatter: formatDashboardCompactNumber,
         icon: FileText,
         tone: 'success',
         sparkline: sparkline(
@@ -258,6 +264,8 @@ export function useDashboard(): any {
       {
         title: '今日缓存命中',
         value: cache.todayHitRate,
+        valueRaw: cache.todayHitRateValue,
+        valueFormatter: formatDashboardRate,
         icon: Timer,
         tone: cache.todayHitRateValue && cache.todayHitRateValue > 0 ? 'warning' : 'normal',
         sparkline: sparkline(
@@ -283,6 +291,37 @@ export function useDashboard(): any {
 
   function sparkline(values: number[], tone: string) {
     return values.some((value) => value > 0) ? { values, tone } : undefined
+  }
+
+  function formatDashboardCompactNumber(value: number) {
+    const normalized = Math.max(0, Math.round(value))
+
+    if (normalized < 1_000) {
+      return new Intl.NumberFormat('zh-CN').format(normalized)
+    }
+
+    for (const [unit, threshold] of [
+      ['P', 1_000_000_000_000_000],
+      ['T', 1_000_000_000_000],
+      ['B', 1_000_000_000],
+      ['M', 1_000_000],
+      ['K', 1_000],
+    ] as const) {
+      if (normalized >= threshold) {
+        return `${formatDashboardCompactScaled(normalized / threshold)}${unit}`
+      }
+    }
+
+    return new Intl.NumberFormat('zh-CN').format(normalized)
+  }
+
+  function formatDashboardCompactScaled(value: number) {
+    const rounded = value >= 10 ? value.toFixed(1) : value.toFixed(2)
+    return rounded.replace(/\.?0+$/, '')
+  }
+
+  function formatDashboardRate(value: number) {
+    return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—'
   }
 
   function applyTrend(trend: any) {
