@@ -1,11 +1,13 @@
 //! 管理端账号 quota 展示视图。
 
-use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::infra::{
-    format::format_percent,
+    format::{format_compact_percent, format_tokens},
     time::{china_datetime, china_relative_time},
 };
 
@@ -29,8 +31,33 @@ struct AdminAccountQuotaWindowData {
     label_display: String,
     used_percent: Option<f64>,
     used_percent_display: String,
+    token_usage_display: String,
     reset_at_display: String,
     window_used_display: String,
+    #[serde(skip)]
+    reset_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AdminAccountQuotaUsageWindow {
+    pub(crate) key: String,
+    pub(crate) start: DateTime<Utc>,
+    pub(crate) end: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AdminAccountQuotaWindowTokenUsage {
+    total_tokens: u64,
+}
+
+impl AdminAccountQuotaWindowTokenUsage {
+    pub(crate) fn add_tokens(&mut self, tokens: u64) {
+        self.total_tokens = self.total_tokens.saturating_add(tokens);
+    }
+
+    fn display(self) -> String {
+        format_tokens(self.total_tokens)
+    }
 }
 
 impl Default for AdminAccountQuotaData {
@@ -47,6 +74,40 @@ impl AdminAccountQuotaData {
         self.windows
             .iter()
             .any(|window| window.used_percent.is_some_and(|percent| percent >= 80.0))
+    }
+
+    pub(crate) fn usage_windows(&self) -> Vec<AdminAccountQuotaUsageWindow> {
+        self.windows
+            .iter()
+            .filter_map(AdminAccountQuotaWindowData::usage_window)
+            .collect()
+    }
+
+    pub(crate) fn apply_token_usage(
+        &mut self,
+        usage_by_window: &HashMap<String, AdminAccountQuotaWindowTokenUsage>,
+    ) {
+        for window in &mut self.windows {
+            window.token_usage_display =
+                match (window.usage_window(), usage_by_window.get(&window.key)) {
+                    (Some(_), Some(usage)) => usage.display(),
+                    (Some(_), None) => AdminAccountQuotaWindowTokenUsage::default().display(),
+                    (None, _) => "-".to_string(),
+                };
+        }
+    }
+}
+
+impl AdminAccountQuotaWindowData {
+    fn usage_window(&self) -> Option<AdminAccountQuotaUsageWindow> {
+        let end = self.reset_at?;
+        let seconds = i64::try_from(self.window_seconds?).ok()?;
+        let start = end.checked_sub_signed(Duration::seconds(seconds))?;
+        (start <= end).then(|| AdminAccountQuotaUsageWindow {
+            key: self.key.clone(),
+            start,
+            end,
+        })
     }
 }
 
@@ -111,11 +172,13 @@ fn push_monthly_quota_window(
         window_seconds,
         label_display: "月限额".to_string(),
         used_percent,
-        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
+        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_compact_percent),
+        token_usage_display: "-".to_string(),
         reset_at_display: reset_at
             .as_ref()
             .map_or_else(|| "-".to_string(), china_datetime),
         window_used_display: quota_window_used_display(reset_at, window_seconds),
+        reset_at,
     });
     true
 }
@@ -198,11 +261,13 @@ fn push_quota_window(
         window_seconds,
         label_display,
         used_percent,
-        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_percent),
+        used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_compact_percent),
+        token_usage_display: "-".to_string(),
         reset_at_display: reset_at
             .as_ref()
             .map_or_else(|| "-".to_string(), china_datetime),
         window_used_display: quota_window_used_display(reset_at, window_seconds),
+        reset_at,
     });
 }
 

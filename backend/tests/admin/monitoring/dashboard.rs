@@ -14,7 +14,7 @@ use codex_proxy_rs::{
     },
     infra::{
         database::connect_sqlite,
-        time::{china_day_start, china_hour},
+        time::{china_day_start, china_hour, china_hour_start},
     },
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
@@ -155,7 +155,7 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
         .await
         .unwrap();
 
-    let body = dashboard_trend(app).await;
+    let body = dashboard_trend(app, "usage").await;
     let point = body["data"]["points"]
         .as_array()
         .unwrap()
@@ -165,6 +165,78 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
 
     assert_eq!(point["time"], format!("{:02}", china_hour(&now)));
     assert_eq!(point["tokensValue"], 10);
+}
+
+#[tokio::test]
+async fn dashboard_latency_trend_should_use_first_token_latency() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-trend-first-token-latency.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let now = Utc::now();
+    let current_hour_start = china_hour_start(now);
+    let sample_hour_start = if now - current_hour_start > Duration::minutes(31) {
+        current_hour_start
+    } else {
+        current_hour_start - Duration::hours(1)
+    };
+    let mut slow_completion =
+        usage_record_with_tokens(sample_hour_start + Duration::minutes(1), 10);
+    slow_completion.latency_ms = Some(10_000);
+    slow_completion.metadata["firstTokenMs"] = json!(100_i64);
+    let mut fast_completion =
+        usage_record_with_tokens(sample_hour_start + Duration::minutes(16), 10);
+    fast_completion.latency_ms = Some(1_000);
+    fast_completion.metadata["firstTokenMs"] = json!(500_i64);
+    store.append(&slow_completion).await.unwrap();
+    store.append(&fast_completion).await.unwrap();
+
+    let body = dashboard_trend(app, "latency").await;
+    let point = body["data"]["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|point| point["requestsValue"] == 2)
+        .expect("latency trend should include the inserted usage bucket");
+    let summary = body["data"]["summary"].as_array().unwrap();
+
+    assert_eq!(body["data"]["kind"], "latency");
+    assert_eq!(point["latencyValue"], 300);
+    assert_eq!(point["latency"], "300 ms");
+    assert_eq!(point["maxLatencyValue"], 500);
+    assert_eq!(point["maxLatency"], "500 ms");
+    assert_eq!(point["minLatencyValue"], 100);
+    assert_eq!(point["minLatency"], "100 ms");
+    assert_eq!(summary[0]["value"], "300 ms");
+    assert_eq!(summary[1]["value"], "500 ms");
+    assert_eq!(summary[2]["value"], "100 ms");
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_return_requested_trend_kind() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-summary-requested-trend-kind.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let now = Utc::now();
+    let mut record = usage_record_with_tokens(now - Duration::seconds(1), 10);
+    record.latency_ms = Some(10_000);
+    record.metadata["firstTokenMs"] = json!(250_i64);
+    store.append(&record).await.unwrap();
+
+    let body = dashboard_summary_with_kind(app, "latency").await;
+
+    assert_eq!(body["data"]["trend"]["kind"], "latency");
+    assert!(
+        body["data"]["trend"]["summary"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["value"] == "250 ms"),
+        "summary should include first-token latency trend values: {body:?}"
+    );
 }
 
 #[tokio::test]
@@ -408,11 +480,19 @@ async fn dashboard_test_app(
 }
 
 async fn dashboard_summary(app: axum::Router) -> Value {
+    dashboard_summary_uri(app, "/api/admin/dashboard/summary").await
+}
+
+async fn dashboard_summary_with_kind(app: axum::Router, kind: &str) -> Value {
+    dashboard_summary_uri(app, &format!("/api/admin/dashboard/summary?kind={kind}")).await
+}
+
+async fn dashboard_summary_uri(app: axum::Router, uri: &str) -> Value {
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/dashboard/summary")
+                .uri(uri)
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_dashboard_summary")
                 .body(Body::empty())
@@ -424,12 +504,12 @@ async fn dashboard_summary(app: axum::Router) -> Value {
     response_json(response).await
 }
 
-async fn dashboard_trend(app: axum::Router) -> Value {
+async fn dashboard_trend(app: axum::Router, kind: &str) -> Value {
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/dashboard/trend?kind=usage")
+                .uri(format!("/api/admin/dashboard/trend?kind={kind}"))
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_dashboard_trend")
                 .body(Body::empty())

@@ -40,8 +40,8 @@ const tokenItems = computed(() => [
     <BasePopover
       trigger="hover"
       placement="right"
-      width="168px"
-      panel-class="!bg-[#111827] !p-3 text-white shadow-(--cp-shadow-popover)"
+      width="196px"
+      panel-class="!p-3 text-(--cp-text-primary)"
     >
       <template #trigger>
         <button
@@ -54,18 +54,18 @@ const tokenItems = computed(() => [
       </template>
 
       <div class="grid gap-2 text-[12px] leading-none">
-        <p class="m-0 font-[760] text-white">Token 明细</p>
-        <div class="grid gap-1.5 text-[#cbd5e1]">
+        <p class="m-0 font-[760] text-(--cp-text-primary)">Token 明细</p>
+        <div class="grid gap-1.5 text-(--cp-text-secondary)">
           <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
-            <span>{{ item.label }}</span>
-            <span class="font-mono font-[760] text-white">
+            <span class="whitespace-nowrap">{{ item.label }}</span>
+            <span class="whitespace-nowrap font-mono font-[760] text-(--cp-text-primary)">
               {{ item.value }}
             </span>
           </div>
         </div>
-        <div class="mt-1 flex justify-between border-t border-white/12 pt-2">
-          <span class="text-[#cbd5e1]">总 Token</span>
-          <span class="font-mono font-[760] text-[#93c5fd]">
+        <div class="mt-1 flex justify-between border-t border-(--cp-divider-subtle) pt-2">
+          <span class="whitespace-nowrap text-(--cp-text-secondary)">总 Token</span>
+          <span class="whitespace-nowrap font-mono font-[760] text-(--cp-info-text)">
             {{ tokenDetails.totalTokensDisplay }}
           </span>
         </div>

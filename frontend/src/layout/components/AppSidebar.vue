@@ -313,7 +313,7 @@ watch(
       </button>
     </nav>
 
-    <div class="mt-auto mb-8" :class="collapsed ? 'w-11' : 'w-full'">
+    <div class="mt-auto mb-6" :class="collapsed ? 'w-11' : 'w-full'">
       <div
         class="bg-(--cp-bg-subtle)"
         :class="

@@ -247,6 +247,92 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
 }
 
 #[tokio::test]
+async fn websocket_pool_should_release_slot_when_client_drops_stream() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        // 第一个连接：发一帧后保持沉默（模拟上游不再发帧、也不发 terminal）。
+        // slot 只能靠客户端断开来释放，隔离验证 tx.closed() 机制。
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "streaming has begun"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        // 第二个连接：客户端断开释放 slot 后，同 key 请求应新建连接。
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_released_second", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        drop(first_websocket);
+    });
+    let pool = Arc::new(CodexWebSocketPool::default());
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(pool);
+    let request = pooled_websocket_request("conversation-drop");
+
+    // 起流式请求：slot 变 Busy。
+    let mut stream = backend
+        .create_response_stream(
+            &request,
+            request_context("req_drop_first", Some("chatgpt-account")),
+        )
+        .await
+        .expect("first pooled websocket stream should start")
+        .body;
+    let first_chunk = stream
+        .next()
+        .await
+        .expect("stream should yield an initial chunk")
+        .expect("stream chunk should be valid");
+    assert!(std::str::from_utf8(&first_chunk)
+        .unwrap()
+        .contains("streaming has begun"));
+
+    // 客户端断开：drop stream → rx 被 drop → tx.closed() 完成 →
+    // 代理丢弃上游连接并释放 slot（不再等 idle 超时）。
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 同 key 的后续请求：slot 已释放 → 新建连接（new），而非 bypass(busy)。
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_drop_second", Some("chatgpt-account")),
+        )
+        .await
+        .expect("second request should succeed after slot release");
+    server.await.unwrap();
+
+    assert!(second.body.contains("resp_released_second"));
+    let decision = second.websocket_pool_decision.unwrap();
+    assert_eq!(
+        decision.kind(),
+        "new",
+        "client-drop must release the pool slot so the next same-key request builds a fresh connection instead of bypassing as busy"
+    );
+}
+
+#[tokio::test]
 async fn websocket_pool_should_bypass_new_keys_after_account_cap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -5,6 +5,7 @@ import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
+import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
 
 const props = defineProps<{
   accounts: any[]
@@ -216,16 +217,13 @@ const quotaToneClasses: Record<string, string> = {
                 {{ account.name[0] }}
               </span>
               <span class="flex min-w-0 max-w-full flex-col gap-1.5 xl:gap-4.25">
-                <span class="flex min-w-0 max-w-full items-start gap-1.5">
+                <span class="flex min-w-0 max-w-full items-center gap-2">
                   <strong
                     class="min-w-0 truncate text-sm leading-[1.15] font-[650] text-(--cp-text-primary)"
                     :title="account.name"
                     >{{ account.name }}</strong
                   >
-                  <small
-                    class="mt-0.75 shrink-0 text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted)"
-                    >{{ account.plan }}</small
-                  >
+                  <AccountPlanBadge class="shrink-0" :plan-type="account.planType" />
                 </span>
                 <span
                   class="block min-w-0 max-w-full truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"

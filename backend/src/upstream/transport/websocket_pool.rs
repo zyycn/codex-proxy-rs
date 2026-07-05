@@ -17,7 +17,6 @@ const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_LIVENESS_TIMEOUT: Duration = Duration::from_millis(62_500);
 
 /// WebSocket 连接池 key。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,7 +98,9 @@ impl Default for CodexWebSocketPoolConfig {
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
             ping_interval: Some(DEFAULT_PING_INTERVAL),
             ping_timeout: DEFAULT_PING_TIMEOUT,
-            liveness_timeout: Some(DEFAULT_LIVENESS_TIMEOUT),
+            // idle 连接不设失活截断：靠 ping/pong 保活，只在 max_age（55 分钟）
+            // 或 ping 失败时关闭，最大化跨轮复用（对齐 Codex CLI 的长连接策略）。
+            liveness_timeout: None,
         }
     }
 }

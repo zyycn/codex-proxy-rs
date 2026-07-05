@@ -6,12 +6,23 @@ const props = defineProps<{
   account: any
 }>()
 
+const FIVE_HOUR_WINDOW_SECONDS = 18_000
+const WEEK_WINDOW_SECONDS = 604_800
+const MONTH_WINDOW_SECONDS = 2_592_000
+
 const quotaWindows = computed(() => props.account.quota.windows as any[])
-const visibleQuotaWindows = computed(() => quotaWindows.value.slice(0, 2))
-const summaryClass = computed(() =>
-  visibleQuotaWindows.value.length === 1
-    ? 'flex h-13 w-full max-w-31 min-w-0 flex-col justify-center whitespace-normal py-0.5'
-    : 'grid h-13 w-full max-w-31 min-w-0 grid-rows-2 gap-1.5 whitespace-normal py-0.5',
+const visibleQuotaWindows = computed(() => {
+  const knownWindows = [...quotaWindows.value]
+    .filter((window) => window.group === 'shortTerm' || window.group === 'monthly')
+    .sort((a, b) => quotaWindowOrder(a) - quotaWindowOrder(b))
+
+  return knownWindows.length > 0 ? knownWindows : quotaWindows.value
+})
+const summaryClass = computed(
+  () =>
+    `grid w-full max-w-40 min-w-0 gap-2 whitespace-normal py-0.5 ${
+      visibleQuotaWindows.value.length === 1 ? 'min-h-13 content-center' : ''
+    }`,
 )
 
 function quotaWindowPercent(window?: any) {
@@ -38,17 +49,48 @@ function quotaWindowBarClass(window?: any) {
   }
   return 'bg-(--cp-success)'
 }
+
+function quotaWindowUsageText(window?: any) {
+  return `${windowPercentDisplay(window)}/${windowUsageDisplay(window)}`
+}
+
+function windowUsageDisplay(window?: any) {
+  const display = window?.tokenUsageDisplay
+  return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function windowPercentDisplay(window?: any) {
+  const display = window?.usedPercentDisplay
+  return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function quotaWindowOrder(window?: any) {
+  const seconds = window?.windowSeconds
+  if (quotaWindowMatches(seconds, FIVE_HOUR_WINDOW_SECONDS)) return 0
+  if (quotaWindowMatches(seconds, WEEK_WINDOW_SECONDS)) return 1
+  if (quotaWindowMatches(seconds, MONTH_WINDOW_SECONDS)) return 2
+  return 3
+}
+
+function quotaWindowMatches(actual: unknown, expected: number) {
+  return (
+    typeof actual === 'number' &&
+    Number.isFinite(actual) &&
+    actual > 0 &&
+    Math.abs(actual - expected) <= expected / 20
+  )
+}
 </script>
 
 <template>
   <div v-if="quotaWindows.length > 0" :class="summaryClass">
     <div v-for="window in visibleQuotaWindows" :key="window.key" class="min-w-0">
-      <div class="mb-1 flex items-center justify-between gap-2 text-[11px] leading-none font-[760]">
-        <span class="truncate text-(--cp-text-secondary)">
+      <div class="mb-1 flex items-center justify-between gap-2 text-[10px] leading-none font-[760]">
+        <span class="text-(--cp-text-secondary)">
           {{ window.labelDisplay }}
         </span>
-        <span class="shrink-0 font-mono text-(--cp-text-primary)">
-          {{ window.usedPercentDisplay }}
+        <span class="shrink-0 text-(--cp-text-secondary)">
+          {{ quotaWindowUsageText(window) }}
         </span>
       </div>
       <div class="h-1 w-full overflow-hidden rounded-full bg-(--cp-default-border)">

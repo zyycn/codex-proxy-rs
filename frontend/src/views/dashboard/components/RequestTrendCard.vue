@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import type { EChartsOption } from 'echarts'
 import { storeToRefs } from 'pinia'
 import BaseCard from '../../../components/base/BaseCard.vue'
@@ -8,6 +8,8 @@ import BaseEmpty from '../../../components/base/BaseEmpty.vue'
 import BaseSegmented from '../../../components/base/BaseSegmented.vue'
 import { useUiStore } from '../../../stores/modules/ui'
 
+type TrendKind = 'usage' | 'latency' | 'errors'
+
 const props = defineProps<{
   points: any[]
   summary: any[]
@@ -15,15 +17,15 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  trendChange: [tab: string]
+  trendChange: [kind: TrendKind]
 }>()
 
 const tabs = [
-  { label: '用量', value: '用量' },
-  { label: '延迟', value: '延迟' },
-  { label: '错误', value: '错误' },
+  { label: '用量', value: 'usage' },
+  { label: '延迟', value: 'latency' },
+  { label: '错误', value: 'errors' },
 ]
-const activeTab = ref('用量')
+const activeKind = defineModel<TrendKind>('kind', { required: true })
 const { themeRevision } = storeToRefs(useUiStore())
 
 const hasSamples = computed(() =>
@@ -104,12 +106,12 @@ function formatTooltip(params: unknown) {
 }
 
 function tooltipDisplayValue(point: any, name: string, value: string): string {
-  if (activeTab.value === '用量') {
+  if (activeKind.value === 'usage') {
     if (name === '输入') return point?.inputTokens ?? value
     if (name === '输出') return point?.outputTokens ?? value
     if (name === '缓存') return point?.cachedTokens ?? value
   }
-  if (activeTab.value === '延迟') {
+  if (activeKind.value === 'latency') {
     if (name === '平均') return point?.latency ?? value
     if (name === '最高') return point?.maxLatency ?? value
     if (name === '最低') return point?.minLatency ?? value
@@ -133,7 +135,7 @@ function tooltipIndex(source: unknown) {
 }
 
 function getSeries() {
-  if (activeTab.value === '用量') {
+  if (activeKind.value === 'usage') {
     return [
       lineSeries(
         '输入',
@@ -153,7 +155,7 @@ function getSeries() {
       ),
     ]
   }
-  if (activeTab.value === '延迟') {
+  if (activeKind.value === 'latency') {
     return [
       lineSeries(
         '平均',
@@ -226,16 +228,20 @@ function lineSeries(name: string, data: number[], color: string, area = false, y
 function summaryMarkerStyle(item: any) {
   return item.colorVar ? { backgroundColor: `var(${item.colorVar})` } : undefined
 }
+
+function handleTrendChange(value: string) {
+  emit('trendChange', value as TrendKind)
+}
 </script>
 
 <template>
   <BaseCard as="article" variant="dashboard" title="使用趋势" class="min-h-95 w-full">
     <template #actions>
       <BaseSegmented
-        v-model="activeTab"
+        v-model="activeKind"
         :options="tabs"
         class="w-full max-w-61.5 sm:w-61.5"
-        @update:model-value="emit('trendChange', $event)"
+        @update:model-value="handleTrendChange"
       />
     </template>
 

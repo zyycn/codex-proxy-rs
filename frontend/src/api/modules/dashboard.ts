@@ -1,9 +1,10 @@
 import request from '../request'
 
-export function getDashboardSummary() {
+export function getDashboardSummary(params?: any) {
   return request({
     url: '/api/admin/dashboard/summary',
     method: 'GET',
+    params,
   })
 }
 

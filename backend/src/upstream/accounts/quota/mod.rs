@@ -132,6 +132,8 @@ fn window_from_rate_limit(window: Option<&Value>) -> Value {
         "reset_at": window.get("reset_at").and_then(positive_i64),
         "window_minutes": window_minutes,
         "limit_reached": used_percent >= 100.0,
+        "used": first_present(window, &["used_tokens", "used", "used_credits", "usage", "consumed_tokens", "consumed"]),
+        "limit": first_present(window, &["limit_tokens", "limit", "limit_credits", "quota", "total_tokens", "total"]),
     })
 }
 
@@ -201,8 +203,10 @@ fn monthly_limit_from_snapshots(snapshots: &[Value]) -> Option<Value> {
                     "reset_at": bucket.get("reset_at").cloned().unwrap_or(Value::Null),
                     "window_minutes": bucket.get("window_minutes").cloned().unwrap_or(Value::Null),
                     "limit_reached": bucket.get("limit_reached").cloned().unwrap_or(Value::Bool(false)),
-                    "used_credits": Value::Null,
-                    "limit_credits": Value::Null,
+                    "used": bucket.get("used").cloned().unwrap_or(Value::Null),
+                    "limit": bucket.get("limit").cloned().unwrap_or(Value::Null),
+                    "used_credits": bucket.get("used_credits").cloned().unwrap_or(Value::Null),
+                    "limit_credits": bucket.get("limit_credits").cloned().unwrap_or(Value::Null),
                 }));
             }
         }
@@ -212,6 +216,12 @@ fn monthly_limit_from_snapshots(snapshots: &[Value]) -> Option<Value> {
 
 fn remaining_percent(used_percent: f64) -> i64 {
     (100.0 - used_percent.clamp(0.0, 100.0)).round() as i64
+}
+
+fn first_present(value: &Value, keys: &[&str]) -> Value {
+    keys.iter()
+        .find_map(|key| value.get(*key).filter(|value| !value.is_null()).cloned())
+        .unwrap_or(Value::Null)
 }
 
 fn rate_limit_blocked(rate_limit: &Value) -> bool {

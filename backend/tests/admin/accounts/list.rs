@@ -89,8 +89,8 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
             window_input_tokens: 120_000,
             window_output_tokens: 4_000,
             window_cached_tokens: 40_000,
-            window_started_at: "2026-06-20T00:00:00Z",
-            window_reset_at: "2026-06-27T00:00:00Z",
+            window_started_at: "2026-06-22T12:51:00Z",
+            window_reset_at: "2026-06-29T12:51:00Z",
             limit_window_seconds: 604_800,
             last_used_at: "2026-06-23T08:50:13Z",
         },
@@ -217,6 +217,20 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     sqlx::query(
         "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
     )
+    .bind("2026-06-22T10:00:00+00:00")
+    .bind("acct_stats")
+    .bind("gpt-five-hour-window")
+    .bind(1)
+    .bind(2_000)
+    .bind(500)
+    .bind(100)
+    .bind("2026-06-22T10:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
     .bind("2026-06-19T23:45:00+00:00")
     .bind("acct_stats")
     .bind("gpt-outside-window")
@@ -253,10 +267,13 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert_eq!(item["quota"]["windows"].as_array().unwrap().len(), 3);
     assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
     assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
+    assert_eq!(item["quota"]["windows"][0]["tokenUsageDisplay"], "1.12M");
     assert_eq!(item["quota"]["windows"][1]["labelDisplay"], "5小时限额");
     assert_eq!(item["quota"]["windows"][1]["group"], "shortTerm");
+    assert_eq!(item["quota"]["windows"][1]["tokenUsageDisplay"], "2.5K");
     assert_eq!(item["quota"]["windows"][2]["labelDisplay"], "周限额");
     assert_eq!(item["quota"]["windows"][2]["group"], "shortTerm");
+    assert_eq!(item["quota"]["windows"][2]["tokenUsageDisplay"], "124K");
     assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
         .as_str()
         .is_some_and(|value| value.contains(" / 7.0d")));

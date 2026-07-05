@@ -15,6 +15,7 @@ const {
   loading,
   refreshing,
   trendLoading,
+  activeTrendKind,
   metrics,
   trendPoints,
   trendSummary,
@@ -65,6 +66,7 @@ const {
       class="mt-6 grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,948fr)_minmax(0,608fr)] 2xl:gap-7"
     >
       <RequestTrendCard
+        v-model:kind="activeTrendKind"
         :points="trendPoints"
         :summary="trendSummary"
         :loading="trendLoading"
