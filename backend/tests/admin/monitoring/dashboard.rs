@@ -14,7 +14,7 @@ use codex_proxy_rs::{
     },
     infra::{
         database::connect_sqlite,
-        time::{china_datetime, china_day_start, china_hour, china_hour_start},
+        time::{china_datetime, china_day_start, china_hour},
     },
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
@@ -222,20 +222,14 @@ async fn dashboard_latency_trend_should_use_first_token_latency() {
     )
     .await;
     let now = Utc::now();
-    let current_hour_start = china_hour_start(now);
-    let sample_hour_start = if now - current_hour_start > Duration::minutes(31) {
-        current_hour_start
-    } else {
-        current_hour_start - Duration::hours(1)
-    };
-    let mut slow_completion =
-        usage_record_with_tokens(sample_hour_start + Duration::minutes(1), 10);
+    let mut slow_completion = usage_record_with_tokens(now, 10);
     slow_completion.latency_ms = Some(10_000);
     slow_completion.metadata["firstTokenMs"] = json!(100_i64);
-    let mut fast_completion =
-        usage_record_with_tokens(sample_hour_start + Duration::minutes(16), 10);
+    slow_completion.metadata["serviceTier"] = json!("default");
+    let mut fast_completion = usage_record_with_tokens(now, 10);
     fast_completion.latency_ms = Some(1_000);
     fast_completion.metadata["firstTokenMs"] = json!(500_i64);
+    fast_completion.metadata["serviceTier"] = json!("priority");
     store.append(&slow_completion).await.unwrap();
     store.append(&fast_completion).await.unwrap();
 
