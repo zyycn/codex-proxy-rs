@@ -175,11 +175,14 @@ impl Services {
             }))
         });
         let codex = {
+            let websocket_first_token_timeout = (config.ws_pool.first_token_timeout_ms > 0)
+                .then(|| std::time::Duration::from_millis(config.ws_pool.first_token_timeout_ms));
             let client = CodexBackendClient::new(
                 build_reqwest_client(config.tls.force_http11)?,
                 config.api.base_url.clone(),
                 fingerprint.clone(),
-            );
+            )
+            .with_websocket_first_token_timeout(websocket_first_token_timeout);
             if let Some(pool) = &websocket_pool {
                 StdArc::new(client.with_websocket_pool(pool.clone()))
             } else {

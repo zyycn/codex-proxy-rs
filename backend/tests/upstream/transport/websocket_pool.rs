@@ -342,6 +342,94 @@ async fn codex_backend_client_stream_should_retry_reused_socket_when_first_conte
 }
 
 #[tokio::test]
+async fn codex_backend_client_stream_should_retry_bypass_socket_when_first_content_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_bypass_first_token_stalled",
+                        "object": "response"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "bypass retry recovered"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_bypass_retry_recovered", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        drop(first_websocket);
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        max_per_account: 0,
+        first_token_timeout: Some(Duration::from_millis(30)),
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-first-token-bypass-timeout");
+
+    let response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_first_token_bypass_timeout", Some("chatgpt-account")),
+        )
+        .await
+        .expect("bypass first-token timeout should retry before returning stream");
+    let decision = response.websocket_pool_decision;
+    let mut stream = response.body;
+    let mut body = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.expect("retried bypass stream chunk should be valid");
+        body.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    server.await.unwrap();
+
+    assert!(body.contains("bypass retry recovered"));
+    assert!(body.contains("resp_bypass_retry_recovered"));
+    assert!(!body.contains("resp_bypass_first_token_stalled"));
+    let decision = decision.expect("bypass decision");
+    assert_eq!(decision.kind(), "bypass");
+    assert_eq!(decision.reason(), Some("cap"));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_accounts() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
