@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use thiserror::Error;
@@ -19,8 +19,8 @@ use crate::infra::{
     time::{china_quarter_hour_start, parse_rfc3339_utc as parse_rfc3339},
 };
 
-/// 默认保留最新使用记录数量。
-pub const DEFAULT_USAGE_RECORD_CAPACITY: u32 = 2_000;
+/// 使用记录保留天数。
+pub const USAGE_RECORD_RETENTION_DAYS: i64 = 30;
 /// 默认不保存请求/响应体，避免把用户内容写入诊断日志。
 pub const DEFAULT_USAGE_RECORD_CAPTURE_BODY: bool = false;
 
@@ -105,9 +105,9 @@ impl SqliteUsageRecordStore {
         append_event(&self.pool, event).await
     }
 
-    /// 保留最新的指定数量使用记录。
-    pub async fn trim_to_capacity(&self, capacity: u32) -> SqliteUsageRecordStoreResult<u64> {
-        trim_to_capacity(&self.pool, capacity).await
+    /// 按保留期清理使用记录。
+    pub async fn trim_to_retention(&self, now: DateTime<Utc>) -> SqliteUsageRecordStoreResult<u64> {
+        trim_to_retention(&self.pool, now).await
     }
 
     /// 分页查询使用记录。
@@ -425,17 +425,15 @@ fn metadata_first_token_latency(metadata: &Value) -> Option<i64> {
     })
 }
 
-async fn trim_to_capacity(pool: &SqlitePool, capacity: u32) -> SqliteUsageRecordStoreResult<u64> {
-    let result = sqlx::query(
-        "delete from usage_records where id in (
-            select id from usage_records
-            order by created_at desc, id desc
-            limit -1 offset ?
-        )",
-    )
-    .bind(i64::from(capacity))
-    .execute(pool)
-    .await?;
+async fn trim_to_retention(
+    pool: &SqlitePool,
+    now: DateTime<Utc>,
+) -> SqliteUsageRecordStoreResult<u64> {
+    let cutoff = now - Duration::days(USAGE_RECORD_RETENTION_DAYS);
+    let result = sqlx::query("delete from usage_records where created_at < ?")
+        .bind(cutoff.to_rfc3339())
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected())
 }
 

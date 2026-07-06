@@ -7,10 +7,7 @@ use crate::{
         account_usage_service::AdminUsageService,
         account_usage_store::SqliteUsageStore,
         usage_record_service::AdminUsageRecordService,
-        usage_record_store::{
-            SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPACITY,
-            DEFAULT_USAGE_RECORD_CAPTURE_BODY,
-        },
+        usage_record_store::{SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPTURE_BODY},
     },
     admin::{
         accounts::service::{AdminAccountService, AdminAccountServiceParts},
@@ -110,7 +107,6 @@ pub struct Services {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsageRecordOptions {
     pub enabled: bool,
-    pub capacity: u32,
     pub capture_body: bool,
 }
 
@@ -118,7 +114,6 @@ impl UsageRecordOptions {
     pub fn from_config(config: &AppConfig) -> Self {
         Self {
             enabled: config.logging.enabled,
-            capacity: DEFAULT_USAGE_RECORD_CAPACITY,
             capture_body: DEFAULT_USAGE_RECORD_CAPTURE_BODY,
         }
     }
@@ -192,17 +187,13 @@ impl Services {
         let usage_records = StdArc::new(AdminUsageRecordService::new(
             stores.usage_records.clone(),
             usage_record_options.enabled,
-            usage_record_options.capacity,
             usage_record_options.capture_body,
         ));
-        let account_pool = StdArc::new(
-            RuntimeAccountPoolService::new(
-                account_store_trait.clone(),
-                account_pool_options_from_config(config),
-                config.auth.request_interval_ms,
-            )
-            .with_usage_records(usage_records.clone()),
-        );
+        let account_pool = StdArc::new(RuntimeAccountPoolService::new(
+            account_store_trait.clone(),
+            account_pool_options_from_config(config),
+            config.auth.request_interval_ms,
+        ));
         let refresh_policy = RuntimeRefreshPolicy::new(RefreshPolicy {
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,

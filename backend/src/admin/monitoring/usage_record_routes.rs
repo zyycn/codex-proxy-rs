@@ -463,7 +463,7 @@ fn log_error(error: &AdminUsageRecordError) -> AdminError {
         | AdminUsageRecordError::Get
         | AdminUsageRecordError::Clear
         | AdminUsageRecordError::Append
-        | AdminUsageRecordError::Trim => AdminError::internal(error.to_string()),
+        | AdminUsageRecordError::Retention => AdminError::internal(error.to_string()),
         AdminUsageRecordError::Accounts => {
             AdminError::usage_record_accounts_failed(error.to_string())
         }

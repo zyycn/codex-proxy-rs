@@ -1,3 +1,4 @@
+use chrono::{Duration, Utc};
 use codex_proxy_rs::{
     admin::monitoring::{
         usage_record_model::{UsageRecord, UsageRecordLevel},
@@ -122,6 +123,28 @@ async fn usage_record_store_should_get_and_clear_events() {
         .await
         .unwrap();
     assert!(page.items.is_empty());
+}
+
+#[tokio::test]
+async fn usage_record_store_should_trim_records_older_than_thirty_days() {
+    let (store, _dir) = usage_record_store("usage-records-retention.sqlite").await;
+    let now = Utc::now();
+    let mut expired = UsageRecord::new("v1.response", UsageRecordLevel::Info, "expired");
+    expired.id = "usage_expired".to_string();
+    expired.route = Some("/v1/responses".to_string());
+    expired.created_at = now - Duration::days(31);
+    store.append(&expired).await.unwrap();
+
+    let mut retained = UsageRecord::new("v1.response", UsageRecordLevel::Info, "retained");
+    retained.id = "usage_retained".to_string();
+    retained.route = Some("/v1/responses".to_string());
+    retained.created_at = now - Duration::days(29);
+    store.append(&retained).await.unwrap();
+
+    assert_eq!(store.trim_to_retention(now).await.unwrap(), 1);
+
+    assert!(store.get("usage_expired").await.unwrap().is_none());
+    assert!(store.get("usage_retained").await.unwrap().is_some());
 }
 
 async fn usage_record_store(db_name: &str) -> (SqliteUsageRecordStore, tempfile::TempDir) {

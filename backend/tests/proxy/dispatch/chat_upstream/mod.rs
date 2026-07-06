@@ -16,9 +16,7 @@ use codex_proxy_rs::{
     admin::keys::service::SqliteClientKeyStore,
     admin::monitoring::{
         usage_record_model::UsageRecordLevel,
-        usage_record_store::{
-            SqliteUsageRecordStore, UsageRecordFilter, DEFAULT_USAGE_RECORD_CAPACITY,
-        },
+        usage_record_store::{SqliteUsageRecordStore, UsageRecordFilter},
     },
     config::schema::AppConfig,
     http::router,
@@ -388,7 +386,6 @@ async fn test_app_with_account_pool_and_logging_capture_body(
     config.logging.enabled = true;
     let usage_record_options = UsageRecordOptions {
         enabled: true,
-        capacity: DEFAULT_USAGE_RECORD_CAPACITY,
         capture_body: true,
     };
     let state = test_app_state_with_pool_installation_id_and_usage_record_options(
