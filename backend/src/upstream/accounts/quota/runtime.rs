@@ -2,8 +2,9 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use chrono::Utc;
 use thiserror::Error;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 use crate::upstream::accounts::{
@@ -22,6 +23,7 @@ use crate::upstream::{
 
 const MIN_REFRESH_INTERVAL_SECS: u64 = 30 * 60;
 const DEFAULT_REQUEST_SPACING_SECS: u64 = 3;
+const COOLDOWN_REFRESH_GRACE_SECS: i64 = 30;
 
 /// 运行时 quota refresh 服务。
 pub struct RuntimeQuotaRefreshService {
@@ -109,6 +111,7 @@ impl RuntimeQuotaRefreshService {
         };
         let min_interval = Duration::from_secs(self.min_refresh_interval_secs);
         let now = Instant::now();
+        let now_utc = Utc::now();
 
         let mut candidates = accounts
             .into_iter()
@@ -121,9 +124,18 @@ impl RuntimeQuotaRefreshService {
 
         while let Some(account) = candidates.next() {
             summary.candidates += 1;
-            if last_refreshed
-                .get(&account.id)
-                .is_some_and(|last| now.duration_since(*last) < min_interval)
+            let cooldown_ready = match account.quota_cooldown_until {
+                Some(cooldown_until) if !quota_cooldown_ready(cooldown_until, now_utc) => {
+                    summary.skipped_cooldown += 1;
+                    continue;
+                }
+                Some(_) => true,
+                None => false,
+            };
+            if !cooldown_ready
+                && last_refreshed
+                    .get(&account.id)
+                    .is_some_and(|last| now.duration_since(*last) < min_interval)
             {
                 summary.skipped_recent += 1;
                 continue;
@@ -221,6 +233,12 @@ impl RuntimeQuotaRefreshService {
     }
 }
 
+fn quota_cooldown_ready(cooldown_until: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> bool {
+    cooldown_until
+        .checked_add_signed(chrono::Duration::seconds(COOLDOWN_REFRESH_GRACE_SECS))
+        .is_some_and(|ready_at| now >= ready_at)
+}
+
 /// 单次配额刷新摘要。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct QuotaRefreshSummary {
@@ -228,6 +246,8 @@ pub struct QuotaRefreshSummary {
     pub scanned: usize,
     /// 配额锁定或待验证候选账号数。
     pub candidates: usize,
+    /// 配额冷却宽限期内跳过的账号数。
+    pub skipped_cooldown: usize,
     /// 成功刷新账号数。
     pub refreshed: usize,
     /// 最近刷新过而跳过的账号数。

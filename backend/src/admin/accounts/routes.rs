@@ -303,6 +303,14 @@ struct AccountModelUsageRecord {
     last_used_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct AccountUsageWindowStats {
+    request_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cached_tokens: i64,
+}
+
 #[derive(Debug, Clone)]
 struct AccountQuotaUsageWindow {
     account_id: String,
@@ -873,6 +881,19 @@ async fn account_list_stats(
         .unwrap_or_default();
     let mut quota_by_account = quota_by_account.clone();
     apply_quota_window_token_usage(state, accounts, &mut quota_by_account).await;
+    let selected_quota_windows = selected_quota_windows_by_account(accounts, &quota_by_account);
+    let quota_window_usage_stats =
+        account_usage_stats_by_quota_window(state, &selected_quota_windows).await;
+    let usage_records = usage_records
+        .into_iter()
+        .map(|usage| {
+            apply_selected_quota_window_usage(
+                usage,
+                &selected_quota_windows,
+                &quota_window_usage_stats,
+            )
+        })
+        .collect::<Vec<_>>();
     let models_by_account = list_current_window_model_usage(state, &usage_records).await;
 
     AccountListStats {
@@ -883,6 +904,105 @@ async fn account_list_stats(
         quota_by_account,
         models_by_account,
     }
+}
+
+fn selected_quota_windows_by_account(
+    accounts: &[AdminAccountMetadata],
+    quota_by_account: &HashMap<String, AdminAccountQuotaData>,
+) -> HashMap<String, AdminAccountQuotaUsageWindow> {
+    accounts
+        .iter()
+        .filter_map(|account| {
+            quota_by_account
+                .get(&account.id)
+                .and_then(selected_quota_window)
+                .map(|window| (account.id.clone(), window))
+        })
+        .collect()
+}
+
+fn selected_quota_window(quota: &AdminAccountQuotaData) -> Option<AdminAccountQuotaUsageWindow> {
+    quota.usage_windows().into_iter().max_by(|left, right| {
+        left.duration_seconds()
+            .cmp(&right.duration_seconds())
+            .then_with(|| left.end.cmp(&right.end))
+            .then_with(|| left.key.cmp(&right.key))
+    })
+}
+
+async fn account_usage_stats_by_quota_window(
+    state: &AppState,
+    windows_by_account: &HashMap<String, AdminAccountQuotaUsageWindow>,
+) -> HashMap<String, AccountUsageWindowStats> {
+    if windows_by_account.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "select
+          account_id,
+          coalesce(sum(request_count), 0) as request_count,
+          coalesce(sum(input_tokens), 0) as input_tokens,
+          coalesce(sum(output_tokens), 0) as output_tokens,
+          coalesce(sum(cached_tokens), 0) as cached_tokens
+        from usage_time_buckets
+        where ",
+    );
+    for (index, (account_id, window)) in windows_by_account.iter().enumerate() {
+        if index > 0 {
+            builder.push(" or ");
+        }
+        let bucket_start = china_quarter_hour_start(window.start);
+        builder.push("(account_id = ");
+        builder.push_bind(account_id);
+        builder.push(" and bucket_start >= ");
+        builder.push_bind(bucket_start.to_rfc3339());
+        builder.push(" and bucket_start <= ");
+        builder.push_bind(window.end.to_rfc3339());
+        builder.push(")");
+    }
+    builder.push(" group by account_id");
+
+    let rows = builder
+        .build()
+        .fetch_all(state.services.background_tasks.accounts.pool())
+        .await
+        .unwrap_or_default();
+    rows.into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("account_id"),
+                AccountUsageWindowStats {
+                    request_count: row.get("request_count"),
+                    input_tokens: row.get("input_tokens"),
+                    output_tokens: row.get("output_tokens"),
+                    cached_tokens: row.get("cached_tokens"),
+                },
+            )
+        })
+        .collect()
+}
+
+fn apply_selected_quota_window_usage(
+    mut usage: AdminUsageRecord,
+    selected_quota_windows: &HashMap<String, AdminAccountQuotaUsageWindow>,
+    quota_window_usage_stats: &HashMap<String, AccountUsageWindowStats>,
+) -> AdminUsageRecord {
+    let Some(window) = selected_quota_windows.get(&usage.account_id) else {
+        return usage;
+    };
+    let stats = quota_window_usage_stats
+        .get(&usage.account_id)
+        .copied()
+        .unwrap_or_default();
+    usage.window_request_count = stats.request_count;
+    usage.window_input_tokens = stats.input_tokens;
+    usage.window_output_tokens = stats.output_tokens;
+    usage.window_cached_tokens = stats.cached_tokens;
+    usage.window_started_at = Some(window.start);
+    usage.window_reset_at = Some(window.end);
+    usage.limit_window_seconds = Some(window.window_seconds);
+    usage
 }
 
 async fn apply_account_quota_window_token_usage(

@@ -43,6 +43,16 @@ pub(crate) struct AdminAccountQuotaUsageWindow {
     pub(crate) key: String,
     pub(crate) start: DateTime<Utc>,
     pub(crate) end: DateTime<Utc>,
+    pub(crate) window_seconds: u64,
+}
+
+impl AdminAccountQuotaUsageWindow {
+    pub(crate) fn duration_seconds(&self) -> u64 {
+        self.end
+            .signed_duration_since(self.start)
+            .num_seconds()
+            .max(0) as u64
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -101,12 +111,14 @@ impl AdminAccountQuotaData {
 impl AdminAccountQuotaWindowData {
     fn usage_window(&self) -> Option<AdminAccountQuotaUsageWindow> {
         let end = self.reset_at?;
-        let seconds = i64::try_from(self.window_seconds?).ok()?;
+        let window_seconds = self.window_seconds?;
+        let seconds = i64::try_from(window_seconds).ok()?;
         let start = end.checked_sub_signed(Duration::seconds(seconds))?;
         (start <= end).then(|| AdminAccountQuotaUsageWindow {
             key: self.key.clone(),
             start,
             end,
+            window_seconds,
         })
     }
 }

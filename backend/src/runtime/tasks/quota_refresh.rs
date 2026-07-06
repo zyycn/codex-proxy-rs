@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, spawn_periodic_task},
 };
 
 /// 主动配额刷新后台任务。
@@ -89,6 +89,7 @@ impl PeriodicTaskRunner for QuotaRefreshTask {
                 Ok(summary) => {
                     debug!(
                         candidates = summary.candidates,
+                        skipped_cooldown = summary.skipped_cooldown,
                         skipped_recent = summary.skipped_recent,
                         failed = summary.failed,
                         "没有需要刷新的 quota 锁定或待验证账号"
