@@ -640,18 +640,6 @@ impl CodexResponsesRequest {
         self.body.get("reasoning")
     }
 
-    /// 设置 reasoning 配置（模型后缀路由）。
-    pub fn set_reasoning(&mut self, reasoning: Option<Value>) {
-        match reasoning {
-            Some(value) => {
-                self.body.insert("reasoning".to_string(), value);
-            }
-            None => {
-                self.body.remove("reasoning");
-            }
-        }
-    }
-
     /// 工具定义数组（非数组或空时 None）。
     pub fn tools(&self) -> Option<&[Value]> {
         self.body

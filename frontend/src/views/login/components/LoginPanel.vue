@@ -49,7 +49,7 @@ function togglePasswordVisible(): void {
     as="form"
     :padded="false"
     variant="elevated"
-    class="login-form relative grid min-h-129.25 w-[min(450px,100%)] gap-3 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-3 max-[560px]:p-5.5"
+    class="login-form relative grid min-h-129.25 w-[min(440px,100%)] gap-3 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-3 max-[560px]:p-5.5"
     @submit.prevent="emit('submit')"
   >
     <div class="login-form-line" aria-hidden="true" />
