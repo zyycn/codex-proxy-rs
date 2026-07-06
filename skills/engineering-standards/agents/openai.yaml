@@ -1,0 +1,4 @@
+interface:
+  display_name: "工程规范"
+  short_description: "长期维护的工程规范：证据优先、范围纪律、干净实现与审计工作流。"
+  default_prompt: "使用 $engineering-standards 按工程规范先审计当前代码链路，再提出或实现干净修复。"
