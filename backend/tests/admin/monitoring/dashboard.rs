@@ -14,7 +14,7 @@ use codex_proxy_rs::{
     },
     infra::{
         database::connect_sqlite,
-        time::{china_day_start, china_hour, china_hour_start},
+        time::{china_datetime, china_day_start, china_hour, china_hour_start},
     },
     proxy::dispatch::session_affinity::SqliteSessionAffinityStore,
     runtime::{
@@ -96,21 +96,21 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(body["data"]["cards"]["traffic"]["rpm"], "2");
-    assert_eq!(body["data"]["cards"]["traffic"]["tpm"], "30");
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "2");
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequestsValue"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["yesterdayRequests"], "1");
+    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "2");
+    assert_eq!(
+        body["data"]["cards"]["traffic"]["yesterdayRequestsValue"],
+        1
+    );
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "30");
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokens"], "30");
+    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "30");
+    assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokensValue"], 30);
+    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "0");
     assert_eq!(
         body["data"]["cards"]["cache"]["firstTokenLatencyMs"],
         "300 ms"
-    );
-    assert_eq!(
-        body["data"]["cards"]["cache"]["completionLatencyMs"],
-        "1.50 s"
     );
 }
 
@@ -165,6 +165,38 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
 
     assert_eq!(point["time"], format!("{:02}", china_hour(&now)));
     assert_eq!(point["tokensValue"], 10);
+}
+
+#[tokio::test]
+async fn dashboard_trend_should_only_include_china_today() {
+    let (app, store, _pool, _dir) = dashboard_test_app(
+        "dashboard-trend-china-today.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    let now = Utc::now();
+    let today_start = china_day_start(now);
+    store
+        .append(&usage_record_with_tokens(
+            today_start - Duration::hours(1),
+            99,
+        ))
+        .await
+        .unwrap();
+    store
+        .append(&usage_record_with_tokens(now, 7))
+        .await
+        .unwrap();
+
+    let body = dashboard_trend(app, "usage").await;
+    let points = body["data"]["points"].as_array().unwrap();
+    let token_total = points
+        .iter()
+        .map(|point| point["tokensValue"].as_u64().unwrap())
+        .sum::<u64>();
+
+    assert_eq!(points.first().unwrap()["time"], "00");
+    assert_eq!(token_total, 7);
 }
 
 #[tokio::test]
@@ -241,7 +273,7 @@ async fn dashboard_summary_should_return_requested_trend_kind() {
 
 #[tokio::test]
 async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tier() {
-    let cost = dashboard_summary_total_cost_for_usage_record(
+    let cost = dashboard_summary_today_cost_for_usage_record(
         "dashboard-cost-priority.sqlite",
         "gpt-5.5",
         json!({
@@ -255,12 +287,12 @@ async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tie
     )
     .await;
 
-    assert_f64_eq(cost, 8.75);
+    assert_eq!(cost, "$8.75");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
-    let cost = dashboard_summary_total_cost_for_usage_record(
+    let cost = dashboard_summary_today_cost_for_usage_record(
         "dashboard-cost-cached.sqlite",
         "gpt-5.5",
         json!({
@@ -273,12 +305,12 @@ async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
     )
     .await;
 
-    assert_f64_eq(cost, 0.03275);
+    assert_eq!(cost, "$0.03");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_apply_long_context_prices() {
-    let cost = dashboard_summary_total_cost_for_usage_record(
+    let cost = dashboard_summary_today_cost_for_usage_record(
         "dashboard-cost-long-context.sqlite",
         "gpt-5.5",
         json!({
@@ -291,12 +323,12 @@ async fn dashboard_summary_should_apply_long_context_prices() {
     )
     .await;
 
-    assert_f64_eq(cost, 3.045);
+    assert_eq!(cost, "$3.04");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
-    let cost = dashboard_summary_total_cost_for_usage_record(
+    let cost = dashboard_summary_today_cost_for_usage_record(
         "dashboard-cost-codex-model.sqlite",
         "codex-auto-review",
         json!({
@@ -309,7 +341,7 @@ async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
     )
     .await;
 
-    assert_f64_eq(cost, 1.75);
+    assert_eq!(cost, "$1.75");
 }
 
 #[tokio::test]
@@ -323,62 +355,106 @@ async fn dashboard_summary_should_not_price_usage_summary_without_model_dimensio
 
     let body = dashboard_summary(app).await;
 
-    assert_f64_eq(
-        body["data"]["cards"]["tokens"]["totalCostUsdValue"]
-            .as_f64()
-            .unwrap(),
-        0.0,
-    );
+    assert_eq!(body["data"]["cards"]["tokens"]["todayCostUsd"], "$0.00");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_return_backend_formatted_time_fields() {
-    let (app, store, pool, _dir) = dashboard_test_app(
+    let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-backend-formatted-time.sqlite",
         crate::support::fingerprint::test_fingerprint(),
     )
     .await;
+    let record_at = Utc::now() - Duration::seconds(1);
     store
-        .append(&usage_record_with_tokens(
-            "2026-06-18T12:34:56Z".parse().unwrap(),
-            10,
-        ))
+        .append(&usage_record_with_tokens(record_at, 10))
         .await
         .unwrap();
-    seed_usage_summary_with_last_used(&pool, 1, 1, "2000-01-01T00:00:00Z").await;
 
     let body = dashboard_summary(app).await;
 
     assert_eq!(
         body["data"]["usageRecords"][0]["createdAtDisplay"],
-        "2026-06-18 20:34:56"
+        china_datetime(&record_at)
     );
-    assert_eq!(body["data"]["accountUsage"][0]["lastUsed"], "2000-01-01");
+    assert!(body["data"]["usageRecords"][0].get("metadata").is_none());
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_only_return_today_account_usage_and_usage_records() {
+    let (app, store, pool, _dir) = dashboard_test_app(
+        "dashboard-summary-today-records.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    seed_dashboard_account(&pool, "acct_today", "today@example.com").await;
+    seed_dashboard_account(&pool, "acct_yesterday", "yesterday@example.com").await;
+    let now = Utc::now();
+    let today_start = china_day_start(now);
+    let today_record_at = if now - today_start > Duration::minutes(1) {
+        today_start + Duration::minutes(1)
+    } else {
+        now - Duration::seconds(1)
+    };
+    let yesterday_record_at = today_start - Duration::minutes(1);
+    store
+        .append(&usage_record_with_account_tokens(
+            yesterday_record_at,
+            "acct_yesterday",
+            90,
+        ))
+        .await
+        .unwrap();
+    store
+        .append(&usage_record_with_account_tokens(
+            today_record_at,
+            "acct_today",
+            7,
+        ))
+        .await
+        .unwrap();
+
+    let body = dashboard_summary(app).await;
+
+    assert_eq!(body["data"]["usageRecords"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["data"]["usageRecords"][0]["accountEmail"],
+        "today@example.com"
+    );
+    assert_eq!(body["data"]["accountUsage"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["data"]["accountUsage"][0]["email"],
+        "today@example.com"
+    );
+    assert_eq!(body["data"]["accountUsage"][0]["tokens"], "7");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
-    let (app, _store, pool, _dir) = dashboard_test_app(
+    let (app, store, pool, _dir) = dashboard_test_app(
         "dashboard-account-usage-recent-order.sqlite",
         crate::support::fingerprint::test_fingerprint(),
     )
     .await;
-    seed_dashboard_account_usage(
-        &pool,
-        "acct_old_heavy",
-        "old-heavy@example.com",
-        2_600_000,
-        "2026-06-29T09:00:00Z",
-    )
-    .await;
-    seed_dashboard_account_usage(
-        &pool,
-        "acct_recent_light",
-        "recent-light@example.com",
-        660_000,
-        "2026-06-30T08:00:00Z",
-    )
-    .await;
+    seed_dashboard_account(&pool, "acct_old_heavy", "old-heavy@example.com").await;
+    seed_dashboard_account(&pool, "acct_recent_light", "recent-light@example.com").await;
+    let now = Utc::now();
+    store
+        .append(&usage_record_with_account_tokens(
+            now - Duration::minutes(2),
+            "acct_old_heavy",
+            2_600_000,
+        ))
+        .await
+        .unwrap();
+    store
+        .append(&usage_record_with_account_tokens(
+            now - Duration::minutes(1),
+            "acct_recent_light",
+            660_000,
+        ))
+        .await
+        .unwrap();
 
     let body = dashboard_summary(app).await;
 
@@ -386,10 +462,114 @@ async fn dashboard_summary_should_order_account_usage_by_recent_usage() {
         body["data"]["accountUsage"][0]["email"],
         "recent-light@example.com"
     );
-    assert_eq!(body["data"]["accountUsage"][0]["requests"], "660K");
+    assert_eq!(body["data"]["accountUsage"][0]["id"], "acct_recent_light");
+    assert_eq!(body["data"]["accountUsage"][0]["planType"], "K12");
+    assert_eq!(body["data"]["accountUsage"][0]["tokens"], "660K");
     assert_eq!(
         body["data"]["accountUsage"][1]["email"],
         "old-heavy@example.com"
+    );
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_use_five_hour_quota_window_for_account_usage() {
+    let (app, store, pool, _dir) = dashboard_test_app(
+        "dashboard-account-usage-five-hour-quota.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    seed_dashboard_account(&pool, "acct_quota_five_hour", "quota-five-hour@example.com").await;
+    store
+        .append(&usage_record_with_account_tokens(
+            Utc::now() - Duration::seconds(1),
+            "acct_quota_five_hour",
+            1,
+        ))
+        .await
+        .unwrap();
+    set_account_quota_json(
+        &pool,
+        "acct_quota_five_hour",
+        json!({
+            "monthly_limit": {
+                "used_percent": 92.0,
+                "window_minutes": 43_200
+            },
+            "snapshots": [
+                {
+                    "source": "core",
+                    "primary": {
+                        "used_percent": 31.0,
+                        "window_minutes": 300
+                    },
+                    "secondary": {
+                        "used_percent": 88.0,
+                        "window_minutes": 10_080
+                    }
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let body = dashboard_summary(app).await;
+
+    assert_f64_eq(
+        body["data"]["accountUsage"][0]["quotaUsedPercent"]
+            .as_f64()
+            .unwrap(),
+        31.0,
+    );
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_fall_back_to_weekly_quota_window_when_five_hour_missing() {
+    let (app, store, pool, _dir) = dashboard_test_app(
+        "dashboard-account-usage-weekly-quota.sqlite",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    seed_dashboard_account(&pool, "acct_quota_weekly", "quota-weekly@example.com").await;
+    store
+        .append(&usage_record_with_account_tokens(
+            Utc::now() - Duration::seconds(1),
+            "acct_quota_weekly",
+            1,
+        ))
+        .await
+        .unwrap();
+    set_account_quota_json(
+        &pool,
+        "acct_quota_weekly",
+        json!({
+            "monthly_limit": {
+                "used_percent": 92.0,
+                "window_minutes": 43_200
+            },
+            "snapshots": [
+                {
+                    "source": "experimental",
+                    "primary": {
+                        "used_percent": 99.0,
+                        "window_minutes": 120
+                    },
+                    "secondary": {
+                        "used_percent": 47.0,
+                        "window_minutes": 10_080
+                    }
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let body = dashboard_summary(app).await;
+
+    assert_f64_eq(
+        body["data"]["accountUsage"][0]["quotaUsedPercent"]
+            .as_f64()
+            .unwrap(),
+        47.0,
     );
 }
 
@@ -424,11 +604,11 @@ async fn dashboard_summary_should_return_today_health_timeline() {
     assert_eq!(points.matches('4').count(), 1);
 }
 
-async fn dashboard_summary_total_cost_for_usage_record(
+async fn dashboard_summary_today_cost_for_usage_record(
     db_name: &str,
     model: &str,
     metadata: Value,
-) -> f64 {
+) -> String {
     let (app, store, _pool, _dir) =
         dashboard_test_app(db_name, crate::support::fingerprint::test_fingerprint()).await;
     store
@@ -437,9 +617,10 @@ async fn dashboard_summary_total_cost_for_usage_record(
         .unwrap();
 
     let body = dashboard_summary(app).await;
-    body["data"]["cards"]["tokens"]["totalCostUsdValue"]
-        .as_f64()
+    body["data"]["cards"]["tokens"]["todayCostUsd"]
+        .as_str()
         .unwrap()
+        .to_string()
 }
 
 async fn dashboard_test_app(
@@ -533,9 +714,10 @@ async fn seed_usage_summary_with_last_used(
     last_used_at: &str,
 ) {
     sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
     )
     .bind("acct_usage")
+    .bind("acct-usage@example.com")
     .bind("cipher")
     .bind("active")
     .bind("2026-06-18T00:00:00Z")
@@ -557,18 +739,14 @@ async fn seed_usage_summary_with_last_used(
     .unwrap();
 }
 
-async fn seed_dashboard_account_usage(
-    pool: &SqlitePool,
-    account_id: &str,
-    email: &str,
-    request_count: i64,
-    last_used_at: &str,
-) {
+async fn seed_dashboard_account(pool: &SqlitePool, account_id: &str, email: &str) {
     sqlx::query(
-        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
+        "insert into accounts (id, email, chatgpt_account_id, plan_type, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(account_id)
     .bind(email)
+    .bind(format!("upstream_{account_id}"))
+    .bind("K12")
     .bind("cipher")
     .bind("active")
     .bind("2026-06-18T00:00:00Z")
@@ -576,18 +754,16 @@ async fn seed_dashboard_account_usage(
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, total_tokens, last_used_at) values (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(account_id)
-    .bind(request_count)
-    .bind(0_i64)
-    .bind(0_i64)
-    .bind(0_i64)
-    .bind(last_used_at)
-    .execute(pool)
-    .await
-    .unwrap();
+}
+
+async fn set_account_quota_json(pool: &SqlitePool, account_id: &str, quota_json: Value) {
+    sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ? where id = ?")
+        .bind(quota_json.to_string())
+        .bind("2026-06-30T08:01:00Z")
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 fn service_status_value<'a>(body: &'a Value, label: &str) -> &'a str {
@@ -612,6 +788,16 @@ fn usage_record_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64
             }
         }),
     )
+}
+
+fn usage_record_with_account_tokens(
+    created_at: chrono::DateTime<Utc>,
+    account_id: &str,
+    total_tokens: u64,
+) -> UsageRecord {
+    let mut record = usage_record_with_tokens(created_at, total_tokens);
+    record.account_id = Some(account_id.to_string());
+    record
 }
 
 fn usage_record(created_at: chrono::DateTime<Utc>, model: &str, metadata: Value) -> UsageRecord {

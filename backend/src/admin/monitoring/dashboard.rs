@@ -1,6 +1,6 @@
 //! 管理端 Dashboard 聚合视图。
 
-use std::{cmp::Reverse, collections::HashMap};
+use std::collections::HashMap;
 
 use axum::{
     extract::{Query, State},
@@ -15,14 +15,19 @@ use crate::{
     admin::{
         auth::session::AdminAuth,
         monitoring::{
-            account_usage_service::{
-                AdminUsageRecord, AdminUsageSummary, AdminUsageTimeBucketRecord,
-            },
+            account_usage_service::AdminUsageTimeBucketRecord,
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
-            usage_record_routes::{usage_record_items, UsageRecordData},
+            usage_record_model::{
+                metadata_nonnegative_i64, metadata_string, UsageRecord, UsageRecordLevel,
+            },
+            usage_record_routes::{
+                usage_cost_details, usage_record_models, usage_token_details,
+                UsageRecordCostDetailsData, UsageRecordTokenDetailsData,
+            },
             usage_record_service::AdminUsageRecordFilter,
+            usage_record_store::UsageRecordAccountUsage,
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
@@ -40,11 +45,15 @@ use crate::{
     upstream::accounts::model::{Account, AccountStatus},
 };
 
-const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 1000;
+const DASHBOARD_ACCOUNT_USAGE_LIMIT: u32 = 4;
+const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 10;
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const DASHBOARD_TIME_BUCKET_SLOTS: i64 = 7 * 24 * 4;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD: u64 = 3;
+const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
+const WEEK_WINDOW_SECONDS: u64 = 604_800;
+const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,7 +78,7 @@ struct DashboardSummaryData {
     health_timeline: DashboardHealthTimelineData,
     account_usage: Vec<DashboardAccountUsageData>,
     service_statuses: Vec<DashboardServiceStatusData>,
-    usage_records: Vec<UsageRecordData>,
+    usage_records: Vec<DashboardUsageRecordData>,
     pool_summary: AccountPoolDiagnostics,
     capacity_info: AccountCapacityDiagnostics,
     rotation_strategy: Option<String>,
@@ -80,10 +89,7 @@ struct DashboardSummaryData {
 struct DashboardHealthTimelineData {
     title: String,
     description: String,
-    range_display: String,
     reliability_display: String,
-    oldest_label: String,
-    newest_label: String,
     points: String,
 }
 
@@ -112,11 +118,8 @@ struct DashboardAccountsCardData {
 struct DashboardTrafficCardData {
     today_requests: String,
     today_requests_value: u64,
-    yesterday_requests: String,
     yesterday_requests_value: u64,
     total_requests: String,
-    rpm: String,
-    tpm: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,13 +127,9 @@ struct DashboardTrafficCardData {
 struct DashboardTokenCardData {
     today_tokens: String,
     today_tokens_value: u64,
-    yesterday_tokens: String,
     yesterday_tokens_value: u64,
     total_tokens: String,
     today_cost_usd: String,
-    today_cost_usd_value: f64,
-    total_cost_usd: String,
-    total_cost_usd_value: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,12 +137,10 @@ struct DashboardTokenCardData {
 struct DashboardCacheCardData {
     today_hit_rate: String,
     today_hit_rate_value: Option<f64>,
-    yesterday_hit_rate: String,
     yesterday_hit_rate_value: Option<f64>,
     total_hit_rate: String,
     total_cached_tokens: String,
     first_token_latency_ms: String,
-    completion_latency_ms: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,7 +163,6 @@ struct DashboardTrendPointData {
     output_tokens_value: u64,
     cached_tokens: String,
     cached_tokens_value: u64,
-    tokens: String,
     tokens_value: u64,
     errors: String,
     errors_value: u64,
@@ -191,14 +187,34 @@ struct DashboardTrendSummaryData {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardAccountUsageData {
-    name: String,
+    id: String,
     email: String,
-    plan: String,
-    requests: String,
+    plan_type: Option<String>,
     tokens: String,
     quota_used_percent: Option<f64>,
     last_used: String,
-    status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardUsageRecordData {
+    id: String,
+    level: UsageRecordLevel,
+    route: Option<String>,
+    model: Option<String>,
+    status_code: Option<i64>,
+    transport: Option<String>,
+    created_at_display: String,
+    account_email: Option<String>,
+    requested_model: Option<String>,
+    upstream_model: Option<String>,
+    client_ip: Option<String>,
+    user_agent: Option<String>,
+    reasoning_effort: Option<String>,
+    token_details: UsageRecordTokenDetailsData,
+    cost_details: Option<UsageRecordCostDetailsData>,
+    first_token_latency_ms_display: String,
+    latency_ms_display: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -221,8 +237,14 @@ struct UsageWindow {
     first_token_latency_count: u64,
     max_first_token_bucket_latency: u64,
     min_first_token_bucket_latency: u64,
-    latency_sum: u64,
-    latency_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum QuotaWindowPriority {
+    FiveHour,
+    Weekly,
+    Monthly,
+    Other,
 }
 
 impl UsageWindow {
@@ -250,10 +272,6 @@ impl UsageWindow {
     fn min_first_token_bucket_latency(self) -> Option<u64> {
         (self.min_first_token_bucket_latency > 0).then_some(self.min_first_token_bucket_latency)
     }
-
-    fn avg_latency(self) -> Option<u64> {
-        self.latency_sum.checked_div(self.latency_count)
-    }
 }
 
 /// `GET /api/admin/dashboard/summary`
@@ -269,53 +287,50 @@ pub(crate) async fn dashboard_summary(
         .await
         .unwrap_or_default();
     let capacity = state.services.account_pool.capacity_summary_now().await;
-    let summary = state
+    let now = Utc::now();
+    let today_filter = today_usage_record_filter(now);
+    let account_usage_records = state
         .services
-        .usage
-        .summary()
+        .usage_records
+        .account_usage(today_filter.clone(), DASHBOARD_ACCOUNT_USAGE_LIMIT)
         .await
-        .unwrap_or_else(|_| empty_usage_summary());
-    let usage_records = state
-        .services
-        .usage
-        .list(None, 200)
-        .await
-        .map(|page| page.items)
         .unwrap_or_default();
     let recent_events = state
         .services
         .usage_records
-        .list(
-            None,
-            DASHBOARD_USAGE_RECORD_LIMIT,
-            AdminUsageRecordFilter::default(),
-        )
+        .list(None, DASHBOARD_USAGE_RECORD_LIMIT, today_filter)
         .await
         .map(|page| page.items)
         .unwrap_or_default();
 
-    let now = Utc::now();
     let time_buckets = dashboard_time_buckets(&state, now).await;
     let pool_summary = account_pool_summary(&accounts);
     let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
-    let quota_used_by_account = account_quota_used_percent_by_id(&state, &usage_records).await;
+    let quota_used_by_account =
+        account_quota_used_percent_by_id(&state, &account_usage_records).await;
     let settings = state.services.settings.current();
-    let recent_usage_records = recent_events.into_iter().take(10).collect::<Vec<_>>();
+    let recent_usage_records = recent_events;
     let account_emails = state
         .services
         .usage_records
         .account_email_map(&recent_usage_records)
         .await
         .map_err(|error| AdminError::usage_record_accounts_failed(error.to_string()))?;
-    let dashboard_usage_records = usage_record_items(recent_usage_records, &account_emails);
+    let dashboard_usage_records =
+        dashboard_usage_record_items(recent_usage_records, &account_emails);
 
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(DashboardSummaryData {
-            cards: dashboard_cards(&accounts, &summary, &time_buckets),
+            cards: dashboard_cards(&accounts, &time_buckets),
             trend,
             health_timeline: dashboard_health_timeline_data(&time_buckets),
-            account_usage: account_usage_data(&accounts, &usage_records, &quota_used_by_account),
+            account_usage: account_usage_data(
+                &accounts,
+                &account_usage_records,
+                &quota_used_by_account,
+                now,
+            ),
             service_statuses: service_status_data(&state),
             usage_records: dashboard_usage_records,
             pool_summary,
@@ -323,6 +338,14 @@ pub(crate) async fn dashboard_summary(
             rotation_strategy: Some(settings.auth.rotation_strategy.clone()),
         }),
     ))
+}
+
+fn today_usage_record_filter(now: DateTime<Utc>) -> AdminUsageRecordFilter {
+    AdminUsageRecordFilter {
+        start_time: Some(china_day_start(now)),
+        end_time: Some(now),
+        ..AdminUsageRecordFilter::default()
+    }
 }
 
 /// `GET /api/admin/dashboard/trend?kind=usage|latency|errors`
@@ -344,15 +367,13 @@ pub(crate) async fn dashboard_trend(
 
 fn dashboard_cards(
     accounts: &[Account],
-    summary: &AdminUsageSummary,
     buckets: &[AdminUsageTimeBucketRecord],
 ) -> DashboardCardsData {
-    dashboard_cards_at(accounts, summary, buckets, Utc::now())
+    dashboard_cards_at(accounts, buckets, Utc::now())
 }
 
 fn dashboard_cards_at(
     accounts: &[Account],
-    summary: &AdminUsageSummary,
     buckets: &[AdminUsageTimeBucketRecord],
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
@@ -361,10 +382,7 @@ fn dashboard_cards_at(
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
     let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
-    let total_cost = total_cost(buckets);
 
-    let total_input = nonnegative_i64_to_u64(summary.input_tokens);
-    let total_cached = nonnegative_i64_to_u64(summary.cached_tokens);
     let total_accounts = accounts.len() as u64;
     let enabled_accounts = accounts
         .iter()
@@ -382,13 +400,6 @@ fn dashboard_cards_at(
             )
         })
         .count() as u64;
-    let total_requests = nonnegative_i64_to_u64(summary.request_count);
-    let total_tokens = nonnegative_i64_to_u64(summary.input_tokens + summary.output_tokens);
-    let total_hit_rate = if total_input > 0 {
-        Some(total_cached as f64 / total_input as f64)
-    } else {
-        None
-    };
 
     DashboardCardsData {
         accounts: DashboardAccountsCardData {
@@ -402,38 +413,25 @@ fn dashboard_cards_at(
         traffic: DashboardTrafficCardData {
             today_requests: format_compact_number(today.requests),
             today_requests_value: today.requests,
-            yesterday_requests: format_compact_number(yesterday.requests),
             yesterday_requests_value: yesterday.requests,
-            total_requests: format_compact_number(total_requests),
-            rpm: format_compact_number(today.requests),
-            tpm: format_tokens(today.tokens()),
+            total_requests: format_compact_number(today.requests),
         },
         tokens: DashboardTokenCardData {
             today_tokens: format_tokens(today.tokens()),
             today_tokens_value: today.tokens(),
-            yesterday_tokens: format_tokens(yesterday.tokens()),
             yesterday_tokens_value: yesterday.tokens(),
-            total_tokens: format_tokens(total_tokens),
-            today_cost_usd: format_optional_cost(Some(today_cost)),
-            today_cost_usd_value: today_cost,
-            total_cost_usd: format_optional_cost(Some(total_cost)),
-            total_cost_usd_value: total_cost,
+            total_tokens: format_tokens(today.tokens()),
+            today_cost_usd: format_cost(today_cost),
         },
         cache: DashboardCacheCardData {
             today_hit_rate: format_rate(today.cache_hit_rate()),
             today_hit_rate_value: today.cache_hit_rate(),
-            yesterday_hit_rate: format_rate(yesterday.cache_hit_rate()),
             yesterday_hit_rate_value: yesterday.cache_hit_rate(),
-            total_hit_rate: format_rate(total_hit_rate),
-            total_cached_tokens: format_tokens(total_cached),
+            total_hit_rate: format_rate(today.cache_hit_rate()),
+            total_cached_tokens: format_tokens(today.cached_tokens),
             first_token_latency_ms: format_optional_duration_ms(today.avg_first_token_latency()),
-            completion_latency_ms: format_optional_duration_ms(today.avg_latency()),
         },
     }
-}
-
-fn format_optional_cost(value: Option<f64>) -> String {
-    value.map_or_else(|| "-".to_string(), format_cost)
 }
 
 fn format_optional_duration_ms(value: Option<u64>) -> String {
@@ -468,8 +466,9 @@ fn dashboard_trend_data_at(
     now: DateTime<Utc>,
 ) -> DashboardTrendData {
     let current_hour = china_hour_start(now);
-    let start = current_hour - Duration::hours(23);
-    let mut buckets = (0..24)
+    let start = china_day_start(now);
+    let elapsed_hours = current_hour.signed_duration_since(start).num_hours();
+    let mut buckets = (0..=elapsed_hours)
         .map(|index| {
             let bucket_start = start + Duration::hours(index);
             (bucket_start, UsageWindow::default())
@@ -512,7 +511,6 @@ fn dashboard_trend_data_at(
                 output_tokens_value: bucket.output_tokens,
                 cached_tokens: format_tokens(bucket.cached_tokens),
                 cached_tokens_value: bucket.cached_tokens,
-                tokens: format_tokens(tokens),
                 tokens_value: tokens,
                 errors: format_compact_number(bucket.errors),
                 errors_value: bucket.errors,
@@ -586,14 +584,11 @@ fn dashboard_health_timeline_data_at(
     DashboardHealthTimelineData {
         title: "请求健康时间线".to_string(),
         description: "今日请求可靠性".to_string(),
-        range_display: format!("{} - {}", china_datetime(&start), china_datetime(&now)),
         reliability_display: if requests > 0 {
             format!("{reliability:.1}%")
         } else {
             "-".to_string()
         },
-        oldest_label: "00:00".to_string(),
-        newest_label: "24:00".to_string(),
         points: buckets
             .into_iter()
             .map(|(bucket_start, bucket)| {
@@ -759,22 +754,6 @@ fn cost_window(
     has_usage.then_some(total)
 }
 
-fn total_cost(records: &[AdminUsageTimeBucketRecord]) -> f64 {
-    let mut total = 0.0;
-    let mut has_usage = false;
-    for record in records {
-        if let Some(cost) = record.cost_usd {
-            total += cost;
-            has_usage = true;
-        }
-    }
-    if has_usage {
-        return total;
-    }
-
-    0.0
-}
-
 fn apply_bucket(window: &mut UsageWindow, record: &AdminUsageTimeBucketRecord) {
     window.requests += nonnegative_i64_to_u64(record.request_count);
     window.input_tokens += nonnegative_i64_to_u64(record.input_tokens);
@@ -792,8 +771,6 @@ fn apply_bucket(window: &mut UsageWindow, record: &AdminUsageTimeBucketRecord) {
             window.min_first_token_bucket_latency.min(latency)
         };
     }
-    window.latency_sum += nonnegative_i64_to_u64(record.latency_sum);
-    window.latency_count += nonnegative_i64_to_u64(record.latency_count);
 }
 
 fn first_token_bucket_latency(record: &AdminUsageTimeBucketRecord) -> Option<u64> {
@@ -822,68 +799,51 @@ fn account_pool_summary(accounts: &[Account]) -> AccountPoolDiagnostics {
 
 fn account_usage_data(
     accounts: &[Account],
-    usage_records: &[AdminUsageRecord],
+    usage_records: &[UsageRecordAccountUsage],
     quota_used_by_account: &HashMap<String, f64>,
+    now: DateTime<Utc>,
 ) -> Vec<DashboardAccountUsageData> {
     let account_by_id = accounts
         .iter()
         .map(|account| (account.id.as_str(), account))
         .collect::<HashMap<_, _>>();
-    let mut records = usage_records.iter().collect::<Vec<_>>();
-    records.sort_by_key(|record| Reverse((record.last_used_at, record.account_id.clone())));
-    let mut rows = records
+    usage_records
         .iter()
         .map(|usage| {
             let account = account_by_id.get(usage.account_id.as_str()).copied();
-            let name = account
-                .and_then(|account| account.label.clone())
-                .or_else(|| usage.label.clone())
-                .or_else(|| {
-                    usage
-                        .email
-                        .as_ref()
-                        .and_then(|email| email.split('@').next().map(ToString::to_string))
-                })
-                .unwrap_or_else(|| usage.account_id.chars().take(8).collect());
-            let status = account.map_or_else(
-                || "active".to_string(),
-                |account| account.status.to_string(),
-            );
             let quota_used_percent = quota_used_by_account
                 .get(&usage.account_id)
                 .copied()
-                .or_else(|| (status == "quota_exhausted").then_some(100.0));
-            let requests = nonnegative_i64_to_u64(usage.request_count);
-            let tokens = nonnegative_i64_to_u64(usage.input_tokens + usage.output_tokens);
+                .or_else(|| {
+                    matches!(
+                        account.map(|account| account.status),
+                        Some(AccountStatus::QuotaExhausted)
+                    )
+                    .then_some(100.0)
+                });
             DashboardAccountUsageData {
-                name,
-                email: usage.email.clone().unwrap_or_else(|| "-".to_string()),
-                plan: usage
-                    .plan_type
-                    .clone()
-                    .unwrap_or_else(|| "free".to_string()),
-                requests: format_compact_number(requests),
-                tokens: format_tokens(tokens),
+                id: usage.account_id.clone(),
+                email: account
+                    .and_then(|account| account.email.as_ref())
+                    .cloned()
+                    .expect("dashboard account usage requires email"),
+                plan_type: account
+                    .and_then(|account| account.plan_type.as_ref())
+                    .cloned(),
+                tokens: format_tokens(usage.total_tokens),
                 quota_used_percent,
-                last_used: china_relative_time(usage.last_used_at, Utc::now()),
-                status,
+                last_used: china_relative_time(Some(usage.last_used_at), now),
             }
         })
-        .collect::<Vec<_>>();
-    rows.truncate(4);
-    rows
+        .collect()
 }
 
 async fn account_quota_used_percent_by_id(
     state: &AppState,
-    usage_records: &[AdminUsageRecord],
+    usage_records: &[UsageRecordAccountUsage],
 ) -> HashMap<String, f64> {
-    let mut records = usage_records.iter().collect::<Vec<_>>();
-    records.sort_by_key(|record| Reverse((record.last_used_at, record.account_id.clone())));
-    records.truncate(4);
-
-    let mut quota_used_by_account = HashMap::with_capacity(records.len());
-    for usage in records {
+    let mut quota_used_by_account = HashMap::with_capacity(usage_records.len());
+    for usage in usage_records {
         let Ok(Some(quota_json)) = state
             .services
             .accounts
@@ -901,27 +861,67 @@ async fn account_quota_used_percent_by_id(
 
 fn quota_used_percent(quota_json: &str) -> Option<f64> {
     let quota = serde_json::from_str::<Value>(quota_json).ok()?;
-    let mut values = Vec::new();
-    if let Some(used_percent) = quota
-        .pointer("/monthly_limit/used_percent")
-        .and_then(percent_value)
-    {
-        values.push(used_percent);
+    let mut selected = None;
+    if let Some(monthly_limit) = quota.get("monthly_limit") {
+        select_quota_used_percent(
+            &mut selected,
+            quota_window_priority(monthly_limit, QuotaWindowPriority::Monthly),
+            monthly_limit.get("used_percent").and_then(percent_value),
+        );
     }
     if let Some(snapshots) = quota.get("snapshots").and_then(Value::as_array) {
         for snapshot in snapshots {
             for role in ["primary", "secondary"] {
-                if let Some(used_percent) = snapshot
-                    .get(role)
-                    .and_then(|window| window.get("used_percent"))
-                    .and_then(percent_value)
-                {
-                    values.push(used_percent);
+                if let Some(window) = snapshot.get(role) {
+                    select_quota_used_percent(
+                        &mut selected,
+                        quota_window_priority(window, QuotaWindowPriority::Other),
+                        window.get("used_percent").and_then(percent_value),
+                    );
                 }
             }
         }
     }
-    values.into_iter().max_by(f64::total_cmp)
+    selected.map(|(_, used_percent)| used_percent)
+}
+
+fn select_quota_used_percent(
+    selected: &mut Option<(QuotaWindowPriority, f64)>,
+    priority: QuotaWindowPriority,
+    used_percent: Option<f64>,
+) {
+    let Some(used_percent) = used_percent else {
+        return;
+    };
+    match selected {
+        Some((selected_priority, selected_percent))
+            if priority > *selected_priority
+                || (priority == *selected_priority && used_percent <= *selected_percent) => {}
+        _ => *selected = Some((priority, used_percent)),
+    }
+}
+
+fn quota_window_priority(window: &Value, fallback: QuotaWindowPriority) -> QuotaWindowPriority {
+    let window_seconds = window
+        .get("window_minutes")
+        .and_then(Value::as_u64)
+        .and_then(|minutes| minutes.checked_mul(60));
+    match window_seconds {
+        Some(seconds) if quota_window_matches(seconds, FIVE_HOUR_WINDOW_SECONDS) => {
+            QuotaWindowPriority::FiveHour
+        }
+        Some(seconds) if quota_window_matches(seconds, WEEK_WINDOW_SECONDS) => {
+            QuotaWindowPriority::Weekly
+        }
+        Some(seconds) if quota_window_matches(seconds, MONTH_WINDOW_SECONDS) => {
+            QuotaWindowPriority::Monthly
+        }
+        _ => fallback,
+    }
+}
+
+fn quota_window_matches(actual: u64, expected: u64) -> bool {
+    actual > 0 && actual.abs_diff(expected) <= expected / 20
 }
 
 fn percent_value(value: &Value) -> Option<f64> {
@@ -929,6 +929,64 @@ fn percent_value(value: &Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))?;
     percent.is_finite().then_some(percent.clamp(0.0, 100.0))
+}
+
+fn dashboard_usage_record_items(
+    items: Vec<UsageRecord>,
+    account_emails: &HashMap<String, String>,
+) -> Vec<DashboardUsageRecordData> {
+    items
+        .into_iter()
+        .map(|record| dashboard_usage_record_data(record, account_emails))
+        .collect()
+}
+
+fn dashboard_usage_record_data(
+    record: UsageRecord,
+    account_emails: &HashMap<String, String>,
+) -> DashboardUsageRecordData {
+    let account_email = record
+        .account_id
+        .as_deref()
+        .and_then(|account_id| account_emails.get(account_id))
+        .cloned()
+        .or_else(|| metadata_string(&record.metadata, &["accountEmail", "account_email"]));
+    let (requested_model, upstream_model) = usage_record_models(&record);
+    let client_ip = metadata_string(&record.metadata, &["clientIp", "ipAddress", "ip_address"]);
+    let user_agent = metadata_string(&record.metadata, &["userAgent", "user_agent"]);
+    let reasoning_effort =
+        metadata_string(&record.metadata, &["reasoningEffort", "reasoning_effort"]);
+    let token_details = usage_token_details(&record.metadata);
+    let cost_details = usage_cost_details(&record, upstream_model.as_deref(), &token_details);
+    let first_token_latency_ms = metadata_nonnegative_i64(
+        &record.metadata,
+        &[
+            "firstTokenMs",
+            "first_token_ms",
+            "firstTokenLatencyMs",
+            "first_token_latency_ms",
+        ],
+    );
+
+    DashboardUsageRecordData {
+        id: record.id,
+        level: record.level,
+        route: record.route,
+        model: record.model,
+        status_code: record.status_code,
+        transport: record.transport,
+        created_at_display: china_datetime(&record.created_at),
+        account_email,
+        requested_model,
+        upstream_model,
+        client_ip,
+        user_agent,
+        reasoning_effort,
+        token_details,
+        cost_details,
+        first_token_latency_ms_display: format_duration_ms(first_token_latency_ms),
+        latency_ms_display: format_duration_ms(record.latency_ms),
+    }
 }
 
 fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
@@ -992,21 +1050,4 @@ fn format_fingerprint_updated_at(value: Option<String>) -> String {
         return "-".to_string();
     }
     china_datetime_rfc3339_str(value)
-}
-
-fn empty_usage_summary() -> AdminUsageSummary {
-    AdminUsageSummary {
-        account_count: 0,
-        request_count: 0,
-        empty_response_count: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cached_tokens: 0,
-        reasoning_tokens: 0,
-        total_tokens: 0,
-        image_input_tokens: 0,
-        image_output_tokens: 0,
-        image_request_count: 0,
-        image_request_failed_count: 0,
-    }
 }

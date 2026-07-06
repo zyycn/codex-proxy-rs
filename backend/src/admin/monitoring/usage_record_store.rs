@@ -198,6 +198,15 @@ impl SqliteUsageRecordStore {
         usage_summary(&self.pool, &filter).await
     }
 
+    /// 按账号聚合使用记录。
+    pub async fn account_usage(
+        &self,
+        filter: UsageRecordFilter,
+        limit: u32,
+    ) -> SqliteUsageRecordStoreResult<Vec<UsageRecordAccountUsage>> {
+        usage_account_usage(&self.pool, &filter, limit).await
+    }
+
     /// 按模型来源聚合使用记录分布。
     pub async fn model_distribution(
         &self,
@@ -475,6 +484,45 @@ async fn usage_summary(
         total_tokens: input_tokens + output_tokens,
         average_latency_ms: row.get("average_latency_ms"),
     })
+}
+
+async fn usage_account_usage(
+    pool: &SqlitePool,
+    filter: &UsageRecordFilter,
+    limit: u32,
+) -> SqliteUsageRecordStoreResult<Vec<UsageRecordAccountUsage>> {
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "select
+            account_id,
+            sum(coalesce(cast(json_extract(metadata_json, '$.usage.inputTokens') as integer), cast(json_extract(metadata_json, '$.inputTokens') as integer), 0)) as input_tokens,
+            sum(coalesce(cast(json_extract(metadata_json, '$.usage.outputTokens') as integer), cast(json_extract(metadata_json, '$.outputTokens') as integer), 0)) as output_tokens,
+            max(created_at) as last_used_at
+        from usage_records",
+    );
+    push_filter(&mut builder, filter, None)?;
+    builder.push(" and account_id is not null and trim(account_id) <> ''");
+    builder.push(" group by account_id order by last_used_at desc, account_id asc limit ");
+    builder.push_bind(i64::from(limit.clamp(1, 50)));
+
+    builder
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let input_tokens =
+                optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("input_tokens"));
+            let output_tokens =
+                optional_nonnegative_i64_to_u64(row.get::<Option<i64>, _>("output_tokens"));
+            Ok(UsageRecordAccountUsage {
+                account_id: row.get("account_id"),
+                input_tokens,
+                output_tokens,
+                total_tokens: input_tokens + output_tokens,
+                last_used_at: parse_rfc3339(&row.get::<String, _>("last_used_at"))?,
+            })
+        })
+        .collect()
 }
 
 async fn usage_record_account_email_map(
@@ -976,6 +1024,21 @@ pub struct UsageRecordSummary {
     pub total_tokens: u64,
     /// 平均耗时。
     pub average_latency_ms: Option<f64>,
+}
+
+/// 账号使用记录聚合。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRecordAccountUsage {
+    /// 账号 ID。
+    pub account_id: String,
+    /// 输入 Token。
+    pub input_tokens: u64,
+    /// 输出 Token。
+    pub output_tokens: u64,
+    /// 总 Token。
+    pub total_tokens: u64,
+    /// 最近使用时间。
+    pub last_used_at: DateTime<Utc>,
 }
 
 /// 模型分布来源。

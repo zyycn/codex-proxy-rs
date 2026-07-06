@@ -131,32 +131,23 @@ export function useDashboard(): any {
         traffic: {
           todayRequests: '0',
           todayRequestsValue: 0,
-          yesterdayRequests: '0',
           yesterdayRequestsValue: 0,
           totalRequests: '0',
-          rpm: '0',
-          tpm: '0',
         },
         tokens: {
           todayTokens: '0',
           todayTokensValue: 0,
-          yesterdayTokens: '0',
           yesterdayTokensValue: 0,
           totalTokens: '0',
           todayCostUsd: '—',
-          todayCostUsdValue: 0,
-          totalCostUsd: '—',
-          totalCostUsdValue: 0,
         },
         cache: {
           todayHitRate: '—',
           todayHitRateValue: null,
-          yesterdayHitRate: '—',
           yesterdayHitRateValue: null,
           totalHitRate: '—',
           totalCachedTokens: '0',
           firstTokenLatencyMs: '—',
-          completionLatencyMs: '—',
         },
       },
       trend: {
@@ -167,10 +158,7 @@ export function useDashboard(): any {
       healthTimeline: {
         title: '请求健康时间线',
         description: '今日请求可靠性',
-        rangeDisplay: '-',
         reliabilityDisplay: '-',
-        oldestLabel: '最早',
-        newestLabel: '最新',
         points: '',
       },
       accountUsage: [],
@@ -234,7 +222,7 @@ export function useDashboard(): any {
         details: [
           { label: '总请求', value: traffic.totalRequests, tone: 'info' },
           {
-            label: '首 Token',
+            label: '今日首字',
             value: cache.firstTokenLatencyMs,
             tone: 'info',
           },
@@ -255,7 +243,7 @@ export function useDashboard(): any {
         details: [
           { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
-            label: '计费',
+            label: '今日计费',
             value: tokens.todayCostUsd,
             tone: 'success',
           },
@@ -280,7 +268,7 @@ export function useDashboard(): any {
         details: [
           { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
           {
-            label: '缓存 Token',
+            label: '今日缓存',
             value: cache.totalCachedTokens,
             tone: 'warning',
           },
@@ -353,16 +341,13 @@ export function useDashboard(): any {
   }
 
   function accountUsageItem(item: any) {
-    const tone = accountTone(item.status)
     const quotaPercent = quotaUsedPercent(item.quotaUsedPercent)
     return {
-      name: item.name,
-      email: item.email || '-',
-      planType: item.plan || 'free',
-      requests: item.requests,
+      id: item.id,
+      email: item.email,
+      planType: item.planType,
       tokens: item.tokens,
-      lastUsed: item.lastUsed || '-',
-      tone,
+      lastUsed: item.lastUsed,
       quotaPercent,
       quotaTone: quotaTone(quotaPercent),
     }
@@ -433,14 +418,6 @@ export function useDashboard(): any {
     if (label.includes('输出')) return '--cp-success'
     if (label.includes('缓存')) return '--cp-text-tertiary'
     return '--cp-info'
-  }
-
-  function accountTone(status: string) {
-    if (status === 'active') return 'success'
-    if (status === 'quota_exhausted' || status === 'expired') return 'warning'
-    if (status === 'banned' || status === 'disabled') return 'danger'
-    if (status === 'refreshing') return 'info'
-    return 'normal'
   }
 
   onMounted(() => {

@@ -545,7 +545,7 @@ fn usage_record_data(
     }
 }
 
-fn usage_record_models(record: &UsageRecord) -> (Option<String>, Option<String>) {
+pub(crate) fn usage_record_models(record: &UsageRecord) -> (Option<String>, Option<String>) {
     let stored_model = record
         .model
         .as_deref()
@@ -560,7 +560,7 @@ fn usage_record_models(record: &UsageRecord) -> (Option<String>, Option<String>)
     (requested_model, upstream_model)
 }
 
-fn usage_token_details(metadata: &Value) -> UsageRecordTokenDetailsData {
+pub(crate) fn usage_token_details(metadata: &Value) -> UsageRecordTokenDetailsData {
     let input_tokens = metadata_usage_u64(metadata, "inputTokens");
     let output_tokens = metadata_usage_u64(metadata, "outputTokens");
     let cached_tokens = metadata_usage_u64(metadata, "cachedTokens");
@@ -582,7 +582,7 @@ fn usage_token_details(metadata: &Value) -> UsageRecordTokenDetailsData {
     }
 }
 
-fn usage_cost_details(
+pub(crate) fn usage_cost_details(
     record: &UsageRecord,
     upstream_model: Option<&str>,
     tokens: &UsageRecordTokenDetailsData,

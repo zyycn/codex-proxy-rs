@@ -30,24 +30,17 @@ const {
   showSingleDeleteModal,
   showKeyModal,
   createdKey,
-  editingLabel,
   pendingDeleteKey,
   creatingKey,
   deletingKey,
   batchDeleting,
   updatingStatusKeyIds,
-  savingLabelKeyIds,
   createForm,
   handleCreate,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
   handleToggleStatus,
-  startEditLabel,
-  cancelEditLabel,
-  currentEditingLabelValue,
-  submitEditingLabel,
-  updateEditingLabelValue,
   copyToClipboard,
   maskKey,
 } = useApiKeyMutations(selectedIds)
@@ -158,16 +151,7 @@ function importToCcs(apiKey: any) {
           </template>
 
           <template #identity="{ row }">
-            <ApiKeyIdentityCell
-              :api-key="row"
-              :editing="editingLabel?.id === row.id"
-              :editing-value="currentEditingLabelValue()"
-              :saving="savingLabelKeyIds.has(row.id)"
-              @cancel-edit="cancelEditLabel"
-              @start-edit="startEditLabel"
-              @submit-edit="submitEditingLabel"
-              @update-edit="updateEditingLabelValue"
-            />
+            <ApiKeyIdentityCell :api-key="row" />
           </template>
 
           <template #prefix="{ row }">
