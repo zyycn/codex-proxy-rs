@@ -47,10 +47,6 @@ const timeRangeParams = computed<Record<string, string>>(() => {
     }
   }
 
-  if (timeRange.value === 'all') {
-    return {} as Record<string, string>
-  }
-
   return {
     startTime: now.subtract(6, 'day').startOf('day').toISOString(),
     endTime: now.toISOString(),

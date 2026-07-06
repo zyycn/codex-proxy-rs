@@ -117,9 +117,9 @@ pub enum AdminUsageRecordError {
     /// 写入失败。
     #[error("failed to append usage record")]
     Append,
-    /// 裁剪失败。
-    #[error("failed to trim usage records")]
-    Trim,
+    /// 保留期清理失败。
+    #[error("failed to trim expired usage records")]
+    Retention,
     /// 账号关联信息读取失败。
     #[error("failed to load usage record accounts")]
     Accounts,
@@ -135,23 +135,16 @@ pub struct AdminUsageRecordService {
 #[derive(Debug, Clone, Copy)]
 struct AdminUsageRecordSettings {
     enabled: bool,
-    capacity: u32,
     capture_body: bool,
 }
 
 impl AdminUsageRecordService {
     /// 构造管理端使用记录服务。
-    pub fn new(
-        store: SqliteUsageRecordStore,
-        enabled: bool,
-        capacity: u32,
-        capture_body: bool,
-    ) -> Self {
+    pub fn new(store: SqliteUsageRecordStore, enabled: bool, capture_body: bool) -> Self {
         Self {
             store,
             settings: Arc::new(tokio::sync::RwLock::new(AdminUsageRecordSettings {
                 enabled,
-                capacity,
                 capture_body,
             })),
         }
@@ -289,9 +282,9 @@ impl AdminUsageRecordService {
             .await
             .map_err(|_| AdminUsageRecordError::Append)?;
         self.store
-            .trim_to_capacity(settings.capacity)
+            .trim_to_retention(Utc::now())
             .await
-            .map_err(|_| AdminUsageRecordError::Trim)?;
+            .map_err(|_| AdminUsageRecordError::Retention)?;
         Ok(())
     }
 }
