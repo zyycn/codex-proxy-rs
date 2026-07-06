@@ -147,7 +147,7 @@ export function useDashboard(): any {
           yesterdayHitRateValue: null,
           totalHitRate: '—',
           totalCachedTokens: '0',
-          firstTokenLatencyMs: '—',
+          averageFirstTokenLatencyMs: '—',
         },
       },
       trend: {
@@ -157,7 +157,7 @@ export function useDashboard(): any {
       },
       healthTimeline: {
         title: '请求健康时间线',
-        description: '今日请求可靠性',
+        description: '请求可靠性',
         reliabilityDisplay: '-',
         points: '',
       },
@@ -208,7 +208,7 @@ export function useDashboard(): any {
         ],
       },
       {
-        title: '今日请求',
+        title: '请求次数',
         value: traffic.todayRequests,
         valueRaw: traffic.todayRequestsValue,
         valueFormatter: formatDashboardCompactNumber,
@@ -222,14 +222,14 @@ export function useDashboard(): any {
         details: [
           { label: '总请求', value: traffic.totalRequests, tone: 'info' },
           {
-            label: '今日首字',
-            value: cache.firstTokenLatencyMs,
+            label: '首字延迟',
+            value: cache.averageFirstTokenLatencyMs,
             tone: 'info',
           },
         ],
       },
       {
-        title: '今日 Token',
+        title: 'Token',
         value: tokens.todayTokens,
         valueRaw: tokens.todayTokensValue,
         valueFormatter: formatDashboardCompactNumber,
@@ -243,21 +243,21 @@ export function useDashboard(): any {
         details: [
           { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
-            label: '今日计费',
+            label: '计费',
             value: tokens.todayCostUsd,
             tone: 'success',
           },
         ],
       },
       {
-        title: '今日缓存命中',
+        title: '缓存命中',
         value: cache.todayHitRate,
         valueRaw: cache.todayHitRateValue,
         valueFormatter: formatDashboardRate,
         icon: Timer,
         tone: cache.todayHitRateValue && cache.todayHitRateValue > 0 ? 'warning' : 'normal',
         sparkline: sparkline(
-          points.map((point) => point.cachedTokensValue),
+          points.map((point) => point.cacheHitRateValue),
           'warning',
         ),
         trend: trendState(
@@ -266,9 +266,9 @@ export function useDashboard(): any {
           'warning',
         ),
         details: [
-          { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
+          { label: '平均缓存命中', value: cache.totalHitRate, tone: 'warning' },
           {
-            label: '今日缓存',
+            label: '缓存',
             value: cache.totalCachedTokens,
             tone: 'warning',
           },

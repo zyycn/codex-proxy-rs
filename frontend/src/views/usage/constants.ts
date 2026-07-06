@@ -74,7 +74,7 @@ export const usageRecordColumns = [
   {
     key: 'clientIp',
     label: 'IP',
-    width: '160px',
+    width: '200px',
     ellipsis: false,
   },
   {

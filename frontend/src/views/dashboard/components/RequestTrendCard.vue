@@ -186,7 +186,7 @@ function getSeries() {
       '成功率',
       props.points.map((p) => p.successRateValue),
       themeColor('--cp-success', '#10B981'),
-      false,
+      true,
       1,
     ),
     lineSeries(
@@ -197,7 +197,7 @@ function getSeries() {
   ]
 }
 
-function lineSeries(name: string, data: number[], color: string, area = false, yAxisIndex = 0) {
+function lineSeries(name: string, data: number[], color: string, area = true, yAxisIndex = 0) {
   return {
     name,
     type: 'line' as const,
@@ -255,7 +255,7 @@ function handleTrendChange(value: string) {
             v-if="!hasSamples"
             compact
             title="暂无趋势数据"
-            description="今日暂无请求日志。"
+            description="当日暂无请求日志。"
             class="h-full place-content-center bg-transparent"
           />
         </div>

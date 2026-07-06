@@ -66,8 +66,9 @@ async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_mis
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_buckets() {
-    let (app, store, _pool, _dir) = dashboard_test_app(
+async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets(
+) {
+    let (app, store, pool, _dir) = dashboard_test_app(
         "dashboard-traffic-latency.sqlite",
         crate::support::fingerprint::test_fingerprint(),
     )
@@ -93,25 +94,32 @@ async fn dashboard_summary_should_calculate_today_traffic_and_latency_from_time_
         .append(&usage_record_with_tokens(yesterday_record_at, 30))
         .await
         .unwrap();
+    seed_usage_summary_with_cached_tokens(&pool, 120, 30, 24).await;
 
     let body = dashboard_summary(app).await;
 
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "2");
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequestsValue"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "2");
+    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "42");
     assert_eq!(
         body["data"]["cards"]["traffic"]["yesterdayRequestsValue"],
         1
     );
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "30");
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "30");
+    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "150");
     assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "0");
+    assert_eq!(body["data"]["cards"]["cache"]["totalHitRate"], "20.0%");
+    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "24");
     assert_eq!(
-        body["data"]["cards"]["cache"]["firstTokenLatencyMs"],
+        body["data"]["cards"]["cache"]["averageFirstTokenLatencyMs"],
         "300 ms"
     );
+    assert!(body["data"]["cards"]["cache"]
+        .as_object()
+        .unwrap()
+        .get("averageLatencyMs")
+        .is_none());
 }
 
 #[tokio::test]
@@ -151,7 +159,12 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
     .await;
     let now = Utc::now();
     store
-        .append(&usage_record_with_tokens(now - Duration::seconds(1), 10))
+        .append(&usage_record_with_token_parts(
+            now - Duration::seconds(1),
+            40,
+            60,
+            10,
+        ))
         .await
         .unwrap();
 
@@ -164,7 +177,9 @@ async fn dashboard_trend_should_bucket_usage_by_china_hour() {
         .expect("trend should include the inserted usage bucket");
 
     assert_eq!(point["time"], format!("{:02}", china_hour(&now)));
-    assert_eq!(point["tokensValue"], 10);
+    assert_eq!(point["tokensValue"], 100);
+    assert_eq!(point["cachedTokensValue"], 10);
+    assert_f64_eq(point["cacheHitRateValue"].as_f64().unwrap(), 0.25);
 }
 
 #[tokio::test]
@@ -596,10 +611,7 @@ async fn dashboard_summary_should_return_today_health_timeline() {
     let points = body["data"]["healthTimeline"]["points"].as_str().unwrap();
 
     assert_eq!(body["data"]["healthTimeline"]["title"], "请求健康时间线");
-    assert_eq!(
-        body["data"]["healthTimeline"]["description"],
-        "今日请求可靠性"
-    );
+    assert_eq!(body["data"]["healthTimeline"]["description"], "请求可靠性");
     assert_eq!(points.len(), 96);
     assert_eq!(points.matches('4').count(), 1);
 }
@@ -707,6 +719,39 @@ async fn seed_usage_summary(pool: &SqlitePool, input_tokens: u64, output_tokens:
         .await;
 }
 
+async fn seed_usage_summary_with_cached_tokens(
+    pool: &SqlitePool,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+) {
+    sqlx::query(
+        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_usage_cached")
+    .bind("acct-usage-cached@example.com")
+    .bind("cipher")
+    .bind("active")
+    .bind("2026-06-18T00:00:00Z")
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, total_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_usage_cached")
+    .bind(42_i64)
+    .bind(input_tokens as i64)
+    .bind(output_tokens as i64)
+    .bind(cached_tokens as i64)
+    .bind((input_tokens + output_tokens) as i64)
+    .bind("2026-06-18T00:00:00Z")
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn seed_usage_summary_with_last_used(
     pool: &SqlitePool,
     input_tokens: u64,
@@ -777,14 +822,23 @@ fn service_status_value<'a>(body: &'a Value, label: &str) -> &'a str {
 }
 
 fn usage_record_with_tokens(created_at: chrono::DateTime<Utc>, total_tokens: u64) -> UsageRecord {
+    usage_record_with_token_parts(created_at, total_tokens, 0, 0)
+}
+
+fn usage_record_with_token_parts(
+    created_at: chrono::DateTime<Utc>,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+) -> UsageRecord {
     usage_record(
         created_at,
         "gpt-5.5",
         json!({
             "usage": {
-                "inputTokens": total_tokens,
-                "outputTokens": 0u64,
-                "cachedTokens": 0u64
+                "inputTokens": input_tokens,
+                "outputTokens": output_tokens,
+                "cachedTokens": cached_tokens
             }
         }),
     )

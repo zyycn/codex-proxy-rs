@@ -15,7 +15,7 @@ use crate::{
     admin::{
         auth::session::AdminAuth,
         monitoring::{
-            account_usage_service::AdminUsageTimeBucketRecord,
+            account_usage_service::{AdminUsageSummary, AdminUsageTimeBucketRecord},
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
@@ -140,7 +140,7 @@ struct DashboardCacheCardData {
     yesterday_hit_rate_value: Option<f64>,
     total_hit_rate: String,
     total_cached_tokens: String,
-    first_token_latency_ms: String,
+    average_first_token_latency_ms: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,6 +163,7 @@ struct DashboardTrendPointData {
     output_tokens_value: u64,
     cached_tokens: String,
     cached_tokens_value: u64,
+    cache_hit_rate_value: f64,
     tokens_value: u64,
     errors: String,
     errors_value: u64,
@@ -289,6 +290,12 @@ pub(crate) async fn dashboard_summary(
     let capacity = state.services.account_pool.capacity_summary_now().await;
     let now = Utc::now();
     let today_filter = today_usage_record_filter(now);
+    let usage_summary = state
+        .services
+        .usage
+        .summary()
+        .await
+        .unwrap_or_else(|_| empty_usage_summary());
     let account_usage_records = state
         .services
         .usage_records
@@ -322,7 +329,7 @@ pub(crate) async fn dashboard_summary(
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(DashboardSummaryData {
-            cards: dashboard_cards(&accounts, &time_buckets),
+            cards: dashboard_cards(&accounts, &time_buckets, &usage_summary),
             trend,
             health_timeline: dashboard_health_timeline_data(&time_buckets),
             account_usage: account_usage_data(
@@ -368,13 +375,15 @@ pub(crate) async fn dashboard_trend(
 fn dashboard_cards(
     accounts: &[Account],
     buckets: &[AdminUsageTimeBucketRecord],
+    usage_summary: &AdminUsageSummary,
 ) -> DashboardCardsData {
-    dashboard_cards_at(accounts, buckets, Utc::now())
+    dashboard_cards_at(accounts, buckets, usage_summary, Utc::now())
 }
 
 fn dashboard_cards_at(
     accounts: &[Account],
     buckets: &[AdminUsageTimeBucketRecord],
+    usage_summary: &AdminUsageSummary,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
@@ -382,6 +391,10 @@ fn dashboard_cards_at(
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
     let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
+    let total_requests = nonnegative_i64_to_u64(usage_summary.request_count);
+    let total_tokens = nonnegative_i64_to_u64(usage_summary.total_tokens);
+    let total_cached_tokens = nonnegative_i64_to_u64(usage_summary.cached_tokens);
+    let total_hit_rate = summary_cache_hit_rate(usage_summary);
 
     let total_accounts = accounts.len() as u64;
     let enabled_accounts = accounts
@@ -414,23 +427,51 @@ fn dashboard_cards_at(
             today_requests: format_compact_number(today.requests),
             today_requests_value: today.requests,
             yesterday_requests_value: yesterday.requests,
-            total_requests: format_compact_number(today.requests),
+            total_requests: format_compact_number(total_requests),
         },
         tokens: DashboardTokenCardData {
             today_tokens: format_tokens(today.tokens()),
             today_tokens_value: today.tokens(),
             yesterday_tokens_value: yesterday.tokens(),
-            total_tokens: format_tokens(today.tokens()),
+            total_tokens: format_tokens(total_tokens),
             today_cost_usd: format_cost(today_cost),
         },
         cache: DashboardCacheCardData {
             today_hit_rate: format_rate(today.cache_hit_rate()),
             today_hit_rate_value: today.cache_hit_rate(),
             yesterday_hit_rate_value: yesterday.cache_hit_rate(),
-            total_hit_rate: format_rate(today.cache_hit_rate()),
-            total_cached_tokens: format_tokens(today.cached_tokens),
-            first_token_latency_ms: format_optional_duration_ms(today.avg_first_token_latency()),
+            total_hit_rate: format_rate(total_hit_rate),
+            total_cached_tokens: format_tokens(total_cached_tokens),
+            average_first_token_latency_ms: format_optional_duration_ms(
+                today.avg_first_token_latency(),
+            ),
         },
+    }
+}
+
+fn empty_usage_summary() -> AdminUsageSummary {
+    AdminUsageSummary {
+        account_count: 0,
+        request_count: 0,
+        empty_response_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        image_input_tokens: 0,
+        image_output_tokens: 0,
+        image_request_count: 0,
+        image_request_failed_count: 0,
+    }
+}
+
+fn summary_cache_hit_rate(summary: &AdminUsageSummary) -> Option<f64> {
+    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
+    if input_tokens > 0 {
+        Some(nonnegative_i64_to_u64(summary.cached_tokens) as f64 / input_tokens as f64)
+    } else {
+        None
     }
 }
 
@@ -495,6 +536,7 @@ fn dashboard_trend_data_at(
             let max_latency = bucket.max_first_token_bucket_latency().unwrap_or(0);
             let min_latency = bucket.min_first_token_bucket_latency().unwrap_or(0);
             let tokens = bucket.tokens();
+            let cache_hit_rate = bucket.cache_hit_rate().unwrap_or(0.0);
             let success_rate = if bucket.requests > 0 {
                 ((bucket.requests - bucket.errors) as f64 / bucket.requests as f64 * 1000.0).round()
                     / 10.0
@@ -511,6 +553,7 @@ fn dashboard_trend_data_at(
                 output_tokens_value: bucket.output_tokens,
                 cached_tokens: format_tokens(bucket.cached_tokens),
                 cached_tokens_value: bucket.cached_tokens,
+                cache_hit_rate_value: cache_hit_rate,
                 tokens_value: tokens,
                 errors: format_compact_number(bucket.errors),
                 errors_value: bucket.errors,
@@ -583,7 +626,7 @@ fn dashboard_health_timeline_data_at(
     };
     DashboardHealthTimelineData {
         title: "请求健康时间线".to_string(),
-        description: "今日请求可靠性".to_string(),
+        description: "请求可靠性".to_string(),
         reliability_display: if requests > 0 {
             format!("{reliability:.1}%")
         } else {

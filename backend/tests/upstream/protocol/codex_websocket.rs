@@ -11,7 +11,6 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
         })],
     );
     request.set_previous_response_id(Some("resp_secret".to_string()));
-    request.set_reasoning(Some(json!({"effort": "medium"})));
     request.set_service_tier(Some("flex".to_string()));
     request.set_prompt_cache_key(Some("cache-secret".to_string()));
     request.set_client_metadata(Some(json!({
@@ -33,7 +32,6 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
             "stream",
             "store",
             "previous_response_id",
-            "reasoning",
             "service_tier",
             "prompt_cache_key",
             "client_metadata",
