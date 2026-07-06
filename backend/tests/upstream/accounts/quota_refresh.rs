@@ -5,16 +5,16 @@ use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::quota::{
-    quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
-    quota_snapshot_reset_at, RuntimeQuotaRefreshService,
+    RuntimeQuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
+    quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
 };
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
 use secrecy::SecretString;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 #[test]
@@ -489,6 +489,145 @@ async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
 }
 
 #[tokio::test]
+async fn quota_refresh_service_should_skip_recent_locked_account_before_cooldown_expires() {
+    let server = MockServer::start().await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir
+        .path()
+        .join("quota-refresh-recent-future-cooldown.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool.clone());
+    insert_quota_locked_account(&store, &pool, "acct-quota", "access-token").await;
+    set_quota_cooldown_until(&pool, "acct-quota", Utc::now() + Duration::minutes(5)).await;
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let service =
+        RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
+
+    let mut last_refreshed = HashMap::new();
+    last_refreshed.insert("acct-quota".to_string(), tokio::time::Instant::now());
+    let summary = service
+        .refresh_locked_accounts(&mut last_refreshed)
+        .await
+        .expect("quota refresh should succeed");
+
+    assert_eq!(
+        (
+            summary.candidates,
+            summary.skipped_cooldown,
+            summary.skipped_recent,
+            summary.refreshed,
+            usage_request_count(&server).await,
+        ),
+        (1, 1, 0, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn quota_refresh_service_should_skip_recent_locked_account_inside_cooldown_grace() {
+    let server = MockServer::start().await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir
+        .path()
+        .join("quota-refresh-recent-cooldown-grace.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool.clone());
+    insert_quota_locked_account(&store, &pool, "acct-quota", "access-token").await;
+    set_quota_cooldown_until(&pool, "acct-quota", Utc::now() - Duration::seconds(20)).await;
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let service =
+        RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
+
+    let mut last_refreshed = HashMap::new();
+    last_refreshed.insert("acct-quota".to_string(), tokio::time::Instant::now());
+    let summary = service
+        .refresh_locked_accounts(&mut last_refreshed)
+        .await
+        .expect("quota refresh should succeed");
+
+    assert_eq!(
+        (
+            summary.candidates,
+            summary.skipped_cooldown,
+            summary.skipped_recent,
+            summary.refreshed,
+            usage_request_count(&server).await,
+        ),
+        (1, 1, 0, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn quota_refresh_service_should_bypass_recent_skip_after_cooldown_grace() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 8,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 18_000
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir
+        .path()
+        .join("quota-refresh-recent-expired-cooldown.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool.clone());
+    insert_quota_locked_account(&store, &pool, "acct-quota", "access-token").await;
+    set_quota_cooldown_until(&pool, "acct-quota", Utc::now() - Duration::seconds(31)).await;
+    let codex = CodexBackendClient::new(
+        reqwest::Client::new(),
+        server.uri(),
+        crate::support::fingerprint::test_fingerprint(),
+    );
+    let service =
+        RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
+
+    let mut last_refreshed = HashMap::new();
+    last_refreshed.insert("acct-quota".to_string(), tokio::time::Instant::now());
+    let summary = service
+        .refresh_locked_accounts(&mut last_refreshed)
+        .await
+        .expect("quota refresh should succeed");
+
+    assert_eq!(
+        (
+            summary.skipped_recent,
+            summary.skipped_cooldown,
+            summary.refreshed,
+            usage_request_count(&server).await,
+        ),
+        (0, 0, 1, 1)
+    );
+}
+
+#[tokio::test]
 async fn quota_refresh_service_should_stagger_multiple_locked_account_requests() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -571,6 +710,19 @@ async fn insert_quota_locked_account(
         .execute(pool)
         .await
         .expect("quota lock should be set");
+}
+
+async fn set_quota_cooldown_until(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    cooldown_until: chrono::DateTime<Utc>,
+) {
+    sqlx::query("update accounts set quota_cooldown_until = ? where id = ?")
+        .bind(cooldown_until.to_rfc3339())
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("quota cooldown should be set");
 }
 
 async fn wait_for_usage_requests(server: &MockServer, expected_count: usize) {

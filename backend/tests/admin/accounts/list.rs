@@ -259,11 +259,11 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     let item = &body["data"]["items"][0];
-    assert_eq!(item["usage"]["requestCount"], 7);
-    assert_eq!(item["usage"]["inputTokens"], 120_000);
-    assert_eq!(item["usage"]["outputTokens"], 4_000);
-    assert_eq!(item["usage"]["cachedTokens"], 40_000);
-    assert_eq!(item["usage"]["totalTokens"], 124_000);
+    assert_eq!(item["usage"]["requestCount"], 107);
+    assert_eq!(item["usage"]["inputTokens"], 1_022_000);
+    assert_eq!(item["usage"]["outputTokens"], 94_500);
+    assert_eq!(item["usage"]["cachedTokens"], 49_100);
+    assert_eq!(item["usage"]["totalTokens"], 1_116_500);
     assert_eq!(item["quota"]["windows"].as_array().unwrap().len(), 3);
     assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
     assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
@@ -277,12 +277,128 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
         .as_str()
         .is_some_and(|value| value.contains(" / 7.0d")));
-    assert_eq!(item["usage"]["createdTokens"], 80_000);
-    assert_eq!(item["usage"]["readTokens"], 40_000);
-    assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 2);
-    assert_eq!(item["usage"]["models"][0]["model"], "gpt-5.5");
-    assert_eq!(item["usage"]["models"][0]["requestCount"], 4);
-    assert_eq!(item["usage"]["models"][1]["model"], "gpt-5");
+    assert_eq!(item["usage"]["createdTokens"], 972_900);
+    assert_eq!(item["usage"]["readTokens"], 49_100);
+    assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 4);
+    assert_eq!(item["usage"]["models"][0]["model"], "gpt-outside-window");
+    assert_eq!(item["usage"]["models"][0]["requestCount"], 99);
+    assert_eq!(item["usage"]["models"][1]["model"], "gpt-5.5");
+    assert_eq!(item["usage"]["models"][2]["model"], "gpt-5");
+    assert_eq!(item["usage"]["models"][3]["model"], "gpt-five-hour-window");
+}
+
+#[tokio::test]
+async fn admin_accounts_list_should_use_largest_quota_reset_interval_for_usage_stats() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-largest-quota-window.sqlite", 71).await;
+    seed_usage_account(
+        &pool,
+        UsageAccountSeed {
+            id: "acct_custom_window",
+            email: "custom-window@example.com",
+            label: "custom",
+            plan_type: "plus",
+            request_count: 10,
+            empty_response_count: 0,
+            input_tokens: 500,
+            output_tokens: 100,
+            cached_tokens: 50,
+            window_request_count: 1,
+            window_input_tokens: 100,
+            window_output_tokens: 10,
+            window_cached_tokens: 5,
+            window_started_at: "2026-07-13T19:00:00Z",
+            window_reset_at: "2026-07-14T00:00:00Z",
+            limit_window_seconds: 18_000,
+            last_used_at: "2026-06-30T01:10:00Z",
+        },
+    )
+    .await;
+    sqlx::query("update accounts set quota_json = ?, quota_fetched_at = ? where id = ?")
+        .bind(
+            json!({
+                "plan_type": "plus",
+                "snapshots": [{
+                    "source": "custom",
+                    "limit_name": "Codex",
+                    "metered_feature": "codex",
+                    "allowed": true,
+                    "limit_reached": false,
+                    "blocked": false,
+                    "primary": {
+                        "used_percent": 50,
+                        "remaining_percent": 50,
+                        "reset_at": 1783987200,
+                        "window_minutes": 20160,
+                        "limit_reached": false
+                    },
+                    "secondary": {
+                        "used_percent": 10,
+                        "remaining_percent": 90,
+                        "reset_at": 1783987200,
+                        "window_minutes": 10080,
+                        "limit_reached": false
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .bind("2026-06-30T01:10:00Z")
+        .bind("acct_custom_window")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-30T01:00:00+00:00")
+    .bind("acct_custom_window")
+    .bind("gpt-custom-14d")
+    .bind(5)
+    .bind(10_000)
+    .bind(2_000)
+    .bind(1_000)
+    .bind("2026-06-30T01:10:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (bucket_start, account_id, model, request_count, input_tokens, output_tokens, cached_tokens, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2026-06-29T23:45:00+00:00")
+    .bind("acct_custom_window")
+    .bind("gpt-before-14d")
+    .bind(99)
+    .bind(900_000)
+    .bind(90_000)
+    .bind(9_000)
+    .bind("2026-06-29T23:59:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_largest_quota_window")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["usage"]["requestCount"], 5);
+    assert_eq!(item["usage"]["inputTokens"], 10_000);
+    assert_eq!(item["usage"]["outputTokens"], 2_000);
+    assert_eq!(item["usage"]["cachedTokens"], 1_000);
+    assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 1);
+    assert_eq!(item["usage"]["models"][0]["model"], "gpt-custom-14d");
 }
 
 #[tokio::test]
