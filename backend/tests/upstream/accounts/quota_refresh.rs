@@ -5,16 +5,16 @@ use codex_proxy_rs::infra::database::connect_sqlite;
 use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::AccountStatus;
 use codex_proxy_rs::upstream::accounts::quota::{
-    RuntimeQuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
-    quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
+    quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
+    quota_snapshot_reset_at, RuntimeQuotaRefreshService,
 };
 use codex_proxy_rs::upstream::accounts::store::{NewAccount, SqliteAccountStore};
 use codex_proxy_rs::upstream::transport::CodexBackendClient;
 use secrecy::SecretString;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
 };
 
 #[test]
