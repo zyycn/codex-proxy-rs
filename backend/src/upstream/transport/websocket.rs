@@ -1,6 +1,7 @@
 //! Codex WebSocket 连接建立（关键函数）。
 
 use std::{
+    collections::VecDeque,
     io,
     path::{Path, PathBuf},
     pin::Pin,
@@ -29,7 +30,7 @@ use crate::upstream::protocol::events::{self, TokenUsage};
 use crate::upstream::protocol::responses::CodexResponsesRequest;
 use crate::upstream::protocol::sse::SseError;
 use crate::upstream::protocol::websocket::{
-    classify_websocket_error_frame, is_terminal_websocket_event,
+    classify_websocket_error_frame, is_pre_content_lifecycle_event, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
     websocket_event_type, websocket_incomplete_response_reason, websocket_metadata_turn_state,
     websocket_response_completed_parse_error, websocket_response_create_payload_text,
@@ -50,6 +51,7 @@ const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const WEBSOCKET_STREAM_BUFFER: usize = 16;
+const WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS: usize = 2;
 /// WebSocket audit artifact 输出目录环境变量。
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
@@ -199,6 +201,12 @@ pub enum CodexWebSocketExchangeError {
     ReusedConnectionDiedBeforeFirstFrame {
         /// 底层失效原因。
         message: String,
+    },
+    /// 首个内容帧在配置的绝对超时内未到达（连接落到病态上游后端）。
+    #[error("websocket first content frame not received within {timeout:?}")]
+    FirstTokenTimeout {
+        /// 首 token 超时时长。
+        timeout: Duration,
     },
 }
 
@@ -412,30 +420,94 @@ fn request_line_for_endpoint(endpoint: &str) -> String {
 async fn execute_fresh_response_create_request(
     request: &CodexWebSocketRequest,
     started_at: Instant,
+    first_token_timeout: Option<Duration>,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     let (websocket, response) =
         connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
+    let first_token_started_at = Instant::now();
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
 
     let metadata = websocket_connection_metadata(&response);
-    let (exchange, _websocket, _metadata) =
-        collect_websocket_response(websocket, metadata, false, started_at).await?;
+    let (exchange, _websocket, _metadata) = collect_websocket_response(
+        websocket,
+        metadata,
+        false,
+        started_at,
+        first_token_started_at,
+        first_token_timeout,
+    )
+    .await?;
     Ok(exchange)
 }
 
 async fn execute_fresh_response_create_request_stream(
     request: &CodexWebSocketRequest,
+    first_token_timeout: Option<Duration>,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
+    let (mut websocket, response) =
         connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
+    let first_token_started_at = Instant::now();
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
 
-    let metadata = websocket_connection_metadata(&response);
-    Ok(stream_websocket_response(websocket, metadata, None, None))
+    let mut metadata = websocket_connection_metadata(&response);
+    let prefetched_frames = match prefetch_first_content_stream_frames(
+        &mut websocket,
+        &mut metadata,
+        first_token_started_at,
+        first_token_timeout,
+    )
+    .await
+    {
+        Ok(prefetched_frames) => prefetched_frames,
+        Err(error) => {
+            websocket.close().await;
+            return Err(error);
+        }
+    };
+    Ok(stream_websocket_response(
+        websocket,
+        metadata,
+        None,
+        prefetched_frames,
+    ))
+}
+
+async fn execute_fresh_response_create_request_with_retries(
+    request: &CodexWebSocketRequest,
+    started_at: Instant,
+    first_token_timeout: Option<Duration>,
+    attempts: usize,
+) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
+    let attempts = attempts.max(1);
+    for attempt in 1..=attempts {
+        match execute_fresh_response_create_request(request, started_at, first_token_timeout).await
+        {
+            Ok(exchange) => return Ok(exchange),
+            Err(error) if attempt < attempts && is_first_token_timeout(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("fresh websocket retry loop always returns");
+}
+
+async fn execute_fresh_response_create_request_stream_with_retries(
+    request: &CodexWebSocketRequest,
+    first_token_timeout: Option<Duration>,
+    attempts: usize,
+) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
+    let attempts = attempts.max(1);
+    for attempt in 1..=attempts {
+        match execute_fresh_response_create_request_stream(request, first_token_timeout).await {
+            Ok(exchange) => return Ok(exchange),
+            Err(error) if attempt < attempts && is_first_token_timeout(&error) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("fresh websocket stream retry loop always returns");
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +520,7 @@ pub(crate) async fn execute_response_create_request_with_pool(
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     let Some((pool, key)) = pool else {
-        return execute_fresh_response_create_request(request, started_at).await;
+        return execute_fresh_response_create_request(request, started_at, None).await;
     };
 
     match pool.acquire(&key).await {
@@ -459,9 +531,15 @@ pub(crate) async fn execute_response_create_request_with_pool(
             match result {
                 Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                     ..
-                }) => {
-                    let mut exchange =
-                        execute_fresh_response_create_request(request, started_at).await?;
+                })
+                | Err(CodexWebSocketExchangeError::FirstTokenTimeout { .. }) => {
+                    let mut exchange = execute_fresh_response_create_request_with_retries(
+                        request,
+                        started_at,
+                        pool.first_token_timeout(),
+                        WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
+                    )
+                    .await?;
                     exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
                     Ok(exchange)
                 }
@@ -480,16 +558,36 @@ pub(crate) async fn execute_response_create_request_with_pool(
                 started_at,
             )
             .await;
-            if result.is_err() {
-                pool.discard(&key).await;
+            match result {
+                Ok(mut exchange) => {
+                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                    Ok(exchange)
+                }
+                Err(error) if is_first_token_timeout(&error) => {
+                    pool.discard(&key).await;
+                    let mut exchange = execute_fresh_response_create_request_with_retries(
+                        request,
+                        started_at,
+                        pool.first_token_timeout(),
+                        1,
+                    )
+                    .await?;
+                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                    Ok(exchange)
+                }
+                Err(error) => {
+                    pool.discard(&key).await;
+                    Err(error)
+                }
             }
-            result.map(|mut exchange| {
-                exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                exchange
-            })
         }
         WebSocketPoolAcquire::Bypass(reason) => {
-            let mut exchange = execute_fresh_response_create_request(request, started_at).await?;
+            let mut exchange = execute_fresh_response_create_request(
+                request,
+                started_at,
+                pool.first_token_timeout(),
+            )
+            .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
             Ok(exchange)
         }
@@ -501,7 +599,7 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let Some((pool, key)) = pool else {
-        return execute_fresh_response_create_request_stream(request).await;
+        return execute_fresh_response_create_request_stream(request, None).await;
     };
 
     match pool.acquire(&key).await {
@@ -516,9 +614,14 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             match result {
                 Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                     ..
-                }) => {
-                    let mut exchange =
-                        execute_fresh_response_create_request_stream(request).await?;
+                })
+                | Err(CodexWebSocketExchangeError::FirstTokenTimeout { .. }) => {
+                    let mut exchange = execute_fresh_response_create_request_stream_with_retries(
+                        request,
+                        pool.first_token_timeout(),
+                        WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
+                    )
+                    .await?;
                     exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
                     Ok(exchange)
                 }
@@ -536,16 +639,32 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
                 key.clone(),
             )
             .await;
-            if result.is_err() {
-                pool.discard(&key).await;
+            match result {
+                Ok(mut exchange) => {
+                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                    Ok(exchange)
+                }
+                Err(error) if is_first_token_timeout(&error) => {
+                    pool.discard(&key).await;
+                    let mut exchange = execute_fresh_response_create_request_stream_with_retries(
+                        request,
+                        pool.first_token_timeout(),
+                        1,
+                    )
+                    .await?;
+                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                    Ok(exchange)
+                }
+                Err(error) => {
+                    pool.discard(&key).await;
+                    Err(error)
+                }
             }
-            result.map(|mut exchange| {
-                exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                exchange
-            })
         }
         WebSocketPoolAcquire::Bypass(reason) => {
-            let mut exchange = execute_fresh_response_create_request_stream(request).await?;
+            let mut exchange =
+                execute_fresh_response_create_request_stream(request, pool.first_token_timeout())
+                    .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
             Ok(exchange)
         }
@@ -560,14 +679,22 @@ async fn execute_fresh_pooled_response_create_request(
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     let (websocket, response) =
         connect_pumped_websocket(request.connection(), pool.keepalive()).await?;
+    let first_token_started_at = Instant::now();
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
 
     let now = Instant::now();
     let metadata = websocket_connection_metadata(&response);
-    let (exchange, websocket, metadata) =
-        collect_websocket_response(websocket, metadata, false, started_at).await?;
+    let (exchange, websocket, metadata) = collect_websocket_response(
+        websocket,
+        metadata,
+        false,
+        started_at,
+        first_token_started_at,
+        pool.first_token_timeout(),
+    )
+    .await?;
     pool.put(
         key,
         PooledWebSocketConnection {
@@ -585,14 +712,29 @@ async fn execute_fresh_pooled_response_create_request_stream(
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let (websocket, response) =
+    let (mut websocket, response) =
         connect_pumped_websocket(request.connection(), pool.keepalive()).await?;
+    let first_token_started_at = Instant::now();
     websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await?;
 
     let now = Instant::now();
-    let metadata = websocket_connection_metadata(&response);
+    let mut metadata = websocket_connection_metadata(&response);
+    let prefetched_frames = match prefetch_first_content_stream_frames(
+        &mut websocket,
+        &mut metadata,
+        first_token_started_at,
+        pool.first_token_timeout(),
+    )
+    .await
+    {
+        Ok(prefetched_frames) => prefetched_frames,
+        Err(error) => {
+            websocket.close().await;
+            return Err(error);
+        }
+    };
     Ok(stream_websocket_response(
         websocket,
         metadata,
@@ -601,7 +743,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
             key,
             created_at: now,
         }),
-        None,
+        prefetched_frames,
     ))
 }
 
@@ -612,6 +754,7 @@ async fn execute_pooled_response_create_request(
     connection: PooledWebSocketConnection,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
+    let first_token_started_at = Instant::now();
     if let Err(error) = connection
         .websocket
         .send(Message::Text(request.payload_text().to_string().into()))
@@ -626,8 +769,15 @@ async fn execute_pooled_response_create_request(
     }
 
     let created_at = connection.created_at;
-    match collect_websocket_response(connection.websocket, connection.metadata, true, started_at)
-        .await
+    match collect_websocket_response(
+        connection.websocket,
+        connection.metadata,
+        true,
+        started_at,
+        first_token_started_at,
+        pool.first_token_timeout(),
+    )
+    .await
     {
         Ok((exchange, websocket, metadata)) => {
             pool.put(
@@ -652,10 +802,13 @@ async fn execute_pooled_response_create_request_stream(
     request: &CodexWebSocketRequest,
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
-    mut connection: PooledWebSocketConnection,
+    connection: PooledWebSocketConnection,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    if let Err(error) = connection
-        .websocket
+    let mut websocket = connection.websocket;
+    let mut metadata = connection.metadata;
+    let created_at = connection.created_at;
+    let first_token_started_at = Instant::now();
+    if let Err(error) = websocket
         .send(Message::Text(request.payload_text().to_string().into()))
         .await
     {
@@ -667,49 +820,32 @@ async fn execute_pooled_response_create_request_stream(
         );
     }
 
-    let prefetched_text = first_reused_stream_text(&mut connection.websocket).await?;
+    let prefetched_frames = match prefetch_first_content_stream_frames(
+        &mut websocket,
+        &mut metadata,
+        first_token_started_at,
+        pool.first_token_timeout(),
+    )
+    .await
+    {
+        Ok(prefetched_frames) => prefetched_frames,
+        Err(error) => {
+            pool.discard(&key).await;
+            websocket.close().await;
+            return Err(reused_stream_prefetch_error(error));
+        }
+    };
 
     Ok(stream_websocket_response(
-        connection.websocket,
-        connection.metadata,
+        websocket,
+        metadata,
         Some(WebSocketStreamPoolReturn {
             pool,
             key,
-            created_at: connection.created_at,
+            created_at,
         }),
-        Some(prefetched_text),
+        prefetched_frames,
     ))
-}
-
-async fn first_reused_stream_text(
-    websocket: &mut PumpedWebSocket,
-) -> Result<String, CodexWebSocketExchangeError> {
-    loop {
-        let message = match next_websocket_message(websocket, WEBSOCKET_RECEIVE_IDLE_TIMEOUT).await
-        {
-            Ok(Some(message)) => message,
-            Ok(None) => {
-                return Err(
-                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
-                        message: "websocket closed".to_string(),
-                    },
-                );
-            }
-            Err(error) => return Err(reused_connection_died_before_first_frame(&error)),
-        };
-        match message {
-            Message::Text(text) => return Ok(text.to_string()),
-            Message::Close(_) => {
-                return Err(
-                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
-                        message: "websocket closed".to_string(),
-                    },
-                );
-            }
-            Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
-            _ => {}
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +868,8 @@ async fn collect_websocket_response(
     mut metadata: CodexWebSocketConnectionMetadata,
     reused_connection: bool,
     started_at: Instant,
+    first_token_started_at: Instant,
+    first_token_timeout: Option<Duration>,
 ) -> Result<
     (
         CodexWebSocketExchange,
@@ -741,27 +879,37 @@ async fn collect_websocket_response(
     CodexWebSocketExchangeError,
 > {
     let mut body = String::new();
-    let mut saw_response_frame = false;
+    let mut saw_content_frame = false;
     let mut first_token_ms = None;
 
     loop {
-        let message =
-            match next_websocket_message(&mut websocket, receive_idle_timeout(saw_response_frame))
-                .await
-            {
-                Ok(message) => message,
-                Err(error) if reused_connection && !saw_response_frame => {
+        let receive_timeout = receive_idle_timeout_with_first_token_deadline(
+            saw_content_frame,
+            first_token_started_at,
+            first_token_timeout,
+        )?;
+        let message = match next_websocket_message(&mut websocket, receive_timeout).await {
+            Ok(message) => message,
+            Err(error) if !saw_content_frame => {
+                if let Some(timeout) =
+                    elapsed_first_token_timeout(first_token_started_at, first_token_timeout)
+                {
+                    return Err(CodexWebSocketExchangeError::FirstTokenTimeout { timeout });
+                }
+                if reused_connection {
                     return Err(reused_connection_died_before_first_frame(&error));
                 }
-                Err(error) => return Err(error),
-            };
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         let Some(message) = message else {
             break;
         };
         let text = match message {
             Message::Text(text) => text,
             Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
-            Message::Close(_) if reused_connection && !saw_response_frame => {
+            Message::Close(_) if reused_connection && !saw_content_frame => {
                 return Err(
                     CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                         message: "websocket closed".to_string(),
@@ -799,8 +947,14 @@ async fn collect_websocket_response(
         let event = websocket_event_type(&raw);
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
             body.push_str(&frame);
-            saw_response_frame = true;
-            response_meta::update_first_token_ms(started_at, body.as_bytes(), &mut first_token_ms);
+            if event_is_first_content(event.as_deref()) {
+                saw_content_frame = true;
+                response_meta::update_first_token_ms(
+                    started_at,
+                    body.as_bytes(),
+                    &mut first_token_ms,
+                );
+            }
             true
         } else {
             false
@@ -820,7 +974,7 @@ async fn collect_websocket_response(
         }
     }
 
-    if reused_connection && !saw_response_frame {
+    if reused_connection && !saw_content_frame {
         return Err(
             CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
                 message: "websocket closed before terminal event".to_string(),
@@ -829,6 +983,84 @@ async fn collect_websocket_response(
     }
 
     Err(CodexWebSocketExchangeError::ClosedBeforeTerminal)
+}
+
+async fn prefetch_first_content_stream_frames(
+    websocket: &mut PumpedWebSocket,
+    metadata: &mut CodexWebSocketConnectionMetadata,
+    first_token_started_at: Instant,
+    first_token_timeout: Option<Duration>,
+) -> Result<Vec<String>, CodexWebSocketExchangeError> {
+    let mut prefetched_frames = Vec::new();
+    loop {
+        let receive_timeout =
+            receive_timeout_before_first_content(first_token_started_at, first_token_timeout)?;
+        let message = match next_websocket_message(websocket, receive_timeout).await {
+            Ok(Some(message)) => message,
+            Ok(None) => return Err(CodexWebSocketExchangeError::ClosedBeforeTerminal),
+            Err(error) => {
+                if let Some(timeout) =
+                    elapsed_first_token_timeout(first_token_started_at, first_token_timeout)
+                {
+                    return Err(CodexWebSocketExchangeError::FirstTokenTimeout { timeout });
+                }
+                return Err(error);
+            }
+        };
+
+        let raw = match message {
+            Message::Text(text) => text.to_string(),
+            Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
+            Message::Close(_) => return Err(CodexWebSocketExchangeError::ClosedBeforeTerminal),
+            _ => continue,
+        };
+
+        if let Some(classified) = classify_websocket_error_frame(&raw) {
+            let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
+                .or_else(|| events::retry_after_seconds_from_body(&raw));
+            return Err(CodexWebSocketExchangeError::Upstream {
+                status_code: classified.status_code,
+                retry_after_seconds,
+                body: raw,
+                set_cookie_headers: Vec::new(),
+            });
+        }
+        if let Some(reason) = websocket_incomplete_response_reason(&raw) {
+            return Err(CodexWebSocketExchangeError::IncompleteResponse { reason });
+        }
+        if let Some(message) = websocket_response_completed_parse_error(&raw) {
+            return Err(CodexWebSocketExchangeError::InvalidCompletedResponse { message });
+        }
+        if let Some(headers) = websocket_rate_limit_event_headers(&raw) {
+            metadata.rate_limit_headers.extend(headers);
+            continue;
+        }
+        if let Some(metadata_turn_state) = websocket_metadata_turn_state(&raw) {
+            metadata.turn_state = Some(metadata_turn_state);
+            continue;
+        }
+
+        let event = websocket_event_type(&raw);
+        if websocket_event_to_sse_frame(&raw).is_none() {
+            continue;
+        }
+        let is_first_content = event_is_first_content(event.as_deref());
+        prefetched_frames.push(raw);
+        if is_first_content {
+            return Ok(prefetched_frames);
+        }
+    }
+}
+
+fn reused_stream_prefetch_error(error: CodexWebSocketExchangeError) -> CodexWebSocketExchangeError {
+    match error {
+        CodexWebSocketExchangeError::ClosedBeforeTerminal
+        | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
+        | CodexWebSocketExchangeError::Transport(_) => {
+            reused_connection_died_before_first_frame(&error)
+        }
+        error => error,
+    }
 }
 
 fn reused_connection_died_before_first_frame(
@@ -863,7 +1095,7 @@ fn stream_websocket_response(
     websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
-    prefetched_text: Option<String>,
+    prefetched_frames: Vec<String>,
 ) -> CodexWebSocketStreamingExchange {
     let response_metadata = metadata.clone();
     let rate_limit_header_updates = Arc::new(Mutex::new(Vec::new()));
@@ -876,7 +1108,7 @@ fn stream_websocket_response(
             websocket,
             metadata,
             pool_return,
-            prefetched_text,
+            prefetched_frames,
             rate_limit_header_updates_for_task,
             turn_state_update_for_task,
             tx,
@@ -903,16 +1135,16 @@ async fn forward_websocket_response_stream(
     mut websocket: PumpedWebSocket,
     mut metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
-    prefetched_text: Option<String>,
+    prefetched_frames: Vec<String>,
     rate_limit_header_updates: CodexWebSocketRateLimitHeaderUpdates,
     turn_state_update: CodexWebSocketTurnStateUpdate,
     tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
 ) {
     let mut pool_return = pool_return;
-    let mut prefetched_text = prefetched_text;
-    let mut saw_response_frame = false;
+    let mut prefetched_frames: VecDeque<String> = prefetched_frames.into();
+    let mut saw_content_frame = false;
     loop {
-        let raw = if let Some(text) = prefetched_text.take() {
+        let raw = if let Some(text) = prefetched_frames.pop_front() {
             text
         } else {
             let message = tokio::select! {
@@ -925,7 +1157,7 @@ async fn forward_websocket_response_stream(
                 }
                 message = next_websocket_message(
                     &mut websocket,
-                    receive_idle_timeout(saw_response_frame),
+                    receive_idle_timeout(saw_content_frame),
                 ) => message,
             };
             let message = match message {
@@ -1009,7 +1241,9 @@ async fn forward_websocket_response_stream(
             discard_stream_websocket(websocket, pool_return).await;
             return;
         }
-        saw_response_frame = true;
+        if event_is_first_content(event.as_deref()) {
+            saw_content_frame = true;
+        }
         if terminal {
             finish_stream_websocket(websocket, metadata, pool_return.take()).await;
             return;
@@ -1028,6 +1262,56 @@ fn receive_idle_timeout(saw_response_frame: bool) -> Duration {
     } else {
         WEBSOCKET_RECEIVE_IDLE_TIMEOUT
     }
+}
+
+fn receive_idle_timeout_with_first_token_deadline(
+    saw_content_frame: bool,
+    first_token_started_at: Instant,
+    first_token_timeout: Option<Duration>,
+) -> Result<Duration, CodexWebSocketExchangeError> {
+    if saw_content_frame {
+        return Ok(WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT);
+    }
+    receive_timeout_before_first_content(first_token_started_at, first_token_timeout)
+}
+
+fn receive_timeout_before_first_content(
+    first_token_started_at: Instant,
+    first_token_timeout: Option<Duration>,
+) -> Result<Duration, CodexWebSocketExchangeError> {
+    let Some(first_token_timeout) = first_token_timeout.filter(|timeout| !timeout.is_zero()) else {
+        return Ok(WEBSOCKET_RECEIVE_IDLE_TIMEOUT);
+    };
+    let Some(remaining) = first_token_timeout.checked_sub(first_token_started_at.elapsed()) else {
+        return Err(CodexWebSocketExchangeError::FirstTokenTimeout {
+            timeout: first_token_timeout,
+        });
+    };
+    if remaining.is_zero() {
+        return Err(CodexWebSocketExchangeError::FirstTokenTimeout {
+            timeout: first_token_timeout,
+        });
+    }
+    Ok(WEBSOCKET_RECEIVE_IDLE_TIMEOUT.min(remaining))
+}
+
+fn elapsed_first_token_timeout(
+    first_token_started_at: Instant,
+    first_token_timeout: Option<Duration>,
+) -> Option<Duration> {
+    let first_token_timeout = first_token_timeout.filter(|timeout| !timeout.is_zero())?;
+    (first_token_started_at.elapsed() >= first_token_timeout).then_some(first_token_timeout)
+}
+
+fn event_is_first_content(event: Option<&str>) -> bool {
+    match event {
+        Some(event) => !is_pre_content_lifecycle_event(event),
+        None => true,
+    }
+}
+
+fn is_first_token_timeout(error: &CodexWebSocketExchangeError) -> bool {
+    matches!(error, CodexWebSocketExchangeError::FirstTokenTimeout { .. })
 }
 
 async fn next_websocket_message(

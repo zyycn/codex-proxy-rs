@@ -1024,19 +1024,15 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
         crate::support::fingerprint::test_fingerprint(),
     );
 
-    let mut response = backend
+    let Err(error) = backend
         .create_response_stream(
             &request,
             request_context("req_stream_binary", Some("chatgpt-account")),
         )
         .await
-        .expect("websocket stream should open");
-    let error = response
-        .body
-        .next()
-        .await
-        .expect("stream should yield binary error")
-        .expect_err("binary event should be rejected");
+    else {
+        panic!("binary event before first content should reject stream open");
+    };
     server.await.unwrap();
 
     assert!(matches!(

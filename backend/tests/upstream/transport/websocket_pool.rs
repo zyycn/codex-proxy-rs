@@ -156,6 +156,192 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
 }
 
 #[tokio::test]
+async fn codex_backend_client_stream_should_retry_fresh_socket_when_first_content_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_first_token_fresh_stalled",
+                        "object": "response"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "fresh retry recovered"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_first_token_fresh_recovered", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        drop(first_websocket);
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        first_token_timeout: Some(Duration::from_millis(30)),
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-first-token-fresh-timeout");
+
+    let response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_first_token_fresh_timeout", Some("chatgpt-account")),
+        )
+        .await
+        .expect("fresh first-token timeout should retry before returning stream");
+    let decision = response.websocket_pool_decision;
+    let mut stream = response.body;
+    let mut body = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.expect("retried stream chunk should be valid");
+        body.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    server.await.unwrap();
+
+    assert!(body.contains("fresh retry recovered"));
+    assert!(body.contains("resp_first_token_fresh_recovered"));
+    assert!(!body.contains("resp_first_token_fresh_stalled"));
+    assert_eq!(decision.unwrap().kind(), "new");
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn codex_backend_client_stream_should_retry_reused_socket_when_first_content_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _seed_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_first_token_reuse_seed", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let _reused_message = first_websocket.next().await.unwrap().unwrap();
+        first_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.in_progress",
+                    "response": {
+                        "id": "resp_first_token_reuse_stalled",
+                        "object": "response"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _retry_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "reuse retry recovered"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_first_token_reuse_recovered", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        drop(first_websocket);
+    });
+    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
+        first_token_timeout: Some(Duration::from_millis(30)),
+        ..websocket_pool_config_for_tests(None, None, None)
+    }));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let request = pooled_websocket_request("conversation-first-token-reuse-timeout");
+
+    let seed = backend
+        .create_response(
+            &request,
+            request_context("req_first_token_reuse_seed", Some("chatgpt-account")),
+        )
+        .await
+        .expect("seed response should populate pool");
+    let response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_first_token_reuse_timeout", Some("chatgpt-account")),
+        )
+        .await
+        .expect("reused first-token timeout should retry before returning stream");
+    let decision = response.websocket_pool_decision;
+    let mut stream = response.body;
+    let mut body = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.expect("retried reused stream chunk should be valid");
+        body.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    server.await.unwrap();
+
+    assert!(seed.body.contains("resp_first_token_reuse_seed"));
+    assert!(body.contains("reuse retry recovered"));
+    assert!(body.contains("resp_first_token_reuse_recovered"));
+    assert!(!body.contains("resp_first_token_reuse_stalled"));
+    assert_eq!(decision.unwrap().kind(), "retry_after_stale_reuse");
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_accounts() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

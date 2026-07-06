@@ -246,6 +246,7 @@ pub(crate) fn websocket_pool_config_for_tests(
         ping_interval,
         ping_timeout: Duration::from_secs(1),
         liveness_timeout,
+        first_token_timeout: None,
     }
 }
 

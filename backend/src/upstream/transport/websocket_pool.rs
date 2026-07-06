@@ -17,6 +17,7 @@ const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// WebSocket 连接池 key。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -87,6 +88,8 @@ pub struct CodexWebSocketPoolConfig {
     pub ping_timeout: Duration,
     /// idle socket 无活动多久后视为失活。
     pub liveness_timeout: Option<Duration>,
+    /// 首个内容帧到达前的绝对超时；`None` 表示禁用首 token 熔断。
+    pub first_token_timeout: Option<Duration>,
 }
 
 impl Default for CodexWebSocketPoolConfig {
@@ -101,6 +104,7 @@ impl Default for CodexWebSocketPoolConfig {
             // idle 连接不设失活截断：靠 ping/pong 保活，只在 max_age（55 分钟）
             // 或 ping 失败时关闭，最大化跨轮复用（对齐 Codex CLI 的长连接策略）。
             liveness_timeout: None,
+            first_token_timeout: Some(DEFAULT_FIRST_TOKEN_TIMEOUT),
         }
     }
 }
@@ -141,6 +145,11 @@ impl CodexWebSocketPool {
     /// pump 后台任务的保活策略（供建连时传入）。
     pub(crate) fn keepalive(&self) -> PumpKeepalive {
         self.config.keepalive()
+    }
+
+    /// 首个内容帧到达前的绝对超时；`None` 表示禁用首 token 熔断。
+    pub(crate) fn first_token_timeout(&self) -> Option<Duration> {
+        self.config.first_token_timeout
     }
 
     pub(crate) async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {

@@ -168,6 +168,9 @@ impl Services {
                 enabled: true,
                 max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
                 max_per_account: config.ws_pool.max_per_account,
+                first_token_timeout: (config.ws_pool.first_token_timeout_ms > 0).then(|| {
+                    std::time::Duration::from_millis(config.ws_pool.first_token_timeout_ms)
+                }),
                 ..CodexWebSocketPoolConfig::default()
             }))
         });
