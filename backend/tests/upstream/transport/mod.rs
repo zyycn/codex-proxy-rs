@@ -37,6 +37,7 @@ use tokio_tungstenite::{
 use crate::support::assertions::assert_substrings_appear_in_order;
 
 pub(crate) mod client;
+pub(crate) mod diagnostics;
 pub(crate) mod headers;
 pub(crate) mod http_client;
 pub(crate) mod websocket;

@@ -554,8 +554,32 @@ async fn test_app_with_two_accounts(
     (app, api_key, pool, dir)
 }
 
+async fn test_app_with_two_accounts_and_logging(
+    base_url: String,
+) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
+    let (app, _state, api_key, pool, dir) =
+        test_app_with_two_accounts_and_state_config(base_url, |config| {
+            config.logging.enabled = true;
+        })
+        .await;
+    (app, api_key, pool, dir)
+}
+
 async fn test_app_with_two_accounts_and_state(
     base_url: String,
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    SqlitePool,
+    tempfile::TempDir,
+) {
+    test_app_with_two_accounts_and_state_config(base_url, |_| {}).await
+}
+
+async fn test_app_with_two_accounts_and_state_config(
+    base_url: String,
+    configure: impl FnOnce(&mut AppConfig),
 ) -> (
     axum::Router,
     AppState,
@@ -576,8 +600,10 @@ async fn test_app_with_two_accounts_and_state(
         "chatgpt-secondary",
     )
     .await;
+    let mut config = test_config(url, base_url);
+    configure(&mut config);
     let state = test_app_state_with_pool_and_installation_id(
-        &test_config(url, base_url),
+        &config,
         pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     )

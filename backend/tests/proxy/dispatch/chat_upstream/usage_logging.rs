@@ -862,6 +862,82 @@ async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() 
 }
 
 #[tokio::test]
+async fn responses_should_record_attempt_trace_after_retrying_another_account() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {"message": "primary rate limited"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": {"message": "secondary failed"}
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let secret_input = "do not persist this input";
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts_and_logging(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .header("x-request-id", "req_attempt_trace_retry")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": secret_input,
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let event = latest_response_usage_record(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(event.level, "error");
+    assert_eq!(event.request_id.as_deref(), Some("req_attempt_trace_retry"));
+    assert_eq!(event.account_id.as_deref(), Some("acct_secondary"));
+    assert_eq!(event.status_code, Some(500));
+    assert_eq!(metadata["eventStatusCode"], 500);
+    assert_eq!(metadata["clientStatusCode"], 502);
+    assert_eq!(metadata["upstreamStatusCode"], 500);
+    assert_eq!(metadata["attemptIndex"], 1);
+    assert_eq!(metadata["attemptAccountId"], "acct_secondary");
+    assert_eq!(metadata["attemptCount"], 2);
+    assert_eq!(metadata["attempts"][0]["index"], 0);
+    assert_eq!(metadata["attempts"][0]["accountId"], "acct_primary");
+    assert_eq!(metadata["attempts"][1]["index"], 1);
+    assert_eq!(metadata["attempts"][1]["accountId"], "acct_secondary");
+    assert_eq!(metadata["requestSummary"]["inputType"], "string");
+    assert!(metadata["requestSummary"]["inputItemsCount"].is_null());
+    assert_eq!(metadata["requestSummary"]["transport"], "http_sse");
+    assert_eq!(
+        metadata["requestSummary"]["localTransport"]["useWebsocket"],
+        false
+    );
+    assert!(
+        !metadata.to_string().contains(secret_input),
+        "request summary must not persist input content: {metadata:?}",
+    );
+}
+
+#[tokio::test]
 async fn responses_should_record_session_affinity_for_completed_response() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
