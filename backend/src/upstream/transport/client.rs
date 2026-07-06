@@ -46,7 +46,9 @@ use super::websocket::{
     write_websocket_audit_artifact_from_env, CodexWebSocketConnection, CodexWebSocketExchangeError,
     CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketTurnStateUpdate,
 };
-use super::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision};
+use super::websocket_pool::{
+    CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision, DEFAULT_FIRST_TOKEN_TIMEOUT,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -324,6 +326,7 @@ pub struct CodexBackendClient {
     pub(super) base_url: String,
     fingerprint: Fingerprint,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
+    websocket_first_token_timeout: Option<Duration>,
 }
 
 impl CodexBackendClient {
@@ -334,7 +337,13 @@ impl CodexBackendClient {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             fingerprint,
             websocket_pool: None,
+            websocket_first_token_timeout: Some(DEFAULT_FIRST_TOKEN_TIMEOUT),
         }
+    }
+
+    pub fn with_websocket_first_token_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.websocket_first_token_timeout = timeout.filter(|timeout| !timeout.is_zero());
+        self
     }
 
     /// 为 Responses WebSocket 请求启用连接池。
@@ -590,10 +599,23 @@ impl CodexBackendClient {
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
-                execute_response_create_request_with_pool(&prepared, Some((pool, key)), started_at)
-                    .await
+                execute_response_create_request_with_pool(
+                    &prepared,
+                    Some((pool, key)),
+                    started_at,
+                    self.websocket_first_token_timeout,
+                )
+                .await
             }
-            _ => execute_response_create_request_with_pool(&prepared, None, started_at).await,
+            _ => {
+                execute_response_create_request_with_pool(
+                    &prepared,
+                    None,
+                    started_at,
+                    self.websocket_first_token_timeout,
+                )
+                .await
+            }
         }
         .map_err(websocket_exchange_error_to_client_error)?;
         log_websocket_pool_decision(
@@ -642,9 +664,21 @@ impl CodexBackendClient {
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
         let exchange = match (self.websocket_pool.as_deref(), pool_key) {
             (Some(pool), Some(key)) => {
-                execute_response_create_request_stream_with_pool(&prepared, Some((pool, key))).await
+                execute_response_create_request_stream_with_pool(
+                    &prepared,
+                    Some((pool, key)),
+                    self.websocket_first_token_timeout,
+                )
+                .await
             }
-            _ => execute_response_create_request_stream_with_pool(&prepared, None).await,
+            _ => {
+                execute_response_create_request_stream_with_pool(
+                    &prepared,
+                    None,
+                    self.websocket_first_token_timeout,
+                )
+                .await
+            }
         }
         .map_err(websocket_exchange_error_to_client_error)?;
         log_websocket_pool_decision(

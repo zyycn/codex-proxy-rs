@@ -518,9 +518,16 @@ pub(crate) async fn execute_response_create_request_with_pool(
     request: &CodexWebSocketRequest,
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
     started_at: Instant,
+    fallback_first_token_timeout: Option<Duration>,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     let Some((pool, key)) = pool else {
-        return execute_fresh_response_create_request(request, started_at, None).await;
+        return execute_fresh_response_create_request_with_retries(
+            request,
+            started_at,
+            fallback_first_token_timeout,
+            WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
+        )
+        .await;
     };
 
     match pool.acquire(&key).await {
@@ -582,10 +589,11 @@ pub(crate) async fn execute_response_create_request_with_pool(
             }
         }
         WebSocketPoolAcquire::Bypass(reason) => {
-            let mut exchange = execute_fresh_response_create_request(
+            let mut exchange = execute_fresh_response_create_request_with_retries(
                 request,
                 started_at,
                 pool.first_token_timeout(),
+                WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
             )
             .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
@@ -597,9 +605,15 @@ pub(crate) async fn execute_response_create_request_with_pool(
 pub(crate) async fn execute_response_create_request_stream_with_pool(
     request: &CodexWebSocketRequest,
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
+    fallback_first_token_timeout: Option<Duration>,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let Some((pool, key)) = pool else {
-        return execute_fresh_response_create_request_stream(request, None).await;
+        return execute_fresh_response_create_request_stream_with_retries(
+            request,
+            fallback_first_token_timeout,
+            WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
+        )
+        .await;
     };
 
     match pool.acquire(&key).await {
@@ -662,9 +676,12 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             }
         }
         WebSocketPoolAcquire::Bypass(reason) => {
-            let mut exchange =
-                execute_fresh_response_create_request_stream(request, pool.first_token_timeout())
-                    .await?;
+            let mut exchange = execute_fresh_response_create_request_stream_with_retries(
+                request,
+                pool.first_token_timeout(),
+                WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
+            )
+            .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
             Ok(exchange)
         }
@@ -856,7 +873,7 @@ async fn execute_pooled_response_create_request_stream(
 pub async fn execute_response_create_request(
     request: &CodexWebSocketRequest,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    execute_response_create_request_with_pool(request, None, Instant::now()).await
+    execute_response_create_request_with_pool(request, None, Instant::now(), None).await
 }
 
 // ---------------------------------------------------------------------------
