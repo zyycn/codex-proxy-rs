@@ -2,7 +2,7 @@
 
 use std::{
     collections::VecDeque,
-    io,
+    fmt, io,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -37,12 +37,12 @@ use crate::upstream::protocol::websocket::{
     OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
 };
 
-use super::response_meta;
 use super::websocket_pool::{
     CodexWebSocketConnectionMetadata, CodexWebSocketPool, CodexWebSocketPoolKey,
     PooledWebSocketConnection, WebSocketPoolAcquire, WebSocketPoolDecision,
 };
 use super::websocket_pump::{PumpKeepalive, PumpedWebSocket, RawWsStream};
+use super::{diagnostics::CodexUpstreamDiagnostics, response_meta};
 use uuid::Uuid;
 
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
@@ -120,6 +120,8 @@ pub struct CodexWebSocketExchange {
     pub first_token_ms: Option<i64>,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
 }
 
 /// Responses WebSocket live SSE exchange result.
@@ -138,6 +140,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
 }
 
 /// Responses WebSocket live SSE byte stream.
@@ -161,17 +165,8 @@ pub enum CodexWebSocketExchangeError {
     #[error("invalid websocket SSE response: {0}")]
     InvalidSse(#[from] SseError),
     /// 上游 WebSocket 错误帧。
-    #[error("websocket upstream error {status_code}: {body}")]
-    Upstream {
-        /// HTTP-style upstream status code.
-        status_code: u16,
-        /// 推导出的重试秒数。
-        retry_after_seconds: Option<u64>,
-        /// 原始错误帧。
-        body: String,
-        /// 上游透传的 `set-cookie` 列表。
-        set_cookie_headers: Vec<String>,
-    },
+    #[error("{0}")]
+    Upstream(Box<CodexWebSocketUpstreamError>),
     /// 上游返回 `response.incomplete`。
     #[error("Incomplete response returned, reason: {reason}")]
     IncompleteResponse {
@@ -208,6 +203,49 @@ pub enum CodexWebSocketExchangeError {
         /// 首 token 超时时长。
         timeout: Duration,
     },
+}
+
+/// WebSocket 上游错误帧载荷。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexWebSocketUpstreamError {
+    /// HTTP-style upstream status code.
+    pub status_code: u16,
+    /// 推导出的重试秒数。
+    pub retry_after_seconds: Option<u64>,
+    /// 原始错误帧。
+    pub body: String,
+    /// 上游透传的 `set-cookie` 列表。
+    pub set_cookie_headers: Vec<String>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
+}
+
+impl fmt::Display for CodexWebSocketUpstreamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "websocket upstream error {}: {}",
+            self.status_code, self.body
+        )
+    }
+}
+
+impl CodexWebSocketExchangeError {
+    fn upstream(
+        status_code: u16,
+        retry_after_seconds: Option<u64>,
+        body: String,
+        set_cookie_headers: Vec<String>,
+        diagnostics: CodexUpstreamDiagnostics,
+    ) -> Self {
+        Self::Upstream(Box::new(CodexWebSocketUpstreamError {
+            status_code,
+            retry_after_seconds,
+            body,
+            set_cookie_headers,
+            diagnostics,
+        }))
+    }
 }
 
 impl CodexWebSocketRequest {
@@ -389,12 +427,13 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
         .or_else(|| events::retry_after_seconds_from_body(&body));
-    CodexWebSocketExchangeError::Upstream {
+    CodexWebSocketExchangeError::upstream(
         status_code,
         retry_after_seconds,
         body,
-        set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
-    }
+        response_meta::set_cookie_headers(response.headers()),
+        response_meta::diagnostics(Some(status_code), response.headers()),
+    )
 }
 
 fn request_line_for_endpoint(endpoint: &str) -> String {
@@ -940,12 +979,13 @@ async fn collect_websocket_response(
         if let Some(classified) = classify_websocket_error_frame(&raw) {
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
-            return Err(CodexWebSocketExchangeError::Upstream {
-                status_code: classified.status_code,
+            return Err(CodexWebSocketExchangeError::upstream(
+                classified.status_code,
                 retry_after_seconds,
-                body: raw,
-                set_cookie_headers: Vec::new(),
-            });
+                raw,
+                Vec::new(),
+                CodexUpstreamDiagnostics::with_status(classified.status_code),
+            ));
         }
         if let Some(reason) = websocket_incomplete_response_reason(&raw) {
             return Err(CodexWebSocketExchangeError::IncompleteResponse { reason });
@@ -986,6 +1026,7 @@ async fn collect_websocket_response(
                 rate_limit_headers: metadata.rate_limit_headers.clone(),
                 first_token_ms,
                 pool_decision: None,
+                diagnostics: metadata.diagnostics.clone(),
             };
             return Ok((exchange, websocket, metadata));
         }
@@ -1035,12 +1076,13 @@ async fn prefetch_first_content_stream_frames(
         if let Some(classified) = classify_websocket_error_frame(&raw) {
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
-            return Err(CodexWebSocketExchangeError::Upstream {
-                status_code: classified.status_code,
+            return Err(CodexWebSocketExchangeError::upstream(
+                classified.status_code,
                 retry_after_seconds,
-                body: raw,
-                set_cookie_headers: Vec::new(),
-            });
+                raw,
+                Vec::new(),
+                CodexUpstreamDiagnostics::with_status(classified.status_code),
+            ));
         }
         if let Some(reason) = websocket_incomplete_response_reason(&raw) {
             return Err(CodexWebSocketExchangeError::IncompleteResponse { reason });
@@ -1095,6 +1137,10 @@ fn websocket_connection_metadata(
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
         rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
+        diagnostics: response_meta::diagnostics(
+            Some(response.status().as_u16()),
+            response.headers(),
+        ),
     }
 }
 
@@ -1145,6 +1191,7 @@ fn stream_websocket_response(
         rate_limit_header_updates,
         turn_state_update,
         pool_decision: None,
+        diagnostics: response_metadata.diagnostics,
     }
 }
 
@@ -1212,12 +1259,13 @@ async fn forward_websocket_response_stream(
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
             let _ = tx
-                .send(Err(CodexWebSocketExchangeError::Upstream {
-                    status_code: classified.status_code,
+                .send(Err(CodexWebSocketExchangeError::upstream(
+                    classified.status_code,
                     retry_after_seconds,
-                    body: raw,
-                    set_cookie_headers: Vec::new(),
-                }))
+                    raw,
+                    Vec::new(),
+                    CodexUpstreamDiagnostics::with_status(classified.status_code),
+                )))
                 .await;
             return;
         }

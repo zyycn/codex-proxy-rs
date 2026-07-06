@@ -424,6 +424,34 @@ impl From<AdminAccountRefreshResult> for AccountRefreshData {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountQuotaData {
+    quota: Value,
+    raw: Value,
+    quota_data: AdminAccountQuotaData,
+    plan_type: Option<String>,
+    account: AdminAccountData,
+}
+
+impl AccountQuotaData {
+    fn from_account(
+        quota: Value,
+        raw: Value,
+        quota_data: AdminAccountQuotaData,
+        account: AdminAccountData,
+    ) -> Self {
+        let plan_type = account.plan_type.clone();
+        Self {
+            quota,
+            raw,
+            quota_data,
+            plan_type,
+            account,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct AccountHealthCheckRequest {
@@ -664,18 +692,13 @@ pub(crate) async fn account_quota(
             let quota_json = quota.to_string();
             let mut quota_data = quota_data(&quota_json, Some(Utc::now()));
             apply_account_quota_window_token_usage(&state, &account_id, &mut quota_data).await;
-            let plan_type = quota
-                .get("plan_type")
-                .and_then(Value::as_str)
-                .map(ToString::to_string);
+            let account =
+                account_data_for_quota_refresh(&state, &account_id, quota_data.clone()).await?;
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminEnvelope::ok(serde_json::json!({
-                    "quota": quota,
-                    "raw": raw,
-                    "quotaData": quota_data,
-                    "planType": plan_type,
-                })),
+                AdminEnvelope::ok(AccountQuotaData::from_account(
+                    quota, raw, quota_data, account,
+                )),
             ))
         }
         Err(AdminAccountError::NotFound) => Err(account_not_found()),
@@ -688,6 +711,25 @@ pub(crate) async fn account_quota(
         ))),
         Err(e) => Err(account_error(&e)),
     }
+}
+
+async fn account_data_for_quota_refresh(
+    state: &AppState,
+    account_id: &str,
+    quota_data: AdminAccountQuotaData,
+) -> Result<AdminAccountData, AdminError> {
+    let Some(account) = state
+        .services
+        .admin_accounts
+        .get(account_id)
+        .await
+        .map_err(|error| account_error(&error))?
+    else {
+        return Err(account_not_found());
+    };
+    let quota_by_account = HashMap::from([(account_id.to_string(), quota_data)]);
+    let stats = account_list_stats(state, std::slice::from_ref(&account), &quota_by_account).await;
+    Ok(stats.data_for(account))
 }
 
 /// `POST /api/admin/accounts/import`

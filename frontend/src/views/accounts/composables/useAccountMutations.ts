@@ -20,6 +20,18 @@ import { useIdSet } from '@/composables/useIdSet'
 import { withMinimumDuration } from '@/utils/async'
 
 type TokenImportAccount = { token: string } | { refreshToken: string }
+type AccountRow = {
+  id: string
+  status: string
+  planType?: string | null
+  quota: any
+  usage: any
+  [key: string]: any
+}
+
+type AccountQuotaRefreshResult = {
+  account: AccountRow
+}
 
 export function useAccountMutations(options: {
   page: Ref<number>
@@ -30,7 +42,7 @@ export function useAccountMutations(options: {
 }) {
   const { downloadJson } = useDownload()
   const loading = ref(true)
-  const accounts = ref<any[]>([])
+  const accounts = ref<AccountRow[]>([])
   const accountSummary = ref({
     total: 0,
     active: 0,
@@ -341,23 +353,19 @@ export function useAccountMutations(options: {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
         await withMinimumDuration(async () => {
-          const result = await getAccountQuota({ id: accountId })
-          if (result?.quotaData) {
-            accounts.value = accounts.value.map((account) =>
-              account.id === accountId
-                ? {
-                    ...account,
-                    quota: result.quotaData,
-                    planType: result.planType ?? account.planType,
-                  }
-                : account,
-            )
-          }
+          const result = (await getAccountQuota({ id: accountId })) as AccountQuotaRefreshResult
+          mergeAccountQuotaRefresh(accountId, result)
         })
       } catch (error) {
         console.error('Failed to refresh account quota:', error)
       }
     })
+  }
+
+  function mergeAccountQuotaRefresh(accountId: string, result: AccountQuotaRefreshResult) {
+    accounts.value = accounts.value.map((account) =>
+      account.id === accountId ? { ...account, ...result.account } : account,
+    )
   }
 
   async function handleToggleSchedule(account: any) {

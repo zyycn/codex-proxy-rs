@@ -6,7 +6,8 @@ use crate::upstream::protocol::events::retry_after_seconds_from_body;
 use super::{
     client::{read_capped_error_body, retry_after_seconds, truncate_for_error},
     endpoints::usage_endpoint_urls,
-    CodexBackendClient, CodexClientError, CodexClientResult, CodexRequestContext,
+    response_meta, CodexBackendClient, CodexClientError, CodexClientResult, CodexRequestContext,
+    CodexUpstreamDiagnostics,
 };
 
 impl CodexBackendClient {
@@ -18,6 +19,7 @@ impl CodexBackendClient {
             let headers = self.usage_request_headers(context)?;
             let response = self.client.get(endpoint).headers(headers).send().await?;
             let status = response.status();
+            let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
             let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
             if status == StatusCode::NOT_FOUND {
@@ -31,6 +33,7 @@ impl CodexBackendClient {
                     retry_after_seconds: retry_after_seconds
                         .or_else(|| retry_after_seconds_from_body(&body)),
                     body,
+                    diagnostics,
                     set_cookie_headers: Vec::new(),
                 });
             }
@@ -49,6 +52,7 @@ impl CodexBackendClient {
                 || "usage endpoint is unavailable".to_string(),
                 |body| format!("invalid usage response: {}", truncate_for_error(&body)),
             ),
+            diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
             set_cookie_headers: Vec::new(),
         })
     }

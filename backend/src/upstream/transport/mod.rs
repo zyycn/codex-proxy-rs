@@ -1,6 +1,7 @@
 //! Codex HTTP/SSE/WebSocket 上游 transport。
 
 pub mod client;
+pub mod diagnostics;
 pub mod endpoints;
 pub mod headers;
 mod response_meta;
@@ -19,6 +20,7 @@ pub use self::{
         CodexModelCatalogRequest, CodexRateLimitHeaderUpdates, CodexRequestContext,
         CodexTurnStateUpdate,
     },
+    diagnostics::CodexUpstreamDiagnostics,
     endpoints::{
         endpoint_request_path, endpoint_url, usage_endpoint_urls, CODEX_RESPONSES_COMPACT_PATH,
         CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, CODEX_USAGE_PATH, WHAM_USAGE_PATH,

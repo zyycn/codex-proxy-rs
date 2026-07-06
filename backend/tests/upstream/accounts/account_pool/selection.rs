@@ -270,11 +270,22 @@ async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_ex
     .execute(&pool)
     .await
     .unwrap();
+    let usage_records = std::sync::Arc::new(
+        codex_proxy_rs::admin::monitoring::usage_record_service::AdminUsageRecordService::new(
+            codex_proxy_rs::admin::monitoring::usage_record_store::SqliteUsageRecordStore::new(
+                pool.clone(),
+            ),
+            true,
+            2_000,
+            false,
+        ),
+    );
     let runtime_pool = codex_proxy_rs::upstream::accounts::pool::RuntimeAccountPoolService::new(
         std::sync::Arc::new(store),
         AccountPoolOptions::default(),
         0,
-    );
+    )
+    .with_usage_records(usage_records);
     runtime_pool.restore_from_repository().await.unwrap();
 
     let acquired = runtime_pool
@@ -352,6 +363,22 @@ async fn runtime_account_pool_should_persist_quota_window_reset_when_cooldown_ex
     );
     assert!(persisted_reset_at.is_some_and(|reset_at| reset_at > now));
     assert_eq!(stored_limit_window_seconds, Some(60));
+    let audit_event: (String, String) = sqlx::query_as(
+        "select kind, metadata_json from usage_records where account_id = ? order by created_at desc limit 1",
+    )
+    .bind("acct_quota_reset")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&audit_event.1).unwrap();
+
+    assert_eq!(audit_event.0, "account.state");
+    assert_eq!(metadata["reason"], "runtime_quota_window_refreshed");
+    assert_eq!(metadata["oldStatus"], "quota_exhausted");
+    assert_eq!(metadata["newStatus"], "active");
+    assert_eq!(metadata["syncUsageWindow"], true);
+    assert_eq!(metadata["after"]["quotaVerifyRequired"], true);
+    assert_eq!(metadata["after"]["windowRequestCount"], 0);
 }
 
 #[test]

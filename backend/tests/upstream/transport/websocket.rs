@@ -322,18 +322,12 @@ async fn websocket_execute_response_create_request_should_surface_response_faile
         .expect_err("response.failed should be surfaced as upstream error");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream {
-        status_code,
-        retry_after_seconds,
-        body,
-        ..
-    } = error
-    else {
+    let CodexWebSocketExchangeError::Upstream(error) = error else {
         panic!("expected upstream websocket error");
     };
-    assert_eq!(status_code, 429);
-    assert_eq!(retry_after_seconds, Some(12));
-    assert!(body.contains("rate_limit_exceeded"));
+    assert_eq!(error.status_code, 429);
+    assert_eq!(error.retry_after_seconds, Some(12));
+    assert!(error.body.contains("rate_limit_exceeded"));
 }
 
 #[tokio::test]
@@ -405,18 +399,12 @@ async fn websocket_execute_response_create_request_should_preserve_opening_error
         .expect_err("failed opening should surface upstream status");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream {
-        status_code,
-        retry_after_seconds,
-        body,
-        ..
-    } = error
-    else {
+    let CodexWebSocketExchangeError::Upstream(error) = error else {
         panic!("expected upstream opening error");
     };
-    assert_eq!(status_code, 429);
-    assert_eq!(retry_after_seconds, Some(33));
-    assert!(body.contains("rate limited"));
+    assert_eq!(error.status_code, 429);
+    assert_eq!(error.retry_after_seconds, Some(33));
+    assert!(error.body.contains("rate limited"));
 }
 
 #[tokio::test]
@@ -482,18 +470,12 @@ async fn websocket_execute_response_create_request_should_surface_wrapped_error_
         .expect_err("wrapped error should surface as upstream error");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream {
-        status_code,
-        retry_after_seconds,
-        body,
-        ..
-    } = error
-    else {
+    let CodexWebSocketExchangeError::Upstream(error) = error else {
         panic!("expected wrapped upstream error");
     };
-    assert_eq!(status_code, 409);
-    assert_eq!(retry_after_seconds, Some(17));
-    assert!(body.contains("wrapped conflict"));
+    assert_eq!(error.status_code, 409);
+    assert_eq!(error.retry_after_seconds, Some(17));
+    assert!(error.body.contains("wrapped conflict"));
 }
 
 #[tokio::test]
@@ -530,14 +512,11 @@ async fn websocket_execute_response_create_request_should_surface_connection_lim
         .expect_err("connection limit should surface as upstream error");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::Upstream {
-        status_code, body, ..
-    } = error
-    else {
+    let CodexWebSocketExchangeError::Upstream(error) = error else {
         panic!("expected connection limit upstream error");
     };
-    assert_eq!(status_code, 503);
-    assert!(body.contains("websocket_connection_limit_reached"));
+    assert_eq!(error.status_code, 503);
+    assert!(error.body.contains("websocket_connection_limit_reached"));
 }
 
 #[tokio::test]

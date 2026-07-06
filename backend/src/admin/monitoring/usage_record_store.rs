@@ -286,7 +286,6 @@ fn usage_record_summary_fields(event: &UsageRecord) -> UsageRecordSummaryFields 
                     "upstreamRequestId",
                     "upstream_request_id",
                     "openaiRequestId",
-                    "cfRay",
                 ],
             )
         }),

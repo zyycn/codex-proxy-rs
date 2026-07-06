@@ -8,3 +8,4 @@ mod prefetch;
 pub(crate) mod service;
 mod sse_failure;
 mod stream_lifecycle;
+mod trace;

@@ -46,11 +46,38 @@ async fn admin_account_quota_should_send_usage_cookie() {
             access_token: SecretString::new("access-quota-cookie".to_string().into()),
             refresh_token: None,
             access_token_expires_at: None,
-            status: AccountStatus::Active,
+            status: AccountStatus::QuotaExhausted,
             added_at: None,
         },
     )
     .await;
+    sqlx::query(
+        "insert into account_usage (
+            account_id,
+            request_count,
+            window_request_count,
+            window_input_tokens,
+            window_output_tokens,
+            window_cached_tokens,
+            window_started_at,
+            window_reset_at,
+            limit_window_seconds,
+            last_used_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("acct_quota_cookie")
+    .bind(9)
+    .bind(9)
+    .bind(9_000)
+    .bind(900)
+    .bind(90)
+    .bind("2027-01-01T00:00:00Z")
+    .bind("2027-01-01T05:00:00Z")
+    .bind(18_000)
+    .bind("2027-01-15T04:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "insert into usage_time_buckets (
             bucket_start,
@@ -71,6 +98,29 @@ async fn admin_account_quota_should_send_usage_cookie() {
     .bind(500)
     .bind(300)
     .bind("2027-01-15T04:00:00Z")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into usage_time_buckets (
+            bucket_start,
+            account_id,
+            model,
+            request_count,
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("2027-01-15T09:00:00+00:00")
+    .bind("acct_quota_cookie")
+    .bind("gpt-5")
+    .bind(1)
+    .bind(1_500)
+    .bind(500)
+    .bind(300)
+    .bind("2027-01-15T09:00:00Z")
     .execute(&pool)
     .await
     .unwrap();
@@ -107,6 +157,15 @@ async fn admin_account_quota_should_send_usage_cookie() {
     );
     let body = response_json(response).await;
     assert_eq!(body["data"]["planType"], "plus");
+    assert_eq!(body["data"]["account"]["status"], "active");
+    assert_eq!(body["data"]["account"]["usage"]["requestCount"], 1);
+    assert_eq!(body["data"]["account"]["usage"]["inputTokens"], 1_500);
+    assert_eq!(body["data"]["account"]["usage"]["outputTokens"], 500);
+    assert_eq!(body["data"]["account"]["usage"]["cachedTokens"], 300);
+    assert_eq!(
+        body["data"]["account"]["usage"]["models"][0]["model"],
+        "gpt-5"
+    );
     assert_eq!(
         body["data"]["quotaData"]["windows"][0]["labelDisplay"],
         "5小时限额"
@@ -125,6 +184,6 @@ async fn admin_account_quota_should_send_usage_cookie() {
     );
     assert_eq!(
         body["data"]["quotaData"]["windows"][1]["tokenUsageDisplay"],
-        "0"
+        "2K"
     );
 }

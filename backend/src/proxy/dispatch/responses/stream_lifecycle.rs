@@ -24,7 +24,7 @@ use crate::{
         },
         transport::{
             CodexBackendTransport, CodexRateLimitHeaderUpdates, CodexTurnStateUpdate,
-            WebSocketPoolDecision,
+            CodexUpstreamDiagnostics, WebSocketPoolDecision,
         },
     },
 };
@@ -40,6 +40,7 @@ use super::{
         stream_failure_metadata, stream_failure_source, synthetic_stream_disconnected_detail,
         STREAM_DISCONNECTED_CODE, STREAM_DISCONNECTED_MESSAGE,
     },
+    trace::ResponseDispatchAttempt,
 };
 use crate::proxy::dispatch::cloudflare::CloudflareRecovery;
 
@@ -65,6 +66,9 @@ pub(super) struct LiveResponseStreamContext {
     pub(super) turn_state_update: Option<CodexTurnStateUpdate>,
     pub(super) websocket_pool_decision: Option<WebSocketPoolDecision>,
     pub(super) turn_state: Option<String>,
+    pub(super) diagnostics: CodexUpstreamDiagnostics,
+    pub(super) attempt: ResponseDispatchAttempt,
+    pub(super) attempts: Vec<ResponseDispatchAttempt>,
     pub(super) started_at: Instant,
 }
 

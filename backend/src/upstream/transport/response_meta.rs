@@ -6,6 +6,15 @@ use reqwest::header::{HeaderMap, SET_COOKIE};
 
 use crate::upstream::protocol::responses::update_first_response_event_ms;
 
+use super::diagnostics::CodexUpstreamDiagnostics;
+
+pub(super) fn diagnostics(
+    status_code: Option<u16>,
+    headers: &HeaderMap,
+) -> CodexUpstreamDiagnostics {
+    CodexUpstreamDiagnostics::from_headers(status_code, headers)
+}
+
 pub(super) fn turn_state(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-codex-turn-state")
