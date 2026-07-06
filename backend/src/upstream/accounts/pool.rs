@@ -9,8 +9,13 @@ use std::{
 
 use chrono::{DateTime, Duration, Utc};
 use indexmap::IndexMap;
+use serde_json::{json, Value};
 use thiserror::Error;
 
+use crate::admin::monitoring::{
+    usage_record_model::{UsageRecord, UsageRecordLevel},
+    usage_record_service::AdminUsageRecordService,
+};
 use crate::infra::time::parse_rfc3339_utc;
 use crate::upstream::accounts::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
 use crate::upstream::accounts::store::AccountStore;
@@ -227,12 +232,102 @@ impl RuntimeAccountStateSnapshot {
             || self.window_reset_at != other.window_reset_at
             || self.limit_window_seconds != other.limit_window_seconds
     }
+
+    fn metadata_value(&self) -> Value {
+        json!({
+            "status": self.status.as_str(),
+            "quotaLimitReached": self.quota_limit_reached,
+            "quotaVerifyRequired": self.quota_verify_required,
+            "quotaCooldownUntil": self.quota_cooldown_until,
+            "edgeCooldownUntil": self.cloudflare_cooldown_until,
+            "windowRequestCount": self.window_request_count,
+            "windowInputTokens": self.window_input_tokens,
+            "windowOutputTokens": self.window_output_tokens,
+            "windowCachedTokens": self.window_cached_tokens,
+            "windowImageInputTokens": self.window_image_input_tokens,
+            "windowImageOutputTokens": self.window_image_output_tokens,
+            "windowImageRequestCount": self.window_image_request_count,
+            "windowImageRequestFailedCount": self.window_image_request_failed_count,
+            "windowStartedAt": self.window_started_at,
+            "windowResetAt": self.window_reset_at,
+            "limitWindowSeconds": self.limit_window_seconds,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
 struct RefreshedAccountState {
     account: Account,
     sync_usage_window: bool,
+    transition: AccountStateTransition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountStateTransitionReason {
+    AccessTokenExpired,
+    RuntimeQuotaWindowRefreshed,
+    RuntimeStateRefreshed,
+    StatusSet,
+    QuotaCooldownSet,
+    QuotaSnapshotApplied,
+    EdgeCooldownSet,
+}
+
+impl AccountStateTransitionReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AccessTokenExpired => "access_token_expired",
+            Self::RuntimeQuotaWindowRefreshed => "runtime_quota_window_refreshed",
+            Self::RuntimeStateRefreshed => "runtime_state_refreshed",
+            Self::StatusSet => "status_set",
+            Self::QuotaCooldownSet => "quota_cooldown_set",
+            Self::QuotaSnapshotApplied => "quota_snapshot_applied",
+            Self::EdgeCooldownSet => "edge_cooldown_set",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccountStateTransition {
+    account_id: String,
+    reason: AccountStateTransitionReason,
+    before: RuntimeAccountStateSnapshot,
+    after: RuntimeAccountStateSnapshot,
+    sync_usage_window: bool,
+}
+
+impl AccountStateTransition {
+    fn new(
+        account_id: &str,
+        reason: AccountStateTransitionReason,
+        before: Option<RuntimeAccountStateSnapshot>,
+        after: Option<RuntimeAccountStateSnapshot>,
+    ) -> Option<Self> {
+        let before = before?;
+        let after = after?;
+        if before == after {
+            return None;
+        }
+        let sync_usage_window = before.usage_window_changed(&after);
+        Some(Self {
+            account_id: account_id.to_string(),
+            reason,
+            before,
+            after,
+            sync_usage_window,
+        })
+    }
+
+    fn metadata(&self) -> Value {
+        json!({
+            "reason": self.reason.as_str(),
+            "oldStatus": self.before.status.as_str(),
+            "newStatus": self.after.status.as_str(),
+            "syncUsageWindow": self.sync_usage_window,
+            "before": self.before.metadata_value(),
+            "after": self.after.metadata_value(),
+        })
+    }
 }
 
 /// 运行时窗口用量增量。
@@ -562,9 +657,18 @@ impl AccountPool {
             }
             let after = RuntimeAccountStateSnapshot::from(&*account);
             if before != after {
+                let reason = runtime_refresh_transition_reason(&before, &after);
+                let sync_usage_window = before.usage_window_changed(&after);
                 refreshed_accounts.push(RefreshedAccountState {
                     account: account.clone(),
-                    sync_usage_window: before.usage_window_changed(&after),
+                    sync_usage_window,
+                    transition: AccountStateTransition {
+                        account_id: account_id.clone(),
+                        reason,
+                        before,
+                        after,
+                        sync_usage_window,
+                    },
                 });
             }
         }
@@ -886,12 +990,26 @@ fn access_token_expired(account: &Account, now: DateTime<Utc>) -> bool {
     }
 }
 
+fn runtime_refresh_transition_reason(
+    before: &RuntimeAccountStateSnapshot,
+    after: &RuntimeAccountStateSnapshot,
+) -> AccountStateTransitionReason {
+    if before.status == AccountStatus::Active && after.status == AccountStatus::Expired {
+        return AccountStateTransitionReason::AccessTokenExpired;
+    }
+    if before.quota_limit_reached && !after.quota_limit_reached && after.quota_verify_required {
+        return AccountStateTransitionReason::RuntimeQuotaWindowRefreshed;
+    }
+    AccountStateTransitionReason::RuntimeStateRefreshed
+}
+
 /// 运行时账号池服务。
 #[derive(Clone)]
 pub struct RuntimeAccountPoolService {
     pool: StdArc<tokio::sync::Mutex<AccountPool>>,
     store: StdArc<dyn AccountStore>,
     request_interval: StdArc<std::sync::RwLock<StdDuration>>,
+    usage_records: Option<StdArc<AdminUsageRecordService>>,
 }
 
 impl RuntimeAccountPoolService {
@@ -907,7 +1025,14 @@ impl RuntimeAccountPoolService {
             request_interval: StdArc::new(std::sync::RwLock::new(StdDuration::from_millis(
                 request_interval_ms,
             ))),
+            usage_records: None,
         }
+    }
+
+    /// 注入账号状态审计事件记录器。
+    pub fn with_usage_records(mut self, usage_records: StdArc<AdminUsageRecordService>) -> Self {
+        self.usage_records = Some(usage_records);
+        self
     }
 
     /// 更新账号池运行参数。
@@ -1021,7 +1146,28 @@ impl RuntimeAccountPoolService {
                 false
             }
         };
-        let in_memory = self.pool.lock().await.set_status(account_id, status);
+        let (in_memory, transition) = {
+            let mut pool = self.pool.lock().await;
+            let before = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            let in_memory = pool.set_status(account_id, status);
+            let after = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            (
+                in_memory,
+                AccountStateTransition::new(
+                    account_id,
+                    AccountStateTransitionReason::StatusSet,
+                    before,
+                    after,
+                ),
+            )
+        };
+        if persisted {
+            self.record_account_state_transition(transition).await;
+        }
         persisted || in_memory
     }
 
@@ -1038,11 +1184,28 @@ impl RuntimeAccountPoolService {
                 false
             }
         };
-        let in_memory = self
-            .pool
-            .lock()
-            .await
-            .mark_quota_limited_until(account_id, until);
+        let (in_memory, transition) = {
+            let mut pool = self.pool.lock().await;
+            let before = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            let in_memory = pool.mark_quota_limited_until(account_id, until);
+            let after = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            (
+                in_memory,
+                AccountStateTransition::new(
+                    account_id,
+                    AccountStateTransitionReason::QuotaCooldownSet,
+                    before,
+                    after,
+                ),
+            )
+        };
+        if persisted {
+            self.record_account_state_transition(transition).await;
+        }
         persisted || in_memory
     }
 
@@ -1068,6 +1231,7 @@ impl RuntimeAccountPoolService {
 
     async fn persist_runtime_account_states(&self, refreshed_states: Vec<RefreshedAccountState>) {
         for refreshed in refreshed_states {
+            let transition = refreshed.transition.clone();
             if let Err(error) = self
                 .store
                 .sync_runtime_account_state(&refreshed.account, refreshed.sync_usage_window)
@@ -1078,7 +1242,34 @@ impl RuntimeAccountPoolService {
                     error = %error,
                     "failed to persist refreshed runtime account state"
                 );
+            } else {
+                self.record_account_state_transition(Some(transition)).await;
             }
+        }
+    }
+
+    async fn record_account_state_transition(&self, transition: Option<AccountStateTransition>) {
+        let Some(transition) = transition else {
+            return;
+        };
+        let Some(usage_records) = &self.usage_records else {
+            return;
+        };
+        let mut event = UsageRecord::new(
+            "account.state",
+            UsageRecordLevel::Info,
+            "account runtime state changed",
+        );
+        event.account_id = Some(transition.account_id.clone());
+        event.metadata = transition.metadata();
+
+        if let Err(error) = usage_records.record(event).await {
+            tracing::warn!(
+                account_id = %transition.account_id,
+                reason = transition.reason.as_str(),
+                error = %error,
+                "failed to record account state transition"
+            );
         }
     }
 
@@ -1296,24 +1487,50 @@ impl RuntimeAccountPoolService {
             }
         };
 
-        if let Some(reset_at) = reset_at {
-            if let Err(error) = self
+        let window_persisted = if let Some(reset_at) = reset_at {
+            match self
                 .store
                 .sync_rate_limit_window(account_id, reset_at, limit_window_seconds)
                 .await
             {
-                tracing::warn!(
-                    account_id,
-                    error = %error,
-                    "failed to persist verified quota window"
-                );
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        account_id,
+                        error = %error,
+                        "failed to persist verified quota window"
+                    );
+                    false
+                }
             }
-        }
+        } else {
+            true
+        };
 
-        let mut pool = self.pool.lock().await;
-        let in_memory = pool.apply_quota_state(account_id, limit_reached, cooldown_until);
-        if let Some(reset_at) = reset_at {
-            pool.sync_rate_limit_window(account_id, reset_at, limit_window_seconds);
+        let (in_memory, transition) = {
+            let mut pool = self.pool.lock().await;
+            let before = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            let in_memory = pool.apply_quota_state(account_id, limit_reached, cooldown_until);
+            if let Some(reset_at) = reset_at {
+                pool.sync_rate_limit_window(account_id, reset_at, limit_window_seconds);
+            }
+            let after = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            (
+                in_memory,
+                AccountStateTransition::new(
+                    account_id,
+                    AccountStateTransitionReason::QuotaSnapshotApplied,
+                    before,
+                    after,
+                ),
+            )
+        };
+        if persisted && window_persisted {
+            self.record_account_state_transition(transition).await;
         }
 
         persisted || in_memory
@@ -1363,11 +1580,28 @@ impl RuntimeAccountPoolService {
                 false
             }
         };
-        let in_memory = self
-            .pool
-            .lock()
-            .await
-            .set_cloudflare_cooldown_until(account_id, cooldown_until);
+        let (in_memory, transition) = {
+            let mut pool = self.pool.lock().await;
+            let before = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            let in_memory = pool.set_cloudflare_cooldown_until(account_id, cooldown_until);
+            let after = pool
+                .get(account_id)
+                .map(|account| RuntimeAccountStateSnapshot::from(&account));
+            (
+                in_memory,
+                AccountStateTransition::new(
+                    account_id,
+                    AccountStateTransitionReason::EdgeCooldownSet,
+                    before,
+                    after,
+                ),
+            )
+        };
+        if persisted {
+            self.record_account_state_transition(transition).await;
+        }
         persisted || in_memory
     }
 }

@@ -34,6 +34,7 @@ use crate::upstream::protocol::websocket::{
     websocket_audit_artifact_from_attempt, websocket_payload_audit_snapshot,
 };
 
+use super::diagnostics::CodexUpstreamDiagnostics;
 use super::endpoints::{endpoint_url, CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH};
 use super::headers::{
     build_ordered_codex_base_headers, insert_optional_header, insert_ordered_headers,
@@ -129,6 +130,8 @@ pub enum CodexClientError {
         body: String,
         /// 推导出的重试秒数。
         retry_after_seconds: Option<u64>,
+        /// 上游诊断元数据。
+        diagnostics: CodexUpstreamDiagnostics,
         /// 上游透传的 `set-cookie` 列表。
         set_cookie_headers: Vec<String>,
     },
@@ -255,6 +258,8 @@ pub struct CodexBackendResponse {
     pub first_token_ms: Option<i64>,
     /// WebSocket 连接池决策。
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -302,6 +307,8 @@ pub struct CodexBackendStreamingResponse {
     pub turn_state_update: Option<CodexTurnStateUpdate>,
     /// WebSocket 连接池决策。
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
 }
 
 /// Codex compact 端点响应。
@@ -313,6 +320,8 @@ pub struct CodexCompactResponse {
     pub set_cookie_headers: Vec<String>,
     /// 上游透传的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +385,7 @@ impl CodexBackendClient {
             .send()
             .await?;
         let status = response.status();
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let turn_state = response_meta::turn_state(response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
@@ -388,6 +398,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                diagnostics,
                 set_cookie_headers,
             });
         }
@@ -410,6 +421,7 @@ impl CodexBackendClient {
             rate_limit_headers,
             first_token_ms,
             websocket_pool_decision: None,
+            diagnostics,
         })
     }
 
@@ -428,6 +440,7 @@ impl CodexBackendClient {
             .send()
             .await?;
         let status = response.status();
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let turn_state = response_meta::turn_state(response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
@@ -440,6 +453,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                diagnostics,
                 set_cookie_headers,
             });
         }
@@ -453,6 +467,7 @@ impl CodexBackendClient {
             rate_limit_header_updates: None,
             turn_state_update: None,
             websocket_pool_decision: None,
+            diagnostics,
         })
     }
 
@@ -634,6 +649,7 @@ impl CodexBackendClient {
             rate_limit_headers: exchange.rate_limit_headers,
             first_token_ms: exchange.first_token_ms,
             websocket_pool_decision: exchange.pool_decision,
+            diagnostics: exchange.diagnostics,
         })
     }
 
@@ -701,6 +717,7 @@ impl CodexBackendClient {
             rate_limit_header_updates: Some(exchange.rate_limit_header_updates),
             turn_state_update: Some(exchange.turn_state_update),
             websocket_pool_decision: exchange.pool_decision,
+            diagnostics: exchange.diagnostics,
         })
     }
 
@@ -738,6 +755,7 @@ impl CodexBackendClient {
             .await?;
 
         let status = response.status();
+        let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
@@ -749,6 +767,7 @@ impl CodexBackendClient {
                 retry_after_seconds: retry_after_seconds
                     .or_else(|| retry_after_seconds_from_body(&body)),
                 body,
+                diagnostics,
                 set_cookie_headers,
             });
         }
@@ -761,12 +780,16 @@ impl CodexBackendClient {
                     "Compact response is not valid JSON: {}",
                     truncate_for_error(&body)
                 ),
+                diagnostics: CodexUpstreamDiagnostics::with_status(
+                    StatusCode::BAD_GATEWAY.as_u16(),
+                ),
                 set_cookie_headers: set_cookie_headers.clone(),
             })?;
         Ok(CodexCompactResponse {
             body: parsed,
             set_cookie_headers,
             rate_limit_headers,
+            diagnostics,
         })
     }
 
@@ -801,6 +824,7 @@ impl CodexBackendClient {
             status: StatusCode::BAD_GATEWAY,
             retry_after_seconds: None,
             body: "backend model catalog is unavailable".to_string(),
+            diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
             set_cookie_headers: Vec::new(),
         })
     }
@@ -1201,17 +1225,17 @@ fn websocket_exchange_error_to_client_error(
     error: CodexWebSocketExchangeError,
 ) -> CodexClientError {
     match error {
-        CodexWebSocketExchangeError::Upstream {
-            status_code,
-            retry_after_seconds,
-            body,
-            set_cookie_headers,
-        } => CodexClientError::Upstream {
-            status: StatusCode::from_u16(status_code).unwrap_or(StatusCode::BAD_GATEWAY),
-            body,
-            retry_after_seconds,
-            set_cookie_headers,
-        },
+        CodexWebSocketExchangeError::Upstream(upstream) => {
+            let upstream = *upstream;
+            CodexClientError::Upstream {
+                status: StatusCode::from_u16(upstream.status_code)
+                    .unwrap_or(StatusCode::BAD_GATEWAY),
+                body: upstream.body,
+                retry_after_seconds: upstream.retry_after_seconds,
+                diagnostics: upstream.diagnostics,
+                set_cookie_headers: upstream.set_cookie_headers,
+            }
+        }
         error => CodexClientError::WebSocket(error),
     }
 }

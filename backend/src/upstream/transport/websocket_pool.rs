@@ -352,6 +352,7 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
+    pub(crate) diagnostics: super::diagnostics::CodexUpstreamDiagnostics,
 }
 
 pub(crate) struct PooledWebSocketConnection {

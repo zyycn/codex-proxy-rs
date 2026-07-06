@@ -82,10 +82,12 @@ use super::{
     affinity::{evict_reasoning_replay, record_response_affinity},
     errors::{ResponseDispatchError, ResponseDispatchStreamError},
     event_recording::{
-        insert_websocket_pool_decision, record_prefetched_response_stream_failure_event,
-        record_response_dispatch_error_event, record_response_upstream_error_event,
-        ResponseDispatchErrorDetails, ResponseDispatchErrorEventRecord,
-        ResponseStreamFailureEventRecord, ResponseUpstreamErrorEventRecord,
+        insert_response_status_metadata, insert_response_trace_metadata,
+        insert_response_upstream_diagnostics, insert_websocket_pool_decision,
+        record_prefetched_response_stream_failure_event, record_response_dispatch_error_event,
+        record_response_upstream_error_event, ResponseDispatchErrorDetails,
+        ResponseDispatchErrorEventRecord, ResponseStreamFailureEventRecord,
+        ResponseUpstreamErrorEventRecord,
     },
     live_stream::spawn_live_response_stream,
     prefetch::prefetch_first_sse_chunk,
@@ -96,6 +98,7 @@ use super::{
         sse_failure_invalid_reasoning_replay, stream_failure_http_status,
     },
     stream_lifecycle::LiveResponseStreamContext,
+    trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
 };
 
 /// OpenAI Responses 调度服务。
@@ -387,11 +390,13 @@ impl ResponseDispatchService {
         let mut history_recovery_used = false;
         let mut empty_response_retries = 0u8;
         let mut quota_verify_attempts = 0usize;
+        let mut trace = ResponseDispatchTrace::default();
         const MAX_EMPTY_RESPONSE_RETRIES: u8 = 2;
-        let (account, response, collected_response): (
+        let (account, response, collected_response, attempt): (
             Account,
             CodexBackendResponse,
             CollectedResponse,
+            ResponseDispatchAttempt,
         ) = loop {
             let mut attempt_acquire_request = acquire_request
                 .clone()
@@ -487,6 +492,7 @@ impl ResponseDispatchService {
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
             let release_account_id = account.id.clone();
+            let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_response_with_account_retrying_5xx(
                 &self.codex,
                 self.installation_id.as_deref(),
@@ -626,7 +632,7 @@ impl ResponseDispatchService {
                             continue;
                         }
                     }
-                    break (account, response, collected_response);
+                    break (account, response, collected_response, attempt);
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
                     exhausted_accounts.record_rate_limited(
@@ -750,7 +756,10 @@ impl ResponseDispatchService {
                         started_at,
                         stream: false,
                         transport: backend_transport_for_response_request(&request),
+                        request: &request,
                         error: &error,
+                        trace: &trace,
+                        attempt: Some(&attempt),
                     })
                     .await;
                     return Err(ResponseDispatchError::Upstream(error));
@@ -787,6 +796,14 @@ impl ResponseDispatchService {
                     "firstTokenMs": response.first_token_ms,
                     "usage": response.usage,
                 });
+                insert_response_status_metadata(
+                    &mut metadata,
+                    200,
+                    200,
+                    response.diagnostics.status_code.map(i64::from),
+                );
+                insert_response_upstream_diagnostics(&mut metadata, &response.diagnostics);
+                insert_response_trace_metadata(&mut metadata, &trace, Some(&attempt));
                 insert_websocket_pool_decision(&mut metadata, response.websocket_pool_decision);
                 record_response_event(ResponseUsageRecord {
                     usage_records: &self.usage_records,
@@ -916,6 +933,7 @@ impl ResponseDispatchService {
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut history_recovery_used = false;
         let mut quota_verify_attempts = 0usize;
+        let mut trace = ResponseDispatchTrace::default();
         macro_rules! return_stream_dispatch_error {
             ($error:expr) => {{
                 let error = $error;
@@ -1024,6 +1042,7 @@ impl ResponseDispatchService {
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
             let release_account_id = account.id.clone();
+            let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_response_stream_with_account_retrying_5xx(
                 &self.codex,
                 self.installation_id.as_deref(),
@@ -1051,6 +1070,7 @@ impl ResponseDispatchService {
                     let turn_state_update = response.turn_state_update;
                     let websocket_pool_decision = response.websocket_pool_decision;
                     let turn_state = response.turn_state;
+                    let diagnostics = response.diagnostics;
                     self.cloudflare
                         .capture_set_cookie_headers(&release_account_id, &set_cookie_headers)
                         .await;
@@ -1204,7 +1224,10 @@ impl ResponseDispatchService {
                                         started_at,
                                         stream: true,
                                         transport,
+                                        request: &request,
                                         error: upstream_error,
+                                        trace: &trace,
+                                        attempt: Some(&attempt),
                                     },
                                 )
                                 .await;
@@ -1306,8 +1329,11 @@ impl ResponseDispatchService {
                                 transport,
                                 request: &request,
                                 failure: &failure,
+                                diagnostics: &diagnostics,
                                 rate_limit_headers: &rate_limit_headers,
                                 prefetched: &prefetched,
+                                trace: &trace,
+                                attempt: &attempt,
                             },
                         )
                         .await;
@@ -1336,6 +1362,9 @@ impl ResponseDispatchService {
                         turn_state_update,
                         websocket_pool_decision,
                         turn_state,
+                        diagnostics,
+                        attempt: attempt.clone(),
+                        attempts: trace.attempts().to_vec(),
                         started_at,
                     };
                     return Ok(spawn_live_response_stream(context, prefetched, body));
@@ -1460,7 +1489,10 @@ impl ResponseDispatchService {
                         started_at,
                         stream: true,
                         transport: backend_transport_for_response_request(&request),
+                        request: &request,
                         error: &error,
+                        trace: &trace,
+                        attempt: Some(&attempt),
                     })
                     .await;
                     return Err(ResponseDispatchError::Upstream(error));
@@ -1483,6 +1515,7 @@ impl ResponseDispatchService {
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut quota_verify_attempts = 0usize;
+        let mut trace = ResponseDispatchTrace::default();
 
         loop {
             let acquire_request = AccountAcquireRequest::new(request.model(), Utc::now())
@@ -1548,6 +1581,7 @@ impl ResponseDispatchService {
             };
             let account = acquired.account;
             let release_account_id = account.id.clone();
+            let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_compact_response_with_account_retrying_5xx(
                 &self.codex,
                 self.installation_id.as_deref(),
@@ -1585,6 +1619,19 @@ impl ResponseDispatchService {
                             .record_token_usage(&account.id, request.model(), &usage)
                             .await;
                     }
+                    let mut metadata = json!({
+                        "stream": false,
+                        "compact": true,
+                        "usage": usage,
+                    });
+                    insert_response_status_metadata(
+                        &mut metadata,
+                        200,
+                        200,
+                        response.diagnostics.status_code.map(i64::from),
+                    );
+                    insert_response_upstream_diagnostics(&mut metadata, &response.diagnostics);
+                    insert_response_trace_metadata(&mut metadata, &trace, Some(&attempt));
                     record_response_event(ResponseUsageRecord {
                         usage_records: &self.usage_records,
                         request_id,
@@ -1600,11 +1647,7 @@ impl ResponseDispatchService {
                         status_code: 200,
                         level: UsageRecordLevel::Info,
                         message: "v1 responses compact completed",
-                        metadata: json!({
-                            "stream": false,
-                            "compact": true,
-                            "usage": usage,
-                        }),
+                        metadata,
                         rate_limit_headers: &response.rate_limit_headers,
                     })
                     .await;

@@ -199,6 +199,7 @@ impl ResponseDispatchError {
                 exhausted_count: None,
                 upstream_error: Some(sse_failure_error_body(failure)),
                 upstream_status: None,
+                diagnostics: None,
             },
         }
     }

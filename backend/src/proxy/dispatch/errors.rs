@@ -6,7 +6,9 @@ use serde_json::{json, Map, Value};
 use crate::{
     proxy::dispatch::exhaustion::{ExhaustedAccountKind, ExhaustedAccountRef},
     upstream::accounts::model::AccountStatus,
-    upstream::transport::{is_banned_auth_signal, CodexBackendTransport, CodexClientError},
+    upstream::transport::{
+        is_banned_auth_signal, CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -15,6 +17,7 @@ pub(crate) struct DispatchErrorMetadata {
     pub exhausted_count: Option<usize>,
     pub upstream_error: Option<String>,
     pub upstream_status: Option<u16>,
+    pub diagnostics: Option<CodexUpstreamDiagnostics>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +66,7 @@ impl DispatchErrorMetadata {
             exhausted_count: None,
             upstream_error: None,
             upstream_status: None,
+            diagnostics: None,
         }
     }
 
@@ -72,6 +76,7 @@ impl DispatchErrorMetadata {
             exhausted_count: Some(exhausted.count),
             upstream_error: Some(exhausted.upstream_error.to_string()),
             upstream_status: None,
+            diagnostics: None,
         }
     }
 
@@ -84,6 +89,7 @@ impl DispatchErrorMetadata {
                 CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
                 _ => None,
             },
+            diagnostics: upstream_error_diagnostics(error).cloned(),
         }
     }
 
@@ -93,6 +99,7 @@ impl DispatchErrorMetadata {
             exhausted_count: None,
             upstream_error: None,
             upstream_status: None,
+            diagnostics: None,
         }
     }
 }
@@ -128,6 +135,45 @@ pub(crate) fn insert_dispatch_error_metadata(
     }
     if let Some(status) = metadata.upstream_status {
         object.insert("upstreamStatus".to_string(), json!(status));
+    }
+    if let Some(diagnostics) = metadata.diagnostics {
+        insert_upstream_diagnostics_metadata(object, &diagnostics);
+    }
+}
+
+pub(crate) fn insert_upstream_diagnostics_metadata(
+    object: &mut Map<String, Value>,
+    diagnostics: &CodexUpstreamDiagnostics,
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    if let Some(status_code) = diagnostics.status_code {
+        object.insert("upstreamStatus".to_string(), json!(status_code));
+    }
+    if let Some(request_id) = &diagnostics.request_id {
+        object.insert(
+            "upstreamRequestId".to_string(),
+            Value::String(request_id.clone()),
+        );
+    }
+    if !diagnostics.trace_headers.is_empty() {
+        object.insert(
+            "upstreamTraceHeaders".to_string(),
+            json!(diagnostics.trace_headers),
+        );
+    }
+    if let Some(cf_ray) = diagnostics.cf_ray() {
+        object.insert("cfRay".to_string(), Value::String(cf_ray.to_string()));
+    }
+}
+
+pub(crate) fn upstream_error_diagnostics(
+    error: &CodexClientError,
+) -> Option<&CodexUpstreamDiagnostics> {
+    match error {
+        CodexClientError::Upstream { diagnostics, .. } => Some(diagnostics),
+        _ => None,
     }
 }
 

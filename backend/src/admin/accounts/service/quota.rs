@@ -38,15 +38,11 @@ impl AdminAccountService {
             .await
             .map_err(|e| AdminAccountError::FetchQuota(e.to_string()))?;
         let normalized = crate::upstream::accounts::quota::quota_from_usage(&raw);
-        if let Ok(json_str) = serde_json::to_string(&normalized) {
-            if matches!(
-                self.store.update_quota_json(account_id, &json_str).await,
-                Ok(true)
-            ) {
-                self.sync_account_pool_best_effort(account_id, "account quota refresh")
-                    .await;
-            }
-        }
+        self.account_pool
+            .apply_quota_snapshot(account_id, &normalized)
+            .await;
+        self.sync_account_pool_best_effort(account_id, "account quota refresh")
+            .await;
         Ok(serde_json::json!({ "quota": normalized, "raw": raw }))
     }
 }

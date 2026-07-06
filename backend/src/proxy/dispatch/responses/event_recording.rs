@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::{
     admin::monitoring::{
@@ -9,7 +9,11 @@ use crate::{
     },
     infra::time::elapsed_millis_i64,
     proxy::dispatch::{
-        errors::{backend_transport_name, upstream_error_http_status},
+        errors::{
+            backend_transport_name, insert_dispatch_error_metadata,
+            insert_upstream_diagnostics_metadata, upstream_error_http_status,
+            DispatchErrorMetadata,
+        },
         usage_events::{
             enrich_event_route_metadata, enrich_usage_record_identity,
             event_kind as response_event_kind, reasoning_effort_from_request,
@@ -18,7 +22,10 @@ use crate::{
     },
     upstream::{
         protocol::responses::{CodexResponsesRequest, ResponsesSseFailure},
-        transport::{CodexBackendTransport, CodexClientError, WebSocketPoolDecision},
+        transport::{
+            CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
+            WebSocketPoolDecision,
+        },
     },
 };
 
@@ -28,6 +35,7 @@ use super::{
     },
     sse_failure::{status_code_for_stream_failure, stream_failure_metadata},
     stream_lifecycle::{latest_response_id, LiveResponseStreamContext},
+    trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
 };
 
 pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
@@ -40,7 +48,10 @@ pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
     pub(super) started_at: Instant,
     pub(super) stream: bool,
     pub(super) transport: CodexBackendTransport,
+    pub(super) request: &'a CodexResponsesRequest,
     pub(super) error: &'a CodexClientError,
+    pub(super) trace: &'a ResponseDispatchTrace,
+    pub(super) attempt: Option<&'a ResponseDispatchAttempt>,
 }
 
 pub(super) struct ResponseStreamFailureEventRecord<'a> {
@@ -54,8 +65,11 @@ pub(super) struct ResponseStreamFailureEventRecord<'a> {
     pub(super) transport: CodexBackendTransport,
     pub(super) request: &'a CodexResponsesRequest,
     pub(super) failure: &'a ResponsesSseFailure,
+    pub(super) diagnostics: &'a CodexUpstreamDiagnostics,
     pub(super) rate_limit_headers: &'a [(String, String)],
     pub(super) prefetched: &'a [u8],
+    pub(super) trace: &'a ResponseDispatchTrace,
+    pub(super) attempt: &'a ResponseDispatchAttempt,
 }
 
 pub(super) struct ResponseDispatchErrorEventRecord<'a> {
@@ -88,6 +102,14 @@ pub(super) async fn record_response_dispatch_error_event(
         record.transport,
     );
     enrich_response_dispatch_error_metadata(&mut metadata, record.error);
+    if let Some(object) = metadata.as_object_mut() {
+        insert_response_status_metadata_object(
+            object,
+            i64::from(record.error.http_status_code()),
+            dispatch_error_client_status_code(record.error, record.stream, record.compact),
+            dispatch_error_upstream_status_code(record.error),
+        );
+    }
     record_dispatch_error_event(DispatchErrorUsageRecord {
         usage_records: record.usage_records,
         request_id: record.request_id,
@@ -105,6 +127,7 @@ pub(super) async fn record_response_dispatch_error_event(
 pub(super) async fn record_response_upstream_error_event(
     record: ResponseUpstreamErrorEventRecord<'_>,
 ) {
+    let event_status_code = i64::from(upstream_error_http_status(record.error));
     let mut metadata = dispatch_error_metadata(
         record.error,
         record.stream,
@@ -121,9 +144,18 @@ pub(super) async fn record_response_upstream_error_event(
     event.account_id = Some(record.account_id.to_string());
     event.route = Some(record.route.to_string());
     event.model = Some(record.model.to_string());
-    event.status_code = Some(i64::from(upstream_error_http_status(record.error)));
+    event.status_code = Some(event_status_code);
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     if let Some(object) = metadata.as_object_mut() {
+        insert_dispatch_error_metadata(object, DispatchErrorMetadata::upstream(record.error));
+        insert_response_status_metadata_object(
+            object,
+            event_status_code,
+            upstream_failure_client_status_code(record.stream),
+            Some(event_status_code),
+        );
+        insert_response_request_summary_object(object, record.request, record.transport);
+        insert_response_trace_metadata_object(object, record.trace.attempts(), record.attempt);
         if let Some(account_email) = record
             .account_email
             .map(str::trim)
@@ -144,6 +176,7 @@ pub(super) async fn record_response_upstream_error_event(
 pub(super) async fn record_prefetched_response_stream_failure_event(
     record: ResponseStreamFailureEventRecord<'_>,
 ) {
+    let event_status_code = status_code_for_stream_failure(record.failure);
     let mut metadata = stream_failure_metadata(record.failure, None);
     if let Some(object) = metadata.as_object_mut() {
         if record.transport == CodexBackendTransport::WebSocket {
@@ -152,10 +185,23 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
                 Value::String("websocket".to_string()),
             );
         }
+        insert_response_status_metadata_object(
+            object,
+            event_status_code,
+            200,
+            diagnostics_status_code(record.diagnostics),
+        );
+        insert_response_request_summary_object(object, record.request, record.transport);
         object.insert("requestBody".to_string(), json!(record.request));
         object.insert(
             "responseBody".to_string(),
             Value::String(String::from_utf8_lossy(record.prefetched).to_string()),
+        );
+        insert_upstream_diagnostics_metadata(object, record.diagnostics);
+        insert_response_trace_metadata_object(
+            object,
+            record.trace.attempts(),
+            Some(record.attempt),
         );
     }
     record_response_event(ResponseUsageRecord {
@@ -170,7 +216,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         reasoning_effort: reasoning_effort_from_request(record.request),
         service_tier: record.request.service_tier(),
         started_at: record.started_at,
-        status_code: status_code_for_stream_failure(record.failure),
+        status_code: event_status_code,
         level: UsageRecordLevel::Error,
         message: "v1 responses stream failed",
         metadata,
@@ -193,6 +239,7 @@ fn enrich_live_response_stream_metadata(
     context: &LiveResponseStreamContext,
     rate_limit_headers: &[(String, String)],
     metadata: &mut Value,
+    status_code: i64,
     body: &str,
 ) {
     let Some(object) = metadata.as_object_mut() else {
@@ -211,12 +258,196 @@ fn enrich_live_response_stream_metadata(
             .entry("websocketPool".to_string())
             .or_insert_with(|| decision.metadata_value());
     }
+    insert_response_status_metadata_object(
+        object,
+        status_code,
+        200,
+        diagnostics_status_code(&context.diagnostics),
+    );
+    insert_response_request_summary_object(object, &context.request, context.transport);
+    insert_upstream_diagnostics_metadata(object, &context.diagnostics);
+    insert_response_trace_metadata_object(object, &context.attempts, Some(&context.attempt));
     object
         .entry("requestBody".to_string())
         .or_insert_with(|| serde_json::json!(context.request));
     object
         .entry("responseBody".to_string())
         .or_insert_with(|| Value::String(body.to_string()));
+}
+
+pub(super) fn insert_response_upstream_diagnostics(
+    metadata: &mut Value,
+    diagnostics: &CodexUpstreamDiagnostics,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    insert_upstream_diagnostics_metadata(object, diagnostics);
+}
+
+pub(super) fn insert_response_status_metadata(
+    metadata: &mut Value,
+    event_status_code: i64,
+    client_status_code: i64,
+    upstream_status_code: Option<i64>,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    insert_response_status_metadata_object(
+        object,
+        event_status_code,
+        client_status_code,
+        upstream_status_code,
+    );
+}
+
+pub(super) fn insert_response_trace_metadata(
+    metadata: &mut Value,
+    trace: &ResponseDispatchTrace,
+    current_attempt: Option<&ResponseDispatchAttempt>,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    insert_response_trace_metadata_object(object, trace.attempts(), current_attempt);
+}
+
+fn insert_response_attempt_metadata_object(
+    object: &mut serde_json::Map<String, Value>,
+    attempt: Option<&ResponseDispatchAttempt>,
+) {
+    let Some(attempt) = attempt else {
+        return;
+    };
+    object.insert("attemptIndex".to_string(), json!(attempt.index()));
+    object.insert(
+        "attemptAccountId".to_string(),
+        Value::String(attempt.account_id().to_string()),
+    );
+}
+
+fn insert_response_trace_metadata_object(
+    object: &mut Map<String, Value>,
+    attempts: &[ResponseDispatchAttempt],
+    current_attempt: Option<&ResponseDispatchAttempt>,
+) {
+    insert_response_attempt_metadata_object(object, current_attempt);
+    object.insert("attemptCount".to_string(), json!(attempts.len()));
+    object.insert(
+        "attempts".to_string(),
+        Value::Array(
+            attempts
+                .iter()
+                .map(|attempt| {
+                    json!({
+                        "index": attempt.index(),
+                        "accountId": attempt.account_id(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+}
+
+fn insert_response_status_metadata_object(
+    object: &mut Map<String, Value>,
+    event_status_code: i64,
+    client_status_code: i64,
+    upstream_status_code: Option<i64>,
+) {
+    object.insert("eventStatusCode".to_string(), json!(event_status_code));
+    object.insert("clientStatusCode".to_string(), json!(client_status_code));
+    if let Some(upstream_status_code) = upstream_status_code {
+        object.insert(
+            "upstreamStatusCode".to_string(),
+            json!(upstream_status_code),
+        );
+    }
+}
+
+fn insert_response_request_summary_object(
+    object: &mut Map<String, Value>,
+    request: &CodexResponsesRequest,
+    transport: CodexBackendTransport,
+) {
+    object.insert(
+        "requestSummary".to_string(),
+        response_request_summary(request, transport),
+    );
+}
+
+fn response_request_summary(
+    request: &CodexResponsesRequest,
+    transport: CodexBackendTransport,
+) -> Value {
+    let body = request.body();
+    let input = body.get("input");
+    let tools = body.get("tools");
+    json!({
+        "model": request.model(),
+        "stream": request.stream(),
+        "store": request.store(),
+        "transport": backend_transport_name(transport),
+        "inputType": json_value_kind(input),
+        "inputItemsCount": input.and_then(Value::as_array).map(Vec::len),
+        "toolsType": json_value_kind(tools),
+        "toolsCount": tools.and_then(Value::as_array).map(Vec::len),
+        "topLevelFields": body.keys().cloned().collect::<Vec<_>>(),
+        "previousResponseIdPresent": request.previous_response_id().is_some(),
+        "serviceTier": request.service_tier(),
+        "localTransport": {
+            "useWebsocket": request.use_websocket,
+            "forceHttpSse": request.force_http_sse,
+        },
+    })
+}
+
+fn json_value_kind(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+    }
+}
+
+fn diagnostics_status_code(diagnostics: &CodexUpstreamDiagnostics) -> Option<i64> {
+    diagnostics.status_code.map(i64::from)
+}
+
+fn dispatch_error_upstream_status_code(error: &ResponseDispatchError) -> Option<i64> {
+    match error {
+        ResponseDispatchError::Upstream(error) => {
+            Some(i64::from(upstream_error_http_status(error)))
+        }
+        _ => None,
+    }
+}
+
+fn dispatch_error_client_status_code(
+    error: &ResponseDispatchError,
+    stream: bool,
+    compact: bool,
+) -> i64 {
+    if stream {
+        return 200;
+    }
+    if matches!(error, ResponseDispatchError::Upstream(_)) && !compact {
+        return 502;
+    }
+    i64::from(error.http_status_code())
+}
+
+fn upstream_failure_client_status_code(stream: bool) -> i64 {
+    if stream {
+        200
+    } else {
+        502
+    }
 }
 
 pub(super) async fn record_live_response_stream_event(
@@ -230,7 +461,13 @@ pub(super) async fn record_live_response_stream_event(
 ) {
     ensure_stream_metadata_flag(&mut metadata);
     enrich_event_route_metadata(&mut metadata, &context.route);
-    enrich_live_response_stream_metadata(context, rate_limit_headers, &mut metadata, body);
+    enrich_live_response_stream_metadata(
+        context,
+        rate_limit_headers,
+        &mut metadata,
+        status_code,
+        body,
+    );
     log_live_response_stream_finalized(context, status_code, level, message, &metadata, body);
     let mut event = UsageRecord::new(response_event_kind(&context.route), level, message);
     event.request_id = Some(context.request_id.clone());
@@ -367,5 +604,63 @@ pub(super) fn insert_websocket_pool_decision(
     };
     if let Some(object) = metadata.as_object_mut() {
         object.insert("websocketPool".to_string(), decision.metadata_value());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::StatusCode;
+    use serde_json::{Map, Value};
+
+    use super::*;
+
+    #[test]
+    fn request_summary_should_record_shape_without_input_content() {
+        let secret_input = "do not persist this input";
+        let mut body = Map::new();
+        body.insert("model".to_string(), Value::String("gpt-5.5".to_string()));
+        body.insert("input".to_string(), Value::String(secret_input.to_string()));
+        body.insert("stream".to_string(), Value::Bool(true));
+        let mut request = CodexResponsesRequest::from_body(body);
+        request.use_websocket = true;
+
+        let summary = response_request_summary(&request, CodexBackendTransport::WebSocket);
+
+        assert_eq!(summary["inputType"], "string");
+        assert!(summary["inputItemsCount"].is_null());
+        assert_eq!(summary["transport"], "websocket");
+        assert_eq!(summary["localTransport"]["useWebsocket"], true);
+        assert!(!summary.to_string().contains(secret_input));
+    }
+
+    #[test]
+    fn upstream_dispatch_client_status_should_match_response_surface() {
+        let error = ResponseDispatchError::Upstream(CodexClientError::Upstream {
+            status: StatusCode::BAD_REQUEST,
+            body: "upstream bad request".to_string(),
+            retry_after_seconds: None,
+            diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_REQUEST.as_u16()),
+            set_cookie_headers: Vec::new(),
+        });
+
+        assert_eq!(dispatch_error_client_status_code(&error, false, false), 502);
+        assert_eq!(dispatch_error_client_status_code(&error, false, true), 400);
+        assert_eq!(dispatch_error_client_status_code(&error, true, false), 200);
+    }
+
+    #[test]
+    fn trace_metadata_should_include_attempt_sequence() {
+        let mut trace = ResponseDispatchTrace::default();
+        let _first = trace.start_attempt("acct_a");
+        let second = trace.start_attempt("acct_b");
+        let mut metadata = json!({});
+
+        insert_response_trace_metadata(&mut metadata, &trace, Some(&second));
+
+        assert_eq!(metadata["attemptIndex"], 1);
+        assert_eq!(metadata["attemptAccountId"], "acct_b");
+        assert_eq!(metadata["attemptCount"], 2);
+        assert_eq!(metadata["attempts"][0]["accountId"], "acct_a");
+        assert_eq!(metadata["attempts"][1]["accountId"], "acct_b");
     }
 }

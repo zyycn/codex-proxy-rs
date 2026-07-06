@@ -92,6 +92,22 @@ async fn usage_record_store_should_promote_diagnostic_metadata_fields() {
 }
 
 #[tokio::test]
+async fn usage_record_store_should_not_promote_cf_ray_as_upstream_request_id() {
+    let (store, _dir) = usage_record_store("usage-records-cf-ray.sqlite").await;
+    let mut event = UsageRecord::new("request", UsageRecordLevel::Error, "upstream failed");
+    event.id = "usage_cf_ray".to_string();
+    event.metadata = json!({
+        "upstreamStatus": 403,
+        "cfRay": "ray-1"
+    });
+
+    store.append(&event).await.unwrap();
+    let loaded = store.get("usage_cf_ray").await.unwrap().unwrap();
+
+    assert_eq!(loaded.upstream_request_id, None);
+}
+
+#[tokio::test]
 async fn usage_record_store_should_get_and_clear_events() {
     let (store, _dir) = usage_record_store("usage-records-clear.sqlite").await;
     let mut event = UsageRecord::new("request", UsageRecordLevel::Warn, "detail");

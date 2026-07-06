@@ -189,11 +189,20 @@ impl Services {
                 StdArc::new(client)
             }
         };
-        let account_pool = StdArc::new(RuntimeAccountPoolService::new(
-            account_store_trait.clone(),
-            account_pool_options_from_config(config),
-            config.auth.request_interval_ms,
+        let usage_records = StdArc::new(AdminUsageRecordService::new(
+            stores.usage_records.clone(),
+            usage_record_options.enabled,
+            usage_record_options.capacity,
+            usage_record_options.capture_body,
         ));
+        let account_pool = StdArc::new(
+            RuntimeAccountPoolService::new(
+                account_store_trait.clone(),
+                account_pool_options_from_config(config),
+                config.auth.request_interval_ms,
+            )
+            .with_usage_records(usage_records.clone()),
+        );
         let refresh_policy = RuntimeRefreshPolicy::new(RefreshPolicy {
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,
@@ -251,12 +260,6 @@ impl Services {
             refresh_policy: refresh_policy.clone(),
             installation_id: installation_id.clone(),
         }));
-        let usage_records = StdArc::new(AdminUsageRecordService::new(
-            stores.usage_records.clone(),
-            usage_record_options.enabled,
-            usage_record_options.capacity,
-            usage_record_options.capture_body,
-        ));
         let usage_store = SqliteUsageStore::new(stores.accounts.pool().clone());
         let usage = StdArc::new(AdminUsageService::new(usage_store));
         let session_affinity = StdArc::new(RuntimeSessionAffinityService::new(
