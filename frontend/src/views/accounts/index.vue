@@ -156,13 +156,13 @@ bindAccountLoader(loadAccounts)
 
           <div class="flex shrink-0 items-center gap-2">
             <BaseButton
+              v-if="selectedIds.size > 0"
               variant="default"
               :loading="exportingAccounts"
-              :disabled="accounts.length === 0"
               @click="handleExportAccounts"
             >
               <Download class="size-4" />
-              {{ selectedIds.size > 0 ? '导出选中' : '导出' }}
+              导出选中 ({{ selectedIds.size }})
             </BaseButton>
             <BaseButton variant="primary" @click="openCreateAccount">
               <Plus class="size-4" />

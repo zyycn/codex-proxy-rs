@@ -4,9 +4,15 @@ import { computed } from 'vue'
 
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
+type AccountIdentity = {
+  id?: string | number | null
+  email: string
+  planType?: string | null
+}
+
 const props = withDefaults(
   defineProps<{
-    account: any
+    account: AccountIdentity
     size?: 'md' | 'lg'
     showPlan?: boolean
   }>(),
@@ -16,24 +22,11 @@ const props = withDefaults(
   },
 )
 
-const displayTitle = computed(
-  () =>
-    props.account.label?.trim() ||
-    props.account.email ||
-    props.account.accountId ||
-    props.account.id,
-)
+const emailText = computed(() => props.account.email.trim())
 
-const secondaryText = computed(() => {
-  const title = displayTitle.value
-  const secondary = [
-    props.account.email,
-    props.account.accountId,
-    props.account.userId,
-    props.account.id,
-  ].find((value) => value && value !== title)
-  return secondary || props.account.id
-})
+const displayTitle = computed(() => emailText.value.split('@')[0])
+
+const secondaryText = emailText
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 

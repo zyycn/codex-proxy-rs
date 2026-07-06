@@ -22,7 +22,7 @@ export const usageRecordColumns = [
   {
     key: 'route',
     label: '端点',
-    width: '172px',
+    width: '185px',
     ellipsis: false,
     cellClass: 'font-mono text-[12px] font-[650]',
   },
@@ -74,7 +74,7 @@ export const usageRecordColumns = [
   {
     key: 'clientIp',
     label: 'IP',
-    width: '146px',
+    width: '160px',
     ellipsis: false,
   },
   {

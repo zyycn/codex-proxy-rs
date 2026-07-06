@@ -11,8 +11,9 @@ use crate::{
         usage_record_model::metadata_service_tier,
         usage_record_model::{UsageRecord, UsageRecordLevel},
         usage_record_store::{
-            SqliteUsageRecordStore, UsageRecordBreakdown, UsageRecordEndpointSource,
-            UsageRecordFilter, UsageRecordModelSource, UsageRecordSummary, UsageRecordTrendPoint,
+            SqliteUsageRecordStore, UsageRecordAccountUsage, UsageRecordBreakdown,
+            UsageRecordEndpointSource, UsageRecordFilter, UsageRecordModelSource,
+            UsageRecordSummary, UsageRecordTrendPoint,
         },
     },
     infra::json::{NumberedPage, Page},
@@ -208,6 +209,18 @@ impl AdminUsageRecordService {
     ) -> Result<UsageRecordSummary, AdminUsageRecordError> {
         self.store
             .summary(filter.into())
+            .await
+            .map_err(|_| AdminUsageRecordError::List)
+    }
+
+    /// 按账号聚合使用记录。
+    pub async fn account_usage(
+        &self,
+        filter: AdminUsageRecordFilter,
+        limit: u32,
+    ) -> Result<Vec<UsageRecordAccountUsage>, AdminUsageRecordError> {
+        self.store
+            .account_usage(filter.into(), limit)
             .await
             .map_err(|_| AdminUsageRecordError::List)
     }

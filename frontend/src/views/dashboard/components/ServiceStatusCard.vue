@@ -38,7 +38,7 @@ const valueToneClasses: Record<string, string> = {
           <div
             v-for="item in items"
             :key="item.label"
-            class="grid h-12.5 w-full grid-cols-[22px_12px_1fr_1fr_1fr] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
+            class="grid h-12.5 w-full grid-cols-[22px_12px_minmax(128px,0.82fr)_minmax(0,1.08fr)_minmax(72px,0.92fr)] items-center rounded-[14px] bg-(--cp-bg-subtle) px-3.5"
           >
             <span
               class="inline-flex size-6 items-center justify-center rounded-lg"

@@ -43,11 +43,17 @@ pub enum ModelServiceError {
     #[error("no active accounts available for model refresh")]
     NoAccounts,
     /// 快照写入失败。
-    #[error("failed to store model snapshot")]
-    StoreSnapshot,
+    #[error("failed to store model snapshot: {source}")]
+    StoreSnapshot {
+        #[source]
+        source: ModelSnapshotStoreError,
+    },
     /// 刷新后重新读取快照失败。
-    #[error("failed to load model snapshots")]
-    LoadSnapshots,
+    #[error("failed to load model snapshots: {source}")]
+    LoadSnapshots {
+        #[source]
+        source: ModelSnapshotStoreError,
+    },
     /// 所有计划都刷新失败。
     #[error("all model refresh plans failed")]
     AllPlansFailed(ModelRefreshResult),
@@ -251,10 +257,10 @@ impl ModelService {
     }
 }
 
-fn map_store_snapshot_error(_: ModelSnapshotStoreError) -> ModelServiceError {
-    ModelServiceError::StoreSnapshot
+fn map_store_snapshot_error(source: ModelSnapshotStoreError) -> ModelServiceError {
+    ModelServiceError::StoreSnapshot { source }
 }
 
-fn map_load_snapshots_error(_: ModelSnapshotStoreError) -> ModelServiceError {
-    ModelServiceError::LoadSnapshots
+fn map_load_snapshots_error(source: ModelSnapshotStoreError) -> ModelServiceError {
+    ModelServiceError::LoadSnapshots { source }
 }

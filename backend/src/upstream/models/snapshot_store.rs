@@ -7,7 +7,7 @@ use thiserror::Error;
 use super::{info::CodexModelInfo, snapshot::ModelPlanSnapshot};
 
 /// 模型快照存储错误。
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModelSnapshotStoreError {
     /// 底层存储失败。
     #[error("model snapshot store operation failed: {message}")]

@@ -5,7 +5,7 @@ import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import BaseCard from '../../../components/base/BaseCard.vue'
 import BaseEmpty from '../../../components/base/BaseEmpty.vue'
-import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
+import AccountIdentityCell from '../../accounts/components/AccountIdentityCell.vue'
 
 const props = defineProps<{
   accounts: any[]
@@ -145,46 +145,52 @@ const quotaToneClasses: Record<string, string> = {
           容量、并发与分配策略
         </p>
 
-        <div class="mt-7.75 grid h-30.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4">
-          <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-            >槽位占用</span
-          >
-          <div>
-            <div class="grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
-              <strong
-                class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
-                >{{ usedRatio }}</strong
-              >
-              <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
-                >{{ usedPercent }}% 已占用</span
-              >
-            </div>
-            <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
-              <i
-                class="block h-2.5 rounded-full bg-(--cp-success)"
-                :style="{ width: `${usedPercent}%` }"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-4 grid h-22.5 grid-cols-3 gap-4 rounded-[14px] bg-(--cp-bg-subtle) p-4">
-          <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
-            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{
-              stat.label
-            }}</span>
-            <strong
-              class="block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-(--cp-text-primary)"
-              >{{ stat.value }}</strong
+        <div class="mt-6.75 grid gap-4 xl:h-82.5 xl:grid-rows-[122px_90px_minmax(0,1fr)]">
+          <div class="grid h-30.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
+            <span class="block h-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
+              >槽位占用</span
             >
+            <div>
+              <div class="grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+                <strong
+                  class="font-mono text-[32px] leading-[1.05] font-[760] tabular-nums text-(--cp-text-primary)"
+                  >{{ usedRatio }}</strong
+                >
+                <span class="mt-3.5 text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
+                  >{{ usedPercent }}% 已占用</span
+                >
+              </div>
+              <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
+                <i
+                  class="block h-2.5 rounded-full bg-(--cp-success)"
+                  :style="{ width: `${usedPercent}%` }"
+                />
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div class="mt-4 grid h-20.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4">
-          <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">分配策略</span>
-          <strong class="block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{
-            strategyLabel
-          }}</strong>
+          <div
+            class="grid h-22.5 grid-cols-3 gap-4 rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto"
+          >
+            <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
+              <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)">{{
+                stat.label
+              }}</span>
+              <strong
+                class="block font-mono text-[21px] leading-[1.1] font-[760] tabular-nums text-(--cp-text-primary)"
+                >{{ stat.value }}</strong
+              >
+            </div>
+          </div>
+
+          <div class="grid h-20.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
+            <span class="text-xs leading-[1.15] font-[650] text-(--cp-text-secondary)"
+              >分配策略</span
+            >
+            <strong class="block text-[17px] leading-[1.15] font-[650] text-(--cp-text-primary)">{{
+              strategyLabel
+            }}</strong>
+          </div>
         </div>
       </section>
 
@@ -201,72 +207,52 @@ const quotaToneClasses: Record<string, string> = {
             v-if="accounts.length === 0"
             compact
             title="暂无账号用量"
-            description="账号产生请求后会显示 24h 排序和 Token 负载。"
+            description="账号产生请求后会显示最近使用排序和 Token 负载。"
             class="min-h-40 place-content-center xl:h-full"
           />
           <template v-else>
             <article
               v-for="account in accounts"
-              :key="account.name"
-              class="grid w-full shrink-0 grid-cols-[34px_minmax(0,1fr)] gap-x-3 rounded-[14px] bg-(--cp-bg-subtle) px-3.5 py-3.5 hover:bg-(--cp-bg-muted) xl:h-19.5 xl:grid-cols-[34px_minmax(0,1.28fr)_minmax(132px,0.86fr)] xl:items-center xl:gap-x-3 xl:py-0"
+              :key="account.id"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-(--cp-bg-subtle) px-3.5 py-3.5 transition-colors hover:bg-(--cp-bg-muted) xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
             >
+              <AccountIdentityCell :account="account" show-plan class="min-w-0" />
+
               <span
-                class="inline-flex size-8.5 items-center justify-center rounded-full"
-                :class="rowToneClasses[account.tone]"
+                class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-end gap-3 xl:contents"
               >
-                {{ account.name[0] }}
-              </span>
-              <span class="flex min-w-0 max-w-full flex-col gap-1.5 xl:gap-4.25">
-                <span class="flex min-w-0 max-w-full items-center gap-2">
-                  <strong
-                    class="min-w-0 truncate text-sm leading-[1.15] font-[650] text-(--cp-text-primary)"
-                    :title="account.name"
-                    >{{ account.name }}</strong
-                  >
-                  <AccountPlanBadge class="shrink-0" :plan-type="account.planType" />
-                </span>
-                <span
-                  class="block min-w-0 max-w-full truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
-                  :title="account.email"
-                  >{{ account.email }}</span
-                >
-              </span>
-              <span
-                class="col-span-2 mt-3 grid grid-cols-3 gap-3 pl-11 xl:col-span-1 xl:mt-0 xl:grid-cols-[minmax(0,56px)_minmax(72px,1fr)] xl:gap-6 xl:pl-0"
-              >
-                <span class="grid min-w-0 gap-1.5 xl:gap-1">
-                  <span
-                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
-                    >最近</span
+                <span class="grid min-w-0 gap-1">
+                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
+                    >Token</span
                   >
                   <strong
-                    class="hidden shrink-0 font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary) xl:block"
+                    class="font-mono text-sm leading-[1.15] font-[780] tabular-nums text-(--cp-text-primary)"
                     >{{ account.tokens }}</strong
                   >
+                </span>
+
+                <span class="grid min-w-0 gap-1">
+                  <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
+                    >最近</span
+                  >
                   <span
-                    class="min-w-0 truncate text-xs leading-[1.15] font-semibold text-(--cp-text-secondary) xl:whitespace-nowrap"
+                    class="min-w-0 truncate text-xs leading-[1.15] font-[680] text-(--cp-text-secondary) xl:whitespace-nowrap"
                   >
                     {{ account.lastUsed }}
                   </span>
                 </span>
-                <span class="grid min-w-0 gap-1.5 xl:hidden">
-                  <span
-                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
-                    >Token</span
-                  >
-                  <strong
-                    class="w-full font-mono text-sm leading-[1.15] font-bold tabular-nums text-(--cp-text-primary)"
-                    >{{ account.tokens }}</strong
-                  >
-                </span>
+
                 <span class="grid min-w-0 gap-2">
-                  <span
-                    class="text-[11px] leading-[1.15] font-[650] text-(--cp-text-muted) xl:hidden"
-                    >额度</span
-                  >
-                  <span
-                    class="mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)"
-                  >
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="text-[11px] leading-none font-[720] text-(--cp-text-muted)"
+                      >额度</span
+                    >
+                    <span
+                      class="font-mono text-[10px] leading-none font-[760] text-(--cp-text-muted)"
+                      >{{ account.quotaPercent }}%</span
+                    >
+                  </span>
+                  <span class="block h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)">
                     <i
                       class="block h-1.5 rounded-full"
                       :class="quotaToneClasses[account.quotaTone]"
