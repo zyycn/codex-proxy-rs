@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use uuid::Uuid;
 
-use crate::upstream::fingerprint::Fingerprint;
+use crate::upstream::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::models::backend_entry::BackendModelEntry;
 use crate::upstream::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::protocol::responses::{
@@ -333,14 +333,18 @@ pub struct CodexCompactResponse {
 pub struct CodexBackendClient {
     pub(super) client: Client,
     pub(super) base_url: String,
-    fingerprint: Fingerprint,
+    fingerprint: RuntimeFingerprint,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
     websocket_first_token_timeout: Option<Duration>,
 }
 
 impl CodexBackendClient {
     /// 构造客户端。
-    pub fn new(client: Client, base_url: impl Into<String>, fingerprint: Fingerprint) -> Self {
+    pub fn new(
+        client: Client,
+        base_url: impl Into<String>,
+        fingerprint: RuntimeFingerprint,
+    ) -> Self {
         Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -798,17 +802,18 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<Vec<BackendModelEntry>> {
+        let fingerprint = self.fingerprint.current();
         let endpoints = [
             format!(
                 "{}/codex/models?client_version={}",
-                self.base_url, self.fingerprint.app_version
+                self.base_url, fingerprint.app_version
             ),
             format!("{}/models", self.base_url),
             format!("{}/sentinel/chat-requirements", self.base_url),
         ];
 
         for endpoint in endpoints {
-            let headers = self.auxiliary_request_headers(context)?;
+            let headers = self.auxiliary_request_headers(&fingerprint, context)?;
             let response = self.client.get(endpoint).headers(headers).send().await?;
             if !response.status().is_success() {
                 continue;
@@ -845,9 +850,10 @@ impl CodexBackendClient {
     }
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
+        let fingerprint = self.fingerprint.current();
         let request_id = context.session_id.unwrap_or(context.request_id);
         let ordered_headers = build_ordered_codex_base_headers(
-            &self.fingerprint,
+            &fingerprint,
             context.access_token,
             context.account_id,
         );
@@ -897,13 +903,11 @@ impl CodexBackendClient {
 
     fn auxiliary_request_headers(
         &self,
+        fingerprint: &Fingerprint,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        let ordered_headers = build_ordered_codex_base_headers(
-            &self.fingerprint,
-            context.access_token,
-            context.account_id,
-        );
+        let ordered_headers =
+            build_ordered_codex_base_headers(fingerprint, context.access_token, context.account_id);
 
         let mut headers = HeaderMap::new();
         insert_ordered_headers(&mut headers, &ordered_headers)?;
@@ -924,10 +928,11 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
+        let fingerprint = self.fingerprint.current();
         let mut headers = HeaderMap::new();
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&self.fingerprint.user_agent())?,
+            HeaderValue::from_str(&fingerprint.user_agent())?,
         );
         headers.insert(
             AUTHORIZATION,
@@ -935,7 +940,7 @@ impl CodexBackendClient {
         );
         headers.insert(
             HeaderName::from_static("originator"),
-            HeaderValue::from_str(&self.fingerprint.originator)?,
+            HeaderValue::from_str(&fingerprint.originator)?,
         );
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
@@ -947,8 +952,9 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
+        let fingerprint = self.fingerprint.current();
         let ordered_headers = build_ordered_codex_base_headers(
-            &self.fingerprint,
+            &fingerprint,
             context.access_token,
             context.account_id,
         );

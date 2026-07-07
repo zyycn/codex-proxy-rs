@@ -35,7 +35,7 @@ use crate::{
         },
     },
     upstream::{
-        fingerprint::{Fingerprint, FingerprintRepository},
+        fingerprint::{FingerprintRepository, RuntimeFingerprint},
         models::{
             config::ModelConfig,
             service::{ModelService, ModelServiceError},
@@ -98,7 +98,7 @@ pub struct Services {
     pub session_affinity: StdArc<RuntimeSessionAffinityService>,
     pub codex: StdArc<CodexBackendClient>,
     pub websocket_pool: Option<StdArc<CodexWebSocketPool>>,
-    pub fingerprint: Fingerprint,
+    pub fingerprint: RuntimeFingerprint,
     pub installation_id: Option<String>,
     pub background_tasks: BackgroundTaskStores,
 }
@@ -120,7 +120,11 @@ impl UsageRecordOptions {
 }
 
 impl Services {
-    pub fn new(config: &AppConfig, stores: BackgroundTaskStores, fingerprint: Fingerprint) -> Self {
+    pub fn new(
+        config: &AppConfig,
+        stores: BackgroundTaskStores,
+        fingerprint: RuntimeFingerprint,
+    ) -> Self {
         Self::try_new(config, stores, fingerprint)
             .expect("failed to build runtime services with configured TLS transport")
     }
@@ -128,7 +132,7 @@ impl Services {
     pub fn try_new(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: Fingerprint,
+        fingerprint: RuntimeFingerprint,
     ) -> Result<Self, CustomCaError> {
         Self::try_with_installation_id(config, stores, fingerprint, None)
     }
@@ -136,7 +140,7 @@ impl Services {
     pub(crate) fn try_with_installation_id(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: Fingerprint,
+        fingerprint: RuntimeFingerprint,
         installation_id: Option<String>,
     ) -> Result<Self, CustomCaError> {
         Self::try_with_installation_id_and_usage_record_options(
@@ -151,7 +155,7 @@ impl Services {
     pub fn try_with_installation_id_and_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
-        fingerprint: Fingerprint,
+        fingerprint: RuntimeFingerprint,
         installation_id: Option<String>,
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {

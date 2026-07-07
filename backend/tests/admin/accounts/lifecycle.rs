@@ -23,7 +23,11 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };
@@ -748,7 +752,11 @@ async fn admin_account_create_should_derive_claims_and_store_plain_tokens() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };
@@ -791,7 +799,11 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

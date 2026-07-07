@@ -57,14 +57,21 @@ async fn update_checker_should_report_available_update_from_appcast() {
         .mount(&server)
         .await;
 
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("fingerprints-check.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let repo = FingerprintRepository::new(pool);
+    repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
+        .await
+        .expect("seed current fingerprint");
+
     let checker = UpdateChecker::with_client(
-        None,
+        repo,
         reqwest::Client::new(),
         format!("{}/appcast.xml", server.uri()),
-        tempfile::tempdir()
-            .expect("temp dir")
-            .path()
-            .join("extracted-fingerprint.json"),
+        dir.path().join("extracted-fingerprint.json"),
         "26.800.1",
         "6001",
     );
@@ -113,7 +120,7 @@ async fn update_checker_should_apply_available_update_to_repository() {
     .expect("write extracted fingerprint");
 
     let checker = UpdateChecker::with_client(
-        Some(repo.clone()),
+        repo.clone(),
         reqwest::Client::new(),
         format!("{}/appcast.xml", server.uri()),
         extracted_path,
@@ -121,17 +128,20 @@ async fn update_checker_should_apply_available_update_to_repository() {
         "6001",
     );
 
-    let applied = checker
+    let updated = checker
         .check_and_apply_update()
         .await
-        .expect("apply update");
+        .expect("apply update")
+        .expect("available update should return current fingerprint");
     let stored = repo
         .load_current()
         .await
         .expect("load current")
         .expect("stored fingerprint");
 
-    assert!(applied);
+    assert_eq!(updated.app_version, "26.900.1");
+    assert_eq!(updated.build_number, "7001");
+    assert_eq!(updated.chromium_version, "147");
     assert_eq!(stored.app_version, "26.900.1");
     assert_eq!(stored.build_number, "7001");
     assert_eq!(stored.chromium_version, "147");

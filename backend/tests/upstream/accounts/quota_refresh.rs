@@ -312,7 +312,7 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service =
         RuntimeQuotaRefreshService::new(store, Arc::new(codex)).with_cookie_store(cookies);
@@ -393,7 +393,7 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service = RuntimeQuotaRefreshService::new(store.clone(), Arc::new(codex));
 
@@ -468,7 +468,7 @@ async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex));
 
@@ -505,7 +505,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_before_cooldown
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service =
         RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
@@ -546,7 +546,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_inside_cooldown
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service =
         RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
@@ -604,7 +604,7 @@ async fn quota_refresh_service_should_bypass_recent_skip_after_cooldown_grace() 
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service =
         RuntimeQuotaRefreshService::with_min_refresh_interval_secs(store, Arc::new(codex), 1_800);
@@ -658,7 +658,7 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
     let codex = CodexBackendClient::new(
         reqwest::Client::new(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let service = RuntimeQuotaRefreshService::new(store, Arc::new(codex))
         .with_request_spacing(StdDuration::from_millis(200));

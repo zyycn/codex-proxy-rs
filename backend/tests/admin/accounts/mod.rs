@@ -26,7 +26,10 @@ use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
 use crate::support::jwt::unsigned_jwt;
-use crate::support::{admin::seed_admin_session, config::test_config, http::response_json};
+use crate::support::{
+    admin::seed_admin_session, config::test_config, fingerprint::runtime_fingerprint,
+    http::response_json,
+};
 
 mod exporting;
 mod importing;
@@ -170,7 +173,11 @@ async fn admin_accounts_test_app_with_overrides(
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

@@ -35,7 +35,9 @@ use wiremock::{
 };
 
 use crate::support::{
-    admin::seed_admin_session, config::test_config, fingerprint::test_fingerprint,
+    admin::seed_admin_session,
+    config::test_config,
+    fingerprint::{runtime_fingerprint, test_fingerprint},
     http::response_json,
 };
 
@@ -1218,7 +1220,11 @@ async fn admin_system_test_app(db_name: &str) -> (axum::Router, tempfile::TempDi
     seed_admin_session(&pool, "session_1").await;
     let config = test_config(url);
     let stores = stores(pool);
-    let services = Arc::new(Services::new(&config, stores, test_fingerprint()));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(test_fingerprint()),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

@@ -49,7 +49,7 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
         let Err(error) = Services::try_new(
             &config,
             stores,
-            crate::support::fingerprint::test_fingerprint(),
+            crate::support::fingerprint::runtime_test_fingerprint(),
         ) else {
             panic!("invalid custom CA should fail service transport construction");
         };
@@ -90,7 +90,7 @@ async fn services_try_new_should_expose_websocket_pool_when_enabled() {
     let services = Services::try_new(
         &config,
         stores(pool),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .expect("services should build");
 
@@ -111,7 +111,7 @@ async fn services_try_new_should_not_expose_websocket_pool_when_disabled() {
     let services = Services::try_new(
         &config,
         stores(pool),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .expect("services should build");
 

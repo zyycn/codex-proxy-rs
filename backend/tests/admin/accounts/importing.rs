@@ -30,7 +30,11 @@ async fn admin_accounts_import_should_store_cpr_account_tokens() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };
@@ -639,7 +643,11 @@ async fn admin_accounts_import_should_fetch_usage_to_complete_missing_plan_and_q
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };
@@ -855,7 +863,11 @@ async fn admin_accounts_import_should_require_admin_session_cookie() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

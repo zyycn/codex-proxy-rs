@@ -17,7 +17,10 @@ use codex_proxy_rs::{
 use serde_json::json;
 use tower::util::ServiceExt;
 
-use crate::support::{admin::seed_admin_session, config::test_config, http::response_json};
+use crate::support::{
+    admin::seed_admin_session, config::test_config, fingerprint::runtime_fingerprint,
+    http::response_json,
+};
 
 mod authorization;
 mod lifecycle;
@@ -41,7 +44,11 @@ async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::Te
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

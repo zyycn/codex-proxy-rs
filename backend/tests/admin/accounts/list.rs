@@ -27,7 +27,11 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Arc::new(Services::new(&config, stores, fingerprint));
+    let services = Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

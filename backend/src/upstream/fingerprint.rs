@@ -1,6 +1,10 @@
 //! 指纹类型、更新与持久化。
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -86,6 +90,38 @@ impl Fingerprint {
             "\"Chromium\";v=\"{}\", \"Not:A-Brand\";v=\"24\"",
             self.chromium_version
         )
+    }
+}
+
+/// 运行时共享指纹快照。
+#[derive(Debug, Clone)]
+pub struct RuntimeFingerprint {
+    current: Arc<RwLock<Arc<Fingerprint>>>,
+}
+
+impl RuntimeFingerprint {
+    pub fn new(fingerprint: Fingerprint) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(Arc::new(fingerprint))),
+        }
+    }
+
+    pub fn current(&self) -> Arc<Fingerprint> {
+        self.current
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn snapshot(&self) -> Fingerprint {
+        self.current().as_ref().clone()
+    }
+
+    pub fn replace(&self, fingerprint: Fingerprint) {
+        *self
+            .current
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(fingerprint);
     }
 }
 
@@ -345,7 +381,7 @@ fn json_error(error: serde_json::Error) -> sqlx::Error {
 /// Appcast 指纹更新检查器。
 #[derive(Clone)]
 pub struct UpdateChecker {
-    repository: Option<FingerprintRepository>,
+    repository: FingerprintRepository,
     client: reqwest::Client,
     appcast_url: String,
     extracted_fingerprint_path: PathBuf,
@@ -360,7 +396,7 @@ struct InternalState {
 impl UpdateChecker {
     /// 使用自定义 client 和路径构造检查器。
     pub fn with_client(
-        repository: Option<FingerprintRepository>,
+        repository: FingerprintRepository,
         client: reqwest::Client,
         appcast_url: impl Into<String>,
         extracted_fingerprint_path: PathBuf,
@@ -406,18 +442,18 @@ impl UpdateChecker {
     }
 
     /// 检查并在需要时应用更新。
-    pub async fn check_and_apply_update(&self) -> Result<bool, UpdateError> {
+    pub async fn check_and_apply_update(&self) -> Result<Option<Fingerprint>, UpdateError> {
         let update_state = self.check_for_update().await?;
 
         if !update_state.update_available {
-            return Ok(false);
+            return Ok(None);
         }
 
         let (Some(version), Some(build)) = (
             update_state.latest_version.as_deref(),
             update_state.latest_build.as_deref(),
         ) else {
-            return Ok(false);
+            return Ok(None);
         };
 
         let state = self.state.lock().await;
@@ -433,13 +469,13 @@ impl UpdateChecker {
             "发现新的 fingerprint 版本"
         );
 
-        self.apply_version_update(version, build).await?;
+        let updated_fingerprint = self.apply_version_update(version, build).await?;
 
         let mut state = self.state.lock().await;
         state.current_version = version.to_string();
         state.current_build = build.to_string();
 
-        Ok(true)
+        Ok(Some(updated_fingerprint))
     }
 
     async fn fetch_appcast(&self) -> Result<String, UpdateError> {
@@ -457,20 +493,26 @@ impl UpdateChecker {
         response.text().await.map_err(UpdateError::from)
     }
 
-    async fn apply_version_update(&self, version: &str, build: &str) -> Result<(), UpdateError> {
+    async fn apply_version_update(
+        &self,
+        version: &str,
+        build: &str,
+    ) -> Result<Fingerprint, UpdateError> {
         let chromium_version =
             load_matching_chromium_version(&self.extracted_fingerprint_path, version, build);
 
-        if let Some(repository) = &self.repository {
-            repository
-                .update_current_version(version, build, chromium_version.as_deref())
-                .await?;
-            repository
-                .insert_update_history(version, build, chromium_version.as_deref(), None)
-                .await?;
-        }
-
-        Ok(())
+        self.repository
+            .update_current_version(version, build, chromium_version.as_deref())
+            .await?;
+        self.repository
+            .insert_update_history(version, build, chromium_version.as_deref(), None)
+            .await?;
+        let updated = self
+            .repository
+            .load_current()
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+        Ok(updated)
     }
 }
 

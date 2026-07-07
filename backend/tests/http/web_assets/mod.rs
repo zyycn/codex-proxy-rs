@@ -10,7 +10,9 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
 
-use crate::support::{config::test_config as base_test_config, http::response_json};
+use crate::support::{
+    config::test_config as base_test_config, fingerprint::runtime_fingerprint, http::response_json,
+};
 
 #[tokio::test]
 async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes() {
@@ -200,7 +202,7 @@ async fn router_with_dist_and_database(dist: &Path, database_url: &str) -> (Rout
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,
-        fingerprint,
+        runtime_fingerprint(fingerprint),
     ));
     let state = codex_proxy_rs::runtime::state::AppState {
         services: (*services).clone(),

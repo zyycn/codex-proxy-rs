@@ -28,7 +28,8 @@ use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
 use crate::support::{
-    admin::seed_admin_session, config::test_config as base_test_config, http::response_json,
+    admin::seed_admin_session, config::test_config as base_test_config,
+    fingerprint::runtime_fingerprint, http::response_json,
 };
 
 #[tokio::test]
@@ -277,7 +278,7 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = Services::new(&config, stores, fingerprint);
+    let services = Services::new(&config, stores, runtime_fingerprint(fingerprint));
     let services = std::sync::Arc::new(services);
     let state = AppState {
         services: (*services).clone(),
@@ -382,7 +383,11 @@ async fn admin_settings_update_should_apply_runtime_services() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     services
         .account_pool
         .restore_from_repository()
@@ -480,7 +485,11 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };
@@ -522,7 +531,11 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

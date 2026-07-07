@@ -59,7 +59,7 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
     let backend = CodexBackendClient::new(
         reqwest::Client::new(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_pool(Arc::new(pool));
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());

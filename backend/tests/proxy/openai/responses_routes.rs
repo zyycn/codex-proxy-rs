@@ -18,7 +18,8 @@ use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
 use crate::support::{
-    client_keys::insert_client_api_key, config::test_config, http::response_json,
+    client_keys::insert_client_api_key, config::test_config, fingerprint::runtime_fingerprint,
+    http::response_json,
 };
 
 #[tokio::test]
@@ -154,7 +155,11 @@ async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::Temp
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     services
         .initialize_hot_path_state()
         .await

@@ -271,7 +271,7 @@ async fn test_app_state_with_pool_installation_id_and_usage_record_options(
     let services = Services::try_with_installation_id_and_usage_record_options(
         &config,
         stores,
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
         Some(installation_id),
         usage_record_options,
     )
