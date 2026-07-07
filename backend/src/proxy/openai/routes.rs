@@ -1,6 +1,7 @@
 //! OpenAI 兼容 API 路由。
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -22,4 +23,5 @@ pub fn router() -> Router<AppState> {
         .route("/v1/models/catalog", get(model_catalog))
         .route("/v1/models/{model_id}", get(model_detail))
         .route("/v1/models/{model_id}/info", get(model_info))
+        .layer(DefaultBodyLimit::disable())
 }
