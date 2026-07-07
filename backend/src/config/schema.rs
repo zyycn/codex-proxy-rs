@@ -24,9 +24,6 @@ pub struct AppConfig {
     /// 运行时模型别名，由数据库设置加载，配置文件不承载该字段。
     #[serde(skip)]
     pub model_aliases: BTreeMap<String, String>,
-    /// 运行时模型账号路由，由 `model_account_routes` 表加载，配置文件不承载该字段。
-    #[serde(skip)]
-    pub model_account_routes: BTreeMap<String, Vec<String>>,
     /// 认证与刷新配置，由固定默认值和数据库运行时设置承载，配置文件不承载该字段。
     #[serde(skip)]
     pub auth: AuthConfig,

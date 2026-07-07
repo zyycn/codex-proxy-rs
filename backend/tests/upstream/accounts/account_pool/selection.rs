@@ -446,28 +446,6 @@ fn account_pool_distinct_plan_accounts_should_filter_like_model_refresh() {
 }
 
 #[test]
-fn account_pool_should_filter_by_model_account_routes() {
-    let mut model_routes = BTreeMap::new();
-    model_routes.insert("gpt-5.5".to_string(), vec!["acct_b".to_string()]);
-    let mut pool = AccountPool::with_options(AccountPoolOptions {
-        max_concurrent_per_account: 1,
-        model_account_routes: model_routes,
-        ..AccountPoolOptions::default()
-    });
-    pool.insert(crate::support::accounts::test_account(
-        "acct_a",
-        AccountStatus::Active,
-    ));
-    pool.insert(crate::support::accounts::test_account(
-        "acct_b",
-        AccountStatus::Active,
-    ));
-
-    assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, "acct_b");
-    assert!(acquire_account(&mut pool, "gpt-5.5").is_none());
-}
-
-#[test]
 fn account_pool_should_exclude_requested_account_ids() {
     let mut pool = AccountPool::default();
     pool.insert(crate::support::accounts::test_account(
@@ -509,6 +487,33 @@ fn account_pool_should_prefer_session_affinity_account_when_available() {
         .unwrap();
 
     assert_eq!(acquired.account.id, "acct_b");
+}
+
+#[test]
+fn account_pool_should_not_fallback_when_required_account_is_unavailable() {
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 1,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+
+    assert!(pool
+        .acquire_with(
+            &AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_required_account_id("acct_a"),
+        )
+        .is_some());
+    let acquired = pool.acquire_with(
+        &AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_required_account_id("acct_a"),
+    );
+
+    assert!(acquired.is_none());
 }
 
 #[test]

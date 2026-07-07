@@ -26,8 +26,6 @@ const RUNTIME_SETTINGS_ID: i64 = 1;
 pub struct AdminSettings {
     /// 模型别名映射。
     pub model_aliases: BTreeMap<String, String>,
-    /// 模型到账号 ID 的显式路由。
-    pub model_account_routes: BTreeMap<String, Vec<String>>,
     /// 访问令牌过期前多少秒开始刷新。
     pub refresh_margin_seconds: u64,
     /// 访问令牌刷新并发数。
@@ -44,7 +42,6 @@ impl Default for AdminSettings {
     fn default() -> Self {
         Self {
             model_aliases: BTreeMap::new(),
-            model_account_routes: BTreeMap::new(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
@@ -60,8 +57,6 @@ impl Default for AdminSettings {
 pub struct AdminSettingsPatch {
     /// 模型别名映射。
     pub model_aliases: Option<BTreeMap<String, String>>,
-    /// 模型到账号 ID 的显式路由。
-    pub model_account_routes: Option<BTreeMap<String, Vec<String>>>,
     /// 访问令牌过期前多少秒开始刷新。
     pub refresh_margin_seconds: Option<u64>,
     /// 访问令牌刷新并发数。
@@ -86,9 +81,6 @@ impl SettingsService {
     ) -> Result<(), SettingsServiceError> {
         if let Some(model_aliases) = patch.model_aliases {
             current.model_aliases = validate_model_aliases(model_aliases)?;
-        }
-        if let Some(model_account_routes) = patch.model_account_routes {
-            current.model_account_routes = validate_model_account_routes(model_account_routes)?;
         }
         if let Some(refresh_margin_seconds) = patch.refresh_margin_seconds {
             current.refresh_margin_seconds =
@@ -147,34 +139,6 @@ fn validate_model_aliases(
             ));
         }
         normalized.insert(alias, target);
-    }
-    Ok(normalized)
-}
-
-fn validate_model_account_routes(
-    routes: BTreeMap<String, Vec<String>>,
-) -> Result<BTreeMap<String, Vec<String>>, SettingsServiceError> {
-    let mut normalized = BTreeMap::new();
-    for (model, account_ids) in routes {
-        let model = non_empty_string("modelAccountRoutes", &model)?;
-        let mut normalized_account_ids = Vec::new();
-        for account_id in account_ids {
-            let account_id = non_empty_string("modelAccountRoutes", &account_id)?;
-            if normalized_account_ids.contains(&account_id) {
-                return Err(invalid_field(
-                    "modelAccountRoutes",
-                    format!("duplicate account id `{account_id}`"),
-                ));
-            }
-            normalized_account_ids.push(account_id);
-        }
-        if normalized_account_ids.is_empty() {
-            return Err(invalid_field(
-                "modelAccountRoutes",
-                "account list must not be empty",
-            ));
-        }
-        normalized.insert(model, normalized_account_ids);
     }
     Ok(normalized)
 }
@@ -394,7 +358,6 @@ pub enum RuntimeSettingsError {
 fn admin_settings_from_config(config: &AppConfig) -> AdminSettings {
     AdminSettings {
         model_aliases: config.model_aliases.clone(),
-        model_account_routes: config.model_account_routes.clone(),
         refresh_margin_seconds: config.auth.refresh_margin_seconds,
         refresh_concurrency: config.auth.refresh_concurrency,
         max_concurrent_per_account: config.auth.max_concurrent_per_account,
@@ -405,7 +368,6 @@ fn admin_settings_from_config(config: &AppConfig) -> AdminSettings {
 
 fn apply_admin_settings_to_config(config: &mut AppConfig, settings: AdminSettings) {
     config.model_aliases = settings.model_aliases;
-    config.model_account_routes = settings.model_account_routes;
     config.auth.refresh_margin_seconds = settings.refresh_margin_seconds;
     config.auth.refresh_concurrency = settings.refresh_concurrency;
     config.auth.max_concurrent_per_account = settings.max_concurrent_per_account;
@@ -418,8 +380,7 @@ async fn insert_runtime_settings_if_missing(
     settings: &AdminSettings,
 ) -> Result<(), RuntimeSettingsError> {
     let model_aliases_json = serde_json::to_string(&settings.model_aliases)?;
-    let mut tx = pool.begin().await?;
-    let result = sqlx::query(
+    sqlx::query(
         r"
 insert or ignore into runtime_settings (
   id,
@@ -449,12 +410,8 @@ insert or ignore into runtime_settings (
     )
     .bind(&settings.rotation_strategy)
     .bind(Utc::now().to_rfc3339())
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
-    if result.rows_affected() > 0 {
-        replace_model_account_routes(&mut tx, &settings.model_account_routes).await?;
-    }
-    tx.commit().await?;
     Ok(())
 }
 
@@ -463,7 +420,6 @@ async fn save_runtime_settings(
     settings: &AdminSettings,
 ) -> Result<(), RuntimeSettingsError> {
     let model_aliases_json = serde_json::to_string(&settings.model_aliases)?;
-    let mut tx = pool.begin().await?;
     sqlx::query(
         r"
 insert into runtime_settings (
@@ -502,10 +458,8 @@ on conflict(id) do update set
     )
     .bind(&settings.rotation_strategy)
     .bind(Utc::now().to_rfc3339())
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
-    replace_model_account_routes(&mut tx, &settings.model_account_routes).await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -525,9 +479,7 @@ where id = ?",
     .bind(RUNTIME_SETTINGS_ID)
     .fetch_one(pool)
     .await?;
-    let mut settings = runtime_settings_from_row(&row)?;
-    settings.model_account_routes = load_model_account_routes(pool).await?;
-    Ok(settings)
+    runtime_settings_from_row(&row)
 }
 
 async fn admin_api_key_status(
@@ -566,7 +518,6 @@ fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSe
     let model_aliases_json: String = row.get("model_aliases_json");
     Ok(AdminSettings {
         model_aliases: serde_json::from_str(&model_aliases_json)?,
-        model_account_routes: BTreeMap::new(),
         refresh_margin_seconds: positive_i64_to_u64(
             "refreshMarginSeconds",
             row.get("refresh_margin_seconds"),
@@ -587,61 +538,6 @@ fn runtime_settings_from_row(row: &SqliteRow) -> Result<AdminSettings, RuntimeSe
     })
 }
 
-async fn replace_model_account_routes(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    routes: &BTreeMap<String, Vec<String>>,
-) -> Result<(), RuntimeSettingsError> {
-    sqlx::query("delete from model_account_routes")
-        .execute(&mut **tx)
-        .await?;
-    let now = Utc::now().to_rfc3339();
-    for (model, account_ids) in routes {
-        for (priority, account_id) in account_ids.iter().enumerate() {
-            sqlx::query(
-                r"
-insert into model_account_routes (
-  model,
-  account_id,
-  priority,
-  enabled,
-  created_at,
-  updated_at
-) values (?, ?, ?, 1, ?, ?)",
-            )
-            .bind(model)
-            .bind(account_id)
-            .bind(
-                i64::try_from(priority)
-                    .map_err(|_| stored_field_error("modelAccountRoutes", "out of range"))?,
-            )
-            .bind(&now)
-            .bind(&now)
-            .execute(&mut **tx)
-            .await?;
-        }
-    }
-    Ok(())
-}
-
-async fn load_model_account_routes(
-    pool: &SqlitePool,
-) -> Result<BTreeMap<String, Vec<String>>, RuntimeSettingsError> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        r"
-select model, account_id
-from model_account_routes
-where enabled = 1
-order by model asc, priority asc, account_id asc",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut routes = BTreeMap::<String, Vec<String>>::new();
-    for (model, account_id) in rows {
-        routes.entry(model).or_default().push(account_id);
-    }
-    Ok(routes)
-}
-
 /// 从当前运行配置生成账号池调度参数。
 pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOptions {
     AccountPoolOptions {
@@ -649,7 +545,6 @@ pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOption
         rotation_strategy: rotation_strategy_from_config(&config.auth.rotation_strategy),
         skip_quota_limited: config.quota.skip_exhausted,
         tier_priority: config.auth.tier_priority.clone(),
-        model_account_routes: config.model_account_routes.clone(),
         ..AccountPoolOptions::default()
     }
 }

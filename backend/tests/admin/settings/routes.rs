@@ -66,7 +66,6 @@ async fn admin_settings_should_return_runtime_fields() {
         .unwrap();
     let body = response_json(response).await;
     assert_eq!(body["data"]["modelAliases"]["codex-fast"], "gpt-5.5");
-    assert_eq!(body["data"]["modelAccountRoutes"], json!({}));
     assert_eq!(body["data"]["refreshMarginSeconds"], 240);
     assert_eq!(body["data"]["refreshConcurrency"], 2);
     assert_eq!(body["data"]["rotationStrategy"], "least_used");
@@ -267,8 +266,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     let config = test_config(url);
     let pool = connect_sqlite(&config.database.url).await.unwrap();
     seed_admin_session(&pool, "session_1").await;
-    seed_account(&pool, "acct_route_a").await;
-    seed_account(&pool, "acct_route_b").await;
     let stores = BackgroundTaskStores {
         accounts: SqliteAccountStore::new(pool.clone()),
         admin_sessions: SqliteAdminSessionStore::new(pool.clone()),
@@ -303,9 +300,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
                             "gpt-5.2": "gpt-5.5",
                             "claude-sonnet": "gpt-5.5"
                         },
-                        "modelAccountRoutes": {
-                            "gpt-5.5": ["acct_route_a", "acct_route_b"]
-                        },
                         "refreshMarginSeconds": 900,
                         "refreshConcurrency": 4,
                         "maxConcurrentPerAccount": 7,
@@ -320,10 +314,6 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["data"]["modelAliases"]["gpt-5.2"], "gpt-5.5");
-    assert_eq!(
-        body["data"]["modelAccountRoutes"]["gpt-5.5"][0],
-        "acct_route_a"
-    );
     assert_eq!(body["data"]["refreshMarginSeconds"], 900);
     assert_eq!(body["data"]["refreshConcurrency"], 4);
 
@@ -357,29 +347,12 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     assert_eq!(row.3, 7);
     assert_eq!(row.4, 80);
     assert_eq!(row.5, "round_robin");
-    let route_rows: Vec<(String, String, i64)> = sqlx::query_as(
-        "select model, account_id, priority from model_account_routes order by model, priority",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        route_rows,
-        vec![
-            ("gpt-5.5".to_string(), "acct_route_a".to_string(), 0),
-            ("gpt-5.5".to_string(), "acct_route_b".to_string(), 1),
-        ]
-    );
     assert!(!dir.path().join("config.yaml").exists());
 
     let restarted_config = RuntimeSettingsService::load_or_initialize_config(config.clone(), &pool)
         .await
         .unwrap();
     assert_eq!(restarted_config.model_aliases["gpt-5.2"], "gpt-5.5");
-    assert_eq!(
-        restarted_config.model_account_routes["gpt-5.5"],
-        vec!["acct_route_a".to_string(), "acct_route_b".to_string()]
-    );
     assert_eq!(restarted_config.auth.refresh_margin_seconds, 900);
     assert_eq!(restarted_config.auth.refresh_concurrency, 4);
     assert_eq!(restarted_config.auth.rotation_strategy, "round_robin");
@@ -433,10 +406,6 @@ async fn admin_settings_update_should_apply_runtime_services() {
                         "modelAliases": {
                             "runtime-alias": "gpt-5.5"
                         },
-                        "modelAccountRoutes": {
-                            "gpt-5.5": ["acct_runtime_b"],
-                            "gpt-5.6": ["acct_runtime_a", "acct_runtime_b"]
-                        },
                         "refreshMarginSeconds": 120,
                         "refreshConcurrency": 3,
                         "maxConcurrentPerAccount": 2,
@@ -466,15 +435,6 @@ async fn admin_settings_update_should_apply_runtime_services() {
     assert_eq!(capacity.total_slots, 4);
     assert_eq!(capacity.max_concurrent_per_account, 2);
 
-    let route_request = AccountAcquireRequest::new("gpt-5.5", Utc::now());
-    let routed = services
-        .account_pool
-        .acquire_with(&route_request)
-        .await
-        .unwrap();
-    assert_eq!(routed.account.id, "acct_runtime_b");
-    services.account_pool.release(&routed.account.id).await;
-
     let rotation_request = AccountAcquireRequest::new("gpt-5.6", Utc::now());
     let first = services
         .account_pool
@@ -486,15 +446,13 @@ async fn admin_settings_update_should_apply_runtime_services() {
         .acquire_with(&rotation_request)
         .await
         .unwrap();
-    assert_eq!(first.account.id, "acct_runtime_b");
-    assert_eq!(second.account.id, "acct_runtime_a");
+    assert_ne!(first.account.id, second.account.id);
 
     let repeated = services
         .account_pool
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
         .await
         .unwrap();
-    assert_eq!(repeated.account.id, "acct_runtime_b");
     let started_at = Instant::now();
     services
         .account_pool
@@ -572,26 +530,6 @@ async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::Temp
         codex_proxy_rs::http::router::router().with_state(state),
         dir,
     )
-}
-
-async fn seed_account(pool: &SqlitePool, account_id: &str) {
-    sqlx::query(
-        r"
-insert into accounts (
-  id,
-  access_token,
-  status,
-  added_at,
-  updated_at
-) values (?, ?, 'active', ?, ?)",
-    )
-    .bind(account_id)
-    .bind("access-token")
-    .bind("2026-06-18T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
 }
 
 async fn seed_schedulable_account(pool: &SqlitePool, account_id: &str) {

@@ -16,9 +16,8 @@ use crate::{
     upstream::models::config::ModelConfig,
 };
 
-const ALLOWED_SETTINGS_KEYS: [&str; 7] = [
+const ALLOWED_SETTINGS_KEYS: [&str; 6] = [
     "modelAliases",
-    "modelAccountRoutes",
     "refreshMarginSeconds",
     "refreshConcurrency",
     "maxConcurrentPerAccount",
@@ -30,7 +29,6 @@ const ALLOWED_SETTINGS_KEYS: [&str; 7] = [
 #[serde(rename_all = "camelCase")]
 struct AdminSettingsData {
     model_aliases: BTreeMap<String, String>,
-    model_account_routes: BTreeMap<String, Vec<String>>,
     refresh_margin_seconds: u64,
     refresh_concurrency: u32,
     max_concurrent_per_account: usize,
@@ -42,7 +40,6 @@ impl AdminSettingsData {
     fn from_config(config: &AppConfig) -> Self {
         Self {
             model_aliases: config.model_aliases.clone(),
-            model_account_routes: config.model_account_routes.clone(),
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,
             max_concurrent_per_account: config.auth.max_concurrent_per_account,

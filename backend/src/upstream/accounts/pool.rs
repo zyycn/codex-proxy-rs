@@ -62,8 +62,6 @@ pub struct AccountPoolOptions {
     pub model_plan_allowlist: BTreeMap<String, Vec<String>>,
     /// 已成功拉取过模型列表的订阅计划。
     pub fetched_model_plan_types: BTreeSet<String>,
-    /// 模型到指定账号 ID 的显式路由。
-    pub model_account_routes: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AccountPoolOptions {
@@ -76,7 +74,6 @@ impl Default for AccountPoolOptions {
             tier_priority: Vec::new(),
             model_plan_allowlist: BTreeMap::new(),
             fetched_model_plan_types: BTreeSet::new(),
-            model_account_routes: BTreeMap::new(),
         }
     }
 }
@@ -88,6 +85,8 @@ pub struct AccountAcquireRequest {
     pub model: String,
     /// 本次请求需要排除的账号 ID。
     pub exclude_account_ids: Vec<String>,
+    /// 本次请求必须使用的账号 ID，用于同请求内的同账号重试。
+    pub required_account_id: Option<String>,
     /// 会话亲和性建议的优先账号 ID。
     pub preferred_account_id: Option<String>,
     /// 本次调度使用的当前时间。
@@ -100,6 +99,7 @@ impl AccountAcquireRequest {
         Self {
             model: model.into(),
             exclude_account_ids: Vec::new(),
+            required_account_id: None,
             preferred_account_id: None,
             now,
         }
@@ -117,6 +117,12 @@ impl AccountAcquireRequest {
     /// 设置会话亲和性建议的优先账号 ID。
     pub fn with_preferred_account_id(mut self, account_id: impl Into<String>) -> Self {
         self.preferred_account_id = Some(account_id.into());
+        self
+    }
+
+    /// 设置本次调度必须使用的账号 ID。
+    pub fn with_required_account_id(mut self, account_id: impl Into<String>) -> Self {
+        self.required_account_id = Some(account_id.into());
         self
     }
 }
@@ -480,7 +486,15 @@ impl AccountPool {
         self.cleanup_stale_slots(request.now);
         let refreshed_accounts = self.refresh_account_statuses(request.now);
         let candidates = self.candidates(request);
-        let selected = if let Some(preferred_account_id) = &request.preferred_account_id {
+        let selected = if let Some(required_account_id) = &request.required_account_id {
+            candidates.first().cloned().map(|account| {
+                (
+                    account,
+                    self.previous_slot_at(required_account_id),
+                    "required",
+                )
+            })
+        } else if let Some(preferred_account_id) = &request.preferred_account_id {
             let preferred = candidates
                 .iter()
                 .find(|account| account.id == *preferred_account_id)
@@ -742,6 +756,10 @@ impl AccountPool {
             .filter(|account| self.is_base_available(account, request))
             .cloned()
             .collect::<Vec<_>>();
+        if let Some(required_account_id) = &request.required_account_id {
+            candidates.retain(|account| account.id == *required_account_id);
+            return candidates;
+        }
         if let Some(best_tier) = self.best_available_tier(&candidates) {
             candidates.retain(|account| account.plan_type.as_deref() == Some(best_tier.as_str()));
         }
@@ -756,7 +774,6 @@ impl AccountPool {
                 request.now,
                 self.options.skip_quota_limited,
             )
-            && self.is_model_account_allowed(account, &request.model)
             && self.is_model_allowed(account, &request.model)
             && !request
                 .exclude_account_ids
@@ -851,15 +868,6 @@ impl AccountPool {
         };
         allowed_plans.iter().any(|plan| plan == plan_type)
             || !self.options.fetched_model_plan_types.contains(plan_type)
-    }
-
-    fn is_model_account_allowed(&self, account: &Account, model: &str) -> bool {
-        let Some(account_ids) = self.options.model_account_routes.get(model) else {
-            return true;
-        };
-        account_ids
-            .iter()
-            .any(|account_id| account_id == &account.id)
     }
 
     fn best_available_tier(&self, candidates: &[Account]) -> Option<String> {

@@ -177,24 +177,6 @@ create index idx_usage_time_buckets_model_bucket
 on usage_time_buckets(model, bucket_start);
 
 -- ============================================
--- Model Account Routes
--- ============================================
-create table model_account_routes (
-  model text not null,
-  account_id text not null references accounts(id) on delete cascade,
-  priority integer not null default 0 check (priority >= 0),
-  enabled integer not null default 1 check (enabled in (0, 1)),
-  created_at text not null,
-  updated_at text not null,
-  primary key (model, account_id)
-);
-
-create index idx_model_account_routes_account
-on model_account_routes(account_id);
-create index idx_model_account_routes_enabled_model
-on model_account_routes(enabled, model, priority asc, account_id);
-
--- ============================================
 -- Account Cookies
 -- ============================================
 create table account_cookies (

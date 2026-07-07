@@ -34,6 +34,7 @@ pub(crate) const QUOTA_VERIFY_LIMIT_REACHED_MESSAGE: &str =
 pub(crate) enum QuotaVerificationDecision {
     Ready(Box<AcquiredAccount>),
     RetryWithAnotherAccount,
+    RequiredAccountUnavailable,
     MaxAttemptsReached,
 }
 
@@ -45,6 +46,7 @@ pub(crate) struct QuotaVerificationContext<'a> {
     pub request_id: &'a str,
     pub excluded_account_ids: &'a mut Vec<String>,
     pub verify_attempts: &'a mut usize,
+    pub allow_retry_with_another_account: bool,
 }
 
 pub(crate) async fn verify_acquired_quota_if_required(
@@ -111,9 +113,12 @@ pub(crate) async fn verify_acquired_quota_if_required(
             quota_verify_required = true,
             quota_verify_result = "limit_reached",
             verify_attempts = *context.verify_attempts,
-            retry_with_another_account = !max_attempts_reached,
+            retry_with_another_account = context.allow_retry_with_another_account && !max_attempts_reached,
             "quota verification reported exhausted account before upstream request"
         );
+        if !context.allow_retry_with_another_account {
+            return QuotaVerificationDecision::RequiredAccountUnavailable;
+        }
         if max_attempts_reached {
             return QuotaVerificationDecision::MaxAttemptsReached;
         }

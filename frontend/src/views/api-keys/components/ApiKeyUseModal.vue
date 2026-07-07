@@ -49,7 +49,7 @@ windows_wsl_setup_acknowledged = true
 
 [model_providers.OpenAI]
 name = "OpenAI"
-base_url = "${props.serviceRootUrl}"
+base_url = "${props.serviceRootUrl}/v1"
 wire_api = "responses"
 requires_openai_auth = true
 

@@ -27,8 +27,8 @@ use codex_proxy_rs::{
     runtime::services::{BackgroundTaskStores, Services, UsageRecordOptions},
     runtime::state::AppState,
     upstream::accounts::{
-        cookies::SqliteCookieStore, model::AccountStatus, store::SqliteAccountStore,
-        token_refresh::RefreshLeaseStore,
+        cookies::SqliteCookieStore, model::AccountStatus, pool::AccountAcquireRequest,
+        store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
     },
     upstream::fingerprint::FingerprintRepository,
 };
