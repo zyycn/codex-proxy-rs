@@ -13,7 +13,7 @@ use crate::runtime::services::{BackgroundTaskStores, Services};
 use crate::runtime::shutdown::{restart_executable_path, shutdown_signal};
 use crate::runtime::state::{AppState, RuntimeConfig};
 use crate::runtime::tasks::coordinator::TaskCoordinator;
-use crate::upstream::fingerprint::{Fingerprint, FingerprintRepository};
+use crate::upstream::fingerprint::{Fingerprint, FingerprintRepository, RuntimeFingerprint};
 
 const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
 
@@ -81,6 +81,7 @@ async fn build_application(
     let runtime_fingerprint = fingerprint_repository
         .ensure_current_seed(&default_fingerprint)
         .await?;
+    let runtime_fingerprint = RuntimeFingerprint::new(runtime_fingerprint);
     let runtime_config = RuntimeConfig::from(config.clone());
     let services = Services::try_with_installation_id(
         &config,

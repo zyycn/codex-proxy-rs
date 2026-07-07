@@ -1,4 +1,5 @@
 use super::*;
+use codex_proxy_rs::upstream::fingerprint::RuntimeFingerprint;
 use codex_proxy_rs::upstream::transport::build_ordered_codex_headers;
 use codex_proxy_rs::upstream::transport::websocket::CodexWebSocketConnection;
 use serde_json::Value;
@@ -279,7 +280,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_pool(pool);
 
@@ -420,7 +421,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
     let mut request =
         codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
@@ -472,6 +473,91 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
 }
 
 #[tokio::test]
+async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requests() {
+    let server = wiremock::MockServer::start().await;
+    let sse_body = include_str!("../../fixtures/responses/http_sse/completed_usage_basic.sse");
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/codex/responses"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse_body),
+        )
+        .mount(&server)
+        .await;
+
+    let mut initial = crate::support::fingerprint::test_fingerprint();
+    initial.app_version = "26.800.1".to_string();
+    let runtime_fingerprint = RuntimeFingerprint::new(initial);
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+        runtime_fingerprint.clone(),
+    );
+    let mut request =
+        codex_proxy_rs::upstream::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "",
+            Vec::new(),
+        );
+    request.force_http_sse = true;
+    let request_context = |request_id| CodexRequestContext {
+        access_token: "access-token",
+        account_id: Some("chatgpt-account"),
+        request_id,
+        turn_state: None,
+        turn_metadata: None,
+        beta_features: None,
+        include_timing_metrics: None,
+        version: None,
+        codex_window_id: None,
+        parent_thread_id: None,
+        cookie_header: None,
+        installation_id: None,
+        session_id: None,
+    };
+
+    client
+        .create_response(&request, request_context("req_fingerprint_1"))
+        .await
+        .expect("first response should succeed");
+
+    let mut updated = runtime_fingerprint.snapshot();
+    updated.app_version = "26.900.1".to_string();
+    updated.build_number = "7001".to_string();
+    runtime_fingerprint.replace(updated);
+
+    client
+        .create_response(&request, request_context("req_fingerprint_2"))
+        .await
+        .expect("second response should succeed");
+
+    let user_agents = server
+        .received_requests()
+        .await
+        .expect("received requests should load")
+        .iter()
+        .map(|request| {
+            request
+                .headers
+                .get("user-agent")
+                .expect("user-agent should be sent")
+                .to_str()
+                .expect("user-agent should be valid")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        user_agents,
+        vec![
+            "Codex Desktop/26.800.1 (darwin; arm64)".to_string(),
+            "Codex Desktop/26.900.1 (darwin; arm64)".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn codex_backend_client_usage_should_use_wham_usage_headers() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -486,7 +572,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let usage = client
@@ -571,7 +657,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let models = client
@@ -638,7 +724,7 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     client
@@ -713,7 +799,7 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     client

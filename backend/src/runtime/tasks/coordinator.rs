@@ -86,16 +86,17 @@ impl TaskCoordinator {
             .with_account_pool(services.account_pool.clone())
             .start(),
         );
-        coordinator.push(
-            "fingerprint_update",
+        coordinator.push("fingerprint_update", {
+            let fingerprint = services.fingerprint.snapshot();
             start_fingerprint_update_task(
-                Some(stores.fingerprints.clone()),
+                stores.fingerprints.clone(),
+                services.fingerprint.clone(),
                 CODEX_DESKTOP_APPCAST_URL.to_string(),
                 PathBuf::from(DEFAULT_EXTRACTED_FINGERPRINT_PATH),
-                services.fingerprint.app_version.clone(),
-                services.fingerprint.build_number.clone(),
-            ),
-        );
+                fingerprint.app_version,
+                fingerprint.build_number,
+            )
+        });
         if let Some(pool) = &services.websocket_pool {
             coordinator.push(
                 "websocket_pool",

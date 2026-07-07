@@ -1033,7 +1033,8 @@ fn dashboard_usage_record_data(
 }
 
 fn service_status_data(state: &AppState) -> Vec<DashboardServiceStatusData> {
-    let fingerprint = fingerprint_diagnostics(&state.services.fingerprint);
+    let current_fingerprint = state.services.fingerprint.snapshot();
+    let fingerprint = fingerprint_diagnostics(&current_fingerprint);
     vec![
         DashboardServiceStatusData {
             label: "客户端版本".to_string(),

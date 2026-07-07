@@ -10,7 +10,7 @@ use codex_proxy_rs::upstream::accounts::cookies::SqliteCookieStore;
 use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
 use codex_proxy_rs::upstream::accounts::model::{AccountModelUsageDelta, AccountUsageDelta};
 use codex_proxy_rs::upstream::accounts::store::{AccountStore, AccountStoreResult};
-use codex_proxy_rs::upstream::fingerprint::FingerprintRepository;
+use codex_proxy_rs::upstream::fingerprint::{FingerprintRepository, RuntimeFingerprint};
 use codex_proxy_rs::upstream::models::config::ModelConfig;
 use codex_proxy_rs::upstream::models::service::ModelService;
 use wiremock::{
@@ -135,6 +135,15 @@ async fn wait_for_current_fingerprint_version(
         );
         tokio::time::sleep(StdDuration::from_millis(25)).await;
     }
+}
+
+async fn runtime_fingerprint_from_repo(repo: &FingerprintRepository) -> RuntimeFingerprint {
+    RuntimeFingerprint::new(
+        repo.load_current()
+            .await
+            .expect("current fingerprint should load")
+            .expect("current fingerprint should exist"),
+    )
 }
 
 async fn wait_for_appcast_requests(server: &MockServer, expected_count: usize) {

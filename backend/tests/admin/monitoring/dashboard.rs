@@ -32,7 +32,9 @@ use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
-use crate::support::{admin::seed_admin_session, http::response_json};
+use crate::support::{
+    admin::seed_admin_session, fingerprint::runtime_fingerprint, http::response_json,
+};
 
 #[tokio::test]
 async fn dashboard_summary_should_render_fingerprint_updated_at_as_beijing_time() {
@@ -654,7 +656,11 @@ async fn dashboard_test_app(
         client_keys: SqliteClientKeyStore::new(pool.clone()),
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

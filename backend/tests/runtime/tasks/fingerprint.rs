@@ -11,9 +11,11 @@ async fn fingerprint_update_task_should_start_background_checker() {
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
+    let runtime_fingerprint = runtime_fingerprint_from_repo(&repo).await;
 
     let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
-        Some(repo),
+        repo,
+        runtime_fingerprint,
         "https://example.invalid/appcast.xml".to_string(),
         dir.path().join("extracted-fingerprint.json"),
         "26.800.1".to_string(),
@@ -49,6 +51,7 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
+    let runtime_fingerprint = runtime_fingerprint_from_repo(&repo).await;
     let extracted_path = dir.path().join("extracted-fingerprint.json");
     std::fs::write(
         &extracted_path,
@@ -57,7 +60,8 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
     .expect("extracted fingerprint should be written");
 
     let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
-        Some(repo.clone()),
+        repo.clone(),
+        runtime_fingerprint.clone(),
         format!("{}/appcast.xml", server.uri()),
         extracted_path,
         "26.800.1".to_string(),
@@ -72,6 +76,15 @@ async fn fingerprint_update_task_should_apply_initial_appcast_update_to_reposito
             stored.app_version.as_str(),
             stored.build_number.as_str(),
             stored.chromium_version.as_str()
+        ),
+        ("26.900.1", "7001", "147")
+    );
+    let runtime_snapshot = runtime_fingerprint.snapshot();
+    assert_eq!(
+        (
+            runtime_snapshot.app_version.as_str(),
+            runtime_snapshot.build_number.as_str(),
+            runtime_snapshot.chromium_version.as_str()
         ),
         ("26.900.1", "7001", "147")
     );
@@ -103,8 +116,10 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
     repo.ensure_current_seed(&crate::support::fingerprint::test_fingerprint())
         .await
         .expect("seed current fingerprint");
+    let runtime_fingerprint = runtime_fingerprint_from_repo(&repo).await;
     let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
-        Some(repo.clone()),
+        repo.clone(),
+        runtime_fingerprint,
         format!("{}/appcast.xml", server.uri()),
         dir.path().join("missing-extracted-fingerprint.json"),
         "26.900.1".to_string(),
@@ -119,34 +134,4 @@ async fn fingerprint_update_task_should_not_persist_when_appcast_matches_current
         .expect("fingerprint history count should load");
 
     assert_eq!(history_count, 0);
-}
-
-#[tokio::test]
-async fn fingerprint_update_task_should_check_appcast_without_repository() {
-    let server = MockServer::start().await;
-    mount_appcast(
-        &server,
-        r#"
-        <rss>
-          <channel>
-            <item>
-              <enclosure url="https://example.invalid/download" sparkle:shortVersionString="26.900.1" sparkle:version="7001" />
-            </item>
-          </channel>
-        </rss>
-        "#,
-    )
-    .await;
-
-    let dir = tempfile::tempdir().expect("temp dir");
-    let handle = codex_proxy_rs::runtime::tasks::fingerprint_update::start_fingerprint_update_task(
-        None,
-        format!("{}/appcast.xml", server.uri()),
-        dir.path().join("missing-extracted-fingerprint.json"),
-        "26.800.1".to_string(),
-        "6001".to_string(),
-    );
-
-    wait_for_appcast_requests(&server, 1).await;
-    handle.shutdown().await;
 }

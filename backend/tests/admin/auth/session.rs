@@ -7,7 +7,7 @@ use codex_proxy_rs::infra::{database::connect_sqlite, identity::hash_admin_passw
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
-use crate::support::{config::test_config, http::response_json};
+use crate::support::{config::test_config, fingerprint::runtime_fingerprint, http::response_json};
 
 #[tokio::test]
 async fn admin_login_should_issue_http_only_session_cookie() {
@@ -202,7 +202,7 @@ async fn admin_login_test_app(
     let services = std::sync::Arc::new(codex_proxy_rs::runtime::services::Services::new(
         &config,
         stores,
-        fingerprint,
+        runtime_fingerprint(fingerprint),
     ));
     let state = codex_proxy_rs::runtime::state::AppState {
         services: (*services).clone(),

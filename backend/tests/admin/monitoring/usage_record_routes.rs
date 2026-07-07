@@ -23,7 +23,10 @@ use serde_json::json;
 use sqlx::SqlitePool;
 use tower::util::ServiceExt;
 
-use crate::support::{admin::seed_admin_session, config::test_config, http::response_json};
+use crate::support::{
+    admin::seed_admin_session, config::test_config, fingerprint::runtime_fingerprint,
+    http::response_json,
+};
 
 #[tokio::test]
 async fn admin_usage_records_should_require_admin_session_cookie() {
@@ -883,7 +886,11 @@ async fn admin_usage_records_test_app_with_config(
         usage_records: SqliteUsageRecordStore::new(pool.clone()),
     };
     let fingerprint = crate::support::fingerprint::test_fingerprint();
-    let services = std::sync::Arc::new(Services::new(&config, stores, fingerprint));
+    let services = std::sync::Arc::new(Services::new(
+        &config,
+        stores,
+        runtime_fingerprint(fingerprint),
+    ));
     let state = AppState {
         services: (*services).clone(),
     };

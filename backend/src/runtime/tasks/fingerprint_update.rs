@@ -2,9 +2,11 @@
 
 use std::path::PathBuf;
 
-use tracing::warn;
+use tracing::{info, warn};
 
-use crate::upstream::fingerprint::{FingerprintRepository, UpdateChecker, APPCAST_POLL_INTERVAL};
+use crate::upstream::fingerprint::{
+    FingerprintRepository, RuntimeFingerprint, UpdateChecker, APPCAST_POLL_INTERVAL,
+};
 
 use super::{
     coordinator::SchedulerHandle,
@@ -19,7 +21,8 @@ pub const DEFAULT_EXTRACTED_FINGERPRINT_PATH: &str = "data/extracted-fingerprint
 
 /// 启动指纹自动更新后台任务。
 pub fn start_fingerprint_update_task(
-    repository: Option<FingerprintRepository>,
+    repository: FingerprintRepository,
+    runtime_fingerprint: RuntimeFingerprint,
     appcast_url: String,
     extracted_fingerprint_path: PathBuf,
     current_version: String,
@@ -36,6 +39,7 @@ pub fn start_fingerprint_update_task(
     spawn_periodic_task(
         FingerprintUpdateTask {
             checker: update_checker,
+            runtime_fingerprint,
             first_tick: true,
         },
         PeriodicTaskConfig::new(
@@ -48,6 +52,7 @@ pub fn start_fingerprint_update_task(
 
 struct FingerprintUpdateTask {
     checker: UpdateChecker,
+    runtime_fingerprint: RuntimeFingerprint,
     first_tick: bool,
 }
 
@@ -55,11 +60,24 @@ impl PeriodicTaskRunner for FingerprintUpdateTask {
     fn tick(&mut self) -> super::periodic::TaskFuture<'_, ()> {
         Box::pin(async move {
             let first_tick = std::mem::take(&mut self.first_tick);
-            if let Err(error) = self.checker.check_and_apply_update().await {
-                if first_tick {
-                    warn!(error = %error, "fingerprint 首次版本检查失败");
-                } else {
-                    warn!(error = %error, "fingerprint 定期版本检查失败");
+            match self.checker.check_and_apply_update().await {
+                Ok(Some(fingerprint)) => {
+                    let app_version = fingerprint.app_version.clone();
+                    let build_number = fingerprint.build_number.clone();
+                    self.runtime_fingerprint.replace(fingerprint);
+                    info!(
+                        app_version = %app_version,
+                        build_number = %build_number,
+                        "fingerprint 运行时版本已更新"
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if first_tick {
+                        warn!(error = %error, "fingerprint 首次版本检查失败");
+                    } else {
+                        warn!(error = %error, "fingerprint 定期版本检查失败");
+                    }
                 }
             }
         })

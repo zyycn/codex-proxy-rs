@@ -107,7 +107,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_pool(pool);
     let mut request =
@@ -1000,7 +1000,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let Err(error) = backend
@@ -1073,7 +1073,7 @@ async fn codex_backend_client_stream_should_retry_without_pool_when_first_conten
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_first_token_timeout(Some(Duration::from_millis(30)));
     let request = pooled_websocket_request("conversation-first-token-no-pool-timeout");
@@ -1133,7 +1133,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let mut response = backend
@@ -1203,7 +1203,7 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let mut response = backend
@@ -1267,7 +1267,7 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
     let mut response = backend
@@ -1363,7 +1363,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
-        crate::support::fingerprint::test_fingerprint(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
     )
     .with_websocket_pool(pool);
 
