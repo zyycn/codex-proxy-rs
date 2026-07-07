@@ -49,7 +49,7 @@ create table runtime_settings (
   refresh_concurrency integer not null check (refresh_concurrency > 0),
   max_concurrent_per_account integer not null check (max_concurrent_per_account > 0),
   request_interval_ms integer not null check (request_interval_ms >= 0),
-  rotation_strategy text not null check (rotation_strategy in ('least_used', 'round_robin', 'sticky')),
+  rotation_strategy text not null check (rotation_strategy in ('smart', 'quota_reset_priority', 'round_robin', 'sticky')),
   admin_api_key text,
   updated_at text not null
 );

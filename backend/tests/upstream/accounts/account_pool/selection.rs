@@ -543,10 +543,244 @@ fn account_pool_should_cleanup_stale_slots_before_acquire() {
 }
 
 #[test]
-fn account_pool_should_rotate_tied_least_used_accounts() {
+fn smart_should_spread_concurrent_requests_by_slot_pressure() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 3,
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_c",
+        AccountStatus::Active,
+    ));
+
+    let first = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+    let second = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::milliseconds(1),
+        ))
+        .unwrap();
+    let third = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::milliseconds(2),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        [first.account.id, second.account.id, third.account.id]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn smart_should_balance_released_requests_by_runtime_usage() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+    pool.insert(crate::support::accounts::test_account(
+        "acct_b",
+        AccountStatus::Active,
+    ));
+
+    let first = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+    pool.release(&first.account.id);
+    let second = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "gpt-5.5",
+            now + Duration::seconds(1),
+        ))
+        .unwrap();
+
+    assert_ne!(first.account.id, second.account.id);
+}
+
+#[test]
+fn smart_should_not_let_reset_window_override_lower_request_count() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    let mut reset_soon =
+        crate::support::accounts::test_account("reset_soon", AccountStatus::Active);
+    reset_soon.request_count = 10;
+    reset_soon.window_request_count = 10;
+    reset_soon.window_reset_at = Some(now + Duration::seconds(30));
+    let mut quieter = crate::support::accounts::test_account("quieter", AccountStatus::Active);
+    quieter.request_count = 2;
+    quieter.window_request_count = 2;
+    quieter.window_reset_at = Some(now + Duration::seconds(300));
+    pool.insert(reset_soon);
+    pool.insert(quieter);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "quieter");
+}
+
+#[test]
+fn smart_should_not_drain_earliest_reset_account_when_other_accounts_are_idle() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    let mut reset_first =
+        crate::support::accounts::test_account("reset_first", AccountStatus::Active);
+    reset_first.window_reset_at = Some(now + Duration::seconds(30));
+    let mut reset_later =
+        crate::support::accounts::test_account("reset_later", AccountStatus::Active);
+    reset_later.window_reset_at = Some(now + Duration::minutes(10));
+    let mut reset_latest =
+        crate::support::accounts::test_account("reset_latest", AccountStatus::Active);
+    reset_latest.window_reset_at = Some(now + Duration::minutes(20));
+    pool.insert(reset_first);
+    pool.insert(reset_later);
+    pool.insert(reset_latest);
+
+    let mut selected_ids = Vec::new();
+    for offset in 0..4 {
+        let acquired = pool
+            .acquire_with(&AccountAcquireRequest::new(
+                "gpt-5.5",
+                now + Duration::seconds(offset),
+            ))
+            .unwrap();
+        selected_ids.push(acquired.account.id.clone());
+        pool.release(&acquired.account.id);
+    }
+
+    assert_eq!(
+        selected_ids
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
+    assert!(selected_ids.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+#[test]
+fn smart_should_use_window_token_load_when_request_counts_tie() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    let mut heavy = crate::support::accounts::test_account("heavy", AccountStatus::Active);
+    heavy.request_count = 5;
+    heavy.window_request_count = 3;
+    heavy.window_input_tokens = 1_000_000;
+    heavy.window_output_tokens = 500_000;
+    let mut light = crate::support::accounts::test_account("light", AccountStatus::Active);
+    light.request_count = 5;
+    light.window_request_count = 3;
+    light.window_input_tokens = 8_000;
+    light.window_output_tokens = 2_000;
+    pool.insert(heavy);
+    pool.insert(light);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "light");
+}
+
+#[test]
+fn smart_should_not_double_count_cached_tokens_when_request_counts_tie() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    let mut cache_heavy =
+        crate::support::accounts::test_account("cache_heavy", AccountStatus::Active);
+    cache_heavy.request_count = 5;
+    cache_heavy.window_request_count = 3;
+    cache_heavy.window_input_tokens = 10_000;
+    cache_heavy.window_output_tokens = 1_000;
+    cache_heavy.window_cached_tokens = 100_000;
+    let mut heavier_actual =
+        crate::support::accounts::test_account("heavier_actual", AccountStatus::Active);
+    heavier_actual.request_count = 5;
+    heavier_actual.window_request_count = 3;
+    heavier_actual.window_input_tokens = 20_000;
+    heavier_actual.window_output_tokens = 1_000;
+    pool.insert(cache_heavy);
+    pool.insert(heavier_actual);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "cache_heavy");
+}
+
+#[test]
+fn smart_should_use_cached_tokens_as_tie_break_when_actual_token_load_ties() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        rotation_strategy: RotationStrategy::Smart,
+        ..AccountPoolOptions::default()
+    });
+    let mut cache_heavy =
+        crate::support::accounts::test_account("cache_heavy", AccountStatus::Active);
+    cache_heavy.request_count = 5;
+    cache_heavy.window_request_count = 3;
+    cache_heavy.window_input_tokens = 10_000;
+    cache_heavy.window_output_tokens = 1_000;
+    cache_heavy.window_cached_tokens = 100_000;
+    let mut cache_light =
+        crate::support::accounts::test_account("cache_light", AccountStatus::Active);
+    cache_light.request_count = 5;
+    cache_light.window_request_count = 3;
+    cache_light.window_input_tokens = 10_000;
+    cache_light.window_output_tokens = 1_000;
+    cache_light.window_cached_tokens = 1_000;
+    pool.insert(cache_heavy);
+    pool.insert(cache_light);
+
+    let acquired = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+
+    assert_eq!(acquired.account.id, "cache_light");
+}
+
+#[test]
+fn account_pool_should_rotate_tied_quota_reset_priority_accounts() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         max_concurrent_per_account: 1,
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     pool.insert(crate::support::accounts::test_account(
@@ -566,11 +800,11 @@ fn account_pool_should_rotate_tied_least_used_accounts() {
 }
 
 #[test]
-fn least_used_should_prefer_lru_before_tie_rotation() {
+fn quota_reset_priority_should_prefer_lru_before_tie_rotation() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         max_concurrent_per_account: 1,
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     pool.insert(crate::support::accounts::test_account(
@@ -603,10 +837,10 @@ fn least_used_should_prefer_lru_before_tie_rotation() {
 }
 
 #[test]
-fn least_used_should_prefer_lower_runtime_request_count() {
+fn quota_reset_priority_should_prefer_lower_runtime_request_count() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut busy = crate::support::accounts::test_account("busy", AccountStatus::Active);
@@ -624,10 +858,10 @@ fn least_used_should_prefer_lower_runtime_request_count() {
 }
 
 #[test]
-fn least_used_should_not_penalize_missing_window_reset() {
+fn quota_reset_priority_should_not_penalize_missing_window_reset() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut fresh = crate::support::accounts::test_account("fresh", AccountStatus::Active);
@@ -647,10 +881,10 @@ fn least_used_should_not_penalize_missing_window_reset() {
 }
 
 #[test]
-fn least_used_should_fall_through_to_request_count_without_window_resets() {
+fn quota_reset_priority_should_fall_through_to_request_count_without_window_resets() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut busier = crate::support::accounts::test_account("busier", AccountStatus::Active);
@@ -668,11 +902,11 @@ fn least_used_should_fall_through_to_request_count_without_window_resets() {
 }
 
 #[test]
-fn least_used_should_sort_quota_limited_accounts_by_reset_when_not_skipping() {
+fn quota_reset_priority_should_sort_quota_limited_accounts_by_reset_when_not_skipping() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         skip_quota_limited: false,
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut later = crate::support::accounts::test_account("later", AccountStatus::Active);
@@ -692,10 +926,10 @@ fn least_used_should_sort_quota_limited_accounts_by_reset_when_not_skipping() {
 }
 
 #[test]
-fn least_used_should_not_mutate_candidate_order() {
+fn quota_reset_priority_should_not_mutate_candidate_order() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut first = crate::support::accounts::test_account("first", AccountStatus::Active);

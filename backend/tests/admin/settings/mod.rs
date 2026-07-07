@@ -7,7 +7,7 @@ fn settings_service_should_apply_retained_settings_patch() {
     let mut current = AdminSettings {
         max_concurrent_per_account: 4,
         request_interval_ms: 50,
-        rotation_strategy: "least_used".to_string(),
+        rotation_strategy: "smart".to_string(),
         ..AdminSettings::default()
     };
 

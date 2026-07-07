@@ -153,10 +153,10 @@ fn account_pool_should_skip_accounts_in_cloudflare_cooldown() {
 }
 
 #[test]
-fn least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled() {
+fn quota_reset_priority_should_deprioritize_quota_limited_accounts_when_skip_is_disabled() {
     let mut pool = AccountPool::with_options(AccountPoolOptions {
         skip_quota_limited: false,
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut limited = crate::support::accounts::test_account("limited", AccountStatus::Active);
@@ -172,10 +172,10 @@ fn least_used_should_deprioritize_quota_limited_accounts_when_skip_is_disabled()
 }
 
 #[test]
-fn least_used_should_prefer_earlier_rate_limit_window_reset() {
+fn quota_reset_priority_should_prefer_earlier_rate_limit_window_reset() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut soon = crate::support::accounts::test_account("soon", AccountStatus::Active);

@@ -20,7 +20,7 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 
-type RotationStrategy = 'least_used' | 'round_robin' | 'sticky'
+type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 interface AliasRow {
   alias: string
@@ -63,7 +63,7 @@ const form = reactive<SettingsForm>({
   refreshConcurrency: 2,
   maxConcurrentPerAccount: 3,
   requestIntervalMs: 50,
-  rotationStrategy: 'least_used',
+  rotationStrategy: 'smart',
 })
 
 const aliasRows = ref<AliasRow[]>([])
@@ -74,8 +74,13 @@ const adminApiKeyStatus = reactive<AdminApiKeyStatus>({
 
 const rotationOptions: RotationOption[] = [
   {
-    label: '智能分配（推荐）',
-    value: 'least_used',
+    label: '智能调度（推荐）',
+    value: 'smart',
+    description: '优先避开高并发压力账号，并结合窗口用量和历史用量打散请求。',
+  },
+  {
+    label: '额度重置优先',
+    value: 'quota_reset_priority',
     description: '优先使用即将刷新额度的账号，最大化总使用量。',
   },
   {
@@ -144,7 +149,7 @@ function applySettings(data: any) {
   form.refreshConcurrency = Number(data.refreshConcurrency ?? 2)
   form.maxConcurrentPerAccount = Number(data.maxConcurrentPerAccount ?? 3)
   form.requestIntervalMs = Number(data.requestIntervalMs ?? 50)
-  form.rotationStrategy = (data.rotationStrategy || 'least_used') as RotationStrategy
+  form.rotationStrategy = (data.rotationStrategy || 'smart') as RotationStrategy
   aliasRows.value = modelAliasesToRows(form.modelAliases)
   aliasError.value = ''
 }

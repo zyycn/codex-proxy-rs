@@ -27,8 +27,10 @@ use crate::upstream::protocol::events::{
 /// 账号轮转策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationStrategy {
-    /// 优先选择当前窗口用量最低的账号。
-    LeastUsed,
+    /// 综合并发压力、窗口用量和历史用量进行调度。
+    Smart,
+    /// 优先消耗即将重置的额度窗口。
+    QuotaResetPriority,
     /// 按候选账号顺序循环选择。
     RoundRobin,
     /// 优先选择最近使用过的账号。
@@ -38,7 +40,8 @@ pub enum RotationStrategy {
 impl RotationStrategy {
     fn as_str(self) -> &'static str {
         match self {
-            Self::LeastUsed => "least_used",
+            Self::Smart => "smart",
+            Self::QuotaResetPriority => "quota_reset_priority",
             Self::RoundRobin => "round_robin",
             Self::Sticky => "sticky",
         }
@@ -69,7 +72,7 @@ impl Default for AccountPoolOptions {
         Self {
             max_concurrent_per_account: 3,
             stale_slot_ttl: Duration::minutes(5),
-            rotation_strategy: RotationStrategy::LeastUsed,
+            rotation_strategy: RotationStrategy::Smart,
             skip_quota_limited: true,
             tier_priority: Vec::new(),
             model_plan_allowlist: BTreeMap::new(),
@@ -273,6 +276,16 @@ pub struct AccountPool {
 struct AccountSlot {
     created_at: DateTime<Utc>,
     model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SmartAccountLoadScore {
+    quota_limited: bool,
+    slot_count: usize,
+    window_request_count: u64,
+    window_token_count: u64,
+    window_cached_tokens: u64,
+    request_count: u64,
 }
 
 /// 账号释放结果。
@@ -511,10 +524,15 @@ impl AccountPool {
         }
         .or_else(|| {
             Some(match self.options.rotation_strategy {
-                RotationStrategy::LeastUsed => {
-                    let account = self.select_least_used(&candidates)?;
+                RotationStrategy::Smart => {
+                    let account = self.select_smart(&candidates)?;
                     let previous = self.previous_slot_at(&account.id);
-                    (account, previous, "least_used")
+                    (account, previous, "smart")
+                }
+                RotationStrategy::QuotaResetPriority => {
+                    let account = self.select_quota_reset_priority(&candidates)?;
+                    let previous = self.previous_slot_at(&account.id);
+                    (account, previous, "quota_reset_priority")
                 }
                 RotationStrategy::RoundRobin => {
                     let account = self.select_round_robin(&candidates)?;
@@ -534,19 +552,25 @@ impl AccountPool {
                 refreshed_accounts,
             };
         };
+        let selected_slot_count = self.slot_count(&selected.id);
+        let selected_window_token_count = account_window_token_count(&selected);
+        let selected_smart_load_score = self.smart_load_score(&selected);
         tracing::info!(
             model = %request.model,
             rotation_strategy = self.options.rotation_strategy.as_str(),
             selection_source,
             account_id = %selected.id,
             candidate_count = candidates.len(),
+            slot_count = selected_slot_count,
             request_count = selected.request_count,
             window_request_count = selected.window_request_count,
+            window_token_count = selected_window_token_count,
             window_reset_at = ?selected.window_reset_at,
             last_used_at = selected.last_used_at.as_deref().unwrap_or_default(),
             quota_limit_reached = selected.quota_limit_reached,
             quota_cooldown_until = ?selected.quota_cooldown_until,
             previous_slot_at = ?previous_slot_at,
+            smart_load_score = ?selected_smart_load_score,
             rotation_cursor = self.rotation_cursor,
             "account selected for upstream request"
         );
@@ -681,24 +705,31 @@ impl AccountPool {
         let mut accounts = Vec::new();
         for (plan_type, group) in by_plan {
             let selected = match self.options.rotation_strategy {
-                RotationStrategy::LeastUsed => self.select_least_used(&group),
+                RotationStrategy::Smart => self.select_smart(&group),
+                RotationStrategy::QuotaResetPriority => self.select_quota_reset_priority(&group),
                 RotationStrategy::RoundRobin => self.select_round_robin(&group),
                 RotationStrategy::Sticky => Self::select_sticky(&group),
             };
             let Some(account) = selected else {
                 continue;
             };
+            let selected_slot_count = self.slot_count(&account.id);
+            let selected_window_token_count = account_window_token_count(&account);
+            let selected_smart_load_score = self.smart_load_score(&account);
             tracing::info!(
                 plan_type,
                 rotation_strategy = self.options.rotation_strategy.as_str(),
                 account_id = %account.id,
                 candidate_count = group.len(),
+                slot_count = selected_slot_count,
                 request_count = account.request_count,
                 window_request_count = account.window_request_count,
+                window_token_count = selected_window_token_count,
                 window_reset_at = ?account.window_reset_at,
                 last_used_at = account.last_used_at.as_deref().unwrap_or_default(),
                 quota_limit_reached = account.quota_limit_reached,
                 quota_cooldown_until = ?account.quota_cooldown_until,
+                smart_load_score = ?selected_smart_load_score,
                 rotation_cursor = self.rotation_cursor,
                 "account selected for model refresh"
             );
@@ -712,17 +743,47 @@ impl AccountPool {
         }
     }
 
-    fn select_least_used(&mut self, candidates: &[Account]) -> Option<Account> {
+    fn select_smart(&mut self, candidates: &[Account]) -> Option<Account> {
+        self.select_by(candidates, |pool, a, b| pool.compare_smart(a, b))
+    }
+
+    fn select_quota_reset_priority(&mut self, candidates: &[Account]) -> Option<Account> {
+        self.select_by(candidates, |_pool, a, b| compare_quota_reset_priority(a, b))
+    }
+
+    fn select_by(
+        &mut self,
+        candidates: &[Account],
+        compare: impl Fn(&Self, &Account, &Account) -> Ordering,
+    ) -> Option<Account> {
         let mut sorted = candidates.iter().collect::<Vec<_>>();
-        sorted.sort_by(|a, b| compare_least_used(a, b));
+        sorted.sort_by(|a, b| compare(self, a, b));
         let best = *sorted.first()?;
         let tied_count = sorted
             .iter()
-            .take_while(|account| compare_least_used(best, account) == Ordering::Equal)
+            .take_while(|account| compare(self, best, account) == Ordering::Equal)
             .count();
         let index = self.rotation_cursor % tied_count;
         self.rotation_cursor = self.rotation_cursor.wrapping_add(1);
         Some((*sorted[index]).clone())
+    }
+
+    fn compare_smart(&self, a: &Account, b: &Account) -> Ordering {
+        self.smart_load_score(a)
+            .cmp(&self.smart_load_score(b))
+            .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
+            .then_with(|| compare_last_used(a.last_used_at.as_deref(), b.last_used_at.as_deref()))
+    }
+
+    fn smart_load_score(&self, account: &Account) -> SmartAccountLoadScore {
+        SmartAccountLoadScore {
+            quota_limited: account.quota_limit_reached,
+            slot_count: self.slot_count(&account.id),
+            window_request_count: account.window_request_count,
+            window_token_count: account_window_token_count(account),
+            window_cached_tokens: account.window_cached_tokens,
+            request_count: account.request_count,
+        }
     }
 
     fn select_sticky(candidates: &[Account]) -> Option<Account> {
@@ -1460,12 +1521,20 @@ fn refresh_cloudflare_cooldown(account: &mut Account, now: DateTime<Utc>) {
     }
 }
 
-fn compare_least_used(a: &Account, b: &Account) -> Ordering {
+fn compare_quota_reset_priority(a: &Account, b: &Account) -> Ordering {
     a.quota_limit_reached
         .cmp(&b.quota_limit_reached)
         .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
         .then_with(|| a.request_count.cmp(&b.request_count))
         .then_with(|| compare_last_used(a.last_used_at.as_deref(), b.last_used_at.as_deref()))
+}
+
+fn account_window_token_count(account: &Account) -> u64 {
+    account
+        .window_input_tokens
+        .saturating_add(account.window_output_tokens)
+        .saturating_add(account.window_image_input_tokens)
+        .saturating_add(account.window_image_output_tokens)
 }
 
 fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
