@@ -1249,7 +1249,7 @@ async fn responses_should_strip_banned_affinity_history_when_switching_to_active
 }
 
 #[tokio::test]
-async fn responses_should_keep_history_when_affinity_account_is_quota_exhausted() {
+async fn responses_should_strip_quota_history_when_switching_to_active_account() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_after_quota_affinity").await;
     let (app, api_key, pool, _dir) =
@@ -1287,13 +1287,7 @@ async fn responses_should_keep_history_when_affinity_account_is_quota_exhausted(
         captured_header(&captured.headers, "authorization"),
         Some("Bearer access-primary")
     );
-    assert_eq!(
-        captured_header(&captured.headers, "x-codex-turn-state"),
-        Some("turn_affinity_risk")
-    );
-    assert_eq!(
-        captured.payload["previous_response_id"],
-        "resp_affinity_risk"
-    );
+    assert!(captured_header(&captured.headers, "x-codex-turn-state").is_none());
+    assert!(captured.payload.get("previous_response_id").is_none());
     assert_eq!(affinity_count.0, 1);
 }

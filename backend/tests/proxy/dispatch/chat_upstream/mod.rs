@@ -22,7 +22,8 @@ use codex_proxy_rs::{
     http::router,
     infra::database::connect_sqlite,
     proxy::dispatch::session_affinity::{
-        build_conversation_identity, SessionAffinityEntry, SqliteSessionAffinityStore,
+        build_conversation_identity, compute_variant_hash, prepare_variant_identity,
+        SessionAffinityEntry, SqliteSessionAffinityStore,
     },
     runtime::services::{BackgroundTaskStores, Services, UsageRecordOptions},
     runtime::state::AppState,
@@ -31,6 +32,7 @@ use codex_proxy_rs::{
         store::SqliteAccountStore, token_refresh::RefreshLeaseStore,
     },
     upstream::fingerprint::FingerprintRepository,
+    upstream::protocol::responses::CodexResponsesRequest,
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -318,6 +320,13 @@ async fn test_app_with_account_and_pool(
     test_app_with_account_pool_config(base_url, |_| {}).await
 }
 
+async fn test_app_with_account_pool_and_affinity(
+    base_url: String,
+    response_id: &str,
+) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
+    test_app_with_account_pool_config_and_affinity(base_url, |_| {}, Some(response_id)).await
+}
+
 async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("openai-responses-no-accounts.sqlite");
@@ -408,12 +417,23 @@ async fn test_app_with_account_pool_config(
     base_url: String,
     configure: impl FnOnce(&mut AppConfig),
 ) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
+    test_app_with_account_pool_config_and_affinity(base_url, configure, None).await
+}
+
+async fn test_app_with_account_pool_config_and_affinity(
+    base_url: String,
+    configure: impl FnOnce(&mut AppConfig),
+    affinity_response_id: Option<&str>,
+) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("openai-record-affinity.sqlite");
     let url = format!("sqlite://{}", db.display());
     let pool = connect_sqlite(&url).await.unwrap();
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
+    if let Some(response_id) = affinity_response_id {
+        insert_session_affinity(&pool, response_id, "acct_chat").await;
+    }
     let mut config = test_config(url, base_url);
     configure(&mut config);
     let state = test_app_state_with_pool_and_installation_id(
@@ -428,6 +448,14 @@ async fn test_app_with_account_pool_config(
         .restore_from_repository()
         .await
         .expect("account pool should restore");
+    if affinity_response_id.is_some() {
+        state
+            .services
+            .session_affinity
+            .restore_from_repository(Utc::now())
+            .await
+            .expect("session affinity should restore");
+    }
     (router::router().with_state(state), api_key, pool, dir)
 }
 
@@ -711,6 +739,26 @@ async fn insert_model_snapshot(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn insert_session_affinity(pool: &SqlitePool, response_id: &str, account_id: &str) {
+    SqliteSessionAffinityStore::new(pool.clone())
+        .upsert(
+            response_id,
+            &SessionAffinityEntry {
+                account_id: account_id.to_string(),
+                conversation_id: format!("conv_{response_id}"),
+                turn_state: Some("turn-stale".to_string()),
+                instructions_hash: None,
+                input_tokens: None,
+                function_call_ids: Vec::new(),
+                variant_hash: None,
+                created_at: Utc::now(),
+            },
+            Duration::hours(4),
+        )
+        .await
+        .unwrap();
 }
 
 async fn insert_named_account(
