@@ -1581,6 +1581,106 @@ async fn responses_websocket_non_stream_previous_response_not_found_should_strip
 }
 
 #[tokio::test]
+async fn responses_websocket_history_recovery_should_stay_on_fallback_account_when_preferred_is_full(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let first_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-secondary",
+            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
+        )
+        .await;
+        let second_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-secondary",
+            websocket_completed_response("resp_after_fallback_history_strip", 3, 1),
+        )
+        .await;
+        (first_payload, second_payload)
+    });
+    let (app, state, api_key, _pool, _dir) =
+        test_app_with_two_accounts_and_state_config(base_url, |config| {
+            config.auth.max_concurrent_per_account = 1;
+        })
+        .await;
+    seed_primary_affinity_and_hold_primary_slot(&state).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [],
+                "stream": false,
+                "previous_response_id": "resp_owned_by_primary"
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let (first_payload, second_payload) = upstream.await.unwrap();
+
+    assert_eq!(body["id"], "resp_after_fallback_history_strip");
+    assert_eq!(
+        first_payload["previous_response_id"],
+        "resp_owned_by_primary"
+    );
+    assert!(second_payload.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn responses_websocket_stream_history_recovery_should_stay_on_fallback_account_when_preferred_is_full(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let first_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-secondary",
+            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
+        )
+        .await;
+        let second_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-secondary",
+            websocket_completed_response("resp_stream_after_fallback_history_strip", 3, 1),
+        )
+        .await;
+        (first_payload, second_payload)
+    });
+    let (app, state, api_key, _pool, _dir) =
+        test_app_with_two_accounts_and_state_config(base_url, |config| {
+            config.auth.max_concurrent_per_account = 1;
+        })
+        .await;
+    seed_primary_affinity_and_hold_primary_slot(&state).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [],
+                "stream": true,
+                "previous_response_id": "resp_owned_by_primary"
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = response_text(response).await;
+    let (first_payload, second_payload) = upstream.await.unwrap();
+
+    assert!(body.contains("resp_stream_after_fallback_history_strip"));
+    assert_eq!(
+        first_payload["previous_response_id"],
+        "resp_owned_by_primary"
+    );
+    assert!(second_payload.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
 async fn responses_websocket_stream_previous_response_not_found_should_strip_history_and_retry_same_account(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2263,4 +2363,35 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
         quota["snapshots"][0]["primary"]["used_percent"].as_f64(),
         Some(44.0)
     );
+}
+
+async fn seed_primary_affinity_and_hold_primary_slot(state: &AppState) {
+    state
+        .services
+        .session_affinity
+        .record(
+            "resp_owned_by_primary".to_string(),
+            SessionAffinityEntry {
+                account_id: "acct_primary".to_string(),
+                conversation_id: "conv_primary".to_string(),
+                turn_state: Some("turn-primary".to_string()),
+                instructions_hash: None,
+                input_tokens: None,
+                function_call_ids: Vec::new(),
+                variant_hash: None,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    let held_primary_slot = state
+        .services
+        .account_pool
+        .acquire_with(
+            &AccountAcquireRequest::new("gpt-5.5", Utc::now())
+                .with_required_account_id("acct_primary"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(held_primary_slot.account.id, "acct_primary");
 }

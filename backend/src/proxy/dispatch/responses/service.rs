@@ -388,6 +388,7 @@ impl ResponseDispatchService {
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut history_recovery_used = false;
+        let mut next_required_account_id: Option<String> = None;
         let mut empty_response_retries = 0u8;
         let mut quota_verify_attempts = 0usize;
         let mut trace = ResponseDispatchTrace::default();
@@ -401,6 +402,12 @@ impl ResponseDispatchService {
             let mut attempt_acquire_request = acquire_request
                 .clone()
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
+            if let Some(account_id) = next_required_account_id.take() {
+                attempt_acquire_request =
+                    attempt_acquire_request.with_required_account_id(account_id);
+            }
+            let allow_quota_verify_account_retry =
+                attempt_acquire_request.required_account_id.is_none();
             attempt_acquire_request.now = Utc::now();
             let Some(acquired) = self
                 .account_pool
@@ -441,6 +448,7 @@ impl ResponseDispatchService {
                     request_id,
                     excluded_account_ids: &mut excluded_account_ids,
                     verify_attempts: &mut quota_verify_attempts,
+                    allow_retry_with_another_account: allow_quota_verify_account_retry,
                 },
                 acquired,
             )
@@ -452,7 +460,8 @@ impl ResponseDispatchService {
                         .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
-                QuotaVerificationDecision::MaxAttemptsReached => {
+                QuotaVerificationDecision::MaxAttemptsReached
+                | QuotaVerificationDecision::RequiredAccountUnavailable => {
                     exhausted_accounts.record_rate_limited(
                         Some(&acquired_account_id),
                         QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
@@ -568,6 +577,7 @@ impl ResponseDispatchService {
                             self.recover_request_history(&mut request, &mut implicit_resume)
                                 .await;
                             history_recovery_used = true;
+                            next_required_account_id = Some(release_account_id);
                             continue;
                         }
                         if is_model_unsupported_sse_failure(failure) {
@@ -665,6 +675,7 @@ impl ResponseDispatchService {
                     self.recover_request_history(&mut request, &mut implicit_resume)
                         .await;
                     history_recovery_used = true;
+                    next_required_account_id = Some(release_account_id);
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
@@ -932,6 +943,7 @@ impl ResponseDispatchService {
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut history_recovery_used = false;
+        let mut next_required_account_id: Option<String> = None;
         let mut quota_verify_attempts = 0usize;
         let mut trace = ResponseDispatchTrace::default();
         macro_rules! return_stream_dispatch_error {
@@ -978,6 +990,12 @@ impl ResponseDispatchService {
             let mut attempt_acquire_request = acquire_request
                 .clone()
                 .with_exclude_account_ids(excluded_account_ids.iter().cloned());
+            if let Some(account_id) = next_required_account_id.take() {
+                attempt_acquire_request =
+                    attempt_acquire_request.with_required_account_id(account_id);
+            }
+            let allow_quota_verify_account_retry =
+                attempt_acquire_request.required_account_id.is_none();
             attempt_acquire_request.now = Utc::now();
             let Some(acquired) = self
                 .account_pool
@@ -1000,6 +1018,7 @@ impl ResponseDispatchService {
                     request_id,
                     excluded_account_ids: &mut excluded_account_ids,
                     verify_attempts: &mut quota_verify_attempts,
+                    allow_retry_with_another_account: allow_quota_verify_account_retry,
                 },
                 acquired,
             )
@@ -1011,7 +1030,8 @@ impl ResponseDispatchService {
                         .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
-                QuotaVerificationDecision::MaxAttemptsReached => {
+                QuotaVerificationDecision::MaxAttemptsReached
+                | QuotaVerificationDecision::RequiredAccountUnavailable => {
                     exhausted_accounts.record_rate_limited(
                         Some(&acquired_account_id),
                         QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
@@ -1091,6 +1111,7 @@ impl ResponseDispatchService {
                             self.recover_request_history(&mut request, &mut implicit_resume)
                                 .await;
                             history_recovery_used = true;
+                            next_required_account_id = Some(release_account_id);
                             continue;
                         }
                         Err(ResponseDispatchError::Upstream(error))
@@ -1261,6 +1282,7 @@ impl ResponseDispatchService {
                             self.recover_request_history(&mut request, &mut implicit_resume)
                                 .await;
                             history_recovery_used = true;
+                            next_required_account_id = Some(release_account_id);
                             continue;
                         }
                         if is_model_unsupported_sse_failure(&failure) {
@@ -1403,6 +1425,7 @@ impl ResponseDispatchService {
                     self.recover_request_history(&mut request, &mut implicit_resume)
                         .await;
                     history_recovery_used = true;
+                    next_required_account_id = Some(release_account_id);
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
@@ -1548,6 +1571,7 @@ impl ResponseDispatchService {
                     request_id,
                     excluded_account_ids: &mut excluded_account_ids,
                     verify_attempts: &mut quota_verify_attempts,
+                    allow_retry_with_another_account: true,
                 },
                 acquired,
             )
@@ -1559,7 +1583,8 @@ impl ResponseDispatchService {
                         .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
                     continue;
                 }
-                QuotaVerificationDecision::MaxAttemptsReached => {
+                QuotaVerificationDecision::MaxAttemptsReached
+                | QuotaVerificationDecision::RequiredAccountUnavailable => {
                     exhausted_accounts.record_rate_limited(
                         Some(&acquired_account_id),
                         QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,

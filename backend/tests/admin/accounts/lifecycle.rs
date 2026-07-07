@@ -118,16 +118,6 @@ async fn seed_account_related_rows(pool: &SqlitePool, account_id: &str) {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query(
-        "insert into model_account_routes (model, account_id, priority, created_at, updated_at) values (?, ?, 0, ?, ?)",
-    )
-    .bind("gpt-5.5")
-    .bind(account_id)
-    .bind("2026-06-18T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
     sqlx::query("insert into account_cookies (id, account_id, domain, name, value, updated_at) values (?, ?, ?, ?, ?, ?)")
         .bind("cookie_lifecycle")
         .bind(account_id)
@@ -180,12 +170,6 @@ async fn assert_account_related_rows_deleted(pool: &SqlitePool, account_id: &str
             .fetch_one(pool)
             .await
             .unwrap();
-    let model_routes: i64 =
-        sqlx::query_scalar("select count(*) from model_account_routes where account_id = ?")
-            .bind(account_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
     let leases: i64 =
         sqlx::query_scalar("select count(*) from account_refresh_leases where account_id = ?")
             .bind(account_id)
@@ -202,7 +186,6 @@ async fn assert_account_related_rows_deleted(pool: &SqlitePool, account_id: &str
     assert_eq!(accounts, 0);
     assert_eq!(usage, 0);
     assert_eq!(model_usage, 0);
-    assert_eq!(model_routes, 0);
     assert_eq!(cookies, 0);
     assert_eq!(leases, 0);
     assert_eq!(affinities, 0);

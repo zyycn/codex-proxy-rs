@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use codex_proxy_rs::config::schema::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
     LoggingConfig, QuotaConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
@@ -15,8 +13,7 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),
         },
-        model_aliases: BTreeMap::new(),
-        model_account_routes: BTreeMap::new(),
+        model_aliases: std::collections::BTreeMap::new(),
         auth: AuthConfig {
             refresh_margin_seconds: 300,
             refresh_enabled: true,

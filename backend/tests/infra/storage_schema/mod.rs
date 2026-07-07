@@ -10,7 +10,7 @@ async fn sqlite_schema_should_create_current_tables() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'model_account_routes', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
+        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -28,7 +28,6 @@ async fn sqlite_schema_should_create_current_tables() {
             "client_api_keys",
             "fingerprint_update_history",
             "fingerprints",
-            "model_account_routes",
             "model_plan_snapshots",
             "runtime_settings",
             "schema_migrations",
@@ -156,7 +155,7 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_session_affinities_active_order', 'idx_model_account_routes_account', 'idx_model_account_routes_enabled_model', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
+        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_session_affinities_active_order', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -166,8 +165,6 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
         rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
         [
             "idx_account_cookies_expires",
-            "idx_model_account_routes_account",
-            "idx_model_account_routes_enabled_model",
             "idx_session_affinities_active_order",
             "idx_usage_records_level_created",
             "idx_usage_records_model_created",
@@ -241,33 +238,6 @@ async fn sqlite_schema_should_persist_usage_time_bucket_columns() {
             "output_tokens",
             "request_count",
             "service_tier",
-            "updated_at",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_model_account_routes_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("model-account-routes.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('model_account_routes') where name in ('model', 'account_id', 'priority', 'enabled', 'created_at', 'updated_at') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "account_id",
-            "created_at",
-            "enabled",
-            "model",
-            "priority",
             "updated_at",
         ]
     );
@@ -553,22 +523,9 @@ async fn sqlite_schema_should_reject_non_boolean_flags() {
     )
     .execute(&pool)
     .await;
-    sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_route', 'access-token', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let model_route_result = sqlx::query(
-        "insert into model_account_routes (model, account_id, enabled, created_at, updated_at) values ('gpt-5.5', 'acct_route', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
     assert!(api_key_result.is_err());
     assert!(account_result.is_err());
     assert!(quota_verify_result.is_err());
-    assert!(model_route_result.is_err());
 }
 
 #[tokio::test]
@@ -597,28 +554,6 @@ async fn sqlite_schema_should_reject_invalid_runtime_settings() {
     assert!(invalid_id_result.is_err());
     assert!(invalid_refresh_result.is_err());
     assert!(invalid_strategy_result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_invalid_model_account_route_priority() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("model-route-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_route', 'access-token', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let result = sqlx::query(
-        "insert into model_account_routes (model, account_id, priority, created_at, updated_at) values ('gpt-5.5', 'acct_route', -1, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
 }
 
 #[tokio::test]
