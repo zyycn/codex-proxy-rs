@@ -18,7 +18,7 @@ use crate::upstream::accounts::{
     token_refresh::{RefreshPolicy, RuntimeRefreshPolicy},
 };
 
-const ROTATION_STRATEGIES: [&str; 3] = ["least_used", "round_robin", "sticky"];
+const ROTATION_STRATEGIES: [&str; 4] = ["smart", "quota_reset_priority", "round_robin", "sticky"];
 const RUNTIME_SETTINGS_ID: i64 = 1;
 
 /// 管理端可变设置。
@@ -46,7 +46,7 @@ impl Default for AdminSettings {
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
             request_interval_ms: 50,
-            rotation_strategy: "least_used".to_string(),
+            rotation_strategy: "smart".to_string(),
         }
     }
 }
@@ -150,7 +150,7 @@ fn validate_rotation_strategy(strategy: &str) -> Result<String, SettingsServiceE
     } else {
         Err(invalid_field(
             "rotationStrategy",
-            "must be one of least_used, round_robin, sticky",
+            "must be one of smart, quota_reset_priority, round_robin, sticky",
         ))
     }
 }
@@ -551,9 +551,11 @@ pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOption
 
 fn rotation_strategy_from_config(strategy: &str) -> RotationStrategy {
     match strategy {
+        "smart" => RotationStrategy::Smart,
+        "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
         "round_robin" => RotationStrategy::RoundRobin,
         "sticky" => RotationStrategy::Sticky,
-        _ => RotationStrategy::LeastUsed,
+        _ => RotationStrategy::Smart,
     }
 }
 

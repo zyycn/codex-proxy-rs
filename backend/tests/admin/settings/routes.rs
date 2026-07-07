@@ -69,7 +69,7 @@ async fn admin_settings_should_return_runtime_fields() {
     assert_eq!(body["data"]["modelAliases"]["codex-fast"], "gpt-5.5");
     assert_eq!(body["data"]["refreshMarginSeconds"], 240);
     assert_eq!(body["data"]["refreshConcurrency"], 2);
-    assert_eq!(body["data"]["rotationStrategy"], "least_used");
+    assert_eq!(body["data"]["rotationStrategy"], "smart");
 }
 
 #[tokio::test]

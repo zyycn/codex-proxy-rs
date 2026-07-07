@@ -100,7 +100,7 @@ impl Default for AuthConfig {
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
             request_interval_ms: 50,
-            rotation_strategy: "least_used".to_string(),
+            rotation_strategy: "smart".to_string(),
             tier_priority: Vec::new(),
             oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
             oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),
@@ -171,7 +171,7 @@ pub struct WebSocketPoolConfig {
 }
 
 fn default_ws_first_token_timeout_ms() -> u64 {
-    15_000
+    20_000
 }
 
 impl Default for WebSocketPoolConfig {

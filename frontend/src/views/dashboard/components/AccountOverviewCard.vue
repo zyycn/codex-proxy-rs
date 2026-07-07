@@ -39,7 +39,8 @@ const strategyLabel = computed(() => {
   const s = props.rotationStrategy
   if (!s) return '—'
   const map: Record<string, string> = {
-    least_used: '智能分配（推荐）',
+    smart: '智能调度（推荐）',
+    quota_reset_priority: '额度重置优先',
     round_robin: '轮询',
     sticky: '粘滞',
   }

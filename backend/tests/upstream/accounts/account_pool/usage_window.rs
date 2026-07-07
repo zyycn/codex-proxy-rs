@@ -68,10 +68,10 @@ fn capacity_summary_should_not_exclude_cloudflare_cooldown_accounts() {
 }
 
 #[test]
-fn least_used_should_compare_request_count_when_only_one_account_has_window_reset() {
+fn quota_reset_priority_should_compare_request_count_when_only_one_account_has_window_reset() {
     let now = fixed_time();
     let mut pool = AccountPool::with_options(AccountPoolOptions {
-        rotation_strategy: RotationStrategy::LeastUsed,
+        rotation_strategy: RotationStrategy::QuotaResetPriority,
         ..AccountPoolOptions::default()
     });
     let mut reset_known =

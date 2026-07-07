@@ -20,7 +20,7 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
             request_interval_ms: 50,
-            rotation_strategy: "least_used".to_string(),
+            rotation_strategy: "smart".to_string(),
             tier_priority: Vec::new(),
             oauth_client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
             oauth_token_endpoint: "https://auth.openai.com/oauth/token".to_string(),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import BaseCard from '@/components/base/BaseCard.vue'
 
-type RotationStrategy = 'least_used' | 'round_robin' | 'sticky'
+type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 interface RotationOption {
   label: string
@@ -24,7 +24,7 @@ const model = defineModel<RotationStrategy>({ required: true })
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
-    <div class="grid max-w-6xl gap-3 lg:grid-cols-3">
+    <div class="grid max-w-6xl gap-3 lg:grid-cols-4">
       <button
         v-for="option in options"
         :key="option.value"
