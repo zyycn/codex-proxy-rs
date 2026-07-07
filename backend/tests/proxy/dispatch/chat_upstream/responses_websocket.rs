@@ -1539,24 +1539,76 @@ async fn responses_websocket_should_route_previous_response_id_to_recorded_accou
 }
 
 #[tokio::test]
-async fn responses_websocket_non_stream_previous_response_not_found_should_strip_history_and_retry_same_account(
+async fn responses_websocket_should_prefer_conversation_account_without_previous_response_id() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        accept_successful_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-secondary",
+            "resp_conversation_affinity",
+        )
+        .await
+    });
+    let (app, state, api_key, _pool, _dir) = test_app_with_two_accounts_and_state(base_url).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_conversation_affinity",
+        "input": [],
+        "stream": false,
+        "use_websocket": true
+    });
+    let mut affinity_body = request_body.as_object().unwrap().clone();
+    affinity_body.remove("use_websocket");
+    let mut affinity_request = CodexResponsesRequest::from_body(affinity_body);
+    affinity_request.explicit_prompt_cache_key = true;
+    prepare_variant_identity(&mut affinity_request);
+    let variant_hash = compute_variant_hash(&affinity_request);
+    state
+        .services
+        .session_affinity
+        .record(
+            "resp_conversation_latest".to_string(),
+            SessionAffinityEntry {
+                account_id: "acct_secondary".to_string(),
+                conversation_id: "conv_conversation_affinity".to_string(),
+                turn_state: None,
+                instructions_hash: None,
+                input_tokens: None,
+                function_call_ids: Vec::new(),
+                variant_hash: Some(variant_hash),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let body = response_text(response).await;
+    let payload = upstream.await.unwrap();
+
+    assert!(body.contains("\"id\":\"resp_conversation_affinity\""));
+    assert!(payload["prompt_cache_key"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("cp_")));
+    assert!(payload.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn responses_websocket_non_stream_unknown_previous_response_should_strip_history_before_upstream(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secret",
-            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_authorization_and_message(
+        accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secret",
             websocket_completed_response("resp_after_history_strip", 3, 1),
         )
-        .await;
-        (first_payload, second_payload)
+        .await
     });
     let (app, api_key, _dir) = test_app_with_account(base_url).await;
 
@@ -1573,32 +1625,23 @@ async fn responses_websocket_non_stream_previous_response_not_found_should_strip
         .await
         .unwrap();
     let body = response_json(response).await;
-    let (first_payload, second_payload) = upstream.await.unwrap();
+    let payload = upstream.await.unwrap();
 
     assert_eq!(body["id"], "resp_after_history_strip");
-    assert_eq!(first_payload["previous_response_id"], "resp_missing");
-    assert!(second_payload.get("previous_response_id").is_none());
+    assert!(payload.get("previous_response_id").is_none());
 }
 
 #[tokio::test]
-async fn responses_websocket_history_recovery_should_stay_on_fallback_account_when_preferred_is_full(
-) {
+async fn responses_websocket_should_strip_known_history_when_preferred_account_is_full() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secondary",
-            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_authorization_and_message(
+        accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secondary",
             websocket_completed_response("resp_after_fallback_history_strip", 3, 1),
         )
-        .await;
-        (first_payload, second_payload)
+        .await
     });
     let (app, state, api_key, _pool, _dir) =
         test_app_with_two_accounts_and_state_config(base_url, |config| {
@@ -1620,35 +1663,23 @@ async fn responses_websocket_history_recovery_should_stay_on_fallback_account_wh
         .await
         .unwrap();
     let body = response_json(response).await;
-    let (first_payload, second_payload) = upstream.await.unwrap();
+    let payload = upstream.await.unwrap();
 
     assert_eq!(body["id"], "resp_after_fallback_history_strip");
-    assert_eq!(
-        first_payload["previous_response_id"],
-        "resp_owned_by_primary"
-    );
-    assert!(second_payload.get("previous_response_id").is_none());
+    assert!(payload.get("previous_response_id").is_none());
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_history_recovery_should_stay_on_fallback_account_when_preferred_is_full(
-) {
+async fn responses_websocket_stream_should_strip_known_history_when_preferred_account_is_full() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secondary",
-            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_authorization_and_message(
+        accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secondary",
             websocket_completed_response("resp_stream_after_fallback_history_strip", 3, 1),
         )
-        .await;
-        (first_payload, second_payload)
+        .await
     });
     let (app, state, api_key, _pool, _dir) =
         test_app_with_two_accounts_and_state_config(base_url, |config| {
@@ -1670,35 +1701,24 @@ async fn responses_websocket_stream_history_recovery_should_stay_on_fallback_acc
         .await
         .unwrap();
     let body = response_text(response).await;
-    let (first_payload, second_payload) = upstream.await.unwrap();
+    let payload = upstream.await.unwrap();
 
     assert!(body.contains("resp_stream_after_fallback_history_strip"));
-    assert_eq!(
-        first_payload["previous_response_id"],
-        "resp_owned_by_primary"
-    );
-    assert!(second_payload.get("previous_response_id").is_none());
+    assert!(payload.get("previous_response_id").is_none());
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_previous_response_not_found_should_strip_history_and_retry_same_account(
-) {
+async fn responses_websocket_stream_unknown_previous_response_should_strip_history_before_upstream()
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secret",
-            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_authorization_and_message(
+        accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secret",
             websocket_completed_response("resp_stream_after_history_strip", 3, 1),
         )
-        .await;
-        (first_payload, second_payload)
+        .await
     });
     let (app, api_key, _dir) = test_app_with_account(base_url).await;
 
@@ -1715,11 +1735,10 @@ async fn responses_websocket_stream_previous_response_not_found_should_strip_his
         .await
         .unwrap();
     let body = response_text(response).await;
-    let (first_payload, second_payload) = upstream.await.unwrap();
+    let payload = upstream.await.unwrap();
 
     assert!(body.contains("\"id\":\"resp_stream_after_history_strip\""));
-    assert_eq!(first_payload["previous_response_id"], "resp_missing");
-    assert!(second_payload.get("previous_response_id").is_none());
+    assert!(payload.get("previous_response_id").is_none());
 }
 
 #[tokio::test]
@@ -1742,7 +1761,8 @@ async fn responses_websocket_non_stream_unanswered_function_call_should_strip_hi
         .await;
         (first_payload, second_payload)
     });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_with_call").await;
 
     let response = app
         .oneshot(responses_json_request(

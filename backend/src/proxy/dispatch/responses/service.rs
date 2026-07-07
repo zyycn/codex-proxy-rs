@@ -130,6 +130,34 @@ pub(crate) struct ResponseDispatchServiceParts {
 const DEFAULT_REASONING_REPLAY_TTL_SECS: i64 = 55 * 60;
 const IMPLICIT_RESUME_MAX_AGE_SECS: i64 = DEFAULT_REASONING_REPLAY_TTL_SECS;
 
+#[derive(Debug, Clone, Default)]
+struct AccountAffinityDecision {
+    preferred_account_id: Option<String>,
+    request_history_owner: RequestHistoryOwner,
+}
+
+#[derive(Debug, Clone, Default)]
+enum RequestHistoryOwner {
+    #[default]
+    Absent,
+    Known(String),
+    Unknown,
+}
+
+impl AccountAffinityDecision {
+    fn preferred_account_id(&self) -> Option<&str> {
+        self.preferred_account_id.as_deref()
+    }
+
+    fn should_strip_request_history_for(&self, account_id: &str) -> bool {
+        match &self.request_history_owner {
+            RequestHistoryOwner::Absent => false,
+            RequestHistoryOwner::Known(history_account_id) => history_account_id != account_id,
+            RequestHistoryOwner::Unknown => true,
+        }
+    }
+}
+
 /// Responses live SSE 响应体流。
 pub type ResponseBodyStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, ResponseDispatchStreamError>> + Send + 'static>>;
@@ -260,7 +288,31 @@ impl ResponseDispatchService {
         Some(snapshot)
     }
 
-    async fn preferred_account_id_for_request(
+    async fn account_affinity_for_request(
+        &self,
+        request: &CodexResponsesRequest,
+        now: DateTime<Utc>,
+    ) -> AccountAffinityDecision {
+        let has_previous_response_id = request.previous_response_id().is_some();
+        if let Some(account_id) = self.previous_response_account_id(request, now).await {
+            return AccountAffinityDecision {
+                preferred_account_id: Some(account_id.clone()),
+                request_history_owner: RequestHistoryOwner::Known(account_id),
+            };
+        }
+
+        let conversation_account_id = self.conversation_account_id(request, now).await;
+        AccountAffinityDecision {
+            preferred_account_id: conversation_account_id,
+            request_history_owner: if has_previous_response_id {
+                RequestHistoryOwner::Unknown
+            } else {
+                RequestHistoryOwner::Absent
+            },
+        }
+    }
+
+    async fn previous_response_account_id(
         &self,
         request: &CodexResponsesRequest,
         now: DateTime<Utc>,
@@ -268,6 +320,21 @@ impl ResponseDispatchService {
         let previous_response_id = request.previous_response_id()?;
         self.session_affinity
             .lookup_account(previous_response_id, now)
+            .await
+    }
+
+    async fn conversation_account_id(
+        &self,
+        request: &CodexResponsesRequest,
+        now: DateTime<Utc>,
+    ) -> Option<String> {
+        let conversation_id = request
+            .prompt_cache_key()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let variant_hash = compute_variant_hash(request);
+        self.session_affinity
+            .lookup_latest_account_by_conversation(conversation_id, None, Some(&variant_hash), now)
             .await
     }
 
@@ -279,13 +346,22 @@ impl ResponseDispatchService {
         if let Some(previous_response_id) = request.previous_response_id() {
             self.session_affinity.forget(previous_response_id).await;
         }
-        if let Some(snapshot) = implicit_resume.take() {
-            snapshot.restore(request);
-            request.set_previous_response_id(None);
-            request.turn_state = None;
-        } else {
-            strip_request_history(request);
+        restore_request_without_history(request, implicit_resume);
+    }
+
+    fn strip_history_if_account_changed(
+        request: &mut CodexResponsesRequest,
+        implicit_resume: &mut Option<ImplicitResumeSnapshot>,
+        account_affinity: &AccountAffinityDecision,
+        acquired_account_id: &str,
+    ) {
+        if request.previous_response_id().is_none()
+            || !account_affinity.should_strip_request_history_for(acquired_account_id)
+        {
+            return;
         }
+
+        restore_request_without_history(request, implicit_resume);
     }
 
     async fn apply_cascading_ban_defense(
@@ -326,13 +402,7 @@ impl ResponseDispatchService {
         let response_id_to_forget = explicit_previous_response_id
             .or(request.previous_response_id())
             .map(str::to_string);
-        if let Some(snapshot) = implicit_resume.take() {
-            snapshot.restore(request);
-            request.set_previous_response_id(None);
-            request.turn_state = None;
-        } else {
-            strip_request_history(request);
-        }
+        restore_request_without_history(request, implicit_resume);
         if let Some(response_id) = response_id_to_forget {
             self.session_affinity.forget(&response_id).await;
         }
@@ -380,9 +450,9 @@ impl ResponseDispatchService {
         let now = Utc::now();
         let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
-        let preferred_account_id = self.preferred_account_id_for_request(&request, now).await;
+        let account_affinity = self.account_affinity_for_request(&request, now).await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
-        if let Some(preferred_account_id) = preferred_account_id.as_deref() {
+        if let Some(preferred_account_id) = account_affinity.preferred_account_id() {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
         let mut excluded_account_ids = Vec::new();
@@ -493,11 +563,17 @@ impl ResponseDispatchService {
             self.apply_cascading_ban_defense(
                 &mut request,
                 &mut implicit_resume,
-                preferred_account_id.as_deref(),
+                account_affinity.preferred_account_id(),
                 &acquired.account.id,
                 explicit_previous_response_id.as_deref(),
             )
             .await;
+            Self::strip_history_if_account_changed(
+                &mut request,
+                &mut implicit_resume,
+                &account_affinity,
+                &acquired.account.id,
+            );
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
             let release_account_id = account.id.clone();
@@ -935,9 +1011,9 @@ impl ResponseDispatchService {
         let now = Utc::now();
         let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
-        let preferred_account_id = self.preferred_account_id_for_request(&request, now).await;
+        let account_affinity = self.account_affinity_for_request(&request, now).await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
-        if let Some(preferred_account_id) = preferred_account_id.as_deref() {
+        if let Some(preferred_account_id) = account_affinity.preferred_account_id() {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
         let mut excluded_account_ids = Vec::new();
@@ -1053,11 +1129,17 @@ impl ResponseDispatchService {
             self.apply_cascading_ban_defense(
                 &mut request,
                 &mut implicit_resume,
-                preferred_account_id.as_deref(),
+                account_affinity.preferred_account_id(),
                 &acquired.account.id,
                 explicit_previous_response_id.as_deref(),
             )
             .await;
+            Self::strip_history_if_account_changed(
+                &mut request,
+                &mut implicit_resume,
+                &account_affinity,
+                &acquired.account.id,
+            );
 
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account;
@@ -1813,4 +1895,14 @@ impl ResponseDispatchService {
 fn strip_request_history(request: &mut CodexResponsesRequest) {
     request.set_previous_response_id(None);
     request.turn_state = None;
+}
+
+fn restore_request_without_history(
+    request: &mut CodexResponsesRequest,
+    implicit_resume: &mut Option<ImplicitResumeSnapshot>,
+) {
+    if let Some(snapshot) = implicit_resume.take() {
+        snapshot.restore(request);
+    }
+    strip_request_history(request);
 }

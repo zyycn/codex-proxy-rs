@@ -1021,7 +1021,8 @@ async fn responses_should_strip_history_after_previous_response_not_found() {
             "Previous response with id resp_stale was not found",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()
@@ -1073,7 +1074,8 @@ async fn responses_should_strip_history_after_unanswered_function_call() {
             "No tool output found for function call call_1",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()
@@ -1117,7 +1119,8 @@ async fn responses_should_strip_history_after_websocket_invalid_encrypted_reason
             "Invalid encrypted content in reasoning replay",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()
@@ -1161,7 +1164,8 @@ async fn responses_should_strip_history_after_sse_invalid_encrypted_reasoning_re
             "Invalid encrypted content in reasoning replay",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()
@@ -1205,7 +1209,8 @@ async fn responses_stream_should_strip_history_after_previous_response_not_found
             "Previous response with id resp_stale was not found",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()
@@ -1258,7 +1263,8 @@ async fn responses_stream_should_strip_history_after_websocket_invalid_encrypted
             "Invalid encrypted content in reasoning replay",
         ))
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_account_and_pool(base_url).await;
+    let (app, api_key, _pool, _dir) =
+        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
         .oneshot(
             Request::builder()

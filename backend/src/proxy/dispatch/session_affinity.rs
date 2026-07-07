@@ -106,6 +106,38 @@ impl SessionAffinityMap {
         variant_hash: Option<&str>,
         now: DateTime<Utc>,
     ) -> Option<String> {
+        self.latest_entry_by_conversation(conversation_id, max_age, variant_hash, now)
+            .map(|(response_id, _)| response_id.clone())
+    }
+
+    pub fn lookup_latest_account_by_conversation(
+        &self,
+        conversation_id: &str,
+        max_age: Option<Duration>,
+        variant_hash: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Option<String> {
+        self.latest_entry_by_conversation(conversation_id, max_age, variant_hash, now)
+            .map(|(_, entry)| entry.account_id.clone())
+    }
+
+    pub fn forget(&mut self, response_id: &str) -> bool {
+        self.entries.remove(response_id).is_some()
+    }
+
+    fn active_entry(&self, response_id: &str, now: DateTime<Utc>) -> Option<&SessionAffinityEntry> {
+        self.entries
+            .get(response_id)
+            .filter(|entry| self.entry_is_active(entry, now))
+    }
+
+    fn latest_entry_by_conversation(
+        &self,
+        conversation_id: &str,
+        max_age: Option<Duration>,
+        variant_hash: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Option<(&String, &SessionAffinityEntry)> {
         self.entries
             .iter()
             .filter(|(_, entry)| entry.conversation_id == conversation_id)
@@ -118,17 +150,6 @@ impl SessionAffinityMap {
                 max_age.is_none_or(|max_age| now.signed_duration_since(entry.created_at) <= max_age)
             })
             .max_by_key(|(_, entry)| entry.created_at)
-            .map(|(response_id, _)| response_id.clone())
-    }
-
-    pub fn forget(&mut self, response_id: &str) -> bool {
-        self.entries.remove(response_id).is_some()
-    }
-
-    fn active_entry(&self, response_id: &str, now: DateTime<Utc>) -> Option<&SessionAffinityEntry> {
-        self.entries
-            .get(response_id)
-            .filter(|entry| self.entry_is_active(entry, now))
     }
 
     fn stored_record_is_active(&self, record: &StoredSessionAffinity, now: DateTime<Utc>) -> bool {
@@ -628,6 +649,21 @@ impl RuntimeSessionAffinityService {
             .read()
             .await
             .lookup_latest_response_by_conversation(conversation_id, max_age, variant_hash, now)
+    }
+
+    pub async fn lookup_latest_account_by_conversation(
+        &self,
+        conversation_id: &str,
+        max_age: Option<Duration>,
+        variant_hash: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Option<String> {
+        self.map.read().await.lookup_latest_account_by_conversation(
+            conversation_id,
+            max_age,
+            variant_hash,
+            now,
+        )
     }
 
     pub async fn forget(&self, response_id: &str) -> bool {

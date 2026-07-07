@@ -262,6 +262,14 @@ fn session_affinity_map_should_find_latest_response_by_conversation_and_variant(
         Some("resp_new".to_string())
     );
     assert_eq!(
+        map.lookup_latest_account_by_conversation("conv", None, Some("variant_a"), now),
+        Some("acct_b".to_string())
+    );
+    assert_eq!(
+        map.lookup_latest_account_by_conversation("conv", None, Some("variant_b"), now),
+        Some("acct_c".to_string())
+    );
+    assert_eq!(
         map.lookup_turn_state("resp_new", now),
         Some("turn_new".to_string())
     );
