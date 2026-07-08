@@ -19,6 +19,7 @@ export interface SystemUpdateLog {
   level: SystemUpdateLogLevel
   step?: string
   message: string
+  terminal?: boolean
   at: string
 }
 
@@ -84,8 +85,12 @@ function clearUpdateLogs() {
   updateStreamError.value = ''
 }
 
-function connectUpdateEvents() {
-  if (updateEventSource.value) return
+function connectUpdateEvents(options: { force?: boolean } = {}) {
+  if (options.force) {
+    disconnectUpdateEvents()
+  } else if (updateEventSource.value) {
+    return
+  }
 
   if (typeof EventSource === 'undefined') {
     updateStreamError.value = '当前浏览器不支持实时更新日志'
@@ -97,6 +102,8 @@ function connectUpdateEvents() {
   updateEventSource.value = source
 
   source.onopen = () => {
+    if (updateEventSource.value !== source) return
+
     updateStreaming.value = true
     updateStreamError.value = ''
   }
@@ -106,6 +113,9 @@ function connectUpdateEvents() {
       const log = JSON.parse((event as MessageEvent<string>).data)
       if (isUpdateLog(log)) {
         appendUpdateLog(log)
+        if (log.terminal) {
+          disconnectUpdateEvents(source)
+        }
       }
     } catch {
       updateStreamError.value = '更新日志解析失败'
@@ -113,6 +123,8 @@ function connectUpdateEvents() {
   })
 
   source.onerror = () => {
+    if (updateEventSource.value !== source) return
+
     updateStreaming.value = false
     updateStreamError.value = '更新日志连接中断'
     if (source.readyState === EventSource.CLOSED) {
@@ -121,8 +133,10 @@ function connectUpdateEvents() {
   }
 }
 
-function disconnectUpdateEvents() {
-  updateEventSource.value?.close()
+function disconnectUpdateEvents(source: EventSource | null = updateEventSource.value) {
+  source?.close()
+  if (source && updateEventSource.value !== source) return
+
   updateEventSource.value = null
   updateStreaming.value = false
 }
@@ -184,7 +198,7 @@ async function updateNow(targetVersion: string) {
   if (!canUpdate.value || !currentInfo || updating.value || !confirmedTargetVersion) return null
 
   clearUpdateLogs()
-  connectUpdateEvents()
+  connectUpdateEvents({ force: true })
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false

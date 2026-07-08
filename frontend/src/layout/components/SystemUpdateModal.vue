@@ -45,7 +45,6 @@ const {
   updateNow,
   restartNow,
   clearRestartTimer,
-  connectUpdateEvents,
   disconnectUpdateEvents,
 } = useSystemUpdate()
 
@@ -54,7 +53,6 @@ const updateConfirmOpen = shallowRef(false)
 const updateConfirmInfo = shallowRef<SystemUpdateInfo | null>(null)
 const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
-let updateLogPinTimer: number | undefined
 
 const statusView = computed(() => {
   if (updating.value) {
@@ -137,7 +135,6 @@ const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.not
 const showUpdateProgress = computed(
   () => hasUpdate.value || updating.value || restarting.value || updateLogRows.value.length > 0,
 )
-const shouldConnectUpdateEvents = computed(() => (open.value && hasUpdate.value) || updating.value)
 
 const updateConfirmRows = computed(() => [
   {
@@ -210,20 +207,6 @@ function pinUpdateLogsToBottom() {
   window.requestAnimationFrame(() => {
     void scrollUpdateLogsToBottom()
   })
-}
-
-function startUpdateLogPinning() {
-  if (updateLogPinTimer !== undefined) return
-
-  pinUpdateLogsToBottom()
-  updateLogPinTimer = window.setInterval(pinUpdateLogsToBottom, 250)
-}
-
-function stopUpdateLogPinning() {
-  if (updateLogPinTimer === undefined) return
-
-  window.clearInterval(updateLogPinTimer)
-  updateLogPinTimer = undefined
 }
 
 async function handleCheckUpdates(force = true) {
@@ -305,44 +288,16 @@ watch(open, (visible) => {
 })
 
 watch(
-  shouldConnectUpdateEvents,
-  (shouldConnect) => {
-    if (shouldConnect) {
-      connectUpdateEvents()
-    } else {
-      disconnectUpdateEvents()
-    }
-  },
-  { immediate: true },
-)
-
-watch(
   () => updateLogs.value.at(-1)?.id,
-  () => {
+  (logId, previousLogId) => {
+    if (!logId || logId === previousLogId) return
+
     pinUpdateLogsToBottom()
   },
-)
-
-watch(
-  () => updateLogRows.value.length,
-  () => {
-    pinUpdateLogsToBottom()
-  },
-)
-
-watch(
-  () => updating.value || restarting.value || updateStreaming.value,
-  (active) => {
-    if (active) {
-      startUpdateLogPinning()
-      return
-    }
-    stopUpdateLogPinning()
-  },
+  { flush: 'post' },
 )
 
 onUnmounted(() => {
-  stopUpdateLogPinning()
   clearRestartTimer()
   disconnectUpdateEvents()
 })

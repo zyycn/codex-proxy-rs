@@ -860,6 +860,70 @@ async fn update_events_should_close_on_shutdown() {
     assert!(body.is_empty());
 }
 
+#[tokio::test]
+async fn update_events_should_close_after_terminal_update_log() {
+    let _guard = SYSTEM_ENV_LOCK.lock().await;
+    let repository = "zyycn/codex-proxy-rs-events-terminal-route";
+    let github = MockServer::start().await;
+    let deploy = tempfile::tempdir().unwrap();
+    let exe_path = deploy.path().join("codex-proxy-rs");
+    let web_dist = deploy.path().join("web/dist");
+    std::fs::create_dir_all(&web_dist).unwrap();
+    std::fs::write(&exe_path, "old-binary").unwrap();
+    std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
+    mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
+    set_system_update_env(repository, &github.uri());
+    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-events-terminal.sqlite").await;
+
+    let sse_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/system/update-events")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_system_update_events_terminal")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let update_app = app.clone();
+    let update_task = tokio::spawn(async move {
+        update_app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/system/update")
+                    .header("cookie", "cpr_admin_session=session_1")
+                    .header("x-request-id", "req_system_update_events_terminal_update")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(confirmed_update_body("0.4.0"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(2),
+        to_bytes(sse_response.into_body(), 128 * 1024),
+    )
+    .await
+    .expect("update event stream should end after terminal update log")
+    .unwrap();
+    let update_response = update_task.await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        update_response.status() == StatusCode::OK
+            && text.contains("\"step\":\"done\"")
+            && text.contains("\"terminal\":true")
+            && text.contains("更新文件已替换，等待服务重启生效")
+    );
+}
+
 async fn get_update_detail(app: &axum::Router, refresh: bool, request_id: &str) -> Value {
     let response = app
         .clone()
