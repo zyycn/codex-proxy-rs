@@ -265,7 +265,19 @@ impl AdminUsageRecordService {
     /// 记录使用记录。
     pub async fn record(&self, event: UsageRecord) -> Result<(), AdminUsageRecordError> {
         let settings = *self.settings.read().await;
-        if !settings.enabled && event.level != UsageRecordLevel::Error {
+        if !settings.enabled {
+            return Ok(());
+        }
+        if !is_usage_log_event(&event) {
+            tracing::warn!(
+                usage_record_id = %event.id,
+                request_id = event.request_id.as_deref().unwrap_or(""),
+                account_id = event.account_id.as_deref().unwrap_or(""),
+                model = event.model.as_deref().unwrap_or(""),
+                level = ?event.level,
+                status_code = ?event.status_code,
+                "skipped non-usage event in usage record service"
+            );
             return Ok(());
         }
         self.append_with_settings(event, settings).await
@@ -287,6 +299,21 @@ impl AdminUsageRecordService {
             .map_err(|_| AdminUsageRecordError::Retention)?;
         Ok(())
     }
+}
+
+fn is_usage_log_event(event: &UsageRecord) -> bool {
+    event.level != UsageRecordLevel::Error
+        && event.status_code.is_none_or(|status| status < 400)
+        && event
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|account_id| !account_id.is_empty())
+        && event
+            .model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|model| !model.is_empty())
 }
 
 fn apply_capture_body_policy(event: &mut UsageRecord, capture_body: bool) {

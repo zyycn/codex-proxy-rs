@@ -574,6 +574,22 @@ impl AccountPool {
 
     /// 释放指定账号的一个在途槽位。
     pub fn release(&mut self, account_id: &str) -> Option<ReleasedAccountUsage> {
+        self.release_slot(account_id, true)
+    }
+
+    /// 释放指定账号的一个在途槽位，不累计请求用量。
+    pub fn release_without_request_usage(
+        &mut self,
+        account_id: &str,
+    ) -> Option<ReleasedAccountUsage> {
+        self.release_slot(account_id, false)
+    }
+
+    fn release_slot(
+        &mut self,
+        account_id: &str,
+        record_request_usage: bool,
+    ) -> Option<ReleasedAccountUsage> {
         self.accounts.get(account_id)?;
 
         let mut remove_slots = false;
@@ -585,7 +601,9 @@ impl AccountPool {
         if remove_slots {
             self.slots.remove(account_id);
         }
-        self.mark_request_usage(account_id, Utc::now());
+        if record_request_usage {
+            self.mark_request_usage(account_id, Utc::now());
+        }
         Some(ReleasedAccountUsage {
             model: slot.and_then(|slot| slot.model),
         })
@@ -900,10 +918,29 @@ impl RuntimeAccountPoolService {
 
     /// 释放账号在途槽位。
     pub async fn release(&self, account_id: &str) {
-        let released = self.pool.lock().await.release(account_id);
+        self.release_slot(account_id, true).await;
+    }
+
+    /// 释放账号在途槽位，不累计请求用量。
+    pub async fn release_without_request_usage(&self, account_id: &str) {
+        self.release_slot(account_id, false).await;
+    }
+
+    async fn release_slot(&self, account_id: &str, record_request_usage: bool) {
+        let released = if record_request_usage {
+            self.pool.lock().await.release(account_id)
+        } else {
+            self.pool
+                .lock()
+                .await
+                .release_without_request_usage(account_id)
+        };
         let Some(released) = released else {
             return;
         };
+        if !record_request_usage {
+            return;
+        }
         if let Err(error) = self.store.record_request(account_id).await {
             tracing::warn!(
                 account_id,

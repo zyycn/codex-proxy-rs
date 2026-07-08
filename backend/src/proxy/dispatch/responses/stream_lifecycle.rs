@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     admin::monitoring::{
-        usage_record_model::UsageRecordLevel, usage_record_service::AdminUsageRecordService,
+        ops_error_service::AdminOpsErrorLogService, usage_record_model::UsageRecordLevel,
+        usage_record_service::AdminUsageRecordService,
     },
     infra::time::elapsed_millis_i64,
     proxy::{
@@ -49,6 +50,7 @@ pub(super) struct LiveResponseStreamContext {
     pub(super) session_affinity: Arc<RuntimeSessionAffinityService>,
     pub(super) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     pub(super) usage_records: Arc<AdminUsageRecordService>,
+    pub(super) ops_errors: Arc<AdminOpsErrorLogService>,
     pub(super) cloudflare: CloudflareRecovery,
     pub(super) account_id: String,
     pub(super) account_plan_type: Option<String>,

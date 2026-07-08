@@ -4,7 +4,7 @@ use std::{fs, path::Path, str::FromStr, time::Duration};
 
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -15,6 +15,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "rename_rotation_strategies",
         sql: include_str!("migrations/0002_rename_rotation_strategies.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "ops_error_logs",
+        sql: include_str!("migrations/0003_ops_error_logs.sql"),
     },
 ];
 

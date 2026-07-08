@@ -103,7 +103,10 @@ pub(crate) async fn verify_acquired_quota_if_required(
         .apply_quota_snapshot(&account_id, &quota)
         .await;
     if quota_snapshot_limit_reached(&quota) {
-        context.account_pool.release(&account_id).await;
+        context
+            .account_pool
+            .release_without_request_usage(&account_id)
+            .await;
         context.excluded_account_ids.push(account_id.clone());
         *context.verify_attempts += 1;
         let max_attempts_reached = *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS;

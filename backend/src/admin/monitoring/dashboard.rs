@@ -15,7 +15,7 @@ use crate::{
     admin::{
         auth::session::AdminAuth,
         monitoring::{
-            account_usage_service::{AdminUsageSummary, AdminUsageTimeBucketRecord},
+            account_usage_service::AdminUsageTimeBucketRecord,
             diagnostics::{
                 fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
             },
@@ -27,7 +27,7 @@ use crate::{
                 UsageRecordCostDetailsData, UsageRecordTokenDetailsData,
             },
             usage_record_service::AdminUsageRecordFilter,
-            usage_record_store::UsageRecordAccountUsage,
+            usage_record_store::{UsageRecordAccountUsage, UsageRecordSummary},
         },
         response::{AdminEnvelope, AdminError, AdminResponse},
     },
@@ -292,10 +292,10 @@ pub(crate) async fn dashboard_summary(
     let today_filter = today_usage_record_filter(now);
     let usage_summary = state
         .services
-        .usage
-        .summary()
+        .usage_records
+        .summary(AdminUsageRecordFilter::default())
         .await
-        .unwrap_or_else(|_| empty_usage_summary());
+        .unwrap_or_else(|_| UsageRecordSummary::default());
     let account_usage_records = state
         .services
         .usage_records
@@ -375,7 +375,7 @@ pub(crate) async fn dashboard_trend(
 fn dashboard_cards(
     accounts: &[Account],
     buckets: &[AdminUsageTimeBucketRecord],
-    usage_summary: &AdminUsageSummary,
+    usage_summary: &UsageRecordSummary,
 ) -> DashboardCardsData {
     dashboard_cards_at(accounts, buckets, usage_summary, Utc::now())
 }
@@ -383,7 +383,7 @@ fn dashboard_cards(
 fn dashboard_cards_at(
     accounts: &[Account],
     buckets: &[AdminUsageTimeBucketRecord],
-    usage_summary: &AdminUsageSummary,
+    usage_summary: &UsageRecordSummary,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
@@ -391,9 +391,9 @@ fn dashboard_cards_at(
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
     let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
-    let total_requests = nonnegative_i64_to_u64(usage_summary.request_count);
-    let total_tokens = nonnegative_i64_to_u64(usage_summary.total_tokens);
-    let total_cached_tokens = nonnegative_i64_to_u64(usage_summary.cached_tokens);
+    let total_requests = usage_summary.total_requests;
+    let total_tokens = usage_summary.total_tokens;
+    let total_cached_tokens = usage_summary.cached_tokens;
     let total_hit_rate = summary_cache_hit_rate(usage_summary);
 
     let total_accounts = accounts.len() as u64;
@@ -449,27 +449,10 @@ fn dashboard_cards_at(
     }
 }
 
-fn empty_usage_summary() -> AdminUsageSummary {
-    AdminUsageSummary {
-        account_count: 0,
-        request_count: 0,
-        empty_response_count: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cached_tokens: 0,
-        reasoning_tokens: 0,
-        total_tokens: 0,
-        image_input_tokens: 0,
-        image_output_tokens: 0,
-        image_request_count: 0,
-        image_request_failed_count: 0,
-    }
-}
-
-fn summary_cache_hit_rate(summary: &AdminUsageSummary) -> Option<f64> {
-    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
+fn summary_cache_hit_rate(summary: &UsageRecordSummary) -> Option<f64> {
+    let input_tokens = summary.input_tokens;
     if input_tokens > 0 {
-        Some(nonnegative_i64_to_u64(summary.cached_tokens) as f64 / input_tokens as f64)
+        Some(summary.cached_tokens as f64 / input_tokens as f64)
     } else {
         None
     }

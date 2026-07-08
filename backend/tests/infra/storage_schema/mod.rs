@@ -10,7 +10,7 @@ async fn sqlite_schema_should_create_current_tables() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'model_plan_snapshots', 'session_affinities') order by name",
+        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'ops_error_logs', 'model_plan_snapshots', 'session_affinities') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -29,6 +29,7 @@ async fn sqlite_schema_should_create_current_tables() {
             "fingerprint_update_history",
             "fingerprints",
             "model_plan_snapshots",
+            "ops_error_logs",
             "runtime_settings",
             "schema_migrations",
             "session_affinities",
@@ -56,6 +57,7 @@ async fn sqlite_schema_should_record_applied_migrations() {
         [
             (1, "initial".to_string()),
             (2, "rename_rotation_strategies".to_string()),
+            (3, "ops_error_logs".to_string()),
         ]
     );
 }
@@ -161,7 +163,7 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
     let pool = connect_sqlite(&url).await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_session_affinities_active_order', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
+        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_ops_error_logs_created_id', 'idx_ops_error_logs_status_created', 'idx_ops_error_logs_failure_class', 'idx_session_affinities_active_order', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
     )
     .fetch_all(&pool)
     .await
@@ -171,6 +173,9 @@ async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
         rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
         [
             "idx_account_cookies_expires",
+            "idx_ops_error_logs_created_id",
+            "idx_ops_error_logs_failure_class",
+            "idx_ops_error_logs_status_created",
             "idx_session_affinities_active_order",
             "idx_usage_records_level_created",
             "idx_usage_records_model_created",
@@ -476,6 +481,41 @@ async fn sqlite_schema_should_persist_structured_event_diagnostic_columns() {
 }
 
 #[tokio::test]
+async fn sqlite_schema_should_persist_ops_error_log_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("ops-error-columns.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "select name from pragma_table_info('ops_error_logs') where name in ('request_id', 'account_id', 'route', 'model', 'status_code', 'client_status_code', 'upstream_status_code', 'transport', 'attempt_index', 'failure_class', 'response_id', 'upstream_request_id', 'latency_ms', 'metadata_json') order by name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
+        [
+            "account_id",
+            "attempt_index",
+            "client_status_code",
+            "failure_class",
+            "latency_ms",
+            "metadata_json",
+            "model",
+            "request_id",
+            "response_id",
+            "route",
+            "status_code",
+            "transport",
+            "upstream_request_id",
+            "upstream_status_code",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn sqlite_schema_should_reject_invalid_account_status() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("status-check.sqlite");
@@ -500,6 +540,22 @@ async fn sqlite_schema_should_reject_invalid_usage_record_level() {
 
     let result = sqlx::query(
         "insert into usage_records (id, kind, level, message, metadata_json, created_at) values ('usage_bad', 'request', 'fatal', 'bad', '{}', '2026-06-14T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn sqlite_schema_should_reject_invalid_ops_error_status_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("ops-error-status-check.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let result = sqlx::query(
+        "insert into ops_error_logs (id, kind, status_code, message, metadata_json, created_at) values ('ops_bad', 'request', 99, 'bad', '{}', '2026-06-14T00:00:00Z')",
     )
     .execute(&pool)
     .await;

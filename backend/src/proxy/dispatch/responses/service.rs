@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     admin::monitoring::{
+        ops_error_service::AdminOpsErrorLogService,
         usage_record_model::{ResponseUsageRecord, UsageRecordLevel},
         usage_record_service::AdminUsageRecordService,
     },
@@ -110,6 +111,7 @@ pub struct ResponseDispatchService {
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     usage_records: Arc<AdminUsageRecordService>,
+    ops_errors: Arc<AdminOpsErrorLogService>,
     token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
@@ -121,6 +123,7 @@ pub(crate) struct ResponseDispatchServiceParts {
     pub codex: Arc<CodexBackendClient>,
     pub session_affinity: Arc<RuntimeSessionAffinityService>,
     pub usage_records: Arc<AdminUsageRecordService>,
+    pub ops_errors: Arc<AdminOpsErrorLogService>,
     pub token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     pub installation_id: Option<String>,
     pub cloudflare: CloudflareRecovery,
@@ -178,6 +181,7 @@ impl ResponseDispatchService {
                 DEFAULT_REASONING_REPLAY_TTL_SECS,
             )))),
             usage_records: parts.usage_records,
+            ops_errors: parts.ops_errors,
             token_refresh: parts.token_refresh,
             installation_id: parts.installation_id,
             cloudflare: parts.cloudflare,
@@ -834,7 +838,7 @@ impl ResponseDispatchService {
                 }
                 Err(error) => {
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
-                        usage_records: &self.usage_records,
+                        ops_errors: &self.ops_errors,
                         request_id,
                         account_id: &release_account_id,
                         account_email: account.email.as_deref(),
@@ -980,7 +984,7 @@ impl ResponseDispatchService {
         error: &ResponseDispatchError,
     ) {
         record_response_dispatch_error_event(ResponseDispatchErrorEventRecord {
-            usage_records: &self.usage_records,
+            ops_errors: &self.ops_errors,
             request_id,
             account_id: details.account_id,
             route,
@@ -1318,7 +1322,7 @@ impl ResponseDispatchService {
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
                                 record_response_upstream_error_event(
                                     ResponseUpstreamErrorEventRecord {
-                                        usage_records: &self.usage_records,
+                                        ops_errors: &self.ops_errors,
                                         request_id,
                                         account_id: &release_account_id,
                                         account_email: account.email.as_deref(),
@@ -1423,7 +1427,7 @@ impl ResponseDispatchService {
                         self.account_pool.release(&release_account_id).await;
                         record_prefetched_response_stream_failure_event(
                             ResponseStreamFailureEventRecord {
-                                usage_records: &self.usage_records,
+                                ops_errors: &self.ops_errors,
                                 request_id,
                                 account_id: &release_account_id,
                                 route,
@@ -1449,6 +1453,7 @@ impl ResponseDispatchService {
                         session_affinity: Arc::clone(&self.session_affinity),
                         reasoning_replay: Arc::clone(&self.reasoning_replay),
                         usage_records: Arc::clone(&self.usage_records),
+                        ops_errors: Arc::clone(&self.ops_errors),
                         cloudflare: self.cloudflare.clone(),
                         account_id: account.id,
                         account_plan_type: account.plan_type,
@@ -1585,7 +1590,7 @@ impl ResponseDispatchService {
                 Err(error) => {
                     self.account_pool.release(&release_account_id).await;
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
-                        usage_records: &self.usage_records,
+                        ops_errors: &self.ops_errors,
                         request_id,
                         account_id: &release_account_id,
                         account_email: account.email.as_deref(),
@@ -1877,7 +1882,7 @@ impl ResponseDispatchService {
         error: &ResponseDispatchError,
     ) {
         record_response_dispatch_error_event(ResponseDispatchErrorEventRecord {
-            usage_records: &self.usage_records,
+            ops_errors: &self.ops_errors,
             request_id,
             account_id,
             route: "/v1/responses/compact",

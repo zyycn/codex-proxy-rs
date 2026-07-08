@@ -274,7 +274,7 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
     assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert!(message.contains("All accounts exhausted (1 rate-limited)"));
     assert!(message.contains("compact quota reached"));
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
         event.request_id.as_deref(),
@@ -339,7 +339,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["type"], "invalid_request_error");
     assert_eq!(body["error"]["code"], "codex_api_error");
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
         event.request_id.as_deref(),
@@ -361,7 +361,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
 #[tokio::test]
 async fn responses_compact_should_return_responses_error_when_no_accounts_are_available() {
     let server = MockServer::start().await;
-    let (app, api_key, _dir) = test_app_without_accounts(server.uri()).await;
+    let (app, api_key, _pool, _dir) = test_app_without_accounts(server.uri()).await;
 
     let response = app
         .oneshot(

@@ -88,7 +88,9 @@ impl ModelRefreshTask {
             )
             .await;
         for selected in &selected_accounts {
-            self.account_pool.release(&selected.account.id).await;
+            self.account_pool
+                .release_without_request_usage(&selected.account.id)
+                .await;
         }
 
         let result = result?;

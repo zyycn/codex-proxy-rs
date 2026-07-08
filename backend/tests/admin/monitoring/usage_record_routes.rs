@@ -54,10 +54,16 @@ async fn admin_usage_records_should_cursor_page_events_and_include_request_id() 
     let now = Utc::now();
     let mut older = UsageRecord::new("request", UsageRecordLevel::Info, "older");
     older.id = "usage_older".to_string();
+    older.account_id = Some("acct_usage".to_string());
+    older.model = Some("gpt-5.5".to_string());
+    older.status_code = Some(200);
     older.created_at = now;
     store.append(&older).await.unwrap();
     let mut newer = UsageRecord::new("request", UsageRecordLevel::Info, "newer");
     newer.id = "usage_newer".to_string();
+    newer.account_id = Some("acct_usage".to_string());
+    newer.model = Some("gpt-5.5".to_string());
+    newer.status_code = Some(200);
     newer.created_at = now + Duration::seconds(1);
     store.append(&newer).await.unwrap();
 
@@ -88,8 +94,11 @@ async fn admin_usage_records_should_return_numbered_page_metadata() {
         ("usage_old", "older timeout", 0),
         ("usage_new", "newer timeout", 1),
     ] {
-        let mut event = UsageRecord::new("request", UsageRecordLevel::Error, message);
+        let mut event = UsageRecord::new("request", UsageRecordLevel::Info, message);
         event.id = id.to_string();
+        event.account_id = Some("acct_usage".to_string());
+        event.model = Some("gpt-5.5".to_string());
+        event.status_code = Some(200);
         event.created_at = now + Duration::seconds(offset);
         store.append(&event).await.unwrap();
     }
@@ -98,7 +107,7 @@ async fn admin_usage_records_should_return_numbered_page_metadata() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/usage/records?page=1&pageSize=1&level=error&search=timeout")
+                .uri("/api/admin/usage/records?page=1&pageSize=1&search=timeout")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_usage_records_numbered")
                 .body(Body::empty())
@@ -203,12 +212,13 @@ async fn admin_usage_records_should_return_table_display_fields() {
 async fn admin_usage_records_should_use_record_account_email_snapshot_when_account_is_missing() {
     let (app, store, _dir) =
         admin_usage_records_test_app("admin-usage-records-email-snapshot.sqlite").await;
-    let mut event = UsageRecord::new("v1.response", UsageRecordLevel::Error, "upstream failed");
+    let mut event = UsageRecord::new("v1.response", UsageRecordLevel::Info, "completed");
     event.id = "usage_email_snapshot".to_string();
     event.account_id = Some("acct_deleted".to_string());
+    event.model = Some("gpt-5.5".to_string());
+    event.status_code = Some(200);
     event.metadata = json!({
-        "accountEmail": "deleted@example.com",
-        "failed": true
+        "accountEmail": "deleted@example.com"
     });
     store.append(&event).await.unwrap();
 
@@ -237,7 +247,9 @@ async fn admin_usage_records_summary_should_aggregate_filtered_usage() {
         admin_usage_records_test_app("admin-usage-records-summary.sqlite").await;
     let mut success = UsageRecord::new("request", UsageRecordLevel::Info, "summary success");
     success.id = "usage_summary_success".to_string();
+    success.account_id = Some("acct_summary".to_string());
     success.model = Some("gpt-5.5".to_string());
+    success.status_code = Some(200);
     success.latency_ms = Some(1200);
     success.metadata = json!({
         "usage": {
@@ -250,6 +262,7 @@ async fn admin_usage_records_summary_should_aggregate_filtered_usage() {
 
     let mut failure = UsageRecord::new("request", UsageRecordLevel::Error, "summary failure");
     failure.id = "usage_summary_failure".to_string();
+    failure.account_id = Some("acct_summary".to_string());
     failure.model = Some("gpt-5.5-mini".to_string());
     failure.status_code = Some(429);
     failure.latency_ms = Some(600);
@@ -291,8 +304,10 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
         admin_usage_records_test_app_with_pool("admin-usage-records-insights.sqlite").await;
     let mut first = UsageRecord::new("request", UsageRecordLevel::Info, "insight success");
     first.id = "usage_insight_success".to_string();
+    first.account_id = Some("acct_insight".to_string());
     first.route = Some("/v1/responses".to_string());
     first.model = Some("gpt-5.5".to_string());
+    first.status_code = Some(200);
     first.latency_ms = Some(240);
     first.metadata = json!({
         "stream": true,
@@ -310,6 +325,7 @@ async fn admin_usage_record_insight_cards_should_aggregate_filtered_usage_dimens
 
     let mut second = UsageRecord::new("request", UsageRecordLevel::Error, "insight failure");
     second.id = "usage_insight_failure".to_string();
+    second.account_id = Some("acct_insight".to_string());
     second.route = Some("/v1/responses/review".to_string());
     second.model = Some("gpt-5.5-mini".to_string());
     second.status_code = Some(500);
@@ -451,6 +467,9 @@ async fn admin_usage_record_trends_should_bucket_by_china_calendar_day() {
         admin_usage_records_test_app_with_pool("admin-usage-records-china-day-trend.sqlite").await;
     let mut june_29 = UsageRecord::new("request", UsageRecordLevel::Info, "china-day trend");
     june_29.id = "usage_china_day_29".to_string();
+    june_29.account_id = Some("acct_trend".to_string());
+    june_29.model = Some("gpt-5.5".to_string());
+    june_29.status_code = Some(200);
     june_29.created_at = chrono::DateTime::parse_from_rfc3339("2026-06-29T15:30:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -465,6 +484,9 @@ async fn admin_usage_record_trends_should_bucket_by_china_calendar_day() {
 
     let mut june_30 = UsageRecord::new("request", UsageRecordLevel::Info, "china-day trend");
     june_30.id = "usage_china_day_30".to_string();
+    june_30.account_id = Some("acct_trend".to_string());
+    june_30.model = Some("gpt-5.5".to_string());
+    june_30.status_code = Some(200);
     june_30.created_at = chrono::DateTime::parse_from_rfc3339("2026-06-29T16:30:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -517,8 +539,10 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
         admin_usage_records_test_app_with_pool("admin-usage-records-insight-cards.sqlite").await;
     let mut first = UsageRecord::new("request", UsageRecordLevel::Info, "card success");
     first.id = "usage_card_success".to_string();
+    first.account_id = Some("acct_card".to_string());
     first.route = Some("/v1/responses".to_string());
     first.model = Some("gpt-5.5".to_string());
+    first.status_code = Some(200);
     first.latency_ms = Some(240);
     first.metadata = json!({
         "stream": true,
@@ -535,8 +559,10 @@ async fn admin_usage_records_insight_card_endpoints_should_return_source_specifi
 
     let mut second = UsageRecord::new("request", UsageRecordLevel::Info, "card mini");
     second.id = "usage_card_mini".to_string();
+    second.account_id = Some("acct_card".to_string());
     second.route = Some("/v1/responses/compact".to_string());
     second.model = Some("gpt-5.5-mini".to_string());
+    second.status_code = Some(200);
     second.latency_ms = Some(120);
     second.metadata = json!({
         "stream": false,
@@ -662,11 +688,17 @@ async fn admin_usage_records_should_filter_summary_and_table_by_time_range() {
     let now = Utc::now();
     let mut older = UsageRecord::new("request", UsageRecordLevel::Info, "outside range");
     older.id = "usage_outside_range".to_string();
+    older.account_id = Some("acct_range".to_string());
+    older.model = Some("gpt-5.5".to_string());
+    older.status_code = Some(200);
     older.created_at = now - Duration::days(3);
     store.append(&older).await.unwrap();
 
     let mut current = UsageRecord::new("request", UsageRecordLevel::Info, "inside range");
     current.id = "usage_inside_range".to_string();
+    current.account_id = Some("acct_range".to_string());
+    current.model = Some("gpt-5.5".to_string());
+    current.status_code = Some(200);
     current.created_at = now;
     store.append(&current).await.unwrap();
 
@@ -710,18 +742,18 @@ async fn admin_usage_records_should_filter_summary_and_table_by_time_range() {
 #[tokio::test]
 async fn admin_usage_records_should_filter_and_cursor_page_events() {
     let (app, store, _dir) = admin_usage_records_test_app("admin-usage-records.sqlite").await;
-    let mut matching = UsageRecord::new("request", UsageRecordLevel::Error, "upstream timeout");
+    let mut matching = UsageRecord::new("request", UsageRecordLevel::Info, "upstream timeout");
     matching.id = "usage_matching".to_string();
+    matching.account_id = Some("acct_filter".to_string());
     matching.route = Some("/v1/responses".to_string());
+    matching.model = Some("gpt-5.5".to_string());
+    matching.status_code = Some(200);
     store.append(&matching).await.unwrap();
-    store
-        .append(&UsageRecord::new(
-            "request",
-            UsageRecordLevel::Info,
-            "upstream timeout",
-        ))
-        .await
-        .unwrap();
+    let mut non_matching_message = UsageRecord::new("request", UsageRecordLevel::Info, "completed");
+    non_matching_message.account_id = Some("acct_filter".to_string());
+    non_matching_message.model = Some("gpt-5.5".to_string());
+    non_matching_message.status_code = Some(200);
+    store.append(&non_matching_message).await.unwrap();
     store
         .append(&UsageRecord::new(
             "account",
@@ -735,7 +767,7 @@ async fn admin_usage_records_should_filter_and_cursor_page_events() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/usage/records?kind=request&level=error&search=timeout&limit=1")
+                .uri("/api/admin/usage/records?kind=request&level=info&search=timeout&limit=1")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_usage_records_filter")
                 .body(Body::empty())
