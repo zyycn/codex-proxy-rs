@@ -271,13 +271,22 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     assert_eq!(item["quota"]["windows"].as_array().unwrap().len(), 3);
     assert_eq!(item["quota"]["windows"][0]["labelDisplay"], "月限额");
     assert_eq!(item["quota"]["windows"][0]["group"], "monthly");
-    assert_eq!(item["quota"]["windows"][0]["tokenUsageDisplay"], "1.12M");
+    assert_eq!(
+        item["quota"]["windows"][0]["localUsage"]["totalTokensDisplay"],
+        "1.12M"
+    );
     assert_eq!(item["quota"]["windows"][1]["labelDisplay"], "5小时限额");
     assert_eq!(item["quota"]["windows"][1]["group"], "shortTerm");
-    assert_eq!(item["quota"]["windows"][1]["tokenUsageDisplay"], "2.5K");
+    assert_eq!(
+        item["quota"]["windows"][1]["localUsage"]["totalTokensDisplay"],
+        "2.5K"
+    );
     assert_eq!(item["quota"]["windows"][2]["labelDisplay"], "周限额");
     assert_eq!(item["quota"]["windows"][2]["group"], "shortTerm");
-    assert_eq!(item["quota"]["windows"][2]["tokenUsageDisplay"], "124K");
+    assert_eq!(
+        item["quota"]["windows"][2]["localUsage"]["totalTokensDisplay"],
+        "124K"
+    );
     assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
         .as_str()
         .is_some_and(|value| value.contains(" / 7.0d")));
