@@ -755,7 +755,7 @@ async fn execute_fresh_pooled_response_create_request(
         key,
         PooledWebSocketConnection {
             websocket,
-            metadata,
+            metadata: reusable_websocket_metadata(metadata),
             created_at: now,
         },
     )
@@ -827,7 +827,7 @@ async fn execute_pooled_response_create_request(
     let created_at = connection.created_at;
     match collect_websocket_response(
         connection.websocket,
-        connection.metadata,
+        reusable_websocket_metadata(connection.metadata),
         true,
         started_at,
         first_token_started_at,
@@ -840,7 +840,7 @@ async fn execute_pooled_response_create_request(
                 key,
                 PooledWebSocketConnection {
                     websocket,
-                    metadata,
+                    metadata: reusable_websocket_metadata(metadata),
                     created_at,
                 },
             )
@@ -861,7 +861,7 @@ async fn execute_pooled_response_create_request_stream(
     connection: PooledWebSocketConnection,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let mut websocket = connection.websocket;
-    let mut metadata = connection.metadata;
+    let mut metadata = reusable_websocket_metadata(connection.metadata);
     let created_at = connection.created_at;
     let first_token_started_at = Instant::now();
     if let Err(error) = websocket
@@ -1144,6 +1144,13 @@ fn websocket_connection_metadata(
     }
 }
 
+fn reusable_websocket_metadata(
+    mut metadata: CodexWebSocketConnectionMetadata,
+) -> CodexWebSocketConnectionMetadata {
+    metadata.rate_limit_headers.clear();
+    metadata
+}
+
 // ---------------------------------------------------------------------------
 // Streaming
 // ---------------------------------------------------------------------------
@@ -1406,7 +1413,7 @@ async fn finish_stream_websocket(
             pool_return.key,
             PooledWebSocketConnection {
                 websocket,
-                metadata,
+                metadata: reusable_websocket_metadata(metadata),
                 created_at: pool_return.created_at,
             },
         )

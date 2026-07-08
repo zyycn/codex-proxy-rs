@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::infra::{
-    format::{format_compact_percent, format_tokens},
+    format::{format_compact_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64},
     time::{china_datetime, china_relative_time},
 };
 
@@ -31,11 +31,27 @@ struct AdminAccountQuotaWindowData {
     label_display: String,
     used_percent: Option<f64>,
     used_percent_display: String,
-    token_usage_display: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_usage: Option<AdminAccountQuotaWindowLocalUsageData>,
     reset_at_display: String,
     window_used_display: String,
     #[serde(skip)]
     reset_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccountQuotaWindowLocalUsageData {
+    request_count: i64,
+    request_count_display: String,
+    input_tokens: i64,
+    input_tokens_display: String,
+    output_tokens: i64,
+    output_tokens_display: String,
+    cached_tokens: i64,
+    cached_tokens_display: String,
+    total_tokens: i64,
+    total_tokens_display: String,
 }
 
 #[derive(Debug, Clone)]
@@ -56,17 +72,37 @@ impl AdminAccountQuotaUsageWindow {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct AdminAccountQuotaWindowTokenUsage {
-    total_tokens: u64,
+pub(crate) struct AdminAccountQuotaWindowLocalUsage {
+    pub(crate) request_count: i64,
+    pub(crate) input_tokens: i64,
+    pub(crate) output_tokens: i64,
+    pub(crate) cached_tokens: i64,
 }
 
-impl AdminAccountQuotaWindowTokenUsage {
-    pub(crate) fn add_tokens(&mut self, tokens: u64) {
-        self.total_tokens = self.total_tokens.saturating_add(tokens);
+impl AdminAccountQuotaWindowLocalUsage {
+    pub(crate) fn add(&mut self, other: Self) {
+        self.request_count = self.request_count.saturating_add(other.request_count);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.cached_tokens = self.cached_tokens.saturating_add(other.cached_tokens);
     }
+}
 
-    fn display(self) -> String {
-        format_tokens(self.total_tokens)
+impl From<AdminAccountQuotaWindowLocalUsage> for AdminAccountQuotaWindowLocalUsageData {
+    fn from(usage: AdminAccountQuotaWindowLocalUsage) -> Self {
+        let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
+        Self {
+            request_count: usage.request_count,
+            request_count_display: format_plain_number(nonnegative_i64_to_u64(usage.request_count)),
+            input_tokens: usage.input_tokens,
+            input_tokens_display: format_tokens(nonnegative_i64_to_u64(usage.input_tokens)),
+            output_tokens: usage.output_tokens,
+            output_tokens_display: format_tokens(nonnegative_i64_to_u64(usage.output_tokens)),
+            cached_tokens: usage.cached_tokens,
+            cached_tokens_display: format_tokens(nonnegative_i64_to_u64(usage.cached_tokens)),
+            total_tokens,
+            total_tokens_display: format_tokens(nonnegative_i64_to_u64(total_tokens)),
+        }
     }
 }
 
@@ -93,17 +129,18 @@ impl AdminAccountQuotaData {
             .collect()
     }
 
-    pub(crate) fn apply_token_usage(
+    pub(crate) fn apply_local_usage(
         &mut self,
-        usage_by_window: &HashMap<String, AdminAccountQuotaWindowTokenUsage>,
+        usage_by_window: &HashMap<String, AdminAccountQuotaWindowLocalUsage>,
     ) {
         for window in &mut self.windows {
-            window.token_usage_display =
-                match (window.usage_window(), usage_by_window.get(&window.key)) {
-                    (Some(_), Some(usage)) => usage.display(),
-                    (Some(_), None) => AdminAccountQuotaWindowTokenUsage::default().display(),
-                    (None, _) => "-".to_string(),
-                };
+            window.local_usage = window.usage_window().map(|_| {
+                usage_by_window
+                    .get(&window.key)
+                    .copied()
+                    .unwrap_or_default()
+                    .into()
+            });
         }
     }
 }
@@ -185,7 +222,7 @@ fn push_monthly_quota_window(
         label_display: "月限额".to_string(),
         used_percent,
         used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_compact_percent),
-        token_usage_display: "-".to_string(),
+        local_usage: None,
         reset_at_display: reset_at
             .as_ref()
             .map_or_else(|| "-".to_string(), china_datetime),
@@ -274,7 +311,7 @@ fn push_quota_window(
         label_display,
         used_percent,
         used_percent_display: used_percent.map_or_else(|| "-".to_string(), format_compact_percent),
-        token_usage_display: "-".to_string(),
+        local_usage: None,
         reset_at_display: reset_at
             .as_ref()
             .map_or_else(|| "-".to_string(), china_datetime),

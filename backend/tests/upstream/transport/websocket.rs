@@ -4,6 +4,29 @@ use codex_proxy_rs::upstream::{
     transport::websocket::write_websocket_audit_artifact_for_dir,
 };
 
+fn rate_limit_event(used_percent: u64) -> String {
+    json!({
+        "type": "codex.rate_limits",
+        "rate_limits": {
+            "primary": {
+                "used_percent": used_percent,
+                "window_minutes": 43200,
+                "reset_at": 1893456000 + used_percent as i64,
+            }
+        }
+    })
+    .to_string()
+}
+
+fn primary_used_percent_values(headers: &[(String, String)]) -> Vec<&str> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            (name == "x-codex-primary-used-percent").then_some(value.as_str())
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn websocket_audit_artifact_should_require_explicit_directory() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -661,6 +684,74 @@ async fn websocket_execute_response_create_request_should_capture_internal_metad
         .rate_limit_headers
         .iter()
         .any(|(name, value)| name == "x-codex-primary-reset-at" && value == "1893456300"));
+}
+
+#[tokio::test]
+async fn codex_backend_client_should_not_reuse_websocket_rate_limit_headers() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+
+        let _first_message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(rate_limit_event(10).into()))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_rate_limit_first", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let _second_message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(rate_limit_event(20).into()))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_rate_limit_second", 5, 2).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    )
+    .with_websocket_pool(pool);
+    let request = pooled_websocket_request("conversation-rate-limit-reuse");
+
+    let first = backend
+        .create_response(
+            &request,
+            request_context("req_rate_limit_first", Some("chatgpt-account")),
+        )
+        .await
+        .expect("first pooled websocket response should succeed");
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_rate_limit_second", Some("chatgpt-account")),
+        )
+        .await
+        .expect("second pooled websocket response should reuse connection");
+    server.await.unwrap();
+
+    assert_eq!(
+        primary_used_percent_values(&first.rate_limit_headers),
+        vec!["10"]
+    );
+    assert_eq!(
+        primary_used_percent_values(&second.rate_limit_headers),
+        vec!["20"]
+    );
 }
 
 #[tokio::test]
