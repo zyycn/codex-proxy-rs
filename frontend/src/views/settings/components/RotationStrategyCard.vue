@@ -19,8 +19,8 @@ const model = defineModel<RotationStrategy>({ required: true })
 <template>
   <BaseCard
     :padded="false"
-    title="账号选择"
-    description="决定每次请求如何使用账号池。"
+    title="调度策略"
+    description="决定每次请求如何调度账号池。"
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
