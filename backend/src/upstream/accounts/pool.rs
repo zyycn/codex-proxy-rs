@@ -1,7 +1,6 @@
 //! 账号池调度策略。
 
 use std::{
-    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc as StdArc,
     time::Duration as StdDuration,
@@ -11,7 +10,6 @@ use chrono::{DateTime, Duration, Utc};
 use indexmap::IndexMap;
 use thiserror::Error;
 
-use crate::infra::time::parse_rfc3339_utc;
 use crate::upstream::accounts::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
 use crate::upstream::accounts::store::AccountStore;
 use crate::upstream::accounts::token_refresh::{jwt_expiry, JwtExpiry};
@@ -23,30 +21,12 @@ use crate::upstream::accounts::{
 use crate::upstream::protocol::events::{
     parse_rate_limit_headers, rate_limit_quota, TokenUsage as CodexTokenUsage,
 };
+use crate::upstream::scheduler::{
+    candidates::{self, CandidateFilter, CandidateRequest},
+    AccountScheduler, ScoreWeights,
+};
 
-/// 账号轮转策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RotationStrategy {
-    /// 综合并发压力、窗口用量和历史用量进行调度。
-    Smart,
-    /// 优先消耗即将重置的额度窗口。
-    QuotaResetPriority,
-    /// 按候选账号顺序循环选择。
-    RoundRobin,
-    /// 优先选择最近使用过的账号。
-    Sticky,
-}
-
-impl RotationStrategy {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Smart => "smart",
-            Self::QuotaResetPriority => "quota_reset_priority",
-            Self::RoundRobin => "round_robin",
-            Self::Sticky => "sticky",
-        }
-    }
-}
+pub use crate::upstream::scheduler::RotationStrategy;
 
 /// 账号池配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,29 +243,23 @@ pub struct AccountWindowUsageDelta {
     pub image_request_failed: bool,
 }
 
-/// 纯内存账号池，负责账号调度和运行时状态维护。
+/// 纯内存账号池：负责账号存储、在途槽位与运行时状态维护。
+///
+/// 账号**选择**已剥离到 [`crate::upstream::scheduler`]：候选过滤走
+/// [`candidates::filter`]，策略选择走 [`AccountScheduler::select`]。账号池只提供选择
+/// 所需的只读视图（候选切片 + `slot_count`），并持有调度器实例。
 #[derive(Debug)]
 pub struct AccountPool {
     accounts: IndexMap<String, Account>,
     slots: BTreeMap<String, VecDeque<AccountSlot>>,
     options: AccountPoolOptions,
-    rotation_cursor: usize,
+    scheduler: AccountScheduler,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccountSlot {
     created_at: DateTime<Utc>,
     model: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct SmartAccountLoadScore {
-    quota_limited: bool,
-    slot_count: usize,
-    window_request_count: u64,
-    window_token_count: u64,
-    window_cached_tokens: u64,
-    request_count: u64,
 }
 
 /// 账号释放结果。
@@ -308,7 +282,7 @@ impl AccountPool {
             accounts: IndexMap::new(),
             slots: BTreeMap::new(),
             options,
-            rotation_cursor: 0,
+            scheduler: AccountScheduler::new(ScoreWeights::default()),
         }
     }
 
@@ -322,10 +296,11 @@ impl AccountPool {
         self.accounts.get(account_id).cloned()
     }
 
-    /// 移除账号及其在途槽位。
+    /// 移除账号及其在途槽位与运行时反馈。
     pub fn remove(&mut self, account_id: &str) -> bool {
         let removed = self.accounts.shift_remove(account_id).is_some();
         self.slots.remove(account_id);
+        self.scheduler.forget_feedback(account_id);
         removed
     }
 
@@ -333,15 +308,22 @@ impl AccountPool {
     pub fn clear(&mut self) {
         self.accounts.clear();
         self.slots.clear();
-        self.rotation_cursor = 0;
+        self.scheduler.reset_cursor();
+        self.scheduler.clear_feedback();
     }
 
     /// 替换账号池运行参数。
     pub fn set_options(&mut self, options: AccountPoolOptions) {
         if self.options.rotation_strategy != options.rotation_strategy {
-            self.rotation_cursor = 0;
+            self.scheduler.reset_cursor();
         }
         self.options = options;
+    }
+
+    /// 回灌一次请求结果到调度器的运行时反馈（供 Smart 打分）。
+    pub fn report_feedback(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
+        self.scheduler
+            .report_feedback(account_id, success, first_token_ms);
     }
 
     /// 更新账号状态。
@@ -498,7 +480,9 @@ impl AccountPool {
     ) -> AccountAcquireWithStatusRefresh {
         self.cleanup_stale_slots(request.now);
         let refreshed_accounts = self.refresh_account_statuses(request.now);
-        let candidates = self.candidates(request);
+        let candidates = self.filter_candidates(request);
+        // 亲和优先：required 硬锁定该账号；preferred 若在候选内则直接选中；
+        // 二者都不命中时，回退到调度器按当前策略选择。
         let selected = if let Some(required_account_id) = &request.required_account_id {
             candidates.first().cloned().map(|account| {
                 (
@@ -508,43 +492,24 @@ impl AccountPool {
                 )
             })
         } else if let Some(preferred_account_id) = &request.preferred_account_id {
-            let preferred = candidates
+            candidates
                 .iter()
                 .find(|account| account.id == *preferred_account_id)
-                .cloned();
-            preferred.map(|account| {
-                (
-                    account,
-                    self.previous_slot_at(preferred_account_id),
-                    "preferred",
-                )
-            })
+                .cloned()
+                .map(|account| {
+                    (
+                        account,
+                        self.previous_slot_at(preferred_account_id),
+                        "preferred",
+                    )
+                })
         } else {
             None
         }
         .or_else(|| {
-            Some(match self.options.rotation_strategy {
-                RotationStrategy::Smart => {
-                    let account = self.select_smart(&candidates)?;
-                    let previous = self.previous_slot_at(&account.id);
-                    (account, previous, "smart")
-                }
-                RotationStrategy::QuotaResetPriority => {
-                    let account = self.select_quota_reset_priority(&candidates)?;
-                    let previous = self.previous_slot_at(&account.id);
-                    (account, previous, "quota_reset_priority")
-                }
-                RotationStrategy::RoundRobin => {
-                    let account = self.select_round_robin(&candidates)?;
-                    let previous = self.previous_slot_at(&account.id);
-                    (account, previous, "round_robin")
-                }
-                RotationStrategy::Sticky => {
-                    let account = Self::select_sticky(&candidates)?;
-                    let previous = self.previous_slot_at(&account.id);
-                    (account, previous, "sticky")
-                }
-            })
+            let account = self.select_candidate(&candidates, request.now)?;
+            let previous = self.previous_slot_at(&account.id);
+            Some((account, previous, self.options.rotation_strategy.as_str()))
         });
         let Some((selected, previous_slot_at, selection_source)) = selected else {
             return AccountAcquireWithStatusRefresh {
@@ -552,26 +517,20 @@ impl AccountPool {
                 refreshed_accounts,
             };
         };
-        let selected_slot_count = self.slot_count(&selected.id);
-        let selected_window_token_count = account_window_token_count(&selected);
-        let selected_smart_load_score = self.smart_load_score(&selected);
         tracing::info!(
             model = %request.model,
             rotation_strategy = self.options.rotation_strategy.as_str(),
             selection_source,
             account_id = %selected.id,
             candidate_count = candidates.len(),
-            slot_count = selected_slot_count,
+            slot_count = self.slot_count(&selected.id),
             request_count = selected.request_count,
             window_request_count = selected.window_request_count,
-            window_token_count = selected_window_token_count,
             window_reset_at = ?selected.window_reset_at,
             last_used_at = selected.last_used_at.as_deref().unwrap_or_default(),
             quota_limit_reached = selected.quota_limit_reached,
             quota_cooldown_until = ?selected.quota_cooldown_until,
             previous_slot_at = ?previous_slot_at,
-            smart_load_score = ?selected_smart_load_score,
-            rotation_cursor = self.rotation_cursor,
             "account selected for upstream request"
         );
 
@@ -689,48 +648,48 @@ impl AccountPool {
         let refreshed_accounts = self.refresh_account_statuses(now);
         let mut by_plan = IndexMap::<String, Vec<Account>>::new();
 
-        for account in self.accounts.values() {
-            if !self.is_model_refresh_available(account, now) {
-                continue;
+        let max_concurrent = self.options.max_concurrent_per_account;
+        let skip_quota_limited = self.options.skip_quota_limited;
+        {
+            let slot_count = |account_id: &str| self.slots.get(account_id).map_or(0, VecDeque::len);
+            for account in self.accounts.values() {
+                if !candidates::is_model_refresh_available(
+                    account,
+                    max_concurrent,
+                    skip_quota_limited,
+                    &slot_count,
+                    now,
+                ) {
+                    continue;
+                }
+                let Some(plan_type) = account.plan_type.as_ref() else {
+                    continue;
+                };
+                by_plan
+                    .entry(plan_type.clone())
+                    .or_default()
+                    .push(account.clone());
             }
-            let Some(plan_type) = account.plan_type.as_ref() else {
-                continue;
-            };
-            by_plan
-                .entry(plan_type.clone())
-                .or_default()
-                .push(account.clone());
         }
 
+        let strategy = self.options.rotation_strategy;
         let mut accounts = Vec::new();
         for (plan_type, group) in by_plan {
-            let selected = match self.options.rotation_strategy {
-                RotationStrategy::Smart => self.select_smart(&group),
-                RotationStrategy::QuotaResetPriority => self.select_quota_reset_priority(&group),
-                RotationStrategy::RoundRobin => self.select_round_robin(&group),
-                RotationStrategy::Sticky => Self::select_sticky(&group),
-            };
-            let Some(account) = selected else {
+            let Some(account) = self.select_candidate(&group, now) else {
                 continue;
             };
-            let selected_slot_count = self.slot_count(&account.id);
-            let selected_window_token_count = account_window_token_count(&account);
-            let selected_smart_load_score = self.smart_load_score(&account);
             tracing::info!(
                 plan_type,
-                rotation_strategy = self.options.rotation_strategy.as_str(),
+                rotation_strategy = strategy.as_str(),
                 account_id = %account.id,
                 candidate_count = group.len(),
-                slot_count = selected_slot_count,
+                slot_count = self.slot_count(&account.id),
                 request_count = account.request_count,
                 window_request_count = account.window_request_count,
-                window_token_count = selected_window_token_count,
                 window_reset_at = ?account.window_reset_at,
                 last_used_at = account.last_used_at.as_deref().unwrap_or_default(),
                 quota_limit_reached = account.quota_limit_reached,
                 quota_cooldown_until = ?account.quota_cooldown_until,
-                smart_load_score = ?selected_smart_load_score,
-                rotation_cursor = self.rotation_cursor,
                 "account selected for model refresh"
             );
             self.push_slot(&account.id, now, None);
@@ -741,106 +700,6 @@ impl AccountPool {
             accounts,
             refreshed_accounts,
         }
-    }
-
-    fn select_smart(&mut self, candidates: &[Account]) -> Option<Account> {
-        self.select_by(candidates, |pool, a, b| pool.compare_smart(a, b))
-    }
-
-    fn select_quota_reset_priority(&mut self, candidates: &[Account]) -> Option<Account> {
-        self.select_by(candidates, |_pool, a, b| compare_quota_reset_priority(a, b))
-    }
-
-    fn select_by(
-        &mut self,
-        candidates: &[Account],
-        compare: impl Fn(&Self, &Account, &Account) -> Ordering,
-    ) -> Option<Account> {
-        let mut sorted = candidates.iter().collect::<Vec<_>>();
-        sorted.sort_by(|a, b| compare(self, a, b));
-        let best = *sorted.first()?;
-        let tied_count = sorted
-            .iter()
-            .take_while(|account| compare(self, best, account) == Ordering::Equal)
-            .count();
-        let index = self.rotation_cursor % tied_count;
-        self.rotation_cursor = self.rotation_cursor.wrapping_add(1);
-        Some((*sorted[index]).clone())
-    }
-
-    fn compare_smart(&self, a: &Account, b: &Account) -> Ordering {
-        self.smart_load_score(a)
-            .cmp(&self.smart_load_score(b))
-            .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
-            .then_with(|| compare_last_used(a.last_used_at.as_deref(), b.last_used_at.as_deref()))
-    }
-
-    fn smart_load_score(&self, account: &Account) -> SmartAccountLoadScore {
-        SmartAccountLoadScore {
-            quota_limited: account.quota_limit_reached,
-            slot_count: self.slot_count(&account.id),
-            window_request_count: account.window_request_count,
-            window_token_count: account_window_token_count(account),
-            window_cached_tokens: account.window_cached_tokens,
-            request_count: account.request_count,
-        }
-    }
-
-    fn select_sticky(candidates: &[Account]) -> Option<Account> {
-        let mut selected = candidates.first()?;
-        for candidate in &candidates[1..] {
-            if compare_last_used(
-                candidate.last_used_at.as_deref(),
-                selected.last_used_at.as_deref(),
-            ) == Ordering::Greater
-            {
-                selected = candidate;
-            }
-        }
-        Some((*selected).clone())
-    }
-
-    fn select_round_robin(&mut self, candidates: &[Account]) -> Option<Account> {
-        if candidates.is_empty() {
-            return None;
-        }
-        self.rotation_cursor %= candidates.len();
-        let index = self.rotation_cursor;
-        self.rotation_cursor = self.rotation_cursor.wrapping_add(1);
-        Some(candidates[index].clone())
-    }
-
-    fn candidates(&self, request: &AccountAcquireRequest) -> Vec<Account> {
-        let mut candidates = self
-            .accounts
-            .values()
-            .filter(|account| self.is_base_available(account, request))
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(required_account_id) = &request.required_account_id {
-            candidates.retain(|account| account.id == *required_account_id);
-            return candidates;
-        }
-        if let Some(best_tier) = self.best_available_tier(&candidates) {
-            candidates.retain(|account| account.plan_type.as_deref() == Some(best_tier.as_str()));
-        }
-        candidates
-    }
-
-    fn is_base_available(&self, account: &Account, request: &AccountAcquireRequest) -> bool {
-        account.status == AccountStatus::Active
-            && self.slot_count(&account.id) < self.options.max_concurrent_per_account
-            && AccountService::quota_available_at(
-                account,
-                request.now,
-                self.options.skip_quota_limited,
-            )
-            && self.is_model_allowed(account, &request.model)
-            && !request
-                .exclude_account_ids
-                .iter()
-                .any(|account_id| account_id == &account.id)
-            && AccountService::cloudflare_available_at(account, request.now)
     }
 
     fn slot_count(&self, account_id: &str) -> usize {
@@ -862,13 +721,6 @@ impl AccountPool {
                 created_at: now,
                 model: model.map(str::to_string),
             });
-    }
-
-    fn is_model_refresh_available(&self, account: &Account, now: DateTime<Utc>) -> bool {
-        account.status == AccountStatus::Active
-            && self.slot_count(&account.id) < self.options.max_concurrent_per_account
-            && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
-            && AccountService::cloudflare_available_at(account, now)
     }
 
     fn mark_request_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
@@ -920,24 +772,33 @@ impl AccountPool {
         });
     }
 
-    fn is_model_allowed(&self, account: &Account, model: &str) -> bool {
-        let Some(allowed_plans) = self.options.model_plan_allowlist.get(model) else {
-            return true;
-        };
-        let Some(plan_type) = account.plan_type.as_deref() else {
-            return false;
-        };
-        allowed_plans.iter().any(|plan| plan == plan_type)
-            || !self.options.fetched_model_plan_types.contains(plan_type)
+    /// 过滤出本次请求的可用候选集合（委托 [`candidates::filter`]）。
+    fn filter_candidates(&self, request: &AccountAcquireRequest) -> Vec<Account> {
+        let slot_count = |account_id: &str| self.slots.get(account_id).map_or(0, VecDeque::len);
+        candidates::filter(
+            self.accounts.values(),
+            &CandidateFilter {
+                max_concurrent_per_account: self.options.max_concurrent_per_account,
+                skip_quota_limited: self.options.skip_quota_limited,
+                tier_priority: &self.options.tier_priority,
+                model_plan_allowlist: &self.options.model_plan_allowlist,
+                fetched_model_plan_types: &self.options.fetched_model_plan_types,
+                slot_count: &slot_count,
+            },
+            &CandidateRequest {
+                model: &request.model,
+                exclude_account_ids: &request.exclude_account_ids,
+                required_account_id: request.required_account_id.as_deref(),
+                now: request.now,
+            },
+        )
     }
 
-    fn best_available_tier(&self, candidates: &[Account]) -> Option<String> {
-        self.options.tier_priority.iter().find_map(|tier| {
-            candidates
-                .iter()
-                .find(|account| account.plan_type.as_deref() == Some(tier.as_str()))
-                .and_then(|account| account.plan_type.clone())
-        })
+    /// 按当前策略从候选集合中选择一个账号（委托 [`AccountScheduler::select`]）。
+    fn select_candidate(&self, candidates: &[Account], now: DateTime<Utc>) -> Option<Account> {
+        let slot_count = |account_id: &str| self.slots.get(account_id).map_or(0, VecDeque::len);
+        self.scheduler
+            .select(self.options.rotation_strategy, candidates, &slot_count, now)
     }
 }
 
@@ -1519,38 +1380,4 @@ fn refresh_cloudflare_cooldown(account: &mut Account, now: DateTime<Utc>) {
     {
         account.cloudflare_cooldown_until = None;
     }
-}
-
-fn compare_quota_reset_priority(a: &Account, b: &Account) -> Ordering {
-    a.quota_limit_reached
-        .cmp(&b.quota_limit_reached)
-        .then_with(|| compare_window_reset(a.window_reset_at, b.window_reset_at))
-        .then_with(|| a.request_count.cmp(&b.request_count))
-        .then_with(|| compare_last_used(a.last_used_at.as_deref(), b.last_used_at.as_deref()))
-}
-
-fn account_window_token_count(account: &Account) -> u64 {
-    account
-        .window_input_tokens
-        .saturating_add(account.window_output_tokens)
-        .saturating_add(account.window_image_input_tokens)
-        .saturating_add(account.window_image_output_tokens)
-}
-
-fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
-    match (a, b) {
-        (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_) | None, None) | (None, Some(_)) => Ordering::Equal,
-    }
-}
-
-fn compare_last_used(a: Option<&str>, b: Option<&str>) -> Ordering {
-    last_used_millis(a).cmp(&last_used_millis(b))
-}
-
-fn last_used_millis(value: Option<&str>) -> i64 {
-    value
-        .and_then(|value| parse_rfc3339_utc(value).ok())
-        .map(|datetime| datetime.timestamp_millis())
-        .unwrap_or(0)
 }

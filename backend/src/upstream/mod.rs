@@ -4,5 +4,6 @@ pub mod accounts;
 pub mod fingerprint;
 pub mod models;
 pub mod protocol;
+pub mod scheduler;
 pub mod token_client;
 pub mod transport;

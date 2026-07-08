@@ -1828,7 +1828,9 @@ async fn responses_websocket_previous_response_id_should_retry_fallback_account_
             .unwrap();
 
     assert!(body.contains("\"id\":\"resp_history_fallback\""));
-    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
+    // 亲和缓存无 `resp_prev` 记录（Unknown owner），换账号前历史即被剥离，
+    // 由 `input` 让备用账号重建上下文，不把上一账号作用域的 id 透传给它。
+    assert_eq!(fallback_payload.get("previous_response_id"), None);
     assert_eq!(secondary_usage.0, 1);
 }
 
@@ -1878,7 +1880,9 @@ async fn responses_websocket_non_stream_previous_response_id_should_retry_fallba
             .unwrap();
 
     assert_eq!(body["id"], "resp_history_fallback_non_stream");
-    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
+    // 亲和缓存无 `resp_prev` 记录（Unknown owner），换账号前历史即被剥离，
+    // 由 `input` 让备用账号重建上下文，不把上一账号作用域的 id 透传给它。
+    assert_eq!(fallback_payload.get("previous_response_id"), None);
     assert_eq!(secondary_usage.0, 1);
 }
 
@@ -2324,10 +2328,9 @@ async fn responses_stream_with_previous_response_id_should_forward_websocket_chu
         captured_header(&captured.headers, "authorization"),
         Some("Bearer access-secret")
     );
-    assert_eq!(
-        captured.payload["previous_response_id"],
-        "resp_runtime_pool_previous"
-    );
+    // 亲和缓存无该 previous_response_id 的记录（Unknown），故上游 payload 里应被剥离，
+    // 靠已展开的 input 让选中账号自行重建续链——与 sub2api/codex2api 的默认行为一致。
+    assert_eq!(captured.payload["previous_response_id"], Value::Null);
 }
 
 #[tokio::test]
@@ -2355,10 +2358,8 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("resp_live_websocket_stream"));
-    assert_eq!(
-        captured.payload["previous_response_id"],
-        "resp_runtime_pool_previous"
-    );
+    // 亲和缓存无记录（Unknown）→ 上游 payload 里 previous_response_id 被剥离。
+    assert_eq!(captured.payload["previous_response_id"], Value::Null);
     assert_eq!(event.level, "info");
     assert_eq!(metadata["stream"], true);
     assert_eq!(metadata["transport"], "websocket");
