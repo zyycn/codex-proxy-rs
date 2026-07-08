@@ -70,7 +70,7 @@ async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_mis
 #[tokio::test]
 async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets(
 ) {
-    let (app, store, pool, _dir) = dashboard_test_app(
+    let (app, store, _pool, _dir) = dashboard_test_app(
         "dashboard-traffic-latency.sqlite",
         crate::support::fingerprint::test_fingerprint(),
     )
@@ -96,23 +96,22 @@ async fn dashboard_summary_should_calculate_today_traffic_and_average_first_toke
         .append(&usage_record_with_tokens(yesterday_record_at, 30))
         .await
         .unwrap();
-    seed_usage_summary_with_cached_tokens(&pool, 120, 30, 24).await;
 
     let body = dashboard_summary(app).await;
 
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "2");
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequestsValue"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "42");
+    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "3");
     assert_eq!(
         body["data"]["cards"]["traffic"]["yesterdayRequestsValue"],
         1
     );
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "30");
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "150");
+    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "60");
     assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["cache"]["totalHitRate"], "20.0%");
-    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "24");
+    assert_eq!(body["data"]["cards"]["cache"]["totalHitRate"], "0.0%");
+    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "0");
     assert_eq!(
         body["data"]["cards"]["cache"]["averageFirstTokenLatencyMs"],
         "300 ms"
@@ -719,39 +718,6 @@ async fn seed_usage_summary(pool: &SqlitePool, input_tokens: u64, output_tokens:
         .await;
 }
 
-async fn seed_usage_summary_with_cached_tokens(
-    pool: &SqlitePool,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-) {
-    sqlx::query(
-        "insert into accounts (id, email, access_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?)",
-    )
-    .bind("acct_usage_cached")
-    .bind("acct-usage-cached@example.com")
-    .bind("cipher")
-    .bind("active")
-    .bind("2026-06-18T00:00:00Z")
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into account_usage (account_id, request_count, input_tokens, output_tokens, cached_tokens, total_tokens, last_used_at) values (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind("acct_usage_cached")
-    .bind(42_i64)
-    .bind(input_tokens as i64)
-    .bind(output_tokens as i64)
-    .bind(cached_tokens as i64)
-    .bind((input_tokens + output_tokens) as i64)
-    .bind("2026-06-18T00:00:00Z")
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
 async fn seed_usage_summary_with_last_used(
     pool: &SqlitePool,
     input_tokens: u64,
@@ -857,6 +823,7 @@ fn usage_record_with_account_tokens(
 fn usage_record(created_at: chrono::DateTime<Utc>, model: &str, metadata: Value) -> UsageRecord {
     let mut record = UsageRecord::new("v1.response", UsageRecordLevel::Info, "completed");
     record.model = Some(model.to_string());
+    record.status_code = Some(200);
     record.created_at = created_at;
     record.metadata = metadata;
     record

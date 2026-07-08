@@ -6,6 +6,8 @@ use crate::{
     admin::monitoring::{
         account_usage_service::AdminUsageService,
         account_usage_store::SqliteUsageStore,
+        ops_error_service::AdminOpsErrorLogService,
+        ops_error_store::SqliteOpsErrorLogStore,
         usage_record_service::AdminUsageRecordService,
         usage_record_store::{SqliteUsageRecordStore, DEFAULT_USAGE_RECORD_CAPTURE_BODY},
     },
@@ -91,6 +93,7 @@ pub struct Services {
     pub refresh_policy: RuntimeRefreshPolicy,
     pub admin_accounts: StdArc<AdminAccountService>,
     pub usage_records: StdArc<AdminUsageRecordService>,
+    pub ops_errors: StdArc<AdminOpsErrorLogService>,
     pub usage: StdArc<AdminUsageService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub token_refresh: StdArc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
@@ -193,6 +196,10 @@ impl Services {
             usage_record_options.enabled,
             usage_record_options.capture_body,
         ));
+        let ops_errors = StdArc::new(AdminOpsErrorLogService::new(
+            SqliteOpsErrorLogStore::new(stores.usage_records.pool().clone()),
+            usage_record_options.capture_body,
+        ));
         let account_pool = StdArc::new(RuntimeAccountPoolService::new(
             account_store_trait.clone(),
             account_pool_options_from_config(config),
@@ -269,6 +276,7 @@ impl Services {
             codex: codex.clone(),
             session_affinity: session_affinity.clone(),
             usage_records: usage_records.clone(),
+            ops_errors: ops_errors.clone(),
             token_refresh: token_refresh.clone(),
             installation_id: installation_id.clone(),
             cloudflare: cloudflare_recovery,
@@ -284,6 +292,7 @@ impl Services {
             refresh_policy,
             admin_accounts,
             usage_records,
+            ops_errors,
             usage,
             account_pool,
             token_refresh,

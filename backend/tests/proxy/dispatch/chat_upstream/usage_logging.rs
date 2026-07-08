@@ -678,7 +678,7 @@ async fn responses_stream_should_record_usage_record_after_late_disconnect() {
     let response = response_task.await.unwrap();
     close_upstream.send(()).unwrap();
     let body = response_text(response).await;
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("stream_disconnected"));
@@ -744,7 +744,7 @@ async fn responses_stream_should_record_failure_detail_after_transport_error() {
     let response = response_task.await.unwrap();
     close_upstream.send(()).unwrap();
     let _body = response_text(response).await;
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert_eq!(metadata["failureSource"], "proxy");
@@ -788,7 +788,7 @@ async fn responses_stream_should_not_record_first_token_when_metadata_only_prefi
     let response = response_task.await.unwrap();
     close_upstream.send(()).unwrap();
     let body = response_text(response).await;
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     let first_token_bucket: (i64, i64) = sqlx::query_as(
         "select coalesce(sum(first_token_latency_sum), 0), coalesce(sum(first_token_latency_count), 0) from usage_time_buckets",
@@ -855,7 +855,7 @@ async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(authorizations.len(), 3, "requests: {authorizations:?}");
     assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
     assert_eq!(metadata["accountEmail"], "user@example.com");
@@ -906,7 +906,7 @@ async fn responses_should_record_attempt_trace_after_retrying_another_account() 
         )
         .await
         .unwrap();
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);

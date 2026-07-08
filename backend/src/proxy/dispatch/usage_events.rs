@@ -6,15 +6,16 @@ use serde_json::Value;
 
 use crate::{
     admin::monitoring::{
-        usage_record_model::{ResponseUsageRecord, UsageRecord, UsageRecordLevel},
-        usage_record_service::AdminUsageRecordService,
+        ops_error_model::OpsErrorLog,
+        ops_error_service::AdminOpsErrorLogService,
+        usage_record_model::{ResponseUsageRecord, UsageRecord},
     },
     infra::time::elapsed_millis_i64,
     upstream::protocol::responses::{CodexCompactRequest, CodexResponsesRequest},
 };
 
-pub(super) struct DispatchErrorUsageRecord<'a> {
-    pub usage_records: &'a AdminUsageRecordService,
+pub(super) struct DispatchErrorLogRecord<'a> {
+    pub ops_errors: &'a AdminOpsErrorLogService,
     pub request_id: &'a str,
     pub account_id: Option<&'a str>,
     pub route: &'a str,
@@ -25,15 +26,11 @@ pub(super) struct DispatchErrorUsageRecord<'a> {
     pub metadata: Value,
 }
 
-pub(super) async fn record_dispatch_error_event(record: DispatchErrorUsageRecord<'_>) {
+pub(super) async fn record_dispatch_error_event(record: DispatchErrorLogRecord<'_>) {
     let mut metadata = record.metadata;
     enrich_event_route_metadata(&mut metadata, record.route);
 
-    let mut event = UsageRecord::new(
-        event_kind(record.route),
-        UsageRecordLevel::Error,
-        record.message,
-    );
+    let mut event = OpsErrorLog::new(event_kind(record.route), record.message);
     event.request_id = Some(record.request_id.to_string());
     event.account_id = record.account_id.map(ToString::to_string);
     event.route = Some(record.route.to_string());
@@ -42,7 +39,7 @@ pub(super) async fn record_dispatch_error_event(record: DispatchErrorUsageRecord
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     event.metadata = metadata;
 
-    if let Err(error) = record.usage_records.record(event).await {
+    if let Err(error) = record.ops_errors.record(event).await {
         tracing::warn!(
             account_id = record.account_id.unwrap_or(""),
             error = %error,

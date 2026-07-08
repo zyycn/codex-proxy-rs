@@ -4,8 +4,9 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     admin::monitoring::{
-        usage_record_model::{ResponseUsageRecord, UsageRecord, UsageRecordLevel},
-        usage_record_service::AdminUsageRecordService,
+        ops_error_model::OpsErrorLog,
+        ops_error_service::AdminOpsErrorLogService,
+        usage_record_model::{UsageRecord, UsageRecordLevel},
     },
     infra::time::elapsed_millis_i64,
     proxy::dispatch::{
@@ -17,7 +18,7 @@ use crate::{
         usage_events::{
             enrich_event_route_metadata, enrich_usage_record_identity,
             event_kind as response_event_kind, reasoning_effort_from_request,
-            record_dispatch_error_event, record_response_event, DispatchErrorUsageRecord,
+            record_dispatch_error_event, DispatchErrorLogRecord,
         },
     },
     upstream::{
@@ -39,7 +40,7 @@ use super::{
 };
 
 pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
-    pub(super) usage_records: &'a AdminUsageRecordService,
+    pub(super) ops_errors: &'a AdminOpsErrorLogService,
     pub(super) request_id: &'a str,
     pub(super) account_id: &'a str,
     pub(super) account_email: Option<&'a str>,
@@ -55,7 +56,7 @@ pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
 }
 
 pub(super) struct ResponseStreamFailureEventRecord<'a> {
-    pub(super) usage_records: &'a AdminUsageRecordService,
+    pub(super) ops_errors: &'a AdminOpsErrorLogService,
     pub(super) request_id: &'a str,
     pub(super) account_id: &'a str,
     pub(super) route: &'a str,
@@ -73,7 +74,7 @@ pub(super) struct ResponseStreamFailureEventRecord<'a> {
 }
 
 pub(super) struct ResponseDispatchErrorEventRecord<'a> {
-    pub(super) usage_records: &'a AdminUsageRecordService,
+    pub(super) ops_errors: &'a AdminOpsErrorLogService,
     pub(super) request_id: &'a str,
     pub(super) account_id: Option<&'a str>,
     pub(super) route: &'a str,
@@ -110,8 +111,8 @@ pub(super) async fn record_response_dispatch_error_event(
             dispatch_error_upstream_status_code(record.error),
         );
     }
-    record_dispatch_error_event(DispatchErrorUsageRecord {
-        usage_records: record.usage_records,
+    record_dispatch_error_event(DispatchErrorLogRecord {
+        ops_errors: record.ops_errors,
         request_id: record.request_id,
         account_id: record.account_id,
         route: record.route,
@@ -135,11 +136,7 @@ pub(super) async fn record_response_upstream_error_event(
         Some(backend_transport_name(record.transport)),
     );
     enrich_event_route_metadata(&mut metadata, record.route);
-    let mut event = UsageRecord::new(
-        "v1.response",
-        UsageRecordLevel::Error,
-        "v1 responses upstream request failed",
-    );
+    let mut event = OpsErrorLog::new("v1.response", "v1 responses upstream request failed");
     event.request_id = Some(record.request_id.to_string());
     event.account_id = Some(record.account_id.to_string());
     event.route = Some(record.route.to_string());
@@ -167,8 +164,17 @@ pub(super) async fn record_response_upstream_error_event(
             );
         }
     }
+    enrich_usage_record_identity(
+        &mut metadata,
+        Some(record.request.model()),
+        record.model,
+        record.request.client_ip.as_deref(),
+        record.request.client_user_agent.as_deref(),
+        reasoning_effort_from_request(record.request),
+        record.request.service_tier(),
+    );
     event.metadata = metadata;
-    if let Err(error) = record.usage_records.record(event).await {
+    if let Err(error) = record.ops_errors.record(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
     }
 }
@@ -204,25 +210,38 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
             Some(record.attempt),
         );
     }
-    record_response_event(ResponseUsageRecord {
-        usage_records: record.usage_records,
-        request_id: record.request_id,
-        account_id: record.account_id,
-        route: record.route,
-        model: record.model,
-        requested_model: Some(record.requested_model),
-        client_ip: record.request.client_ip.as_deref(),
-        client_user_agent: record.request.client_user_agent.as_deref(),
-        reasoning_effort: reasoning_effort_from_request(record.request),
-        service_tier: record.request.service_tier(),
-        started_at: record.started_at,
-        status_code: event_status_code,
-        level: UsageRecordLevel::Error,
-        message: "v1 responses stream failed",
-        metadata,
-        rate_limit_headers: record.rate_limit_headers,
-    })
-    .await;
+    enrich_event_route_metadata(&mut metadata, record.route);
+    enrich_usage_record_identity(
+        &mut metadata,
+        Some(record.requested_model),
+        record.model,
+        record.request.client_ip.as_deref(),
+        record.request.client_user_agent.as_deref(),
+        reasoning_effort_from_request(record.request),
+        record.request.service_tier(),
+    );
+    let mut event = OpsErrorLog::new(
+        response_event_kind(record.route),
+        "v1 responses stream failed",
+    );
+    event.request_id = Some(record.request_id.to_string());
+    event.account_id = Some(record.account_id.to_string());
+    event.route = Some(record.route.to_string());
+    event.model = Some(record.model.to_string());
+    event.status_code = Some(event_status_code);
+    event.latency_ms = Some(elapsed_millis_i64(record.started_at));
+    if !record.rate_limit_headers.is_empty() {
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                "rateLimitHeaders".to_string(),
+                serde_json::json!(record.rate_limit_headers),
+            );
+        }
+    }
+    event.metadata = metadata;
+    if let Err(error) = record.ops_errors.record(event).await {
+        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record prefetched stream error event");
+    }
 }
 
 fn ensure_stream_metadata_flag(metadata: &mut Value) {
@@ -469,13 +488,6 @@ pub(super) async fn record_live_response_stream_event(
         body,
     );
     log_live_response_stream_finalized(context, status_code, level, message, &metadata, body);
-    let mut event = UsageRecord::new(response_event_kind(&context.route), level, message);
-    event.request_id = Some(context.request_id.clone());
-    event.account_id = Some(context.account_id.clone());
-    event.route = Some(context.route.clone());
-    event.model = Some(context.display_model.clone());
-    event.status_code = Some(status_code);
-    event.latency_ms = Some(elapsed_millis_i64(context.started_at));
     enrich_usage_record_identity(
         &mut metadata,
         Some(&context.requested_model),
@@ -485,10 +497,36 @@ pub(super) async fn record_live_response_stream_event(
         reasoning_effort_from_request(&context.request),
         context.request.service_tier(),
     );
-    event.metadata = metadata;
-    if let Err(error) = context.usage_records.record(event).await {
-        tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream event");
+
+    if is_success_usage_event(level, status_code) {
+        let mut event = UsageRecord::new(response_event_kind(&context.route), level, message);
+        event.request_id = Some(context.request_id.clone());
+        event.account_id = Some(context.account_id.clone());
+        event.route = Some(context.route.clone());
+        event.model = Some(context.display_model.clone());
+        event.status_code = Some(status_code);
+        event.latency_ms = Some(elapsed_millis_i64(context.started_at));
+        event.metadata = metadata;
+        if let Err(error) = context.usage_records.record(event).await {
+            tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream event");
+        }
+    } else {
+        let mut event = OpsErrorLog::new(response_event_kind(&context.route), message);
+        event.request_id = Some(context.request_id.clone());
+        event.account_id = Some(context.account_id.clone());
+        event.route = Some(context.route.clone());
+        event.model = Some(context.display_model.clone());
+        event.status_code = Some(status_code);
+        event.latency_ms = Some(elapsed_millis_i64(context.started_at));
+        event.metadata = metadata;
+        if let Err(error) = context.ops_errors.record(event).await {
+            tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream error event");
+        }
     }
+}
+
+fn is_success_usage_event(level: UsageRecordLevel, status_code: i64) -> bool {
+    level != UsageRecordLevel::Error && status_code < 400
 }
 
 fn log_live_response_stream_finalized(

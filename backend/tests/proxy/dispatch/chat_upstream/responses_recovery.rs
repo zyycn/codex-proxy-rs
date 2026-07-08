@@ -93,7 +93,7 @@ async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
 #[tokio::test]
 async fn responses_should_return_no_available_accounts_error_when_no_accounts_are_available() {
     let server = MockServer::start().await;
-    let (app, api_key, _dir) = test_app_without_accounts(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_without_accounts(server.uri()).await;
 
     let response = app
         .oneshot(
@@ -121,6 +121,35 @@ async fn responses_should_return_no_available_accounts_error_when_no_accounts_ar
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["type"], "server_error");
     assert_eq!(body["error"]["code"], "no_available_accounts");
+
+    let (usage_count,): (i64,) = sqlx::query_as("select count(*) from usage_records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (ops_count, account_id, model, failure_class): (
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "select count(*), max(account_id), max(model), max(failure_class) from ops_error_logs",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (bucket_requests, bucket_errors): (i64, i64) = sqlx::query_as(
+        "select coalesce(sum(request_count), 0), coalesce(sum(error_count), 0) from usage_time_buckets",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(usage_count, 0);
+    assert_eq!(ops_count, 1);
+    assert_eq!(account_id, None);
+    assert_eq!(model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(failure_class.as_deref(), Some("no_available_accounts"));
+    assert_eq!((bucket_requests, bucket_errors), (1, 1));
 }
 
 #[tokio::test]
@@ -2128,7 +2157,7 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
     assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "error");
     assert_eq!(
@@ -2212,7 +2241,7 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(quota_state.0, 1);
     assert!(quota_state.1.is_some());
     assert!(!response_request_id.is_empty());
-    let event = latest_response_usage_record(&pool).await;
+    let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.level, "error");
     assert_eq!(

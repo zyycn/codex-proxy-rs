@@ -100,6 +100,11 @@ impl SqliteUsageRecordStore {
         Self { pool }
     }
 
+    /// 暴露底层连接池，供运行时组合层复用。
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     /// 写入使用记录。
     pub async fn append(&self, event: &UsageRecord) -> SqliteUsageRecordStoreResult<()> {
         append_event(&self.pool, event).await

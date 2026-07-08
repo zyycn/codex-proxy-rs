@@ -1,6 +1,9 @@
 use super::*;
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use codex_proxy_rs::upstream::{
     accounts::pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
@@ -50,6 +53,8 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
             plan_account("acct-plus", "plus"),
             plan_account("acct-team", "team"),
         ],
+        request_usage_records: Arc::new(AtomicUsize::new(0)),
+        model_request_usage_records: Arc::new(AtomicUsize::new(0)),
     });
     let account_pool = Arc::new(RuntimeAccountPoolService::new(
         account_store.clone(),
@@ -74,6 +79,16 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
         .await
         .expect("team model should acquire an account");
     assert_eq!(acquired.account.id, "acct-team");
+    assert_eq!(
+        account_store.request_usage_records.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        account_store
+            .model_request_usage_records
+            .load(Ordering::SeqCst),
+        0
+    );
 }
 
 fn empty_model_config() -> ModelConfig {
@@ -139,6 +154,8 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
 
 struct PlanAccountStore {
     accounts: Vec<Account>,
+    request_usage_records: Arc<AtomicUsize>,
+    model_request_usage_records: Arc<AtomicUsize>,
 }
 
 #[async_trait]
@@ -174,8 +191,11 @@ impl AccountStore for PlanAccountStore {
     async fn record_usage_delta(
         &self,
         _account_id: &str,
-        _usage: AccountUsageDelta,
+        usage: AccountUsageDelta,
     ) -> AccountStoreResult<()> {
+        if usage.requests > 0 {
+            self.request_usage_records.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 
@@ -183,8 +203,12 @@ impl AccountStore for PlanAccountStore {
         &self,
         _account_id: &str,
         _model: &str,
-        _usage: AccountModelUsageDelta,
+        usage: AccountModelUsageDelta,
     ) -> AccountStoreResult<()> {
+        if usage.requests > 0 {
+            self.model_request_usage_records
+                .fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 

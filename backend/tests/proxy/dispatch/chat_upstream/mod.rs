@@ -327,7 +327,9 @@ async fn test_app_with_account_pool_and_affinity(
     test_app_with_account_pool_config_and_affinity(base_url, |_| {}, Some(response_id)).await
 }
 
-async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, tempfile::TempDir) {
+async fn test_app_without_accounts(
+    base_url: String,
+) -> (axum::Router, String, SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("openai-responses-no-accounts.sqlite");
     let url = format!("sqlite://{}", db.display());
@@ -336,7 +338,7 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
     insert_model_snapshot(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
         &test_config(url, base_url),
-        pool,
+        pool.clone(),
         TEST_INSTALLATION_ID.to_string(),
     )
     .await;
@@ -346,7 +348,7 @@ async fn test_app_without_accounts(base_url: String) -> (axum::Router, String, t
         .restore_from_repository()
         .await
         .expect("empty account pool should restore");
-    (router::router().with_state(state), api_key, dir)
+    (router::router().with_state(state), api_key, pool, dir)
 }
 
 async fn test_app_with_account_pool_and_logging(
@@ -1443,6 +1445,40 @@ struct ResponseUsageRecordSnapshot {
 
 async fn latest_response_usage_record(pool: &SqlitePool) -> ResponseUsageRecordSnapshot {
     latest_usage_record(pool, "v1.response").await
+}
+
+async fn latest_response_ops_error_log(pool: &SqlitePool) -> ResponseUsageRecordSnapshot {
+    let row: Option<(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        String,
+    )> = sqlx::query_as(
+        "select request_id, account_id, route, model, status_code, response_id, metadata_json
+         from ops_error_logs
+         where kind = ?
+         order by created_at desc, id desc
+         limit 1",
+    )
+    .bind("v1.response")
+    .fetch_optional(pool)
+    .await
+    .unwrap();
+    let (request_id, account_id, route, model, status_code, response_id, metadata_json) =
+        row.unwrap_or_else(|| panic!("expected a v1.response ops error log"));
+    ResponseUsageRecordSnapshot {
+        level: "error".to_string(),
+        request_id,
+        account_id,
+        route,
+        model,
+        status_code,
+        response_id,
+        metadata_json,
+    }
 }
 
 async fn latest_usage_record(pool: &SqlitePool, kind: &str) -> ResponseUsageRecordSnapshot {
