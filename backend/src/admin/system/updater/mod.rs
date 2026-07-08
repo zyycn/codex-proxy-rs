@@ -110,6 +110,8 @@ struct SystemUpdateEvent {
     level: UpdateLogLevel,
     step: Option<String>,
     message: String,
+    #[serde(skip_serializing_if = "is_false")]
+    terminal: bool,
     at: String,
 }
 
@@ -157,18 +159,23 @@ pub(crate) async fn update_event_stream(
     let receiver = update_event_sender().subscribe();
     let shutdown = shutdown_subscription();
     let stream = futures::stream::unfold(
-        (receiver, shutdown),
-        |(mut receiver, mut shutdown)| async move {
+        (receiver, shutdown, false),
+        |(mut receiver, mut shutdown, close_after_send)| async move {
+            if close_after_send {
+                return None;
+            }
+
             loop {
                 tokio::select! {
                     _ = shutdown.recv() => return None,
                     received = receiver.recv() => {
                         match received {
                             Ok(message) => {
+                                let close_after_send = message.terminal;
                                 let id = message.id.clone();
                                 let data = serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
                                 let event = Event::default().event("update").id(id).data(data);
-                                return Some((Ok(event), (receiver, shutdown)));
+                                return Some((Ok(event), (receiver, shutdown, close_after_send)));
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => return None,
@@ -192,7 +199,7 @@ pub(crate) async fn perform_update(
         .map_err(|_| AdminError::conflict("System update already running"))?;
     let config = SystemUpdateConfig::from_env();
     if let Some(reason) = config.update_support_error() {
-        emit_update_event(
+        emit_terminal_update_event(
             UpdateLogLevel::Error,
             None,
             Some("preflight"),
@@ -217,7 +224,7 @@ pub(crate) async fn perform_update(
     )
     .await
     .map_err(|error| {
-        emit_update_event(UpdateLogLevel::Error, None, Some("release"), error.clone());
+        emit_terminal_update_event(UpdateLogLevel::Error, None, Some("release"), error.clone());
         AdminError::bad_gateway(error)
     })?;
     let info = update_info_from_release(&config, release.clone());
@@ -226,7 +233,7 @@ pub(crate) async fn perform_update(
             "远端最新版本已变更为 v{}，请重新检查并确认",
             info.latest_version
         );
-        emit_update_event(
+        emit_terminal_update_event(
             UpdateLogLevel::Warning,
             None,
             Some("release"),
@@ -235,7 +242,7 @@ pub(crate) async fn perform_update(
         return Err(AdminError::conflict(message));
     }
     if !info.has_update {
-        emit_update_event(
+        emit_terminal_update_event(
             UpdateLogLevel::Warning,
             None,
             Some("release"),
@@ -261,14 +268,14 @@ pub(crate) async fn perform_update(
     );
     let result = perform_release_update(&config, &release, &target_version, &operation_id).await;
     if let Err(error) = &result {
-        emit_update_event(
+        emit_terminal_update_event(
             UpdateLogLevel::Error,
             Some(&operation_id),
             Some("failed"),
             error.to_string(),
         );
     } else {
-        emit_update_event(
+        emit_terminal_update_event(
             UpdateLogLevel::Success,
             Some(&operation_id),
             Some("done"),
@@ -733,6 +740,25 @@ fn emit_update_event(
     step: Option<&str>,
     message: impl Into<String>,
 ) {
+    emit_update_event_with_terminal(level, operation_id, step, message, false);
+}
+
+fn emit_terminal_update_event(
+    level: UpdateLogLevel,
+    operation_id: Option<&str>,
+    step: Option<&str>,
+    message: impl Into<String>,
+) {
+    emit_update_event_with_terminal(level, operation_id, step, message, true);
+}
+
+fn emit_update_event_with_terminal(
+    level: UpdateLogLevel,
+    operation_id: Option<&str>,
+    step: Option<&str>,
+    message: impl Into<String>,
+    terminal: bool,
+) {
     let now = Utc::now();
     let event = SystemUpdateEvent {
         id: format!(
@@ -744,9 +770,14 @@ fn emit_update_event(
         level,
         step: step.map(ToString::to_string),
         message: message.into(),
+        terminal,
         at: now.to_rfc3339(),
     };
     let _ = update_event_sender().send(event);
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn format_bytes(bytes: u64) -> String {
