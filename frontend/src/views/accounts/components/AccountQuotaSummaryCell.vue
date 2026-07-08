@@ -50,14 +50,19 @@ function quotaWindowBarClass(window?: any) {
   return 'bg-(--cp-success)'
 }
 
-function windowUsageDisplay(window?: any) {
-  const display = window?.tokenUsageDisplay
-  return typeof display === 'string' && display.trim() ? display : '-'
-}
-
 function windowPercentDisplay(window?: any) {
   const display = window?.usedPercentDisplay
   return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function windowLocalUsageDisplay(window?: any) {
+  const display = window?.localUsage?.totalTokensDisplay
+  return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function shouldShowWindowLocalUsage(window?: any) {
+  const totalTokens = window?.localUsage?.totalTokens
+  return typeof totalTokens === 'number' && totalTokens > 0
 }
 
 function quotaWindowPercentTextClass(window?: any) {
@@ -100,13 +105,16 @@ function quotaWindowMatches(actual: unknown, expected: number) {
         </span>
         <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
           <span
+            v-if="shouldShowWindowLocalUsage(window)"
+            class="text-[10px] leading-none font-[680] text-(--cp-text-muted)"
+          >
+            {{ windowLocalUsageDisplay(window) }}
+          </span>
+          <span
             class="text-[10px] leading-none font-[780]"
             :class="quotaWindowPercentTextClass(window)"
           >
             {{ windowPercentDisplay(window) }}
-          </span>
-          <span class="text-[10px] leading-none font-[680] text-(--cp-text-muted)">
-            {{ windowUsageDisplay(window) }}
           </span>
         </span>
       </div>

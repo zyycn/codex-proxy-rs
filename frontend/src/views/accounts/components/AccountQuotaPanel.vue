@@ -42,6 +42,29 @@ function quotaWindowBarClass(window?: any) {
   }
   return 'bg-(--cp-success)'
 }
+
+function quotaWindowPercentTextClass(window?: any) {
+  if (window?.usedPercent === null || window?.usedPercent === undefined) {
+    return 'text-(--cp-text-muted)'
+  }
+  if (window.usedPercent >= 95) {
+    return 'text-(--cp-danger-text)'
+  }
+  if (window.usedPercent >= 80) {
+    return 'text-(--cp-warning-text)'
+  }
+  return 'text-(--cp-success-text)'
+}
+
+function quotaWindowLocalUsageDisplay(window?: any) {
+  const display = window?.localUsage?.totalTokensDisplay
+  return typeof display === 'string' && display.trim() ? display : '-'
+}
+
+function shouldShowQuotaWindowLocalUsage(window?: any) {
+  const totalTokens = window?.localUsage?.totalTokens
+  return typeof totalTokens === 'number' && totalTokens > 0
+}
 </script>
 
 <template>
@@ -80,7 +103,17 @@ function quotaWindowBarClass(window?: any) {
       >
         <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
           <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
-          <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+          <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+            <span
+              v-if="shouldShowQuotaWindowLocalUsage(window)"
+              class="text-[12px] font-[680] text-(--cp-text-muted)"
+            >
+              {{ quotaWindowLocalUsageDisplay(window) }}
+            </span>
+            <span class="text-[12px] font-[780]" :class="quotaWindowPercentTextClass(window)">
+              {{ window.usedPercentDisplay }}
+            </span>
+          </span>
         </div>
         <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
           <div
@@ -105,7 +138,17 @@ function quotaWindowBarClass(window?: any) {
         >
           <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
             <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
-            <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+            <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+              <span
+                v-if="shouldShowQuotaWindowLocalUsage(window)"
+                class="text-[12px] font-[680] text-(--cp-text-muted)"
+              >
+                {{ quotaWindowLocalUsageDisplay(window) }}
+              </span>
+              <span class="text-[12px] font-[780]" :class="quotaWindowPercentTextClass(window)">
+                {{ window.usedPercentDisplay }}
+              </span>
+            </span>
           </div>
           <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
             <div
@@ -130,7 +173,17 @@ function quotaWindowBarClass(window?: any) {
       >
         <div class="flex items-center justify-between gap-3 text-[12px] font-[720]">
           <span class="text-(--cp-text-secondary)">{{ window.labelDisplay }}</span>
-          <span class="text-(--cp-text-primary)">{{ window.usedPercentDisplay }}</span>
+          <span class="flex shrink-0 items-baseline justify-end gap-1.5 font-mono tabular-nums">
+            <span
+              v-if="shouldShowQuotaWindowLocalUsage(window)"
+              class="text-[12px] font-[680] text-(--cp-text-muted)"
+            >
+              {{ quotaWindowLocalUsageDisplay(window) }}
+            </span>
+            <span class="text-[12px] font-[780]" :class="quotaWindowPercentTextClass(window)">
+              {{ window.usedPercentDisplay }}
+            </span>
+          </span>
         </div>
         <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--cp-default-border)">
           <div
