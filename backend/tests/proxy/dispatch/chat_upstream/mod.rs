@@ -1443,20 +1443,38 @@ struct ResponseUsageRecordSnapshot {
     metadata_json: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct OpsErrorLogSnapshot {
+    request_id: Option<String>,
+    account_id: Option<String>,
+    route: Option<String>,
+    model: Option<String>,
+    status_code: Option<i64>,
+    response_id: Option<String>,
+    metadata_json: String,
+}
+
+impl From<OpsErrorLogSnapshot> for ResponseUsageRecordSnapshot {
+    fn from(snapshot: OpsErrorLogSnapshot) -> Self {
+        Self {
+            level: "error".to_string(),
+            request_id: snapshot.request_id,
+            account_id: snapshot.account_id,
+            route: snapshot.route,
+            model: snapshot.model,
+            status_code: snapshot.status_code,
+            response_id: snapshot.response_id,
+            metadata_json: snapshot.metadata_json,
+        }
+    }
+}
+
 async fn latest_response_usage_record(pool: &SqlitePool) -> ResponseUsageRecordSnapshot {
     latest_usage_record(pool, "v1.response").await
 }
 
 async fn latest_response_ops_error_log(pool: &SqlitePool) -> ResponseUsageRecordSnapshot {
-    let row: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-    )> = sqlx::query_as(
+    let row = sqlx::query_as::<_, OpsErrorLogSnapshot>(
         "select request_id, account_id, route, model, status_code, response_id, metadata_json
          from ops_error_logs
          where kind = ?
@@ -1467,18 +1485,8 @@ async fn latest_response_ops_error_log(pool: &SqlitePool) -> ResponseUsageRecord
     .fetch_optional(pool)
     .await
     .unwrap();
-    let (request_id, account_id, route, model, status_code, response_id, metadata_json) =
-        row.unwrap_or_else(|| panic!("expected a v1.response ops error log"));
-    ResponseUsageRecordSnapshot {
-        level: "error".to_string(),
-        request_id,
-        account_id,
-        route,
-        model,
-        status_code,
-        response_id,
-        metadata_json,
-    }
+    row.unwrap_or_else(|| panic!("expected a v1.response ops error log"))
+        .into()
 }
 
 async fn latest_usage_record(pool: &SqlitePool, kind: &str) -> ResponseUsageRecordSnapshot {
