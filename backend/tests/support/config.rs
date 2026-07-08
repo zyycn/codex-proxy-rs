@@ -8,7 +8,6 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 0,
-            trusted_proxies: Vec::new(),
         },
         api: ApiConfig {
             base_url: "https://chatgpt.com/backend-api".to_string(),

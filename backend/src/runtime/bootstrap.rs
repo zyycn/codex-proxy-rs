@@ -5,7 +5,6 @@ use chrono::Utc;
 
 use crate::config::schema::AppConfig;
 use crate::config::settings::RuntimeSettingsService;
-use crate::http::middleware::request_id::TrustedProxyConfig;
 use crate::infra::database::connect_sqlite;
 use crate::infra::logging::{init_tracing, LogGuard, RotationConfig};
 use crate::infra::paths::{ensure_data_dir, load_or_create_installation_id};
@@ -113,11 +112,10 @@ async fn build_application(
     );
 
     let task_coordinator = TaskCoordinator::start(&runtime_config, &services);
-    let trusted_proxies = TrustedProxyConfig::from_entries(&config.server.trusted_proxies)?;
     let app_state = AppState { services };
 
     Ok((
-        crate::http::router::router_with_trusted_proxies(trusted_proxies).with_state(app_state),
+        crate::http::router::router().with_state(app_state),
         task_coordinator,
     ))
 }
