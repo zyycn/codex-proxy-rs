@@ -175,7 +175,7 @@ async fn admin_account_quota_should_send_usage_cookie() {
         "shortTerm"
     );
     assert_eq!(
-        body["data"]["quotaData"]["windows"][0]["tokenUsageDisplay"],
+        body["data"]["quotaData"]["windows"][0]["localUsage"]["totalTokensDisplay"],
         "2K"
     );
     assert_eq!(
@@ -183,7 +183,7 @@ async fn admin_account_quota_should_send_usage_cookie() {
         "周限额"
     );
     assert_eq!(
-        body["data"]["quotaData"]["windows"][1]["tokenUsageDisplay"],
+        body["data"]["quotaData"]["windows"][1]["localUsage"]["totalTokensDisplay"],
         "2K"
     );
 }
