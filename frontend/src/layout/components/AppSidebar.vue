@@ -286,7 +286,7 @@ watch(
           <button
             v-if="hasVersionLabel"
             type="button"
-            class="inline-flex h-4.5 min-w-0 items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-[720] cursor-pointer transition-colors"
+            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-[720] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
             :class="[
               hasUpdate
                 ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
@@ -309,7 +309,7 @@ watch(
         v-for="item in navItems"
         :key="item.label"
         type="button"
-        class="inline-flex h-11.5 items-center rounded-(--cp-icon-button-radius) text-sm leading-[1.15] border-0 cursor-pointer transition-colors duration-200"
+        class="inline-flex h-11.5 cursor-pointer items-center rounded-(--cp-icon-button-radius) border-0 text-sm leading-[1.15] transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
         :class="[
           isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
