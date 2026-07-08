@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::LazyLock;
 
 use axum::{
-    extract::{connect_info::ConnectInfo, Request, State},
+    extract::{connect_info::ConnectInfo, Request},
     http::{HeaderMap, HeaderValue},
     middleware::Next,
     response::Response,
@@ -19,7 +19,7 @@ const CF_CONNECTING_IP_HEADER: &str = "cf-connecting-ip";
 const REAL_IP_HEADER: &str = "x-real-ip";
 const X_FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 
-/// 私有 / 回环 / 唯一本地地址网段，用于在自动模式下从 `X-Forwarded-For` 中跳过内网跳板 IP。
+/// 私有 / 回环 / 唯一本地地址网段，用于从 `X-Forwarded-For` 中跳过内网跳板 IP。
 static PRIVATE_NETWORKS: LazyLock<Vec<IpNet>> = LazyLock::new(|| {
     [
         "10.0.0.0/8",
@@ -36,40 +36,6 @@ static PRIVATE_NETWORKS: LazyLock<Vec<IpNet>> = LazyLock::new(|| {
 
 fn is_private_ip(ip: IpAddr) -> bool {
     PRIVATE_NETWORKS.iter().any(|network| network.contains(&ip))
-}
-
-/// 可信反向代理配置。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrustedProxyConfig {
-    networks: Vec<IpNet>,
-}
-
-impl TrustedProxyConfig {
-    /// 从 IP 或 CIDR 字符串构造可信代理配置。
-    pub fn from_entries(entries: &[String]) -> Result<Self, TrustedProxyConfigError> {
-        let networks = entries
-            .iter()
-            .map(|entry| parse_trusted_proxy_entry(entry))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { networks })
-    }
-
-    fn is_trusted(&self, ip: IpAddr) -> bool {
-        self.networks.iter().any(|network| network.contains(&ip))
-    }
-
-    /// 是否未配置任何可信代理（决定是否启用自动真实 IP 探测）。
-    fn is_empty(&self) -> bool {
-        self.networks.is_empty()
-    }
-}
-
-/// 可信代理配置错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum TrustedProxyConfigError {
-    /// 配置项不是 IP 地址或 CIDR。
-    #[error("invalid trusted proxy entry `{entry}`; expected an IP address or CIDR network")]
-    InvalidEntry { entry: String },
 }
 
 /// 请求 ID。
@@ -97,7 +63,7 @@ impl RequestId {
     }
 }
 
-/// 由连接来源和可信代理链解析出的客户端 IP。
+/// 由连接来源和转发头解析出的客户端 IP。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientIp(String);
 
@@ -118,17 +84,7 @@ fn valid_request_id(value: &str) -> bool {
 
 /// 为请求附加请求 ID，并在响应头中回写。
 pub async fn attach_request_id(mut request: Request, next: Next) -> Response {
-    attach_request_context(&TrustedProxyConfig::default(), &mut request);
-    run_with_request_id(request, next).await
-}
-
-/// 为请求附加请求上下文，并按可信代理配置解析真实客户端 IP。
-pub async fn attach_request_id_with_proxy_config(
-    State(trusted_proxies): State<TrustedProxyConfig>,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    attach_request_context(&trusted_proxies, &mut request);
+    attach_request_context(&mut request);
     run_with_request_id(request, next).await
 }
 
@@ -147,17 +103,16 @@ async fn run_with_request_id(mut request: Request, next: Next) -> Response {
     response
 }
 
-fn attach_request_context(trusted_proxies: &TrustedProxyConfig, request: &mut Request) {
-    attach_client_ip_from_connection(trusted_proxies, request);
+fn attach_request_context(request: &mut Request) {
+    attach_client_ip_from_connection(request);
 }
 
-fn attach_client_ip_from_connection(trusted_proxies: &TrustedProxyConfig, request: &mut Request) {
+fn attach_client_ip_from_connection(request: &mut Request) {
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| addr.ip());
-    let client_ip =
-        peer_ip.map(|peer_ip| client_ip_from_peer(peer_ip, request.headers(), trusted_proxies));
+    let client_ip = peer_ip.map(|peer_ip| client_ip_from_peer(peer_ip, request.headers()));
 
     let Some(client_ip) = client_ip else {
         return;
@@ -165,28 +120,12 @@ fn attach_client_ip_from_connection(trusted_proxies: &TrustedProxyConfig, reques
     request.extensions_mut().insert(ClientIp(client_ip));
 }
 
-fn client_ip_from_peer(
-    peer_ip: IpAddr,
-    headers: &HeaderMap,
-    trusted_proxies: &TrustedProxyConfig,
-) -> String {
-    if trusted_proxies.is_empty() {
-        // 未配置可信代理：自动模式，按 CF-Connecting-IP → X-Real-IP →
-        // X-Forwarded-For（首个公网 IP）→ peer IP 的优先级解析真实客户端 IP。
-        return auto_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string());
-    }
-    if trusted_proxies.is_trusted(peer_ip) {
-        // 已配置可信代理且直连来源可信：只采信转发头。
-        trusted_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string())
-    } else {
-        // 已配置可信代理但直连来源不可信：忽略转发头，使用 peer IP。
-        peer_ip.to_string()
-    }
+fn client_ip_from_peer(peer_ip: IpAddr, headers: &HeaderMap) -> String {
+    auto_forwarded_client_ip(headers).unwrap_or_else(|| peer_ip.to_string())
 }
 
-/// 自动模式下解析转发头中的真实客户端 IP。
+/// 解析转发头中的真实客户端 IP。
 ///
-/// 未配置可信代理时使用，对齐常见反代（Cloudflare / Nginx）默认行为：
 /// `CF-Connecting-IP` → `X-Real-IP` → `X-Forwarded-For` 首个公网 IP。
 fn auto_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
     if let Some(cf_ip) = header_string(headers, CF_CONNECTING_IP_HEADER) {
@@ -212,13 +151,6 @@ fn forwarded_for_public_ip(headers: &HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn trusted_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, CF_CONNECTING_IP_HEADER)
-        .or_else(|| header_string(headers, REAL_IP_HEADER))
-        .or_else(|| forwarded_for_public_ip(headers))
-        .or_else(|| first_forwarded_for_value(headers))
-}
-
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -236,20 +168,4 @@ fn first_forwarded_for_value(headers: &HeaderMap) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn parse_trusted_proxy_entry(entry: &str) -> Result<IpNet, TrustedProxyConfigError> {
-    if let Ok(network) = entry.parse::<IpNet>() {
-        return Ok(network);
-    }
-    entry
-        .parse::<IpAddr>()
-        .map(IpNet::from)
-        .map_err(|_| invalid_trusted_proxy_entry(entry))
-}
-
-fn invalid_trusted_proxy_entry(entry: &str) -> TrustedProxyConfigError {
-    TrustedProxyConfigError::InvalidEntry {
-        entry: entry.to_string(),
-    }
 }

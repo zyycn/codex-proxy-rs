@@ -8,7 +8,6 @@ const DEFAULT_CONFIG_YAML: &str = r#"
 server:
   host: 0.0.0.0
   port: 8080
-  trusted_proxies: []
 api:
   base_url: https://chatgpt.com/backend-api
 database:
@@ -80,7 +79,6 @@ logging:
 fn default_config_keeps_only_codex_backend() {
     let cfg: AppConfig = parse_yaml_config(DEFAULT_CONFIG_YAML).unwrap();
     assert_eq!(cfg.server.host, "0.0.0.0");
-    assert!(cfg.server.trusted_proxies.is_empty());
     assert_eq!(cfg.api.base_url, "https://chatgpt.com/backend-api");
     assert!(cfg.model_aliases.is_empty());
     assert_eq!(cfg.auth.refresh_margin_seconds, 300);
@@ -259,7 +257,6 @@ ws_pool:
 
     assert_eq!(cfg.server.host, "127.0.0.1");
     assert_eq!(cfg.server.port, 8080);
-    assert!(cfg.server.trusted_proxies.is_empty());
     assert_eq!(
         cfg.database.url,
         "sqlite://.runtime/data/codex-proxy-rs.sqlite"
@@ -281,29 +278,14 @@ ws_pool:
 }
 
 #[test]
-fn config_should_parse_trusted_proxy_entries() {
-    let cfg: AppConfig = parse_yaml_config(&DEFAULT_CONFIG_YAML.replace(
-        "trusted_proxies: []",
-        "trusted_proxies:\n    - 127.0.0.1\n    - 10.0.0.0/8",
-    ))
-    .unwrap();
-
-    assert_eq!(
-        cfg.server.trusted_proxies,
-        vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()]
-    );
-}
-
-#[test]
 fn server_config_should_reject_unknown_fields() {
-    let err = parse_yaml_config::<AppConfig>(&DEFAULT_CONFIG_YAML.replace(
-        "trusted_proxies: []",
-        "trusted_proxies: []\n  trusted_proxy: 127.0.0.1",
-    ))
+    let err = parse_yaml_config::<AppConfig>(
+        &DEFAULT_CONFIG_YAML.replace("  port: 8080", "  port: 8080\n  trusted_proxies: []"),
+    )
     .unwrap_err();
 
     assert!(
-        err.to_string().contains("trusted_proxy"),
+        err.to_string().contains("trusted_proxies"),
         "expected unknown server field to be rejected, got {err}"
     );
 }

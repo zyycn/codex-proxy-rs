@@ -19,9 +19,7 @@ cp deploy/config.example.yaml .runtime/config.yaml
 
 复制后必须设置 `admin.default_password`。空值、长度不足 12 位或常见弱口令会被后端拒绝。
 
-如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，把后端实际看到的代理 peer IP 或 CIDR 写入 `server.trusted_proxies`。经宿主机反代访问 Docker 端口时，这个 peer 通常是 Compose 网络网关，例如 `172.18.0.1/32`，不是宿主 `127.0.0.1/32`。
-
-`server.trusted_proxies` 非空时，只有这些 peer 的 `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` 会被采信；为空时进入自动解析模式，按同一组头解析真实 IP。
+如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，确保反代正常传递 `CF-Connecting-IP`、`X-Real-IP` 或 `X-Forwarded-For`。后端会按这组头自动解析真实客户端 IP；没有这些头时回落到直连 peer IP。
 
 构建并启动：
 

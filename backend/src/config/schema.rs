@@ -57,9 +57,6 @@ pub struct ServerConfig {
     pub host: String,
     /// 监听端口。
     pub port: u16,
-    /// 可信反向代理 IP 或 CIDR。非空时只有这些 peer 的转发 IP 头会被采信。
-    #[serde(default)]
-    pub trusted_proxies: Vec<String>,
 }
 
 /// 上游 API 地址配置。
