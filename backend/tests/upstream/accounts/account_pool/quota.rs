@@ -40,6 +40,22 @@ fn account_pool_should_mark_quota_state_as_quota_exhausted_status() {
 }
 
 #[test]
+fn account_pool_should_mark_quota_cooldown_as_quota_exhausted_status() {
+    let now = fixed_time();
+    let mut pool = AccountPool::default();
+    pool.insert(crate::support::accounts::test_account(
+        "limited",
+        AccountStatus::Active,
+    ));
+
+    pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
+
+    let limited = pool.get("limited").unwrap();
+    assert_eq!(limited.status, AccountStatus::QuotaExhausted);
+    assert!(limited.quota_limit_reached);
+}
+
+#[test]
 fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
     let now = fixed_time();
     let mut pool = AccountPool::default();

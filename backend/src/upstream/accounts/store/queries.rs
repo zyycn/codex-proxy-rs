@@ -165,7 +165,13 @@ set
   chatgpt_user_id = case when ? then ? else chatgpt_user_id end,
   label = case when ? then ? else label end,
   plan_type = case when ? then ? else plan_type end,
-  status = case when ? then ? else status end,
+  status = case
+    when ? then case
+      when ? = 'active' and quota_limit_reached = 1 then 'quota_exhausted'
+      else ?
+    end
+    else status
+  end,
   updated_at = ?
 where id = ?";
 
@@ -413,6 +419,10 @@ on conflict(account_id) do update set
 pub(super) const MARK_QUOTA_LIMITED_UNTIL_SQL: &str = r"
 update accounts
 set
+  status = case
+    when status in ('disabled', 'banned', 'expired') then status
+    else 'quota_exhausted'
+  end,
   quota_limit_reached = 1,
   quota_verify_required = 0,
   quota_cooldown_until = ?,
@@ -424,6 +434,12 @@ update accounts
 set
   status = case
     when status in ('disabled', 'banned') then status
+    when (
+      case
+        when ? = 0 and quota_cooldown_until is not null and quota_cooldown_until > ? then quota_limit_reached
+        else ?
+      end
+    ) = 1 then 'quota_exhausted'
     else ?
   end,
   quota_limit_reached = case
@@ -496,6 +512,7 @@ set
   next_refresh_at = ?,
   status = case
     when status in ('disabled', 'banned') then status
+    when quota_limit_reached = 1 then 'quota_exhausted'
     else ?
   end,
   updated_at = ?
@@ -513,6 +530,7 @@ set
   next_refresh_at = ?,
   status = case
     when status in ('disabled', 'banned') then status
+    when quota_limit_reached = 1 then 'quota_exhausted'
     else ?
   end,
   updated_at = ?

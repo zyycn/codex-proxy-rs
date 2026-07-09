@@ -148,6 +148,88 @@ async fn token_refresh_task_should_refresh_quota_exhausted_account_without_clear
 }
 
 #[tokio::test]
+async fn token_refresh_task_should_not_clear_quota_limit_when_expired_token_refreshes() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-expired-quota.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool.clone());
+    let now = Utc.with_ymd_and_hms(2026, 6, 19, 11, 30, 0).unwrap();
+    let cooldown_until = now + Duration::hours(1);
+    let new_expires_at = now + Duration::hours(2);
+    let new_access_token = test_jwt(new_expires_at.timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-expired-quota".to_string(),
+            email: Some("expired-quota@example.com".to_string()),
+            account_id: Some("chatgpt-expired-quota".to_string()),
+            user_id: Some("user-expired-quota".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(
+                test_jwt((now - Duration::seconds(30)).timestamp()).into(),
+            ),
+            refresh_token: Some(SecretString::new(
+                "refresh-expired-quota".to_string().into(),
+            )),
+            added_at: None,
+            access_token_expires_at: Some(now - Duration::seconds(30)),
+            status: AccountStatus::Expired,
+        })
+        .await
+        .expect("account should be inserted");
+    sqlx::query(
+        "update accounts set quota_limit_reached = 1, quota_cooldown_until = ? where id = ?",
+    )
+    .bind(cooldown_until.to_rfc3339())
+    .bind("acct-expired-quota")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let refresher = StaticTokenRefresher {
+        response: Arc::new(Mutex::new(Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }))),
+    };
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher,
+    );
+
+    let summary = task
+        .refresh_due_accounts_once_at(now)
+        .await
+        .expect("expired quota-limited account should refresh token");
+    let stored = store
+        .get("acct-expired-quota")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+    let quota_state: (i64, Option<String>) = sqlx::query_as(
+        "select quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct-expired-quota")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(summary.refreshed, 1);
+    assert_eq!(stored.status, AccountStatus::QuotaExhausted);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        new_access_token.as_str()
+    );
+    assert_eq!(quota_state.0, 1);
+    assert_eq!(quota_state.1, Some(cooldown_until.to_rfc3339()));
+}
+
+#[tokio::test]
 async fn token_refresh_task_should_persist_success_after_transient_transport_retry() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-transient-success.sqlite");
