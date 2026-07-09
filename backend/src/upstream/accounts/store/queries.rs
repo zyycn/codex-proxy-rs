@@ -502,10 +502,10 @@ where id = ?";
 pub(super) const UPDATE_ACCOUNT_CLAIMS_WITH_REFRESH_SQL: &str = r"
 update accounts
 set
-  email = ?,
-  chatgpt_account_id = ?,
-  chatgpt_user_id = ?,
-  plan_type = ?,
+  email = coalesce(?, email),
+  chatgpt_account_id = coalesce(?, chatgpt_account_id),
+  chatgpt_user_id = coalesce(?, chatgpt_user_id),
+  plan_type = coalesce(?, plan_type),
   access_token = ?,
   refresh_token = ?,
   access_token_expires_at = ?,
@@ -521,10 +521,10 @@ where id = ?";
 pub(super) const UPDATE_ACCOUNT_CLAIMS_PRESERVING_REFRESH_SQL: &str = r"
 update accounts
 set
-  email = ?,
-  chatgpt_account_id = ?,
-  chatgpt_user_id = ?,
-  plan_type = ?,
+  email = coalesce(?, email),
+  chatgpt_account_id = coalesce(?, chatgpt_account_id),
+  chatgpt_user_id = coalesce(?, chatgpt_user_id),
+  plan_type = coalesce(?, plan_type),
   access_token = ?,
   access_token_expires_at = ?,
   next_refresh_at = ?,
