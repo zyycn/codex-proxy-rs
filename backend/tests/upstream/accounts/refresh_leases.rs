@@ -68,3 +68,66 @@ async fn refresh_lease_store_should_acquire_release_and_respect_expiry() {
         .await
         .expect("lease should be acquirable after release"));
 }
+
+#[tokio::test]
+async fn refresh_lease_store_should_list_active_account_ids() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("refresh-lease-active-ids.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let accounts = SqliteAccountStore::new(pool.clone());
+    for id in ["acct-active-lease", "acct-expired-lease"] {
+        accounts
+            .insert(NewAccount {
+                id: id.to_string(),
+                email: None,
+                account_id: None,
+                user_id: None,
+                label: None,
+                plan_type: None,
+                access_token: SecretString::new("access".to_string().into()),
+                refresh_token: Some(SecretString::new("refresh".to_string().into())),
+                access_token_expires_at: None,
+                status: AccountStatus::Active,
+                added_at: None,
+            })
+            .await
+            .expect("account should be inserted");
+    }
+    let leases = RefreshLeaseStore::new(pool);
+    let now = Utc.with_ymd_and_hms(2026, 7, 9, 8, 0, 0).unwrap();
+    leases
+        .try_acquire(
+            "acct-active-lease",
+            "owner-a",
+            now + Duration::minutes(5),
+            now,
+        )
+        .await
+        .expect("active lease should be acquired");
+    leases
+        .try_acquire(
+            "acct-expired-lease",
+            "owner-b",
+            now - Duration::minutes(5),
+            now - Duration::minutes(10),
+        )
+        .await
+        .expect("expired lease should be acquired");
+
+    let account_ids = vec![
+        "acct-active-lease".to_string(),
+        "acct-expired-lease".to_string(),
+        "acct-missing".to_string(),
+    ];
+    let active = leases
+        .active_account_ids(&account_ids, now)
+        .await
+        .expect("active leases should load");
+
+    assert_eq!(
+        active,
+        std::collections::HashSet::from(["acct-active-lease".to_string()])
+    );
+}

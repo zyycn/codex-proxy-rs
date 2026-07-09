@@ -613,7 +613,6 @@ pub fn parse_account_status(status: &str) -> Result<AccountStatus, &'static str>
         "disabled" => Ok(AccountStatus::Disabled),
         "expired" => Ok(AccountStatus::Expired),
         "quota_exhausted" => Ok(AccountStatus::QuotaExhausted),
-        "refreshing" => Ok(AccountStatus::Refreshing),
         "banned" => Ok(AccountStatus::Banned),
         _ => Err("invalid account status"),
     }

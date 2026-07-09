@@ -1,5 +1,5 @@
 import { clamp } from 'es-toolkit'
-import { computed, onMounted, ref, type Ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import dayjs from 'dayjs'
 
 import {
@@ -23,6 +23,8 @@ type TokenImportAccount = { token: string } | { refreshToken: string }
 type AccountRow = {
   id: string
   status: string
+  displayStatus: string
+  tokenRefreshing: boolean
   planType?: string | null
   quota: any
   usage: any
@@ -31,6 +33,11 @@ type AccountRow = {
 
 type AccountQuotaRefreshResult = {
   account: AccountRow
+}
+
+type AccountRefreshResult = {
+  result: 'alive' | 'dead' | 'skipped'
+  error?: string | null
 }
 
 export function useAccountMutations(options: {
@@ -70,6 +77,7 @@ export function useAccountMutations(options: {
   const authorizingOAuth = authorizingOAuthAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
+  let tokenRefreshPollTimer: ReturnType<typeof window.setInterval> | undefined
 
   const createForm = ref({
     mode: 'oauth',
@@ -338,11 +346,18 @@ export function useAccountMutations(options: {
   async function handleRefresh(accountId: string) {
     await refreshingAccounts.run(accountId, async () => {
       try {
-        await withMinimumDuration(async () => {
-          await refreshAccount({ id: accountId })
+        const result = await withMinimumDuration(async () => {
+          const result = (await refreshAccount({ id: accountId })) as AccountRefreshResult
           await loadAccounts()
+          return result
         })
-        toast.success('Token 已刷新')
+        if (result.result === 'alive') {
+          toast.success('Token 已刷新')
+        } else if (result.result === 'skipped') {
+          toast.warning(result.error || 'Token 正在刷新中')
+        } else {
+          toast.error(result.error || '刷新失败')
+        }
       } catch (error: any) {
         toast.error(error.message || '刷新失败')
       }
@@ -389,8 +404,42 @@ export function useAccountMutations(options: {
     return `cpr-accounts-selected-${selectedCount}-${dayjs().format('YYYY-MM-DD')}.json`
   }
 
+  function hasTokenRefreshingAccount() {
+    return accounts.value.some((account) => account.tokenRefreshing)
+  }
+
+  function startTokenRefreshPolling() {
+    if (tokenRefreshPollTimer !== undefined) return
+    tokenRefreshPollTimer = window.setInterval(() => {
+      if (!loading.value && hasTokenRefreshingAccount()) {
+        void loadAccounts()
+      }
+    }, 2000)
+  }
+
+  function stopTokenRefreshPolling() {
+    if (tokenRefreshPollTimer === undefined) return
+    window.clearInterval(tokenRefreshPollTimer)
+    tokenRefreshPollTimer = undefined
+  }
+
+  watch(
+    () => hasTokenRefreshingAccount(),
+    (hasRefreshing) => {
+      if (hasRefreshing) {
+        startTokenRefreshPolling()
+      } else {
+        stopTokenRefreshPolling()
+      }
+    },
+  )
+
   onMounted(() => {
     loadAccounts()
+  })
+
+  onUnmounted(() => {
+    stopTokenRefreshPolling()
   })
 
   return {

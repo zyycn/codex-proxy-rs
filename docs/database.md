@@ -279,7 +279,7 @@ create table accounts (
   refresh_token text,
   access_token_expires_at text,
   next_refresh_at text,
-  status text not null check (status in ('active', 'expired', 'quota_exhausted', 'refreshing', 'disabled', 'banned')),
+  status text not null check (status in ('active', 'expired', 'quota_exhausted', 'disabled', 'banned')),
   quota_json text,
   quota_fetched_at text,
   quota_limit_reached integer not null default 0 check (quota_limit_reached in (0, 1)),
@@ -301,7 +301,7 @@ create unique index ux_accounts_chatgpt_identity
 
 - **身份**：`id` 与上游 ID 解耦（导入半成品账号仍可运转）；`chatgpt_account_id` + `chatgpt_user_id` 复合唯一防重复导入，身份未知的账号不参与去重（部分索引）。`plan_type` 不加枚举 check：取值由上游定义。
 - **凭据（secret）**：`access_token` not null 是账号存在的最低要求；`refresh_token` NULL = 不可续期，到期即 `expired`。不进日志、不进列表 API。
-- **状态**：单列状态机 + 布尔/冷却补充列，避免状态爆炸。冷却用时间而非布尔：自然过期无需回写。quota 与 CF 冷却分列：成因、时长、解除策略都不同。
+- **状态**：单列业务状态机 + 布尔/冷却补充列，避免状态爆炸。`refreshing` 不落 `accounts.status`，由 `account_refresh_leases` / 进程内 in-flight 派生为运行时展示态。冷却用时间而非布尔：自然过期无需回写。quota 与 CF 冷却分列：成因、时长、解除策略都不同。
 - **快照**：`quota_json` 上游原样快照（JSON 合规）；`added_at` 语义化命名——账号是"被添加进池子"的。
 
 ### 4.7 account_refresh_leases
@@ -706,7 +706,7 @@ struct Migration {
 }
 ```
 
-应用顺序不变：`raw_sql(migration.sql)` → `post`（若有）→ `record_migration`，全程同一事务。`CURRENT_SCHEMA_VERSION = 4`。
+应用顺序不变：`raw_sql(migration.sql)` → `post`（若有）→ `record_migration`，全程同一事务。当前 `CURRENT_SCHEMA_VERSION = 3`；本节 0004 为目标迁移草案，落地时再提升版本。
 
 ### 6.2 0004_final_schema.sql（SQL 部分）
 
@@ -847,7 +847,7 @@ drop index if exists idx_account_cookies_account;
 
 与 0004 同一 PR 交付，按依赖顺序：
 
-1. **迁移框架**（`infra/database.rs`）：`Migration.post` 钩子；连接参数补 `synchronous(Normal)`、`auto_vacuum(Incremental)`；`CURRENT_SCHEMA_VERSION = 4`。
+1. **迁移框架**（`infra/database.rs`）：`Migration.post` 钩子；连接参数补 `synchronous(Normal)`、`auto_vacuum(Incremental)`；目标迁移落地时再提升 `CURRENT_SCHEMA_VERSION`。
 2. **鉴权归因**（`proxy/auth.rs`）：`authorize_client_api_key_result` 改为返回 key 的 `id`（现在验完即弃）；SHA-256 后查 `key_hash`。调用链把 `client_api_key_id` 装进请求上下文。
 3. **事件结构**（`proxy/dispatch/usage_events.rs`、`proxy/dispatch/responses/event_recording.rs`）：成功/失败事件携带 `client_api_key_id`；token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段；metadata 不再写已提升字段。
 4. **写入路径**（`admin/monitoring/usage_record_store.rs`、ops error store）：§5.2 的两条事务；错误路径对桶只 `error_count + 1`；`__unknown__` sentinel；min/max 延迟直接 `min()`/`max()`（无 0-sentinel 分支）。

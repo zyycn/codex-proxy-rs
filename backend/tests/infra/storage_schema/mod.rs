@@ -62,6 +62,24 @@ async fn sqlite_schema_should_record_applied_migrations() {
     );
 }
 
+#[tokio::test]
+async fn sqlite_schema_should_reject_refreshing_account_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("account-status.sqlite");
+    let url = format!("sqlite://{}", db.display());
+    let pool = connect_sqlite(&url).await.unwrap();
+
+    let error = sqlx::query(
+        "insert into accounts (id, access_token, status, added_at, updated_at)
+         values ('acct_refreshing', 'access', 'refreshing', '2026-07-09T00:00:00Z', '2026-07-09T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("CHECK constraint failed"));
+}
+
 #[test]
 fn initial_migration_should_not_use_idempotent_business_schema_ddl() {
     let migration_path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -1,7 +1,7 @@
 //! 刷新租约存储、JWT 解码与账号 claims 验证。
 
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, HashSet},
     hash::{Hash, Hasher},
     sync::{Arc, RwLock},
 };
@@ -369,22 +369,53 @@ where
         trigger: RefreshTrigger,
         now: DateTime<Utc>,
     ) -> bool {
-        if account.status != AccountStatus::Active {
-            return false;
-        }
-
         match trigger {
-            RefreshTrigger::Unauthorized => true,
-            RefreshTrigger::BeforeExpiry => account
-                .access_token_expires_at
-                .is_some_and(|expires_at| expires_at <= now + self.refresh_margin()),
+            RefreshTrigger::Unauthorized => can_refresh_after_auth_failure(account.status),
+            RefreshTrigger::BeforeExpiry => {
+                can_refresh_before_expiry(account.status)
+                    && self.should_refresh_before_expiry(account, now)
+            }
         }
     }
 
-    fn refresh_margin(&self) -> Duration {
+    fn should_refresh_before_expiry(&self, account: &Account, now: DateTime<Utc>) -> bool {
+        if let Some(next_refresh_at) = account.next_refresh_at {
+            return next_refresh_at <= now;
+        }
+
+        account
+            .access_token_expires_at
+            .is_some_and(|expires_at| self.refresh_at(account, expires_at) <= now)
+    }
+
+    fn refresh_at(&self, account: &Account, expires_at: DateTime<Utc>) -> DateTime<Utc> {
         let policy = self.policy.snapshot();
-        let seconds = policy.refresh_margin_seconds.min(86_400 * 7) as i64;
-        Duration::seconds(seconds)
+        jittered_refresh_at(
+            account.id.as_str(),
+            expires_at,
+            policy.refresh_margin_seconds,
+        )
+    }
+}
+
+fn can_refresh_after_auth_failure(status: AccountStatus) -> bool {
+    matches!(
+        status,
+        AccountStatus::Active | AccountStatus::Expired | AccountStatus::QuotaExhausted
+    )
+}
+
+fn can_refresh_before_expiry(status: AccountStatus) -> bool {
+    matches!(
+        status,
+        AccountStatus::Active | AccountStatus::QuotaExhausted
+    )
+}
+
+fn status_after_successful_token_refresh(status: AccountStatus) -> AccountStatus {
+    match status {
+        AccountStatus::Expired => AccountStatus::Active,
+        status => status,
     }
 }
 
@@ -398,7 +429,7 @@ pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
         refreshed.refresh_token = Some(refresh_token);
     }
 
-    refreshed.status = AccountStatus::Active;
+    refreshed.status = status_after_successful_token_refresh(account.status);
     refreshed
 }
 
@@ -418,7 +449,7 @@ pub fn apply_refresh_failure(account: &Account, failure: RefreshFailure) -> Acco
 // 刷新租约存储（SQLite）
 // ---------------------------------------------------------------------------
 
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use thiserror::Error;
 
 /// SQLite 刷新租约存储结果。
@@ -484,6 +515,35 @@ where account_refresh_leases.expires_at <= ?
                 .execute(&self.pool)
                 .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    /// 返回给定账号集合中仍有效的刷新租约。
+    pub async fn active_account_ids(
+        &self,
+        account_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> RefreshLeaseStoreResult<HashSet<String>> {
+        if account_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "select account_id from account_refresh_leases where datetime(expires_at) > datetime(",
+        );
+        builder.push_bind(now.to_rfc3339());
+        builder.push(") and account_id in (");
+        let mut separated = builder.separated(", ");
+        for account_id in account_ids {
+            separated.push_bind(account_id);
+        }
+        separated.push_unseparated(")");
+
+        let rows = builder
+            .build_query_as::<(String,)>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.into_iter().map(|(account_id,)| account_id).collect())
     }
 }
 

@@ -135,6 +135,8 @@ struct AdminAccountData {
     plan_type: Option<String>,
     has_refresh_token: bool,
     status: String,
+    display_status: String,
+    token_refreshing: bool,
     access_token_expires_at: Option<String>,
     access_token_expires_at_display: Option<String>,
     added_at: String,
@@ -147,7 +149,7 @@ struct AdminAccountData {
 
 impl From<AdminAccountMetadata> for AdminAccountData {
     fn from(a: AdminAccountMetadata) -> Self {
-        Self::from_parts(a, None, None, Vec::new())
+        Self::from_parts(a, None, None, Vec::new(), false)
     }
 }
 
@@ -157,10 +159,12 @@ impl AdminAccountData {
         usage: Option<&AdminUsageRecord>,
         quota: Option<AdminAccountQuotaData>,
         models: Vec<AdminAccountModelUsageData>,
+        token_refreshing: bool,
     ) -> Self {
         let access_token_expires_at = a.access_token_expires_at.as_ref().map(china_rfc3339);
         let access_token_expires_at_display =
             a.access_token_expires_at.as_ref().map(china_datetime);
+        let display_status = account_display_status(a.status, token_refreshing).to_string();
         Self {
             id: a.id,
             email: a.email,
@@ -170,6 +174,8 @@ impl AdminAccountData {
             plan_type: a.plan_type,
             has_refresh_token: a.has_refresh_token,
             status: a.status.as_str().to_string(),
+            display_status,
+            token_refreshing,
             access_token_expires_at,
             access_token_expires_at_display,
             added_at: china_rfc3339(&a.added_at),
@@ -289,6 +295,7 @@ struct AccountListStats {
     usage_by_account: HashMap<String, AdminUsageRecord>,
     quota_by_account: HashMap<String, AdminAccountQuotaData>,
     models_by_account: HashMap<String, Vec<AdminAccountModelUsageData>>,
+    refreshing_account_ids: HashSet<String>,
 }
 
 struct AccountModelUsageRecord {
@@ -320,6 +327,7 @@ impl AccountListStats {
                 .get(&account_id)
                 .cloned()
                 .unwrap_or_default(),
+            self.refreshing_account_ids.contains(&account_id),
         )
     }
 }
@@ -523,7 +531,7 @@ pub(crate) async fn accounts(
             .await
         {
             Ok(page) => {
-                let stats = account_list_stats(&state, &page.items, &quota_by_account).await;
+                let stats = account_list_stats(&state, &page.items, &quota_by_account).await?;
                 let page = crate::infra::json::NumberedPage {
                     items: page
                         .items
@@ -550,7 +558,7 @@ pub(crate) async fn accounts(
         .await
     {
         Ok(page) => {
-            let stats = account_list_stats(&state, &page.items, &quota_by_account).await;
+            let stats = account_list_stats(&state, &page.items, &quota_by_account).await?;
             let page = Page {
                 items: page
                     .items
@@ -720,7 +728,8 @@ async fn account_data_for_quota_refresh(
         return Err(account_not_found());
     };
     let quota_by_account = HashMap::from([(account_id.to_string(), quota_data)]);
-    let stats = account_list_stats(state, std::slice::from_ref(&account), &quota_by_account).await;
+    let stats =
+        account_list_stats(state, std::slice::from_ref(&account), &quota_by_account).await?;
     Ok(stats.data_for(account))
 }
 
@@ -902,7 +911,7 @@ async fn account_list_stats(
     state: &AppState,
     accounts: &[AdminAccountMetadata],
     quota_by_account: &HashMap<String, AdminAccountQuotaData>,
-) -> AccountListStats {
+) -> Result<AccountListStats, AdminError> {
     let account_ids = accounts
         .iter()
         .map(|account| account.id.clone())
@@ -930,14 +939,29 @@ async fn account_list_stats(
         })
         .collect::<Vec<_>>();
     let models_by_account = list_current_window_model_usage(state, &usage_records).await;
+    let refreshing_account_ids = state
+        .services
+        .token_refresh
+        .refreshing_account_ids(&account_ids, Utc::now())
+        .await
+        .map_err(|error| AdminError::internal(error.to_string()))?;
 
-    AccountListStats {
+    Ok(AccountListStats {
         usage_by_account: usage_records
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect(),
         quota_by_account,
         models_by_account,
+        refreshing_account_ids,
+    })
+}
+
+fn account_display_status(status: AccountStatus, token_refreshing: bool) -> &'static str {
+    if token_refreshing && matches!(status, AccountStatus::Active | AccountStatus::Expired) {
+        "refreshing"
+    } else {
+        status.as_str()
     }
 }
 

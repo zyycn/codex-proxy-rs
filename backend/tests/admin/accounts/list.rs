@@ -74,6 +74,51 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
 }
 
 #[tokio::test]
+async fn admin_accounts_list_should_derive_refreshing_display_status_from_active_lease() {
+    let (app, _state, pool, _dir) =
+        admin_accounts_test_app("admin-accounts-refreshing-display.sqlite", 72).await;
+    sqlx::query("insert into accounts (id, email, access_token, refresh_token, status, added_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)")
+        .bind("acct_refreshing")
+        .bind("refreshing@example.com")
+        .bind("access-token")
+        .bind("refresh-token")
+        .bind("active")
+        .bind("2026-07-09T00:00:00Z")
+        .bind("2026-07-09T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into account_refresh_leases (account_id, owner, expires_at, updated_at) values (?, ?, ?, ?)")
+        .bind("acct_refreshing")
+        .bind("test-owner")
+        .bind("2099-01-01T00:00:00Z")
+        .bind("2026-07-09T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
+                .header("cookie", "cpr_admin_session=session_1")
+                .header("x-request-id", "req_accounts_refreshing_display")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["status"], "active");
+    assert_eq!(item["displayStatus"], "refreshing");
+    assert_eq!(item["tokenRefreshing"], true);
+}
+
+#[tokio::test]
 async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
     let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-accounts-stats.sqlite", 68).await;

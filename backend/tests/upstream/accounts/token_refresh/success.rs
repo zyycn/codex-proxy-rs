@@ -76,6 +76,78 @@ async fn token_refresh_task_should_persist_refreshed_access_token_and_keep_refre
 }
 
 #[tokio::test]
+async fn token_refresh_task_should_refresh_quota_exhausted_account_without_clearing_status() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("token-refresh-quota-exhausted.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool);
+    let now = Utc.with_ymd_and_hms(2026, 6, 19, 11, 0, 0).unwrap();
+    let new_expires_at = now + Duration::hours(1);
+    let new_access_token = test_jwt(new_expires_at.timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-quota-exhausted".to_string(),
+            email: Some("quota-exhausted@example.com".to_string()),
+            account_id: Some("chatgpt-quota-exhausted".to_string()),
+            user_id: Some("user-quota-exhausted".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(
+                test_jwt((now + Duration::seconds(30)).timestamp()).into(),
+            ),
+            refresh_token: Some(SecretString::new(
+                "refresh-quota-exhausted".to_string().into(),
+            )),
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::seconds(30)),
+            status: AccountStatus::QuotaExhausted,
+        })
+        .await
+        .expect("account should be inserted");
+    let observed_statuses = Arc::new(Mutex::new(Vec::new()));
+    let refresher = StoreObservingTokenRefresher {
+        store: store.clone(),
+        account_id: "acct-refresh-quota-exhausted".to_string(),
+        observed_statuses: observed_statuses.clone(),
+        response: Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }),
+    };
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher,
+    );
+
+    let summary = task
+        .refresh_due_accounts_once_at(now)
+        .await
+        .expect("quota-exhausted account should refresh token");
+    let stored = store
+        .get("acct-refresh-quota-exhausted")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+    let observed_statuses = observed_statuses.lock().await.clone();
+
+    assert_eq!(summary.refreshed, 1);
+    assert_eq!(observed_statuses, [AccountStatus::QuotaExhausted]);
+    assert_eq!(stored.status, AccountStatus::QuotaExhausted);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        new_access_token.as_str()
+    );
+    assert_eq!(stored.access_token_expires_at, Some(new_expires_at));
+    assert!(stored.next_refresh_at.is_some());
+}
+
+#[tokio::test]
 async fn token_refresh_task_should_persist_success_after_transient_transport_retry() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-transient-success.sqlite");
@@ -139,7 +211,7 @@ async fn token_refresh_task_should_persist_success_after_transient_transport_ret
 
     assert_eq!(summary.refreshed, 1);
     assert_eq!(summary.failed, 0);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 2]);
+    assert_eq!(observed_statuses, [AccountStatus::Active; 2]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(
         stored.access_token.expose_secret(),

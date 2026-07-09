@@ -12,8 +12,6 @@ pub enum AccountStatus {
     Expired,
     /// 当前配额已经耗尽。
     QuotaExhausted,
-    /// 账号正处于刷新流程中。
-    Refreshing,
     /// 账号被显式禁用。
     Disabled,
     /// 账号被上游封禁。
@@ -27,7 +25,6 @@ impl AccountStatus {
             Self::Active => "active",
             Self::Expired => "expired",
             Self::QuotaExhausted => "quota_exhausted",
-            Self::Refreshing => "refreshing",
             Self::Disabled => "disabled",
             Self::Banned => "banned",
         }
