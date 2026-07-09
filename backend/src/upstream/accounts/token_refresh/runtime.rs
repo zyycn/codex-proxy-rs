@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::upstream::accounts::{
@@ -627,7 +627,19 @@ where
                     updated.access_token_expires_at =
                         jwt_expiration(&updated.access_token).or(updated.access_token_expires_at);
                     updated.next_refresh_at = self.computed_refresh_at(&updated);
+                    let refresh_token_rotated = updated.refresh_token != attempt.refresh_token;
                     persist_token_update(&self.store, &updated).await?;
+                    info!(
+                        account_id = %updated.id,
+                        trigger = ?trigger,
+                        attempt = attempt_index + 1,
+                        status = %updated.status,
+                        access_token_expires_at = ?updated.access_token_expires_at,
+                        next_refresh_at = ?updated.next_refresh_at,
+                        refresh_token_present = updated.refresh_token.is_some(),
+                        refresh_token_rotated,
+                        "token refresh succeeded"
+                    );
                     return Ok(TokenRefreshOutcome::Refreshed(Box::new(updated)));
                 }
                 Err(RefreshError::RetryableTransport | RefreshError::Transport)

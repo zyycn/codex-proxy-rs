@@ -253,6 +253,75 @@ async fn account_repository_should_not_reactivate_disabled_or_banned_accounts_fr
 }
 
 #[tokio::test]
+async fn account_repository_claims_update_should_preserve_optional_claims_when_missing() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 49).await;
+    let repo = SqliteAccountStore::new(pool);
+    seed_plan_account(&repo, "acct_preserve_without_refresh").await;
+
+    repo.update_from_claims(
+        "acct_preserve_without_refresh",
+        AccountClaimsUpdate {
+            email: None,
+            account_id: None,
+            user_id: None,
+            plan_type: None,
+            access_token: SecretString::new("new-access".to_string().into()),
+            refresh_token: None,
+            access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+            next_refresh_at: Some(Utc::now() + Duration::minutes(30)),
+            status: AccountStatus::Active,
+        },
+    )
+    .await
+    .expect("claims update should persist");
+    let stored = repo
+        .get("acct_preserve_without_refresh")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(stored.email.as_deref(), Some("existing@example.com"));
+    assert_eq!(stored.account_id.as_deref(), Some("chatgpt-existing"));
+    assert_eq!(stored.user_id.as_deref(), Some("user-existing"));
+    assert_eq!(stored.plan_type.as_deref(), Some("plus"));
+}
+
+#[tokio::test]
+async fn account_repository_claims_update_should_preserve_optional_claims_when_refresh_token_rotates(
+) {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 50).await;
+    let repo = SqliteAccountStore::new(pool);
+    seed_plan_account(&repo, "acct_preserve_with_refresh").await;
+
+    repo.update_from_claims(
+        "acct_preserve_with_refresh",
+        AccountClaimsUpdate {
+            email: None,
+            account_id: None,
+            user_id: None,
+            plan_type: None,
+            access_token: SecretString::new("new-access".to_string().into()),
+            refresh_token: Some(SecretString::new("new-refresh".to_string().into())),
+            access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+            next_refresh_at: Some(Utc::now() + Duration::minutes(30)),
+            status: AccountStatus::Active,
+        },
+    )
+    .await
+    .expect("claims update should persist");
+    let stored = repo
+        .get("acct_preserve_with_refresh")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+
+    assert_eq!(stored.email.as_deref(), Some("existing@example.com"));
+    assert_eq!(stored.account_id.as_deref(), Some("chatgpt-existing"));
+    assert_eq!(stored.user_id.as_deref(), Some("user-existing"));
+    assert_eq!(stored.plan_type.as_deref(), Some("plus"));
+}
+
+#[tokio::test]
 async fn account_repository_should_accumulate_usage_counters() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 7).await;
     let repo = SqliteAccountStore::new(pool.clone());
@@ -732,6 +801,24 @@ async fn seed_new_account(repo: &SqliteAccountStore, id: &str) {
         plan_type: None,
         access_token: SecretString::new("access-secret".to_string().into()),
         refresh_token: None,
+        access_token_expires_at: None,
+        status: AccountStatus::Active,
+        added_at: None,
+    })
+    .await
+    .unwrap();
+}
+
+async fn seed_plan_account(repo: &SqliteAccountStore, id: &str) {
+    repo.insert(NewAccount {
+        id: id.to_string(),
+        email: Some("existing@example.com".to_string()),
+        account_id: Some("chatgpt-existing".to_string()),
+        user_id: Some("user-existing".to_string()),
+        label: None,
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("access-secret".to_string().into()),
+        refresh_token: Some(SecretString::new("refresh-secret".to_string().into())),
         access_token_expires_at: None,
         status: AccountStatus::Active,
         added_at: None,
