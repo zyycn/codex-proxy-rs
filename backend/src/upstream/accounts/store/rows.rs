@@ -255,7 +255,6 @@ pub(super) fn status_from_db(value: &str) -> SqliteAccountStoreResult<AccountSta
         "active" => Ok(AccountStatus::Active),
         "expired" => Ok(AccountStatus::Expired),
         "quota_exhausted" => Ok(AccountStatus::QuotaExhausted),
-        "refreshing" => Ok(AccountStatus::Refreshing),
         "disabled" => Ok(AccountStatus::Disabled),
         "banned" => Ok(AccountStatus::Banned),
         other => Err(SqliteAccountStoreError::InvalidStatus(other.to_string())),

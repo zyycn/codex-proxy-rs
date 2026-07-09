@@ -68,7 +68,7 @@ create table accounts (
   refresh_token text,
   access_token_expires_at text,
   next_refresh_at text,
-  status text not null check (status in ('active', 'expired', 'quota_exhausted', 'refreshing', 'disabled', 'banned')),
+  status text not null check (status in ('active', 'expired', 'quota_exhausted', 'disabled', 'banned')),
   quota_json text,
   quota_fetched_at text,
   quota_limit_reached integer not null default 0 check (quota_limit_reached in (0, 1)),

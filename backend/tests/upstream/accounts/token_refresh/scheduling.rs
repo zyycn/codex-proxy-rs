@@ -495,6 +495,92 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
 }
 
 #[tokio::test]
+async fn token_refresh_task_should_fire_quota_exhausted_timer_without_clearing_status() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir
+        .path()
+        .join("token-refresh-quota-exhausted-timer.sqlite");
+    let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
+        .await
+        .expect("sqlite pool");
+    let store = SqliteAccountStore::new(pool);
+    let now = Utc::now();
+    let old_expires_at = now + Duration::milliseconds(50);
+    let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-quota-exhausted-timer".to_string(),
+            email: Some("quota-exhausted-timer@example.com".to_string()),
+            account_id: Some("chatgpt-quota-exhausted-timer".to_string()),
+            user_id: Some("user-quota-exhausted-timer".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(test_jwt(old_expires_at.timestamp()).into()),
+            refresh_token: Some(SecretString::new(
+                "refresh-quota-exhausted-timer".to_string().into(),
+            )),
+            added_at: None,
+            access_token_expires_at: Some(old_expires_at),
+            status: AccountStatus::QuotaExhausted,
+        })
+        .await
+        .expect("account should be inserted");
+    let refresher = NotifyingTokenRefresher {
+        calls: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Notify::new()),
+        response: Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }),
+    };
+    let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 0,
+            refresh_concurrency: 1,
+        },
+        refresher.clone(),
+    )
+    .with_retry_delays(vec![StdDuration::ZERO; 4]);
+
+    let started = refresher.started.notified();
+    tokio::pin!(started);
+    let summary = task
+        .schedule_account_timers_once_at(now)
+        .await
+        .expect("quota-exhausted timer should be scheduled");
+    timeout(StdDuration::from_secs(2), &mut started)
+        .await
+        .expect("quota-exhausted timer should trigger refresh");
+
+    let mut stored = store
+        .get("acct-refresh-quota-exhausted-timer")
+        .await
+        .expect("account should load")
+        .expect("account should exist");
+    for _ in 0..50 {
+        if stored.access_token.expose_secret() == new_access_token.as_str() {
+            break;
+        }
+        sleep(StdDuration::from_millis(20)).await;
+        stored = store
+            .get("acct-refresh-quota-exhausted-timer")
+            .await
+            .expect("account should load")
+            .expect("account should exist");
+    }
+
+    assert_eq!(summary.scheduled, 1);
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stored.status, AccountStatus::QuotaExhausted);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        new_access_token.as_str()
+    );
+    assert!(stored.next_refresh_at.is_some());
+}
+
+#[tokio::test]
 async fn token_refresh_task_should_reschedule_next_timer_after_scheduled_refresh() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-next-timer.sqlite");

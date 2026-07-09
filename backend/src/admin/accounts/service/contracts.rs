@@ -75,6 +75,8 @@ pub enum AdminAccountError {
     Delete,
     #[error("failed to update claims")]
     UpdateClaims,
+    #[error("failed to coordinate token refresh lease")]
+    RefreshLease,
     #[error("failed to sync account pool")]
     SyncAccountPool,
     #[error("failed to store quota")]

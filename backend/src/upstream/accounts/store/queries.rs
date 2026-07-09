@@ -354,7 +354,7 @@ set
   quota_fetched_at = ?,
   plan_type = coalesce(?, plan_type),
   status = case
-    when status in ('disabled', 'banned', 'expired', 'refreshing') then status
+    when status in ('disabled', 'banned', 'expired') then status
     when ? = 1 then 'quota_exhausted'
     when status = 'quota_exhausted' then 'active'
     else status
@@ -423,7 +423,7 @@ pub(super) const SYNC_RUNTIME_ACCOUNT_STATE_SQL: &str = r"
 update accounts
 set
   status = case
-    when status in ('disabled', 'banned', 'refreshing') then status
+    when status in ('disabled', 'banned') then status
     else ?
   end,
   quota_limit_reached = case

@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_call() {
+async fn token_refresh_task_should_keep_business_status_before_refresher_call() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-status.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -13,7 +13,7 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
     let new_access_token = test_jwt(new_expires_at.timestamp());
     store
         .insert(NewAccount {
-            id: "acct-refreshing-marker".to_string(),
+            id: "acct-status-marker".to_string(),
             email: Some("marker@example.com".to_string()),
             account_id: Some("chatgpt-marker".to_string()),
             user_id: Some("user-marker".to_string()),
@@ -32,7 +32,7 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
     let observed_statuses = Arc::new(Mutex::new(Vec::new()));
     let refresher = StoreObservingTokenRefresher {
         store: store.clone(),
-        account_id: "acct-refreshing-marker".to_string(),
+        account_id: "acct-status-marker".to_string(),
         observed_statuses: observed_statuses.clone(),
         response: Ok(TokenPair {
             access_token: new_access_token.clone(),
@@ -53,14 +53,14 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
         .await
         .expect("refresh should succeed");
     let stored = store
-        .get("acct-refreshing-marker")
+        .get("acct-status-marker")
         .await
         .expect("account should load")
         .expect("account should exist");
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(summary.refreshed, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing]);
+    assert_eq!(observed_statuses, [AccountStatus::Active]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(
         stored.access_token.expose_secret(),
@@ -69,7 +69,7 @@ async fn token_refresh_task_should_mark_due_account_refreshing_before_refresher_
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
+async fn token_refresh_task_should_recover_expired_account_after_restart() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-recovery.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -81,7 +81,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
     let new_access_token = test_jwt((now + Duration::hours(2)).timestamp());
     store
         .insert(NewAccount {
-            id: "acct-refreshing-recovery".to_string(),
+            id: "acct-expired-recovery".to_string(),
             email: Some("recovery@example.com".to_string()),
             account_id: Some("chatgpt-recovery".to_string()),
             user_id: Some("user-recovery".to_string()),
@@ -91,7 +91,7 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
             refresh_token: Some(SecretString::new("refresh-recovery".to_string().into())),
             added_at: None,
             access_token_expires_at: Some(now + Duration::hours(1)),
-            status: AccountStatus::Refreshing,
+            status: AccountStatus::Expired,
         })
         .await
         .expect("account should be inserted");
@@ -113,9 +113,9 @@ async fn token_refresh_task_should_recover_refreshing_account_after_restart() {
     let summary = task
         .refresh_due_accounts_once_at(now)
         .await
-        .expect("refreshing account should recover");
+        .expect("expired account should recover");
     let stored = store
-        .get("acct-refreshing-recovery")
+        .get("acct-expired-recovery")
         .await
         .expect("account should load")
         .expect("account should exist");
@@ -183,7 +183,7 @@ async fn token_refresh_task_should_retry_transport_failure_before_recovery() {
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(summary.failed, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 5]);
+    assert_eq!(observed_statuses, [AccountStatus::Active; 5]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert!(stored.next_refresh_at.is_some_and(|next| next > now));
     assert_eq!(
@@ -275,7 +275,7 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
     assert!(recovery_at <= now + Duration::minutes(12));
     assert_eq!(delayed.skipped, 1);
     assert_eq!(refreshed.refreshed, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 6]);
+    assert_eq!(observed_statuses, [AccountStatus::Active; 6]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(
         stored.access_token.expose_secret(),
@@ -412,7 +412,7 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account
     let observed_statuses = observed_statuses.lock().await.clone();
 
     assert_eq!(summary.status_updated, 1);
-    assert_eq!(observed_statuses, [AccountStatus::Refreshing; 2]);
+    assert_eq!(observed_statuses, [AccountStatus::Active; 2]);
     assert_eq!(stored.status, AccountStatus::Expired);
     assert_eq!(
         stored.access_token.expose_secret(),

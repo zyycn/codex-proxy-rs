@@ -3,10 +3,11 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::{stream, StreamExt};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use crate::{
     infra::{
@@ -24,6 +25,8 @@ use super::{
     },
     AdminAccountService,
 };
+
+const ADMIN_REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
 
 impl AdminAccountService {
     pub async fn list(
@@ -281,20 +284,44 @@ impl AdminAccountService {
             duration_ms: elapsed_millis_i64(started_at),
         };
 
-        let Some(refresh_token) = account.refresh_token.as_ref() else {
+        let Some(refresh_token) = account
+            .refresh_token
+            .as_ref()
+            .map(|token| token.expose_secret().to_string())
+        else {
             return Ok(skipped("no refresh token"));
         };
         if account.status == crate::upstream::accounts::model::AccountStatus::Disabled {
             return Ok(skipped("manually disabled"));
         }
-        if account.status == crate::upstream::accounts::model::AccountStatus::Refreshing {
+
+        let lease_now = Utc::now();
+        let lease_owner = format!(
+            "{}:{}",
+            self.refresh_lease_owner_prefix,
+            Uuid::new_v4().simple()
+        );
+        let lease_acquired = self
+            .refresh_leases
+            .try_acquire(
+                account_id,
+                &lease_owner,
+                lease_now + Duration::seconds(ADMIN_REFRESH_LEASE_TTL_SECONDS),
+                lease_now,
+            )
+            .await
+            .map_err(|_| AdminAccountError::RefreshLease)?;
+        if !lease_acquired {
             return Ok(skipped("refresh already in progress"));
         }
 
-        match self
-            .refresh_tokens_from_refresh_token(refresh_token.expose_secret())
-            .await
-        {
+        let refresh_result = self.refresh_tokens_from_refresh_token(&refresh_token).await;
+        let release_result = self.refresh_leases.release(account_id, &lease_owner).await;
+        if release_result.is_err() {
+            return Err(AdminAccountError::RefreshLease);
+        }
+
+        match refresh_result {
             Ok(refreshed) => {
                 let updated = self
                     .store

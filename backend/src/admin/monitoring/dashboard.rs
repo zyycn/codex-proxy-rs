@@ -1,6 +1,6 @@
 //! 管理端 Dashboard 聚合视图。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Query, State},
@@ -311,7 +311,17 @@ pub(crate) async fn dashboard_summary(
         .unwrap_or_default();
 
     let time_buckets = dashboard_time_buckets(&state, now).await;
-    let pool_summary = account_pool_summary(&accounts);
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let refreshing_account_ids = state
+        .services
+        .token_refresh
+        .refreshing_account_ids(&account_ids, now)
+        .await
+        .map_err(|error| AdminError::internal(error.to_string()))?;
+    let pool_summary = account_pool_summary(&accounts, &refreshing_account_ids);
     let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
     let quota_used_by_account =
         account_quota_used_percent_by_id(&state, &account_usage_records).await;
@@ -805,17 +815,24 @@ fn first_token_bucket_latency(record: &AdminUsageTimeBucketRecord) -> Option<u64
     sum.checked_div(count).filter(|latency| *latency > 0)
 }
 
-fn account_pool_summary(accounts: &[Account]) -> AccountPoolDiagnostics {
+fn account_pool_summary(
+    accounts: &[Account],
+    refreshing_account_ids: &HashSet<String>,
+) -> AccountPoolDiagnostics {
     let mut summary = AccountPoolDiagnostics {
         total: accounts.len(),
         ..AccountPoolDiagnostics::default()
     };
     for account in accounts {
         match account.status {
+            AccountStatus::Active | AccountStatus::Expired
+                if refreshing_account_ids.contains(&account.id) =>
+            {
+                summary.refreshing += 1;
+            }
             AccountStatus::Active => summary.active += 1,
             AccountStatus::Expired => summary.expired += 1,
             AccountStatus::QuotaExhausted => summary.quota_exhausted += 1,
-            AccountStatus::Refreshing => summary.refreshing += 1,
             AccountStatus::Disabled => summary.disabled += 1,
             AccountStatus::Banned => summary.banned += 1,
         }

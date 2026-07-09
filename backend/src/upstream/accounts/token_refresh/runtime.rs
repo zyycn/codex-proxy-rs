@@ -127,6 +127,41 @@ where
         self
     }
 
+    /// 返回给定账号集合中当前正在执行 token 刷新的账号 ID。
+    pub async fn refreshing_account_ids(
+        &self,
+        account_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> TokenRefreshServiceResult<HashSet<String>> {
+        if account_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let requested_ids = account_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut refreshing = self
+            .in_flight
+            .lock()
+            .await
+            .iter()
+            .filter(|account_id| requested_ids.contains(account_id.as_str()))
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        if let Some(refresh_leases) = self.refresh_leases.as_ref() {
+            refreshing.extend(
+                refresh_leases
+                    .active_account_ids(account_ids, now)
+                    .await
+                    .map_err(TokenRefreshServiceError::Lease)?,
+            );
+        }
+
+        Ok(refreshing)
+    }
+
     /// 执行一次账号级刷新定时器调度。
     pub async fn schedule_account_timers_once(
         &self,
@@ -165,7 +200,6 @@ where
             }
 
             let timer = match account.status {
-                AccountStatus::Refreshing => Some((Duration::ZERO, RefreshTrigger::Unauthorized)),
                 AccountStatus::Expired => {
                     let delay = match account.next_refresh_at {
                         Some(next_refresh_at) if next_refresh_at > now => {
@@ -543,7 +577,7 @@ where
         account: &Account,
         now: DateTime<Utc>,
     ) -> Option<RefreshTrigger> {
-        if account.status == AccountStatus::Refreshing {
+        if account.status == AccountStatus::Expired {
             return Some(RefreshTrigger::Unauthorized);
         }
 
@@ -562,7 +596,7 @@ where
         let mut permanent_failures = 0;
 
         for attempt_index in 0..max_attempts {
-            let Some(attempt) = self.prepare_refresh_attempt(account, now).await? else {
+            let Some(attempt) = self.prepare_refresh_attempt(account, trigger, now).await? else {
                 return Ok(TokenRefreshOutcome::Skipped);
             };
 
@@ -577,32 +611,34 @@ where
                 .refresh_account_at(&attempt, trigger, now)
                 .await
             {
-                Ok(mut updated) if account_requires_token_write(&attempt, &updated) => {
-                    updated.access_token_expires_at =
-                        jwt_expiration(&updated.access_token).or(updated.access_token_expires_at);
-                    updated.next_refresh_at = self.computed_refresh_at(&updated);
-                    persist_token_update(&self.store, &updated).await?;
-                    return Ok(TokenRefreshOutcome::Refreshed(Box::new(updated)));
-                }
-                Ok(updated) if attempt.status != updated.status => {
-                    if is_permanent_refresh_status(updated.status) {
-                        permanent_failures += 1;
-                        if permanent_failures < PERMANENT_FAILURE_CONFIRMATION_THRESHOLD
-                            && self.sleep_before_retry(&attempt.id, attempt_index).await
-                        {
-                            continue;
-                        }
+                Ok(updated) if is_permanent_refresh_failure_status(updated.status) => {
+                    permanent_failures += 1;
+                    if permanent_failures < PERMANENT_FAILURE_CONFIRMATION_THRESHOLD
+                        && self.sleep_before_retry(&attempt.id, attempt_index).await
+                    {
+                        continue;
                     }
 
                     persist_status(&self.store, &attempt.id, updated.status).await?;
                     persist_next_refresh_at(&self.store, &attempt.id, None).await?;
                     return Ok(TokenRefreshOutcome::StatusUpdated);
                 }
-                Ok(_) => return Ok(TokenRefreshOutcome::Skipped),
+                Ok(mut updated) => {
+                    updated.access_token_expires_at =
+                        jwt_expiration(&updated.access_token).or(updated.access_token_expires_at);
+                    updated.next_refresh_at = self.computed_refresh_at(&updated);
+                    persist_token_update(&self.store, &updated).await?;
+                    return Ok(TokenRefreshOutcome::Refreshed(Box::new(updated)));
+                }
                 Err(RefreshError::RetryableTransport | RefreshError::Transport)
                     if self.sleep_before_retry(&attempt.id, attempt_index).await => {}
                 Err(RefreshError::RetryableTransport | RefreshError::Transport) => {
-                    persist_status(&self.store, &attempt.id, AccountStatus::Active).await?;
+                    persist_status(
+                        &self.store,
+                        &attempt.id,
+                        status_after_temporary_refresh_failure(attempt.status),
+                    )
+                    .await?;
                     let recovery_delay = stable_jittered_duration(
                         &attempt.id,
                         Duration::from_secs(RECOVERY_DELAY_SECONDS as u64),
@@ -624,6 +660,7 @@ where
     async fn prepare_refresh_attempt(
         &self,
         account: &Account,
+        trigger: RefreshTrigger,
         now: DateTime<Utc>,
     ) -> TokenRefreshServiceResult<Option<Account>> {
         let Some(stored) = self.store.get(&account.id).await? else {
@@ -631,7 +668,7 @@ where
                 account.id.clone(),
             ));
         };
-        let mut attempt = stored_account_to_refresh_account(stored);
+        let attempt = stored_account_to_refresh_account(stored);
         if matches!(
             attempt.status,
             AccountStatus::Disabled | AccountStatus::Banned
@@ -641,11 +678,13 @@ where
             return Ok(None);
         }
 
-        if attempt.status != AccountStatus::Refreshing {
-            persist_status(&self.store, &attempt.id, AccountStatus::Refreshing).await?;
+        if !self
+            .scheduler
+            .should_refresh_account_at(&attempt, trigger, now)
+        {
+            return Ok(None);
         }
 
-        attempt.status = AccountStatus::Active;
         Ok(Some(attempt))
     }
 
@@ -839,20 +878,16 @@ async fn persist_next_refresh_at(
     }
 }
 
-fn account_requires_token_write(previous: &Account, updated: &Account) -> bool {
-    previous.access_token != updated.access_token
-        || previous.refresh_token != updated.refresh_token
-        || (updated.status == AccountStatus::Active && previous.status != updated.status)
+fn is_permanent_refresh_failure_status(status: AccountStatus) -> bool {
+    matches!(status, AccountStatus::Expired | AccountStatus::Banned)
 }
 
-fn is_permanent_refresh_status(status: AccountStatus) -> bool {
-    matches!(
-        status,
-        AccountStatus::Expired
-            | AccountStatus::QuotaExhausted
-            | AccountStatus::Disabled
-            | AccountStatus::Banned
-    )
+fn status_after_temporary_refresh_failure(status: AccountStatus) -> AccountStatus {
+    match status {
+        AccountStatus::Expired | AccountStatus::QuotaExhausted => status,
+        AccountStatus::Active => AccountStatus::Active,
+        AccountStatus::Disabled | AccountStatus::Banned => status,
+    }
 }
 
 fn refresh_lease_owner() -> String {

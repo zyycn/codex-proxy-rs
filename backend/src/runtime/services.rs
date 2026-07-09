@@ -254,6 +254,7 @@ impl Services {
             models: models.clone(),
             account_pool: account_pool.clone(),
             token_refresher: StdArc::new(token_client),
+            refresh_leases: stores.refresh_leases.clone(),
             oauth: crate::admin::accounts::service::oauth::AccountOAuthService::new(
                 reqwest::Client::new(),
                 config.auth.oauth_client_id.clone(),

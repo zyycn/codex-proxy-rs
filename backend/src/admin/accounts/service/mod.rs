@@ -12,13 +12,14 @@ mod testing;
 use std::sync::Arc as StdArc;
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::{
     upstream::accounts::{
         cookies::SqliteCookieStore,
         pool::RuntimeAccountPoolService,
         store::SqliteAccountStore,
-        token_refresh::{RuntimeRefreshPolicy, TokenRefresher},
+        token_refresh::{RefreshLeaseStore, RuntimeRefreshPolicy, TokenRefresher},
     },
     upstream::models::service::ModelService,
     upstream::transport::CodexBackendClient,
@@ -38,6 +39,8 @@ pub struct AdminAccountService {
     pub(crate) models: StdArc<ModelService>,
     pub(crate) account_pool: StdArc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: StdArc<dyn TokenRefresher>,
+    pub(crate) refresh_leases: RefreshLeaseStore,
+    pub(crate) refresh_lease_owner_prefix: String,
     pub(crate) oauth: oauth::AccountOAuthService,
     pub(crate) refresh_policy: RuntimeRefreshPolicy,
     pub(crate) installation_id: Option<String>,
@@ -50,6 +53,7 @@ pub struct AdminAccountServiceParts {
     pub models: StdArc<ModelService>,
     pub account_pool: StdArc<RuntimeAccountPoolService>,
     pub token_refresher: StdArc<dyn TokenRefresher>,
+    pub refresh_leases: RefreshLeaseStore,
     pub oauth: oauth::AccountOAuthService,
     pub refresh_policy: RuntimeRefreshPolicy,
     pub installation_id: Option<String>,
@@ -64,6 +68,11 @@ impl AdminAccountService {
             models: parts.models,
             account_pool: parts.account_pool,
             token_refresher: parts.token_refresher,
+            refresh_leases: parts.refresh_leases,
+            refresh_lease_owner_prefix: format!(
+                "admin-account-refresh:{}",
+                Uuid::new_v4().simple()
+            ),
             oauth: parts.oauth,
             refresh_policy: parts.refresh_policy,
             installation_id: parts.installation_id,

@@ -222,7 +222,7 @@ bindAccountLoader(loadAccounts)
           </template>
 
           <template #status="{ row }">
-            <AccountStatusBadge :status="row.status" />
+            <AccountStatusBadge :status="row.displayStatus" />
           </template>
 
           <template #planType="{ row }">
@@ -237,7 +237,7 @@ bindAccountLoader(loadAccounts)
             <AccountTableActions
               :account="row"
               :deleting="deletingAccount"
-              :refreshing="refreshingAccountIds.has(row.id)"
+              :refreshing="refreshingAccountIds.has(row.id) || row.tokenRefreshing"
               :schedule-label="scheduleActionLabel(row)"
               :testing="testingConnectionIds.has(row.id)"
               :updating-status="updatingStatusAccountIds.has(row.id)"
