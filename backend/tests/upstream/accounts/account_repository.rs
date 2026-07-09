@@ -563,13 +563,41 @@ async fn account_repository_should_mark_quota_exhausted_for_any_exhausted_window
 }
 
 #[tokio::test]
+async fn account_repository_should_mark_quota_cooldown_as_quota_exhausted_status() {
+    let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 48).await;
+    let repo = SqliteAccountStore::new(pool.clone());
+    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
+    let future_cooldown = Utc::now() + Duration::hours(1);
+
+    repo.mark_quota_limited_until("acct_a", future_cooldown)
+        .await
+        .unwrap();
+    let stored: (String, i64, Option<String>) = sqlx::query_as(
+        "select status, quota_limit_reached, quota_cooldown_until from accounts where id = ?",
+    )
+    .bind("acct_a")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (stored.0, stored.1, stored.2),
+        (
+            String::from("quota_exhausted"),
+            1,
+            Some(future_cooldown.to_rfc3339())
+        )
+    );
+}
+
+#[tokio::test]
 async fn account_repository_runtime_state_sync_should_not_clear_newer_future_quota_cooldown() {
     let (pool, _dir) = sqlite_account_store_parts("accounts.sqlite", 42).await;
     let repo = SqliteAccountStore::new(pool.clone());
     seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
     let future_cooldown = Utc::now() + Duration::hours(1);
     sqlx::query(
-        "update accounts set quota_limit_reached = 1, quota_verify_required = 0, quota_cooldown_until = ? where id = ?",
+        "update accounts set status = 'quota_exhausted', quota_limit_reached = 1, quota_verify_required = 0, quota_cooldown_until = ? where id = ?",
     )
     .bind(future_cooldown.to_rfc3339())
     .bind("acct_a")
@@ -582,6 +610,7 @@ async fn account_repository_runtime_state_sync_should_not_clear_newer_future_quo
         .into_iter()
         .find(|account| account.id == "acct_a")
         .unwrap();
+    stale_account.status = AccountStatus::Active;
     stale_account.quota_limit_reached = false;
     stale_account.quota_verify_required = true;
     stale_account.quota_cooldown_until = None;
@@ -589,17 +618,18 @@ async fn account_repository_runtime_state_sync_should_not_clear_newer_future_quo
     repo.sync_runtime_account_state(&stale_account, false)
         .await
         .unwrap();
-    let stored: (i64, i64, Option<String>) = sqlx::query_as(
-        "select quota_limit_reached, quota_verify_required, quota_cooldown_until from accounts where id = ?",
+    let stored: (String, i64, i64, Option<String>) = sqlx::query_as(
+        "select status, quota_limit_reached, quota_verify_required, quota_cooldown_until from accounts where id = ?",
     )
     .bind("acct_a")
     .fetch_one(&pool)
     .await
     .unwrap();
 
-    assert_eq!(stored.0, 1);
-    assert_eq!(stored.1, 0);
-    assert_eq!(stored.2, Some(future_cooldown.to_rfc3339()));
+    assert_eq!(stored.0, "quota_exhausted");
+    assert_eq!(stored.1, 1);
+    assert_eq!(stored.2, 0);
+    assert_eq!(stored.3, Some(future_cooldown.to_rfc3339()));
 }
 
 #[tokio::test]

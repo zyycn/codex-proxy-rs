@@ -540,6 +540,7 @@ impl SqliteAccountStore {
             .bind(optional_update_value(&update.plan_type))
             .bind(update.status.is_some())
             .bind(status)
+            .bind(status)
             .bind(&now)
             .bind(account_id)
             .execute(&self.pool)
@@ -703,6 +704,9 @@ impl SqliteAccountStore {
         let cloudflare_cooldown_until = account.cloudflare_cooldown_until.map(|dt| dt.to_rfc3339());
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(SYNC_RUNTIME_ACCOUNT_STATE_SQL)
+            .bind(quota_limit_reached)
+            .bind(&now)
+            .bind(quota_limit_reached)
             .bind(status_to_db(account.status))
             .bind(quota_limit_reached)
             .bind(&now)
@@ -773,12 +777,24 @@ impl SqliteAccountStore {
         status: AccountStatus,
     ) -> SqliteAccountStoreResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let result = sqlx::query("update accounts set status = ?, updated_at = ? where id = ?")
-            .bind(status_to_db(status))
-            .bind(&now)
-            .bind(account_id)
-            .execute(&self.pool)
-            .await?;
+        let status = status_to_db(status);
+        let result = sqlx::query(
+            r"
+update accounts
+set
+  status = case
+    when ? = 'active' and quota_limit_reached = 1 then 'quota_exhausted'
+    else ?
+  end,
+  updated_at = ?
+where id = ?",
+        )
+        .bind(status)
+        .bind(status)
+        .bind(&now)
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 

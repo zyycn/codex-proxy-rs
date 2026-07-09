@@ -331,6 +331,7 @@ impl AccountPool {
         let Some(account) = self.accounts.get_mut(account_id) else {
             return false;
         };
+        let status = status_after_quota_limit(status, account.quota_limit_reached);
         account.status = status;
         if status != AccountStatus::Active {
             self.slots.remove(account_id);
@@ -353,6 +354,7 @@ impl AccountPool {
             .unwrap_or(cooldown_until);
         account.quota_limit_reached = true;
         account.quota_cooldown_until = Some(final_cooldown_until);
+        account.status = status_after_quota_limit(account.status, true);
         account.window_reset_at = account
             .window_reset_at
             .filter(|existing| *existing > final_cooldown_until)
@@ -1373,6 +1375,13 @@ fn refresh_quota_window(account: &mut Account, now: DateTime<Utc>) {
         if account.status == AccountStatus::QuotaExhausted {
             account.status = AccountStatus::Active;
         }
+    }
+}
+
+fn status_after_quota_limit(status: AccountStatus, quota_limit_reached: bool) -> AccountStatus {
+    match (status, quota_limit_reached) {
+        (AccountStatus::Active, true) => AccountStatus::QuotaExhausted,
+        (status, _) => status,
     }
 }
 
