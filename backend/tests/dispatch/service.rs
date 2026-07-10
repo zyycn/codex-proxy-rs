@@ -106,124 +106,124 @@ where
 }
 
 const RESPONSES_SUCCESS_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/success.sse"),
+    include_str!("../fixtures/responses/http_sse/success.sse"),
     "\n"
 );
 const RESPONSES_COMPLETED_USAGE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/completed_usage.sse"),
+    include_str!("../fixtures/responses/http_sse/completed_usage.sse"),
     "\n"
 );
 const RESPONSES_COMPLETED_IMAGE_USAGE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/completed_image_usage.sse"),
+    include_str!("../fixtures/responses/http_sse/completed_image_usage.sse"),
     "\n"
 );
 const RESPONSES_EMPTY_COMPLETED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/empty_completed.sse"),
+    include_str!("../fixtures/responses/http_sse/empty_completed.sse"),
     "\n"
 );
 const RESPONSES_TEXT_DELTAS_COMPLETED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/text_deltas_completed.sse"),
+    include_str!("../fixtures/responses/http_sse/text_deltas_completed.sse"),
     "\n"
 );
 const RESPONSES_DONE_ITEM_COMPLETED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/done_item_completed.sse"),
+    include_str!("../fixtures/responses/http_sse/done_item_completed.sse"),
     "\n"
 );
 const RESPONSES_TUPLE_OBJECT_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/tuple_object.sse"),
+    include_str!("../fixtures/responses/http_sse/tuple_object.sse"),
     "\n"
 );
 const RESPONSES_AFTER_5XX_RETRY_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_5xx_retry.sse"),
+    include_str!("../fixtures/responses/http_sse/after_5xx_retry.sse"),
     "\n"
 );
 const RESPONSES_AFTER_402_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_402.sse"),
+    include_str!("../fixtures/responses/http_sse/after_402.sse"),
     "\n"
 );
 const RESPONSES_FAILED_QUOTA_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/failed_quota.sse"),
+    include_str!("../fixtures/responses/http_sse/failed_quota.sse"),
     "\n"
 );
 const RESPONSES_FAILED_AUTH_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/failed_auth.sse"),
+    include_str!("../fixtures/responses/http_sse/failed_auth.sse"),
     "\n"
 );
 const RESPONSES_AFTER_401_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_401.sse"),
+    include_str!("../fixtures/responses/http_sse/after_401.sse"),
     "\n"
 );
 const RESPONSES_AFTER_403_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_403.sse"),
+    include_str!("../fixtures/responses/http_sse/after_403.sse"),
     "\n"
 );
 const RESPONSES_STREAM_USAGE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_usage.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_usage.sse"),
     "\n"
 );
 const RESPONSES_INCOMPLETE_USAGE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse"),
+    include_str!("../fixtures/responses/http_sse/chat_delta_incomplete_usage.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_429_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_429.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_429.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_5XX_RETRY_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_5xx_retry.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_5xx_retry.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_402_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_402.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_402.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_401_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_401.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_401.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_403_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_403.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_403.sse"),
     "\n"
 );
 const RESPONSES_AFTER_CLOUDFLARE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_cloudflare.sse"),
+    include_str!("../fixtures/responses/http_sse/after_cloudflare.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_CLOUDFLARE_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_cloudflare.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_cloudflare.sse"),
     "\n"
 );
 const RESPONSES_AFTER_MODEL_UNSUPPORTED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/after_model_unsupported.sse"),
+    include_str!("../fixtures/responses/http_sse/after_model_unsupported.sse"),
     "\n"
 );
 const RESPONSES_STREAM_AFTER_MODEL_UNSUPPORTED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/stream_after_model_unsupported.sse"),
+    include_str!("../fixtures/responses/http_sse/stream_after_model_unsupported.sse"),
     "\n"
 );
 const RESPONSES_FAILED_MODEL_UNSUPPORTED_SSE: &str = concat!(
-    include_str!("../../fixtures/responses/http_sse/failed_model_unsupported.sse"),
+    include_str!("../fixtures/responses/http_sse/failed_model_unsupported.sse"),
     "\n"
 );
 
 const WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY: &str =
-    include_str!("../../fixtures/responses/websocket/completed_with_reasoning_replay.json");
+    include_str!("../fixtures/responses/websocket/completed_with_reasoning_replay.json");
 const WEBSOCKET_HISTORY_RATE_LIMITED: &str =
-    include_str!("../../fixtures/responses/websocket/history_rate_limited.json");
+    include_str!("../fixtures/responses/websocket/history_rate_limited.json");
 const WEBSOCKET_RATE_LIMITED: &str =
-    include_str!("../../fixtures/responses/websocket/rate_limited.json");
+    include_str!("../fixtures/responses/websocket/rate_limited.json");
 const WEBSOCKET_TOKEN_REVOKED: &str =
-    include_str!("../../fixtures/responses/websocket/token_revoked.json");
+    include_str!("../fixtures/responses/websocket/token_revoked.json");
 const WEBSOCKET_FIRST_ACCOUNT_LIMITED: &str =
-    include_str!("../../fixtures/responses/websocket/first_account_limited.json");
+    include_str!("../fixtures/responses/websocket/first_account_limited.json");
 const WEBSOCKET_SECOND_ACCOUNT_LIMITED: &str =
-    include_str!("../../fixtures/responses/websocket/second_account_limited.json");
+    include_str!("../fixtures/responses/websocket/second_account_limited.json");
 const WEBSOCKET_INVALID_ENCRYPTED_CONTENT: &str =
-    include_str!("../../fixtures/responses/websocket/invalid_encrypted_content.json");
+    include_str!("../fixtures/responses/websocket/invalid_encrypted_content.json");
 const WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND: &str =
-    include_str!("../../fixtures/responses/websocket/previous_response_not_found.json");
+    include_str!("../fixtures/responses/websocket/previous_response_not_found.json");
 const REASONING_REPLAY_REQUEST_GOLDEN: &str =
-    include_str!("../../fixtures/responses/golden/reasoning_replay_request.json");
+    include_str!("../fixtures/responses/golden/reasoning_replay_request.json");
 
 mod compact_routes;
 mod responses_http;

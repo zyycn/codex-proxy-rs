@@ -6,8 +6,7 @@
 use std::cmp::Ordering;
 
 use crate::accounts::account::Account;
-
-use super::{compare_last_used, SelectionInput};
+use crate::accounts::scheduler::{compare_last_used, SelectionInput};
 
 /// 选中最近使用过的账号（`last_used_at` 最大者）。
 ///

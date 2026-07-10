@@ -24,10 +24,10 @@ use crate::{
         time::china_datetime,
     },
     telemetry::{
-        usage::query::{usage_record_cost_details, UsageQueryError, UsageQueryFilter},
-        usage::store::{
-            UsageRecordBreakdown, UsageRecordEndpointSource, UsageRecordModelSource,
-            UsageRecordSummary, UsageRecordTrendPoint,
+        usage::query::{
+            usage_record_cost_details, UsageQueryError, UsageQueryFilter, UsageRecordBreakdown,
+            UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
+            UsageRecordTrendPoint,
         },
         usage::types::{metadata_string, UsageRecord},
     },

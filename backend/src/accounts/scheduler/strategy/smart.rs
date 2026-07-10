@@ -11,8 +11,7 @@
 
 use crate::accounts::account::Account;
 use crate::accounts::scheduler::feedback::{FeedbackSample, FeedbackStats};
-
-use super::{account_window_token_count, SelectionInput};
+use crate::accounts::scheduler::{account_window_token_count, SelectionInput};
 
 /// 配额封顶账号的惩罚分。远大于各因子加权和的理论上限（各因子 ∈ [0,1]，权重和通常为
 /// 个位数），保证未封顶账号总是优先于封顶账号。

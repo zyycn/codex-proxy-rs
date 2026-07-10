@@ -1,6 +1,7 @@
 //! 管理端 HTTP API。
 
 pub mod accounts_routes;
+pub mod auth_routes;
 pub mod dashboard_routes;
 pub mod keys_routes;
 pub mod ops_routes;

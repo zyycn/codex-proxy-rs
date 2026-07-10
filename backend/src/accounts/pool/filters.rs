@@ -1,3 +1,5 @@
+//! 账号获取过滤条件、池配置与选择结果类型。
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

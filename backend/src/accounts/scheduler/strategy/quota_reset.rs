@@ -11,8 +11,9 @@
 use std::cmp::Ordering;
 
 use crate::accounts::account::Account;
-
-use super::{compare_last_used, compare_window_reset, select_by, SelectionInput};
+use crate::accounts::scheduler::{
+    compare_last_used, compare_window_reset, select_by, SelectionInput,
+};
 
 /// QuotaResetPriority 策略选择。
 pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account> {

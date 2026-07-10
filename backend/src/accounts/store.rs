@@ -282,6 +282,16 @@ pub struct PgAccountStore {
 mod write;
 
 impl PgAccountStore {
+    /// 构造存储。
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 返回底层连接池。
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// 设置账号标签。
     pub async fn set_label(
         &self,

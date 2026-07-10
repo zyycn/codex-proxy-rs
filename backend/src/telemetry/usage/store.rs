@@ -1,29 +1,24 @@
 //! PostgreSQL 成功使用事实存储。
 
-mod query;
-
-use query::{
+use super::query::{
     count_usage_records, usage_account_usage, usage_breakdown, usage_record_account_email_map,
-    usage_record_from_row, usage_summary, usage_trend,
-};
-pub use query::{
-    UsageRecordAccountUsage, UsageRecordBreakdown, UsageRecordEndpointSource,
-    UsageRecordModelSource, UsageRecordSummary, UsageRecordTrendPoint,
+    usage_record_from_row, usage_summary, usage_trend, UsageRecordAccountUsage,
+    UsageRecordBreakdown, UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
+    UsageRecordTrendPoint,
 };
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use thiserror::Error;
 
 use crate::{
     infra::{
-        format::optional_nonnegative_i64_to_u64,
         json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page},
         time::parse_rfc3339_utc,
     },
-    telemetry::{billing, buckets::store::PgRequestBucketStore, usage::types::UsageRecord},
+    telemetry::{buckets::store::PgRequestBucketStore, usage::types::UsageRecord},
 };
 
 pub const USAGE_RECORD_RETENTION_DAYS: i64 = 30;
@@ -286,7 +281,7 @@ insert into usage_records (
     }
 }
 
-fn push_filter(
+pub(super) fn push_filter(
     builder: &mut QueryBuilder<Postgres>,
     filter: &UsageRecordFilter,
     cursor: Option<&str>,
