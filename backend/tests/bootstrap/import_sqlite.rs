@@ -152,6 +152,30 @@ async fn import_sqlite_should_reject_nonempty_target() {
     assert!(matches!(error, ImportSqliteError::TargetNotEmpty));
 }
 
+#[tokio::test]
+async fn import_sqlite_should_keep_blank_admin_api_key_disabled() {
+    let (_source_guard, source_path) = sqlite_v3_source("blank-admin-api-key").await;
+    let source = open_sqlite(&source_path, false).await;
+    sqlx::query(
+        "insert into runtime_settings values
+         (1, '{}', 3600, 2, 3, 50, 'smart', '   ', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&source)
+    .await
+    .unwrap();
+    source.close().await;
+    let (target, _target_guard) = init_test_db("import-sqlite-blank-admin-api-key").await;
+
+    import_sqlite(&target, &source_path).await.unwrap();
+
+    let admin_api_key_hash: Option<String> =
+        sqlx::query_scalar("select admin_api_key_hash from runtime_settings where id = 1")
+            .fetch_one(&target)
+            .await
+            .unwrap();
+    assert!(admin_api_key_hash.is_none());
+}
+
 async fn sqlite_v3_source(label: &str) -> (tempfile::TempDir, PathBuf) {
     let guard = tempfile::tempdir().unwrap();
     let path = guard.path().join(format!("{label}.sqlite"));

@@ -66,7 +66,7 @@
 | 布尔 | boolean | — |
 | 快照/模板/调试 JSON | jsonb | 见 §2.7 |
 
-**枚举用 text + check,不用 PG 原生 enum**(有意修订旧文档 §8 的一句话设想):原生 enum 增删值要 `alter type` 且值永远无法删除;check 约束换一条 `drop/add constraint` 即完成枚举演进(SQLite 0002 改名先例证明枚举确实会变)。**不使用 real/double 存业务数据,不存储金额**。成本一律查询期由 token × 单价计算(`admin/monitoring/billing.rs`):单价会变、需追溯重算,落库的浮点成本既漂移又过期。
+**枚举用 text + check,不用 PG 原生 enum**(有意修订旧文档 §8 的一句话设想):原生 enum 增删值要 `alter type` 且值永远无法删除;check 约束换一条 `drop/add constraint` 即完成枚举演进(SQLite 0002 改名先例证明枚举确实会变)。**不使用 real/double 存业务数据,不存储金额**。成本一律查询期由 token × 单价计算(`telemetry/billing.rs`):单价会变、需追溯重算,落库的浮点成本既漂移又过期。
 
 ### 2.3 时间戳
 
@@ -114,7 +114,7 @@
 2. **可丢弃性是准入条件**:FLUSHALL 之后系统必须无数据损失地继续运行(会话重登、租约重竞争、亲和退化为普通调度、缓存重拉)。不满足即不属于 Redis。
 3. **互斥必须原子**:获取用 `SET NX PX`,续约/释放用 Lua 比较 owner 后操作,禁止 GET-判断-SET 三段式。
 4. 二级索引(亲和的 conversation ZSET / account SET)由写入方维护,读取方容忍成员悬垂(主键已过期),遇悬垂惰性清理。
-5. 值统一 JSON 文本;不用 Redis Hash 拆业务对象字段(整读整写,无字段级更新需求)。
+5. 单个业务对象统一编码为完整 JSON 文本,不把对象属性拆成 Redis Hash 字段。集合缓存可使用 HASH（如 `cpr:models:plan_snapshots`），但每个 field 的 value 仍是一个完整 JSON 对象，整读整写。
 
 ### 2.10 保留与可重建性(诚实边界)
 
@@ -699,8 +699,8 @@ errors:    错误分布 / 排查                                   ← ops_error
 
 ### 5.3 Dashboard 口径决策(钉死)
 
-- 所有 traffic 卡片(今日请求、区间请求、错误率、QPS 趋势)**一律来自 request_time_buckets**,语义为"bucket 保留期内"。卡片文案如实标注区间,**不提供也不暗示"历史总量"**——bucket 有 90 天保留期,任何"total"字样都是口径谎言。
-- 生命周期累计仅有一处合法来源:`account_usage` 累计列(成功口径),使用时必须标注"成功累计"。
+- 周期 traffic 卡片(今日请求、区间请求、错误率、QPS 趋势)**一律来自 request_time_buckets**,语义为"bucket 保留期内"；生命周期累计卡片不从 bucket 推导。
+- 生命周期累计仅有一处合法来源:`account_usage` 累计列(成功口径)。这是后端数据语义，不要求改动既有前端文案。
 - 同一张卡片禁止混排两种口径的数字(v3 的 `todayRequests` 来自 bucket、`totalRequests` 来自 usage_records 全表扫描就是这个病)。
 - 错误明细与错误分布来自 ops_error_logs;成功事件列表不再混排错误行。
 - 真正的长期趋势需求 → 日粒度归档表 `request_day_buckets`(§8),不是延长 15 分钟桶保留期。
@@ -761,7 +761,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 | 3 | 抽查 `select count(*) from client_api_keys where key is null or key = ''` = 0 | 旧 key 值不变；鉴权、管理端复制与 CCSwitch 导入均可用 |
 | 3a | 抽查 `select count(*) from accounts where status = 'refreshing'` = 0 | 旧瞬态状态已规范化为 `expired`，且 `next_refresh_at is null` |
 | 4 | 执行 `rebuild-buckets`(§7),用新口径重算事实保留期内的桶 | 保留期内桶 token 列 = usage_records 聚合值 |
-| 5 | 核对 Dashboard 卡片全部走 bucket 口径,生命周期数字标注"成功累计" | 同卡片无混合口径数字 |
+| 5 | 核对 Dashboard 周期卡片走 bucket、生命周期累计走 account_usage，前端既有文案不变 | 同卡片无混合口径数字 |
 
 ---
 
@@ -774,7 +774,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 3. **鉴权归因**(`keys/{store,service,manage}.rs`、`api/client/auth.rs`):key 创建落唯一 `key` 列；鉴权按完整 key 做 PG unique 点查(删除进程内鉴权缓存);鉴权返回 key `id`,调用链把 `client_api_key_id` 装进请求上下文直至事件写入。管理端列表持续返回完整 key，前端长期保留复制与 CCSwitch 导入入口。
 4. **事件结构**(`telemetry/{usage,ops}`、`telemetry/recorder.rs`、`dispatch/responses/event_recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
 5. **写入路径**(`telemetry/usage/store.rs`、`telemetry/ops/store.rs`、`telemetry/buckets/store.rs`):§5.2 的两条 PG 事务;错误路径对桶只 `error_count + 1`;`__unknown__` sentinel;min/max 延迟使用 nullable-safe 的 `least()`/`greatest()`;内联 trim 移除。
-6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 改卡片来源与文案。
+6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 只改取数来源，不改既有文案。
 7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。
 8. **维护命令**(`main.rs` CLI):`import-sqlite <path>`(§6);`rebuild-buckets`——删除事实保留期内的桶并从两张事实表重算(15 分钟槽对齐在 SQL 侧 `floor(epoch/900)*900`,§2.3);保留期外只读不动。范围明确**不含** `account_usage` / `account_model_usage`(§2.10,不可重建)。
 9. **清理任务**(`bootstrap/tasks/`):三张增长表的周期 trim(读 `runtime_settings` 三列);cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。

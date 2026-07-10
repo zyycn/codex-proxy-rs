@@ -112,7 +112,7 @@ async fn import_runtime_settings(
         let aliases: String = row.try_get("model_aliases_json")?;
         let admin_key = row
             .try_get::<Option<String>, _>("admin_api_key")?
-            .map(|key| hash_credential(&key));
+            .and_then(|key| (!key.trim().is_empty()).then(|| hash_credential(&key)));
         sqlx::query(
             "insert into runtime_settings
              (id, model_aliases_json, refresh_margin_seconds, refresh_concurrency,

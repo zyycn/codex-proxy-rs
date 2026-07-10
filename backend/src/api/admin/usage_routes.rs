@@ -447,11 +447,9 @@ fn optional_datetime(
 
 fn log_error(error: &UsageQueryError) -> AdminError {
     match error {
-        UsageQueryError::List
-        | UsageQueryError::Get
-        | UsageQueryError::Clear
-        | UsageQueryError::Append
-        | UsageQueryError::Retention => AdminError::internal(error.to_string()),
+        UsageQueryError::List | UsageQueryError::Get | UsageQueryError::Clear => {
+            AdminError::internal(error.to_string())
+        }
         UsageQueryError::Accounts => AdminError::usage_record_accounts_failed(error.to_string()),
     }
 }

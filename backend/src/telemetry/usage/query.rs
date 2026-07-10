@@ -1,6 +1,6 @@
 //! 管理端使用记录服务。
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -110,12 +110,6 @@ pub enum UsageQueryError {
     /// 清空失败。
     #[error("failed to clear usage records")]
     Clear,
-    /// 写入失败。
-    #[error("failed to append usage record")]
-    Append,
-    /// 保留期清理失败。
-    #[error("failed to trim expired usage records")]
-    Retention,
     /// 账号关联信息读取失败。
     #[error("failed to load usage record accounts")]
     Accounts,
@@ -125,25 +119,12 @@ pub enum UsageQueryError {
 #[derive(Clone)]
 pub struct UsageQueryService {
     store: PgUsageRecordStore,
-    settings: Arc<tokio::sync::RwLock<UsageQuerySettings>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UsageQuerySettings {
-    enabled: bool,
-    capture_body: bool,
 }
 
 impl UsageQueryService {
     /// 构造管理端使用记录服务。
-    pub fn new(store: PgUsageRecordStore, enabled: bool, capture_body: bool) -> Self {
-        Self {
-            store,
-            settings: Arc::new(tokio::sync::RwLock::new(UsageQuerySettings {
-                enabled,
-                capture_body,
-            })),
-        }
+    pub fn new(store: PgUsageRecordStore) -> Self {
+        Self { store }
     }
 
     /// 分页查询日志。
@@ -253,72 +234,6 @@ impl UsageQueryService {
             .await
             .map(|cleared| ClearUsageRecords { cleared })
             .map_err(|_| UsageQueryError::Clear)
-    }
-
-    /// 记录使用记录。
-    pub async fn record(&self, event: UsageRecord) -> Result<(), UsageQueryError> {
-        let settings = *self.settings.read().await;
-        if !settings.enabled {
-            return Ok(());
-        }
-        if !is_usage_log_event(&event) {
-            tracing::warn!(
-                usage_record_id = %event.id,
-                request_id = event.request_id.as_deref().unwrap_or(""),
-                account_id = event.account_id,
-                model = event.model,
-                status_code = event.status_code,
-                "rejected invalid success usage fact"
-            );
-            return Err(UsageQueryError::Append);
-        }
-        self.append_with_settings(event, settings).await
-    }
-
-    async fn append_with_settings(
-        &self,
-        mut event: UsageRecord,
-        settings: UsageQuerySettings,
-    ) -> Result<(), UsageQueryError> {
-        apply_capture_body_policy(&mut event, settings.capture_body);
-        self.store
-            .append(&event)
-            .await
-            .map_err(|_| UsageQueryError::Append)?;
-        Ok(())
-    }
-
-    /// 周期清理超过保留期的成功事实。
-    pub async fn trim_to_retention(&self, now: DateTime<Utc>) -> Result<u64, UsageQueryError> {
-        self.store
-            .trim_to_retention(now)
-            .await
-            .map_err(|_| UsageQueryError::Retention)
-    }
-}
-
-fn is_usage_log_event(event: &UsageRecord) -> bool {
-    (200..=399).contains(&event.status_code)
-        && !event.provider.trim().is_empty()
-        && !event.account_id.trim().is_empty()
-        && !event.model.trim().is_empty()
-}
-
-fn apply_capture_body_policy(event: &mut UsageRecord, capture_body: bool) {
-    if capture_body {
-        return;
-    }
-    let Some(metadata) = event.metadata.as_object_mut() else {
-        return;
-    };
-    for key in [
-        "body",
-        "rawBody",
-        "requestBody",
-        "responseBody",
-        "upstreamBody",
-    ] {
-        metadata.remove(key);
     }
 }
 

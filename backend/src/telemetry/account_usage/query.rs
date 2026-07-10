@@ -151,7 +151,7 @@ pub struct AccountUsageRecord {
 }
 
 /// 管理端账号用量汇总。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccountUsageSummary {
     pub account_count: i64,
     pub request_count: i64,
