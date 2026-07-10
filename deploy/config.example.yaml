@@ -9,8 +9,12 @@ api:
   base_url: 'https://chatgpt.com/backend-api'
 
 database:
-  # Docker 部署默认写入 /app/data，由 Compose 挂载到仓库 .runtime/data。
-  url: 'sqlite:///app/data/codex-proxy-rs.sqlite'
+  # PostgreSQL 持久层。
+  url: 'postgres://codex_proxy:codex_proxy@postgres:5432/codex_proxy'
+
+redis:
+  # Redis 仅承载可丢弃的运行态与缓存。
+  url: 'redis://redis:6379/'
 
 quota:
   # 账号额度刷新间隔，单位分钟。
@@ -80,8 +84,6 @@ fingerprint:
 admin:
   # 管理端登录会话有效期，单位分钟。
   session_ttl_minutes: 1440
-  # 过期会话清理间隔，单位秒。
-  session_cleanup_interval_secs: 3600
   # 首次启动创建的默认管理员账号。default_password 必须改成至少 12 位的非默认密码。
   default_username: admin@cpr.local
   default_password: ''

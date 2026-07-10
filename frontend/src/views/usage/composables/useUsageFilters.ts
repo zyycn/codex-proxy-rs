@@ -6,7 +6,6 @@ export function useUsageFilters(totalRecords: Ref<number>) {
   const page = ref(1)
   const pageSize = ref(10)
   const searchQuery = ref('')
-  const filterStatus = ref('')
   let loadUsageRecords: ((scope?: 'all' | 'table') => Promise<void> | void) | undefined
 
   const usagePagination = computed(() => ({
@@ -38,7 +37,7 @@ export function useUsageFilters(totalRecords: Ref<number>) {
   }
 
   watchDebounced(
-    [searchQuery, filterStatus],
+    searchQuery,
     () => {
       page.value = 1
       requestLoad('table')
@@ -50,7 +49,6 @@ export function useUsageFilters(totalRecords: Ref<number>) {
     page,
     pageSize,
     searchQuery,
-    filterStatus,
     usagePagination,
     bindUsageRecordLoader,
     handlePageChange,

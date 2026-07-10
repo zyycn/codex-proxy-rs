@@ -6,6 +6,7 @@ use argon2::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::Rng;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -72,4 +73,16 @@ pub fn generate_admin_api_key() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     format!("admin-{}", hex::encode(bytes))
+}
+
+/// 生成新的管理员会话令牌。
+pub fn generate_admin_session_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    format!("sess_{}", URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// 计算高熵凭据的 SHA-256 十六进制摘要。
+pub fn hash_credential(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
 }

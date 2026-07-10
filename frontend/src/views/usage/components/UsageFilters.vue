@@ -3,17 +3,13 @@ import { RefreshCw, Search } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 
 defineProps<{
-  statusOptions: any[]
   refreshing: boolean
   loading: boolean
-  statusDisabled?: boolean
 }>()
 
 const search = defineModel<string>('search', { required: true })
-const status = defineModel<string>('status', { required: true })
 
 const emit = defineEmits<{
   refresh: []
@@ -32,13 +28,6 @@ const emit = defineEmits<{
           <Search class="size-4.5 text-(--cp-text-tertiary)" />
         </template>
       </BaseInput>
-
-      <BaseSelect
-        v-model="status"
-        :options="statusOptions"
-        :disabled="statusDisabled"
-        class="w-34"
-      />
     </div>
 
     <div class="flex shrink-0 items-center gap-2">

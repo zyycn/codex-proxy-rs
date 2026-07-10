@@ -1,6 +1,41 @@
 name: codex-proxy-rs
 
 services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: codex_proxy
+      POSTGRES_USER: codex_proxy
+      POSTGRES_PASSWORD: ${CPR_POSTGRES_PASSWORD:-codex_proxy}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codex_proxy -d codex_proxy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
   codex-proxy-rs:
     image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
     build:
@@ -17,6 +52,11 @@ services:
     user: "10001:10001"
     init: true
     stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     pids_limit: 256
     cpus: "2.0"
     mem_limit: 1g
@@ -50,3 +90,7 @@ services:
       CPR_UPDATE_LOCK_FILE: /app/data/update.lock
       CPR_WEB_DIST_DIR: /app/web/dist
       CPR_ENABLE_SELF_RESTART: "true"
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -16,7 +16,6 @@ export function useUsageRecordsTable(options: {
   page: Ref<number>
   pageSize: Ref<number>
   searchQuery: Ref<string>
-  filterStatus: Ref<string>
   timeRangeParams: Ref<Record<string, string>>
   totalRecords: Ref<number>
 }) {
@@ -32,7 +31,6 @@ export function useUsageRecordsTable(options: {
   let endpointDistributionRequestId = 0
   const scopedParams = () => ({ ...options.timeRangeParams.value })
   const filterParams = () => ({
-    level: options.filterStatus.value || undefined,
     search: options.searchQuery.value || undefined,
   })
 
@@ -188,8 +186,6 @@ export function useUsageRecordsTable(options: {
 function emptySummary() {
   return {
     totalRequests: '0',
-    errorRequests: '0',
-    errorRate: '—',
     inputTokens: '0',
     outputTokens: '0',
     cachedTokens: '0',

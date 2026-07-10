@@ -1,10 +1,10 @@
 use codex_proxy_rs::{
-    config::schema::FingerprintConfig,
-    upstream::fingerprint::{Fingerprint, RuntimeFingerprint},
+    bootstrap::{config::FingerprintConfig, services::fingerprint_from_config},
+    upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint},
 };
 
 pub(crate) fn test_fingerprint() -> Fingerprint {
-    Fingerprint::from_config(&FingerprintConfig::default())
+    fingerprint_from_config(&FingerprintConfig::default())
 }
 
 pub(crate) fn test_fingerprint_with_updated_at(updated_at: Option<&str>) -> Fingerprint {

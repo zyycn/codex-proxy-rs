@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy } from '@lucide/vue'
+import { Copy, Upload } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -20,6 +20,7 @@ const form = defineModel<any>('form', { required: true })
 const emit = defineEmits<{
   create: []
   copy: [text: string]
+  importCcs: []
 }>()
 
 function formField(key: string) {
@@ -39,7 +40,7 @@ const label = formField('label')
   <BaseModal
     v-model="open"
     title="创建 API Key"
-    description="创建后只显示一次，请立即保存。"
+    description="创建后可在密钥列表中随时复制或导入 CCSwitch。"
     variant="info"
     width="540px"
     :close-disabled="saving"
@@ -70,7 +71,7 @@ const label = formField('label')
   <BaseModal
     v-model="createdOpen"
     title="API Key 已创建"
-    description="密钥只会显示一次，关闭弹窗后无法再次查看完整内容。"
+    description="可以立即复制或导入 CCSwitch，之后也可从密钥列表再次操作。"
     variant="success"
     width="540px"
   >
@@ -79,7 +80,7 @@ const label = formField('label')
         class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3"
       >
         <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
-          请妥善保存此密钥，它只会显示一次。
+          该密钥具有网关访问权限，请仅发送给可信调用方。
         </p>
       </div>
 
@@ -101,6 +102,18 @@ const label = formField('label')
     </div>
 
     <template #footer>
+      <BaseButton variant="default" @click="emit('copy', createdKey)">
+        <template #icon>
+          <Copy class="size-4" />
+        </template>
+        复制密钥
+      </BaseButton>
+      <BaseButton variant="default" @click="emit('importCcs')">
+        <template #icon>
+          <Upload class="size-4" />
+        </template>
+        导入 CCSwitch
+      </BaseButton>
       <BaseButton variant="primary" @click="createdOpen = false">我已保存</BaseButton>
     </template>
   </BaseModal>

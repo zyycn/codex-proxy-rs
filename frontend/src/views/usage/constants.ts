@@ -96,15 +96,61 @@ export const usageRecordColumns = [
   },
 ]
 
-export const levelColors: Record<string, { bg: string; text: string }> = {
-  info: { bg: 'bg-(--cp-success-bg)', text: 'text-(--cp-success-text)' },
-  error: { bg: 'bg-(--cp-danger-bg)', text: 'text-(--cp-danger-text)' },
-}
-
-export const statusOptions = [
-  { label: '全部记录', value: '' },
-  { label: '正常', value: 'info' },
-  { label: '错误', value: 'error' },
+export const opsErrorColumns = [
+  {
+    key: 'createdAtDisplay',
+    label: '时间',
+    width: '190px',
+    fixed: 'left' as const,
+    cellClass:
+      'whitespace-nowrap font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
+  },
+  { key: 'statusCode', label: '状态码', width: '96px', align: 'center' as const },
+  {
+    key: 'failureClass',
+    label: '失败分类',
+    width: '170px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  {
+    key: 'kind',
+    label: '事件',
+    width: '170px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  {
+    key: 'route',
+    label: '端点',
+    width: '190px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  {
+    key: 'model',
+    label: '模型',
+    width: '180px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  {
+    key: 'accountId',
+    label: '账号 ID',
+    width: '230px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  {
+    key: 'requestId',
+    label: '请求 ID',
+    width: '250px',
+    cellClass: 'font-mono text-[12px] font-[650]',
+  },
+  { key: 'message', label: '消息', minWidth: '300px', flex: 1 },
+  {
+    key: 'actions',
+    label: '操作',
+    width: '80px',
+    fixed: 'right' as const,
+    headerClass: '!px-4',
+    cellClass: '!px-4',
+  },
 ]
 
 export const usageTimeRangeOptions = [
@@ -112,11 +158,6 @@ export const usageTimeRangeOptions = [
   { label: '最近 7 天', value: '7d' },
   { label: '最近 30 天', value: '30d' },
 ]
-
-export const levelLabels: Record<string, string> = {
-  info: '正常',
-  error: '错误',
-}
 
 export function tokenTotal(record: any) {
   const tokenDetails = record?.tokenDetails

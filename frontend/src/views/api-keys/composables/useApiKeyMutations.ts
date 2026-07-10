@@ -16,6 +16,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   const showSingleDeleteModal = ref(false)
   const showKeyModal = ref(false)
   const createdKey = ref('')
+  const createdKeyName = ref('')
   const pendingDeleteKey = ref<any | null>(null)
   const creatingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
@@ -58,6 +59,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
         })
 
         createdKey.value = result.key
+        createdKeyName.value = result.name
         showCreateModal.value = false
         showKeyModal.value = true
         createForm.value = { name: '', label: '' }
@@ -135,10 +137,6 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     }
   }
 
-  function maskKey(prefix: string): string {
-    return `${prefix}••••••••••••••••`
-  }
-
   onMounted(() => {
     loadApiKeys()
   })
@@ -151,6 +149,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     showSingleDeleteModal,
     showKeyModal,
     createdKey,
+    createdKeyName,
     pendingDeleteKey,
     creatingKey,
     deletingKey,
@@ -163,6 +162,5 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     handleBatchDelete,
     handleToggleStatus,
     copyToClipboard,
-    maskKey,
   }
 }

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { CalendarDays, Eye } from '@lucide/vue'
 import dayjs from 'dayjs'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import {
-  statusOptions,
   usageTimeRangeOptions,
   usageAccountText,
   usageReasoningEffort,
@@ -24,12 +24,18 @@ import UsageCostCell from './components/UsageCostCell.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageModelCell from './components/UsageModelCell.vue'
+import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import UsageTokenCell from './components/UsageTokenCell.vue'
 
 const totalRecords = ref(0)
 const timeRange = ref('7d')
+const recordView = shallowRef('success')
+const recordViewOptions = [
+  { label: '成功记录', value: 'success' },
+  { label: '错误排查', value: 'errors' },
+]
 const timeRangeParams = computed<Record<string, string>>(() => {
   const now = dayjs()
 
@@ -57,7 +63,6 @@ const {
   page,
   pageSize,
   searchQuery,
-  filterStatus,
   usagePagination,
   bindUsageRecordLoader,
   handlePageChange,
@@ -79,7 +84,6 @@ const {
   page,
   pageSize,
   searchQuery,
-  filterStatus,
   timeRangeParams,
   totalRecords,
 })
@@ -104,123 +108,126 @@ watch(timeRange, () => {
           使用记录
         </h1>
         <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          查看网关请求的模型、端点、Token 与上游响应状态。
+          分离查看成功用量事实与错误排查明细。
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-2">
+        <BaseSegmented v-model="recordView" :options="recordViewOptions" class="w-52" />
         <CalendarDays class="size-4 text-(--cp-text-muted)" />
         <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
       </div>
     </header>
 
-    <UsageSummaryCards :summary="summary" />
-    <UsageInsightsGrid
-      v-model:model-source="modelDistributionSource"
-      v-model:endpoint-source="endpointDistributionSource"
-      :insights="insights"
-      :loading="analyticsLoading"
-    />
+    <template v-if="recordView === 'success'">
+      <UsageSummaryCards :summary="summary" />
+      <UsageInsightsGrid
+        v-model:model-source="modelDistributionSource"
+        v-model:endpoint-source="endpointDistributionSource"
+        :insights="insights"
+        :loading="analyticsLoading"
+      />
 
-    <BaseCard
-      :padded="false"
-      class="mt-5 flex flex-col"
-      header-class="px-5 pt-4"
-      body-class="flex flex-col px-5 pt-3 pb-4"
-    >
-      <template #header>
-        <div class="grid gap-3">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
-                请求明细
-              </h2>
-              <p
-                class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
-              >
-                按请求查看网关调用、上游状态与 Token 消耗。
-              </p>
+      <BaseCard
+        :padded="false"
+        class="mt-5 flex flex-col"
+        header-class="px-5 pt-4"
+        body-class="flex flex-col px-5 pt-3 pb-4"
+      >
+        <template #header>
+          <div class="grid gap-3">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
+                  请求明细
+                </h2>
+                <p
+                  class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+                >
+                  按请求查看成功调用、上游状态与 Token 消耗。
+                </p>
+              </div>
             </div>
+
+            <UsageFilters
+              v-model:search="searchQuery"
+              :loading="loading"
+              :refreshing="refreshingList"
+              @refresh="refreshUsageRecords"
+            />
           </div>
+        </template>
 
-          <UsageFilters
-            v-model:status="filterStatus"
-            v-model:search="searchQuery"
-            :status-options="statusOptions"
+        <template #body>
+          <BaseTable
+            class="min-h-[520px] flex-1"
+            :columns="usageRecordColumns"
+            :rows="records"
             :loading="loading"
-            :refreshing="refreshingList"
-            @refresh="refreshUsageRecords"
-          />
-        </div>
-      </template>
-
-      <template #body>
-        <BaseTable
-          class="min-h-[520px] flex-1"
-          :columns="usageRecordColumns"
-          :rows="records"
-          :loading="loading"
-          :pagination="usagePagination"
-          empty-text="暂无使用记录"
-          min-width="1920px"
-          @page-change="handlePageChange"
-          @page-size-change="handlePageSizeChange"
-        >
-          <template #accountEmail="{ row }">
-            <span
-              class="whitespace-nowrap font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
-            >
-              {{ usageAccountText(row) }}
-            </span>
-          </template>
-
-          <template #clientIp="{ row }">
-            <UsageClientIpCell :record="row" />
-          </template>
-
-          <template #model="{ row }">
-            <UsageModelCell :record="row" />
-          </template>
-
-          <template #reasoningEffort="{ row }">
-            <span class="whitespace-nowrap text-[12px] font-[720] text-(--cp-text-primary)">
-              {{ usageReasoningEffort(row) }}
-            </span>
-          </template>
-
-          <template #recordType="{ row }">
-            <span
-              class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
-              :class="usageRecordTypeClass(row)"
-            >
-              {{ usageRecordType(row) }}
-            </span>
-          </template>
-
-          <template #tokenDetails="{ row }">
-            <UsageTokenCell :record="row" />
-          </template>
-
-          <template #costDetails="{ row }">
-            <UsageCostCell :record="row" />
-          </template>
-
-          <template #actions="{ row }">
-            <div class="flex items-center justify-start">
-              <BaseButton
-                icon-only
-                variant="ghost"
-                size="sm"
-                label="查看使用记录详情"
-                @click="handleViewDetail(row)"
+            :pagination="usagePagination"
+            empty-text="暂无使用记录"
+            min-width="1920px"
+            @page-change="handlePageChange"
+            @page-size-change="handlePageSizeChange"
+          >
+            <template #accountEmail="{ row }">
+              <span
+                class="whitespace-nowrap font-mono text-[12px] leading-none font-[720] text-(--cp-text-primary)"
               >
-                <Eye class="size-3.5" />
-              </BaseButton>
-            </div>
-          </template>
-        </BaseTable>
-      </template>
-    </BaseCard>
+                {{ usageAccountText(row) }}
+              </span>
+            </template>
 
-    <UsageRecordDetailModal v-model="showDetailModal" :record="selectedUsageRecord" />
+            <template #clientIp="{ row }">
+              <UsageClientIpCell :record="row" />
+            </template>
+
+            <template #model="{ row }">
+              <UsageModelCell :record="row" />
+            </template>
+
+            <template #reasoningEffort="{ row }">
+              <span class="whitespace-nowrap text-[12px] font-[720] text-(--cp-text-primary)">
+                {{ usageReasoningEffort(row) }}
+              </span>
+            </template>
+
+            <template #recordType="{ row }">
+              <span
+                class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
+                :class="usageRecordTypeClass(row)"
+              >
+                {{ usageRecordType(row) }}
+              </span>
+            </template>
+
+            <template #tokenDetails="{ row }">
+              <UsageTokenCell :record="row" />
+            </template>
+
+            <template #costDetails="{ row }">
+              <UsageCostCell :record="row" />
+            </template>
+
+            <template #actions="{ row }">
+              <div class="flex items-center justify-start">
+                <BaseButton
+                  icon-only
+                  variant="ghost"
+                  size="sm"
+                  label="查看使用记录详情"
+                  @click="handleViewDetail(row)"
+                >
+                  <Eye class="size-3.5" />
+                </BaseButton>
+              </div>
+            </template>
+          </BaseTable>
+        </template>
+      </BaseCard>
+
+      <UsageRecordDetailModal v-model="showDetailModal" :record="selectedUsageRecord" />
+    </template>
+
+    <OpsErrorPanel v-else :time-range-params="timeRangeParams" />
   </div>
 </template>

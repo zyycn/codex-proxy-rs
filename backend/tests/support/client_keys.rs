@@ -1,8 +1,8 @@
-use codex_proxy_rs::admin::keys::service::SqliteClientKeyStore;
-use sqlx::SqlitePool;
+use codex_proxy_rs::keys::{manage::KeyManageService, store::PgClientKeyStore};
+use sqlx::PgPool;
 
-pub(crate) async fn insert_client_api_key(pool: &SqlitePool) -> String {
-    SqliteClientKeyStore::new(pool.clone())
+pub(crate) async fn insert_client_api_key(pool: &PgPool) -> String {
+    KeyManageService::new(PgClientKeyStore::new(pool.clone()))
         .create("test")
         .await
         .unwrap()
