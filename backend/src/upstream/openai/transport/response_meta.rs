@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use reqwest::header::{HeaderMap, SET_COOKIE};
 
-use crate::upstream::openai::protocol::responses::update_first_response_event_ms;
+use crate::upstream::openai::protocol::responses::update_first_response_output_ms;
 
 use super::diagnostics::CodexUpstreamDiagnostics;
 
@@ -48,7 +48,7 @@ pub(super) fn update_first_token_ms(
     body_bytes: &[u8],
     first_token_ms: &mut Option<i64>,
 ) {
-    update_first_response_event_ms(started_at, body_bytes, first_token_ms);
+    update_first_response_output_ms(started_at, body_bytes, first_token_ms);
 }
 
 fn is_rate_limit_header(name: &str) -> bool {

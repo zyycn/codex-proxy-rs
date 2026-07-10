@@ -1101,7 +1101,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
         )
         .await
     else {
-        panic!("binary event before first content should reject stream open");
+        panic!("binary event before first output should reject stream open");
     };
     server.await.unwrap();
 
@@ -1112,7 +1112,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_retry_without_pool_when_first_content_times_out() {
+async fn codex_backend_client_stream_should_retry_without_pool_when_first_output_times_out() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));

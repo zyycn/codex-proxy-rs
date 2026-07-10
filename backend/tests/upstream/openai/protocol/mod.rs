@@ -5,7 +5,7 @@ use codex_proxy_rs::upstream::openai::protocol::events::{
     rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow, TokenUsage,
 };
 use codex_proxy_rs::upstream::openai::protocol::responses::{
-    http_sse_fallback_allowed, response_body_has_first_event, response_from_codex_sse,
+    http_sse_fallback_allowed, response_body_has_first_output, response_from_codex_sse,
     response_sse_event_is_terminal, transport_for_request, CodexResponsesRequest, CodexTransport,
     CollectedResponse,
 };

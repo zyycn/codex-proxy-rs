@@ -18,6 +18,7 @@ const NO_AVAILABLE_RESPONSES_ACCOUNTS_MESSAGE: &str =
 const UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE: &str = "Upstream Codex request failed";
 const INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE: &str = "Invalid upstream Codex response";
 const UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE: &str = "Upstream Codex response failed";
+const HISTORY_UNAVAILABLE_MESSAGE: &str = "Previous response context is unavailable. Start a new conversation or resend the complete input without previous_response_id.";
 
 #[derive(Clone, Copy)]
 pub enum ResponseDispatchMessageStyle {
@@ -72,6 +73,10 @@ const AUTHENTICATION_ERROR: OpenAiErrorKind = OpenAiErrorKind {
 const MODEL_NOT_FOUND_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "invalid_request_error",
     code: "model_not_found",
+};
+const HISTORY_UNAVAILABLE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "invalid_request_error",
+    code: "previous_response_unavailable",
 };
 const INVALID_UPSTREAM_RESPONSE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",
@@ -320,6 +325,7 @@ fn dispatch_failure_message(
             INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE.to_owned()
         }
         DispatchFailureClass::ResponseFailed => UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE.to_owned(),
+        DispatchFailureClass::HistoryUnavailable => HISTORY_UNAVAILABLE_MESSAGE.to_owned(),
         _ => UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
     }
 }
@@ -336,6 +342,7 @@ fn dispatch_failure_openai_error_kind(
         | DispatchFailureClass::Disabled
         | DispatchFailureClass::Banned => AUTHENTICATION_ERROR,
         DispatchFailureClass::ModelUnsupported => MODEL_NOT_FOUND_ERROR,
+        DispatchFailureClass::HistoryUnavailable => HISTORY_UNAVAILABLE_ERROR,
         DispatchFailureClass::InvalidSse
         | DispatchFailureClass::MissingCompleted
         | DispatchFailureClass::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,

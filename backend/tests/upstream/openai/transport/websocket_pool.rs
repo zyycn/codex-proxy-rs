@@ -156,7 +156,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_retry_fresh_socket_when_first_content_times_out() {
+async fn codex_backend_client_stream_should_retry_fresh_socket_when_first_output_times_out() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -241,7 +241,7 @@ async fn codex_backend_client_stream_should_retry_fresh_socket_when_first_conten
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_retry_reused_socket_when_first_content_times_out() {
+async fn codex_backend_client_stream_should_retry_reused_socket_when_first_output_times_out() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -342,7 +342,7 @@ async fn codex_backend_client_stream_should_retry_reused_socket_when_first_conte
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_retry_bypass_socket_when_first_content_times_out() {
+async fn codex_backend_client_stream_should_retry_bypass_socket_when_first_output_times_out() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));

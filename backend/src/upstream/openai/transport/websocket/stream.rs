@@ -27,25 +27,25 @@ pub(super) async fn collect_websocket_response(
     CodexWebSocketExchangeError,
 > {
     let mut body = String::new();
-    let mut saw_content_frame = false;
+    let mut saw_first_output = false;
     let mut first_token_ms = None;
 
     loop {
         let receive_timeout = receive_idle_timeout_with_first_token_deadline(
-            saw_content_frame,
+            saw_first_output,
             first_token_started_at,
             first_token_timeout,
         )?;
         let message = match next_websocket_message(&mut websocket, receive_timeout).await {
             Ok(message) => message,
-            Err(error) if !saw_content_frame => {
+            Err(error) if !saw_first_output => {
                 if let Some(timeout) =
                     elapsed_first_token_timeout(first_token_started_at, first_token_timeout)
                 {
                     return Err(CodexWebSocketExchangeError::FirstTokenTimeout { timeout });
                 }
                 if reused_connection {
-                    return Err(reused_connection_died_before_first_frame(&error));
+                    return Err(reused_connection_died_before_first_output(&error));
                 }
                 return Err(error);
             }
@@ -57,9 +57,9 @@ pub(super) async fn collect_websocket_response(
         let text = match message {
             Message::Text(text) => text,
             Message::Binary(_) => return Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent),
-            Message::Close(_) if reused_connection && !saw_content_frame => {
+            Message::Close(_) if reused_connection && !saw_first_output => {
                 return Err(
-                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+                    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                         message: "websocket closed".to_string(),
                     },
                 );
@@ -95,9 +95,10 @@ pub(super) async fn collect_websocket_response(
         }
         let event = websocket_event_type(&raw);
         let forwarded = if let Some(frame) = websocket_event_to_sse_frame(&raw) {
+            let has_first_output = response_body_has_first_output(frame.as_bytes());
             body.push_str(&frame);
-            if event_is_first_content(event.as_deref()) {
-                saw_content_frame = true;
+            if has_first_output {
+                saw_first_output = true;
                 response_meta::update_first_token_ms(
                     started_at,
                     body.as_bytes(),
@@ -124,9 +125,9 @@ pub(super) async fn collect_websocket_response(
         }
     }
 
-    if reused_connection && !saw_content_frame {
+    if reused_connection && !saw_first_output {
         return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                 message: "websocket closed before terminal event".to_string(),
             },
         );
@@ -135,7 +136,7 @@ pub(super) async fn collect_websocket_response(
     Err(CodexWebSocketExchangeError::ClosedBeforeTerminal)
 }
 
-pub(super) async fn prefetch_first_content_stream_frames(
+pub(super) async fn prefetch_stream_frames_until_output_or_terminal(
     websocket: &mut PumpedWebSocket,
     metadata: &mut CodexWebSocketConnectionMetadata,
     first_token_started_at: Instant,
@@ -144,7 +145,7 @@ pub(super) async fn prefetch_first_content_stream_frames(
     let mut prefetched_frames = Vec::new();
     loop {
         let receive_timeout =
-            receive_timeout_before_first_content(first_token_started_at, first_token_timeout)?;
+            receive_timeout_before_first_output(first_token_started_at, first_token_timeout)?;
         let message = match next_websocket_message(websocket, receive_timeout).await {
             Ok(Some(message)) => message,
             Ok(None) => return Err(CodexWebSocketExchangeError::ClosedBeforeTerminal),
@@ -192,12 +193,13 @@ pub(super) async fn prefetch_first_content_stream_frames(
         }
 
         let event = websocket_event_type(&raw);
-        if websocket_event_to_sse_frame(&raw).is_none() {
+        let Some(frame) = websocket_event_to_sse_frame(&raw) else {
             continue;
-        }
-        let is_first_content = event_is_first_content(event.as_deref());
+        };
+        let has_first_output = response_body_has_first_output(frame.as_bytes());
+        let terminal = event.as_deref().is_some_and(is_terminal_websocket_event);
         prefetched_frames.push(raw);
-        if is_first_content {
+        if has_first_output || terminal {
             return Ok(prefetched_frames);
         }
     }
@@ -210,16 +212,16 @@ pub(super) fn reused_stream_prefetch_error(
         CodexWebSocketExchangeError::ClosedBeforeTerminal
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::Transport(_) => {
-            reused_connection_died_before_first_frame(&error)
+            reused_connection_died_before_first_output(&error)
         }
         error => error,
     }
 }
 
-fn reused_connection_died_before_first_frame(
+fn reused_connection_died_before_first_output(
     error: &CodexWebSocketExchangeError,
 ) -> CodexWebSocketExchangeError {
-    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+    CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
         message: error.to_string(),
     }
 }
@@ -253,6 +255,33 @@ pub(super) struct WebSocketStreamPoolReturn {
     pub(super) pool: CodexWebSocketPool,
     pub(super) key: CodexWebSocketPoolKey,
     pub(super) created_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StreamWebSocketDiscardReason {
+    ClientCancelled,
+    DownstreamSendFailed,
+    IncompleteResponse,
+    InvalidCompletedResponse,
+    UnexpectedBinaryEvent,
+    UpstreamClosed,
+    UpstreamError,
+    UpstreamReceiveFailed,
+}
+
+impl StreamWebSocketDiscardReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientCancelled => "client_cancelled",
+            Self::DownstreamSendFailed => "downstream_send_failed",
+            Self::IncompleteResponse => "incomplete_response",
+            Self::InvalidCompletedResponse => "invalid_completed_response",
+            Self::UnexpectedBinaryEvent => "unexpected_binary_event",
+            Self::UpstreamClosed => "upstream_closed",
+            Self::UpstreamError => "upstream_error",
+            Self::UpstreamReceiveFailed => "upstream_receive_failed",
+        }
+    }
 }
 
 pub(super) fn stream_websocket_response(
@@ -307,7 +336,7 @@ async fn forward_websocket_response_stream(
 ) {
     let mut pool_return = pool_return;
     let mut prefetched_frames: VecDeque<String> = prefetched_frames.into();
-    let mut saw_content_frame = false;
+    let mut saw_first_output = false;
     loop {
         let raw = if let Some(text) = prefetched_frames.pop_front() {
             text
@@ -317,18 +346,27 @@ async fn forward_websocket_response_stream(
                 // 客户端断开下游 SSE 流：立即丢弃连接并释放池 slot，
                 // 不再傻等上游 idle 超时（否则同会话后续请求会一直 bypass/busy）。
                 () = tx.closed() => {
-                    discard_stream_websocket(websocket, pool_return).await;
+                    discard_stream_websocket(
+                        websocket,
+                        pool_return,
+                        StreamWebSocketDiscardReason::ClientCancelled,
+                    ).await;
                     return;
                 }
                 message = next_websocket_message(
                     &mut websocket,
-                    receive_idle_timeout(saw_content_frame),
+                    receive_idle_timeout(saw_first_output),
                 ) => message,
             };
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
-                    discard_stream_websocket(websocket, pool_return).await;
+                    discard_stream_websocket(
+                        websocket,
+                        pool_return,
+                        StreamWebSocketDiscardReason::UpstreamReceiveFailed,
+                    )
+                    .await;
                     let _ = tx.send(Err(error)).await;
                     return;
                 }
@@ -339,14 +377,24 @@ async fn forward_websocket_response_stream(
             match message {
                 Message::Text(text) => text.to_string(),
                 Message::Binary(_) => {
-                    discard_stream_websocket(websocket, pool_return).await;
+                    discard_stream_websocket(
+                        websocket,
+                        pool_return,
+                        StreamWebSocketDiscardReason::UnexpectedBinaryEvent,
+                    )
+                    .await;
                     let _ = tx
                         .send(Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent))
                         .await;
                     return;
                 }
                 Message::Close(_) => {
-                    discard_stream_websocket(websocket, pool_return).await;
+                    discard_stream_websocket(
+                        websocket,
+                        pool_return,
+                        StreamWebSocketDiscardReason::UpstreamClosed,
+                    )
+                    .await;
                     let _ = tx
                         .send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal))
                         .await;
@@ -356,7 +404,12 @@ async fn forward_websocket_response_stream(
             }
         };
         if let Some(classified) = classify_websocket_error_frame(&raw) {
-            discard_stream_websocket(websocket, pool_return).await;
+            discard_stream_websocket(
+                websocket,
+                pool_return,
+                StreamWebSocketDiscardReason::UpstreamError,
+            )
+            .await;
             let retry_after_seconds = retry_after_seconds_from_wrapped_error_headers(&raw)
                 .or_else(|| events::retry_after_seconds_from_body(&raw));
             let _ = tx
@@ -371,7 +424,12 @@ async fn forward_websocket_response_stream(
             return;
         }
         if let Some(reason) = websocket_incomplete_response_reason(&raw) {
-            discard_stream_websocket(websocket, pool_return).await;
+            discard_stream_websocket(
+                websocket,
+                pool_return,
+                StreamWebSocketDiscardReason::IncompleteResponse,
+            )
+            .await;
             let _ = tx
                 .send(Err(CodexWebSocketExchangeError::IncompleteResponse {
                     reason,
@@ -380,7 +438,12 @@ async fn forward_websocket_response_stream(
             return;
         }
         if let Some(message) = websocket_response_completed_parse_error(&raw) {
-            discard_stream_websocket(websocket, pool_return).await;
+            discard_stream_websocket(
+                websocket,
+                pool_return,
+                StreamWebSocketDiscardReason::InvalidCompletedResponse,
+            )
+            .await;
             let _ = tx
                 .send(Err(CodexWebSocketExchangeError::InvalidCompletedResponse {
                     message,
@@ -403,12 +466,18 @@ async fn forward_websocket_response_stream(
             continue;
         };
         let terminal = event.as_deref().is_some_and(is_terminal_websocket_event);
+        let has_first_output = response_body_has_first_output(frame.as_bytes());
         if tx.send(Ok(Bytes::from(frame))).await.is_err() {
-            discard_stream_websocket(websocket, pool_return).await;
+            discard_stream_websocket(
+                websocket,
+                pool_return,
+                StreamWebSocketDiscardReason::DownstreamSendFailed,
+            )
+            .await;
             return;
         }
-        if event_is_first_content(event.as_deref()) {
-            saw_content_frame = true;
+        if has_first_output {
+            saw_first_output = true;
         }
         if terminal {
             finish_stream_websocket(websocket, metadata, pool_return.take()).await;
@@ -416,7 +485,12 @@ async fn forward_websocket_response_stream(
         }
     }
 
-    discard_stream_websocket(websocket, pool_return).await;
+    discard_stream_websocket(
+        websocket,
+        pool_return,
+        StreamWebSocketDiscardReason::UpstreamClosed,
+    )
+    .await;
     let _ = tx
         .send(Err(CodexWebSocketExchangeError::ClosedBeforeTerminal))
         .await;
@@ -431,17 +505,17 @@ fn receive_idle_timeout(saw_response_frame: bool) -> Duration {
 }
 
 fn receive_idle_timeout_with_first_token_deadline(
-    saw_content_frame: bool,
+    saw_first_output: bool,
     first_token_started_at: Instant,
     first_token_timeout: Option<Duration>,
 ) -> Result<Duration, CodexWebSocketExchangeError> {
-    if saw_content_frame {
+    if saw_first_output {
         return Ok(WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT);
     }
-    receive_timeout_before_first_content(first_token_started_at, first_token_timeout)
+    receive_timeout_before_first_output(first_token_started_at, first_token_timeout)
 }
 
-fn receive_timeout_before_first_content(
+fn receive_timeout_before_first_output(
     first_token_started_at: Instant,
     first_token_timeout: Option<Duration>,
 ) -> Result<Duration, CodexWebSocketExchangeError> {
@@ -467,13 +541,6 @@ fn elapsed_first_token_timeout(
 ) -> Option<Duration> {
     let first_token_timeout = first_token_timeout.filter(|timeout| !timeout.is_zero())?;
     (first_token_started_at.elapsed() >= first_token_timeout).then_some(first_token_timeout)
-}
-
-fn event_is_first_content(event: Option<&str>) -> bool {
-    match event {
-        Some(event) => !is_pre_content_lifecycle_event(event),
-        None => true,
-    }
 }
 
 pub(super) fn is_first_token_timeout(error: &CodexWebSocketExchangeError) -> bool {
@@ -517,7 +584,13 @@ async fn finish_stream_websocket(
 async fn discard_stream_websocket(
     mut websocket: PumpedWebSocket,
     pool_return: Option<WebSocketStreamPoolReturn>,
+    reason: StreamWebSocketDiscardReason,
 ) {
+    tracing::info!(
+        reason = reason.as_str(),
+        pooled = pool_return.is_some(),
+        "discarding Responses WebSocket stream"
+    );
     if let Some(pool_return) = pool_return {
         pool_return.pool.discard(&pool_return.key).await;
     }

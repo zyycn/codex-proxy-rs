@@ -27,10 +27,12 @@ use tungstenite::{
 
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::openai::protocol::events::{self, TokenUsage};
-use crate::upstream::openai::protocol::responses::CodexResponsesRequest;
+use crate::upstream::openai::protocol::responses::{
+    response_body_has_first_output, CodexResponsesRequest,
+};
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
-    classify_websocket_error_frame, is_pre_content_lifecycle_event, is_terminal_websocket_event,
+    classify_websocket_error_frame, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
     websocket_event_type, websocket_incomplete_response_reason, websocket_metadata_turn_state,
     websocket_response_completed_parse_error, websocket_response_create_payload_text,
@@ -66,7 +68,7 @@ mod types;
 pub use stream::execute_response_create_request;
 use stream::{
     audit_header_value, collect_websocket_response, is_first_token_timeout,
-    prefetch_first_content_stream_frames, reusable_websocket_metadata,
+    prefetch_stream_frames_until_output_or_terminal, reusable_websocket_metadata,
     reused_stream_prefetch_error, stream_websocket_response, websocket_audit_file_name,
     websocket_connection_metadata, WebSocketStreamPoolReturn,
 };
@@ -317,7 +319,7 @@ async fn execute_fresh_response_create_request_stream(
         .await?;
 
     let mut metadata = websocket_connection_metadata(&response);
-    let prefetched_frames = match prefetch_first_content_stream_frames(
+    let prefetched_frames = match prefetch_stream_frames_until_output_or_terminal(
         &mut websocket,
         &mut metadata,
         first_token_started_at,
@@ -399,7 +401,7 @@ pub(crate) async fn execute_response_create_request_with_pool(
                 execute_pooled_response_create_request(request, pool, key, *connection, started_at)
                     .await;
             match result {
-                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                     ..
                 })
                 | Err(CodexWebSocketExchangeError::FirstTokenTimeout { .. }) => {
@@ -489,7 +491,7 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             )
             .await;
             match result {
-                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+                Err(CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                     ..
                 })
                 | Err(CodexWebSocketExchangeError::FirstTokenTimeout { .. }) => {
@@ -601,7 +603,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
 
     let now = Instant::now();
     let mut metadata = websocket_connection_metadata(&response);
-    let prefetched_frames = match prefetch_first_content_stream_frames(
+    let prefetched_frames = match prefetch_stream_frames_until_output_or_terminal(
         &mut websocket,
         &mut metadata,
         first_token_started_at,
@@ -642,7 +644,7 @@ async fn execute_pooled_response_create_request(
     {
         pool.discard(&key).await;
         return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                 message: error.to_string(),
             },
         );
@@ -694,13 +696,13 @@ async fn execute_pooled_response_create_request_stream(
     {
         pool.discard(&key).await;
         return Err(
-            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstFrame {
+            CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {
                 message: error.to_string(),
             },
         );
     }
 
-    let prefetched_frames = match prefetch_first_content_stream_frames(
+    let prefetched_frames = match prefetch_stream_frames_until_output_or_terminal(
         &mut websocket,
         &mut metadata,
         first_token_started_at,

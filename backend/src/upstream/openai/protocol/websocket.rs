@@ -224,17 +224,6 @@ pub fn is_terminal_websocket_event(event: &str) -> bool {
     matches!(event, "response.completed" | "response.failed" | "error")
 }
 
-/// 判断是否为「首个内容帧之前的纯生命周期帧」。
-///
-/// `response.created` / `response.in_progress` 仅表示上游已受理请求，尚未开始产出
-/// 真实内容（含 reasoning）。首 token 熔断计时不应被它们解除，否则连接一收到
-/// `response.created`（通常 1s 内）就被误判为「已开始产出」，使真正的首内容帧
-/// 可以无限拖延而不触发保护。其余任何帧（reasoning/delta/output_item 等）到达即视为
-/// 上游已开始真实产出，解除熔断——对慢思考模型友好。
-pub fn is_pre_content_lifecycle_event(event: &str) -> bool {
-    matches!(event, "response.created" | "response.in_progress")
-}
-
 /// 将 WebSocket 错误帧映射为上游 HTTP 状态分类。
 pub fn classify_websocket_error_frame(raw: &str) -> Option<ClassifiedWebSocketError> {
     let value = serde_json::from_str::<Value>(raw).ok()?;

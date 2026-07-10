@@ -331,15 +331,24 @@ impl ResponseDispatchService {
             .await
     }
 
-    async fn recover_request_history(
+    async fn try_recover_implicit_resume(
         &self,
         request: &mut CodexResponsesRequest,
         implicit_resume: &mut Option<ImplicitResumeSnapshot>,
-    ) {
+        account_id: &str,
+        evict_reasoning_replay: bool,
+    ) -> bool {
+        let Some(snapshot) = implicit_resume.take() else {
+            return false;
+        };
+        if evict_reasoning_replay {
+            self.evict_reasoning_replay(request, account_id).await;
+        }
         if let Some(previous_response_id) = request.previous_response_id() {
             self.session_affinity.forget(previous_response_id).await;
         }
-        restore_request_without_history(request, implicit_resume);
+        restore_full_request_without_history(request, snapshot);
+        true
     }
 
     fn strip_history_if_account_changed(
@@ -354,7 +363,10 @@ impl ResponseDispatchService {
             return;
         }
 
-        restore_request_without_history(request, implicit_resume);
+        let Some(snapshot) = implicit_resume.take() else {
+            return;
+        };
+        restore_full_request_without_history(request, snapshot);
     }
 
     async fn apply_cascading_ban_defense(
@@ -363,7 +375,6 @@ impl ResponseDispatchService {
         implicit_resume: &mut Option<ImplicitResumeSnapshot>,
         preferred_account_id: Option<&str>,
         acquired_account_id: &str,
-        explicit_previous_response_id: Option<&str>,
     ) -> bool {
         let Some(preferred_account_id) =
             preferred_account_id.filter(|account_id| *account_id != acquired_account_id)
@@ -392,14 +403,17 @@ impl ResponseDispatchService {
             return false;
         }
 
-        let response_id_to_forget = explicit_previous_response_id
-            .or(request.previous_response_id())
-            .map(str::to_string);
-        restore_request_without_history(request, implicit_resume);
+        let response_id_to_forget = request.previous_response_id().map(str::to_string);
+        let restored_full_request = if let Some(snapshot) = implicit_resume.take() {
+            restore_full_request_without_history(request, snapshot);
+            true
+        } else {
+            false
+        };
         if let Some(response_id) = response_id_to_forget {
             self.session_affinity.forget(&response_id).await;
         }
-        true
+        restored_full_request
     }
 
     async fn evict_reasoning_replay(&self, request: &CodexResponsesRequest, account_id: &str) {
@@ -436,12 +450,10 @@ fn strip_request_history(request: &mut CodexResponsesRequest) {
     request.turn_state = None;
 }
 
-fn restore_request_without_history(
+fn restore_full_request_without_history(
     request: &mut CodexResponsesRequest,
-    implicit_resume: &mut Option<ImplicitResumeSnapshot>,
+    snapshot: ImplicitResumeSnapshot,
 ) {
-    if let Some(snapshot) = implicit_resume.take() {
-        snapshot.restore(request);
-    }
+    snapshot.restore(request);
     strip_request_history(request);
 }

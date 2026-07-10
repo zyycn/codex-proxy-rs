@@ -222,8 +222,6 @@ const WEBSOCKET_INVALID_ENCRYPTED_CONTENT: &str =
     include_str!("../../fixtures/responses/websocket/invalid_encrypted_content.json");
 const WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND: &str =
     include_str!("../../fixtures/responses/websocket/previous_response_not_found.json");
-const WEBSOCKET_UNANSWERED_FUNCTION_CALL: &str =
-    include_str!("../../fixtures/responses/websocket/unanswered_function_call.json");
 const REASONING_REPLAY_REQUEST_GOLDEN: &str =
     include_str!("../../fixtures/responses/golden/reasoning_replay_request.json");
 
@@ -777,11 +775,35 @@ struct CapturedWebSocketRequest {
     payload: Value,
 }
 
-struct HistoryRecoveryCapture {
-    first_ws_headers: Vec<(String, String)>,
-    first_ws_payload: Value,
-    second_ws_headers: Vec<(String, String)>,
-    second_ws_payload: Value,
+struct WebSocketSequenceCapture {
+    payload: Value,
+    retry_attempted: bool,
+}
+
+async fn spawn_single_websocket_sequence_upstream(
+    messages: Vec<String>,
+) -> (String, tokio::task::JoinHandle<WebSocketSequenceCapture>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let payload = websocket.next().await.unwrap().unwrap();
+        let payload = serde_json::from_str::<Value>(&payload.into_text().unwrap())
+            .expect("websocket payload should be json");
+
+        send_websocket_messages(&mut websocket, &messages).await;
+        drop(websocket);
+
+        let retry_attempted = timeout(StdDuration::from_millis(500), listener.accept())
+            .await
+            .is_ok();
+        WebSocketSequenceCapture {
+            payload,
+            retry_attempted,
+        }
+    });
+    (base_url, server)
 }
 
 async fn spawn_single_websocket_completed_upstream(
@@ -816,60 +838,6 @@ async fn spawn_single_websocket_completed_upstream(
         websocket.close(None).await.unwrap();
         let headers = captured_headers.lock().unwrap().clone();
         CapturedWebSocketRequest { headers, payload }
-    });
-    (base_url, server)
-}
-
-async fn spawn_websocket_failure_then_websocket_success_upstream(
-    failure: String,
-) -> (String, tokio::task::JoinHandle<HistoryRecoveryCapture>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
-        let first_headers = Arc::new(Mutex::new(Vec::new()));
-        let first_headers_for_callback = Arc::clone(&first_headers);
-        let mut first_websocket = accept_hdr_async(first_stream, move |request, _response| {
-            *first_headers_for_callback.lock().unwrap() = request_headers(request);
-        })
-        .await
-        .unwrap();
-        let first_message = first_websocket.next().await.unwrap().unwrap();
-        let first_ws_payload = serde_json::from_str::<Value>(&first_message.into_text().unwrap())
-            .expect("websocket payload should be json");
-        first_websocket
-            .send(Message::Text(failure.into()))
-            .await
-            .unwrap();
-        drop(first_websocket);
-
-        let (second_stream, _) = listener.accept().await.unwrap();
-        let second_headers = Arc::new(Mutex::new(Vec::new()));
-        let second_headers_for_callback = Arc::clone(&second_headers);
-        let mut second_websocket = accept_hdr_async(second_stream, move |request, _response| {
-            *second_headers_for_callback.lock().unwrap() = request_headers(request);
-        })
-        .await
-        .unwrap();
-        let second_message = second_websocket.next().await.unwrap().unwrap();
-        let second_ws_payload = serde_json::from_str::<Value>(&second_message.into_text().unwrap())
-            .expect("second websocket payload should be json");
-        second_websocket
-            .send(Message::Text(
-                response_completed_websocket_message("resp_after_history_recovery").into(),
-            ))
-            .await
-            .unwrap();
-        second_websocket.close(None).await.unwrap();
-        let first_ws_headers = first_headers.lock().unwrap().clone();
-        let second_ws_headers = second_headers.lock().unwrap().clone();
-
-        HistoryRecoveryCapture {
-            first_ws_headers,
-            first_ws_payload,
-            second_ws_headers,
-            second_ws_payload,
-        }
     });
     (base_url, server)
 }
@@ -1128,6 +1096,50 @@ async fn accept_followup_websocket_response(
                 send_websocket_response_and_capture_payload(&mut followup, response_message).await;
             followup.close(None).await.unwrap();
             payload
+        }
+    }
+}
+
+async fn accept_followup_websocket_response_sequence(
+    listener: &TcpListener,
+    websocket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    response_messages: Vec<String>,
+) -> Value {
+    let followup = tokio::select! {
+        message = websocket.next() => {
+            match message {
+                Some(Ok(message)) if message.is_text() => {
+                    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+                        .expect("websocket payload should be json");
+                    send_websocket_messages(websocket, &response_messages).await;
+                    return payload;
+                }
+                _ => None,
+            }
+        }
+        accepted = listener.accept() => Some(accepted.unwrap().0),
+    };
+
+    let stream = followup.expect("follow-up websocket connection should be available");
+    let mut followup = accept_async(stream).await.unwrap();
+    let message = followup.next().await.unwrap().unwrap();
+    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+        .expect("websocket payload should be json");
+    send_websocket_messages(&mut followup, &response_messages).await;
+    payload
+}
+
+async fn send_websocket_messages(
+    websocket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    messages: &[String],
+) {
+    for (index, message) in messages.iter().enumerate() {
+        websocket
+            .send(Message::Text(message.clone().into()))
+            .await
+            .unwrap();
+        if index + 1 < messages.len() {
+            tokio::time::sleep(StdDuration::from_millis(25)).await;
         }
     }
 }

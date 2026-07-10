@@ -104,8 +104,8 @@ pub fn http_sse_fallback_allowed(request: &CodexResponsesRequest) -> bool {
     )
 }
 
-/// 判断已收到的 Responses SSE 内容是否包含首个完整的有效数据事件。
-pub fn response_body_has_first_event(body_bytes: &[u8]) -> bool {
+/// 判断已收到的 Responses SSE 内容是否包含首个完整的真实输出事件。
+pub fn response_body_has_first_output(body_bytes: &[u8]) -> bool {
     let body = String::from_utf8_lossy(body_bytes);
     let Some(complete_body) = complete_sse_body_prefix(&body) else {
         return false;
@@ -115,12 +115,12 @@ pub fn response_body_has_first_event(body_bytes: &[u8]) -> bool {
 }
 
 /// 已收到首个有效 Responses SSE 输出事件时记录首 token 耗时。
-pub fn update_first_response_event_ms(
+pub fn update_first_response_output_ms(
     started_at: Instant,
     body_bytes: &[u8],
     first_token_ms: &mut Option<i64>,
 ) {
-    if first_token_ms.is_none() && response_body_has_first_event(body_bytes) {
+    if first_token_ms.is_none() && response_body_has_first_output(body_bytes) {
         *first_token_ms = Some(elapsed_millis_i64(started_at).max(1));
     }
 }

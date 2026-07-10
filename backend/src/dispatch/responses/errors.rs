@@ -63,6 +63,8 @@ pub enum ResponseDispatchError {
         count: usize,
         upstream_error: String,
     },
+    #[error("previous response context is unavailable: {upstream_error}")]
+    HistoryUnavailable { upstream_error: String },
     #[error("upstream request failed: {0}")]
     Upstream(#[from] CodexClientError),
     #[error("invalid upstream SSE response: {0}")]
@@ -127,7 +129,7 @@ impl ResponseDispatchError {
             | Self::MissingCompleted
             | Self::EmptyUpstreamResponse => 502,
             Self::Failed(failure) => stream_failure_http_status(failure),
-            Self::ModelUnsupported { .. } => 400,
+            Self::ModelUnsupported { .. } | Self::HistoryUnavailable { .. } => 400,
             Self::Upstream(error) => upstream_error_http_status(error),
         }
     }
@@ -186,6 +188,13 @@ impl ResponseDispatchError {
                 *count,
                 upstream_error,
             ),
+            Self::HistoryUnavailable { upstream_error } => DispatchErrorMetadata {
+                failure_class: DispatchFailureClass::HistoryUnavailable,
+                exhausted_count: None,
+                upstream_error: Some(upstream_error.clone()),
+                upstream_status: Some(400),
+                diagnostics: None,
+            },
             Self::Upstream(error) => DispatchErrorMetadata::upstream(error),
             Self::InvalidSse(_) => DispatchErrorMetadata::simple(DispatchFailureClass::InvalidSse),
             Self::MissingCompleted => {

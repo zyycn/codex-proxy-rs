@@ -16,7 +16,6 @@ impl ResponseDispatchService {
         request.set_stream(true);
         let tuple_schema = request.tuple_schema.clone();
         let now = Utc::now();
-        let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
         let account_affinity = self.account_affinity_for_request(&request, now).await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
@@ -25,7 +24,6 @@ impl ResponseDispatchService {
         }
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
-        let mut history_recovery_used = false;
         let mut next_required_account_id: Option<String> = None;
         let mut quota_verify_attempts = 0usize;
         let mut trace = ResponseDispatchTrace::default();
@@ -140,7 +138,6 @@ impl ResponseDispatchService {
                 &mut implicit_resume,
                 account_affinity.preferred_account_id(),
                 &acquired.account.id,
-                explicit_previous_response_id.as_deref(),
             )
             .await;
             Self::strip_history_if_account_changed(
@@ -190,21 +187,6 @@ impl ResponseDispatchService {
                         .await;
                     let (prefetched, body) = match prefetch_first_sse_chunk(response.body).await {
                         Ok(prefetched) => prefetched,
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_history_recovery_upstream_error(&error)
-                                && !history_recovery_used =>
-                        {
-                            self.account_pool.release(&release_account_id).await;
-                            if client_error_invalid_reasoning_replay(&error) {
-                                self.evict_reasoning_replay(&request, &release_account_id)
-                                    .await;
-                            }
-                            self.recover_request_history(&mut request, &mut implicit_resume)
-                                .await;
-                            history_recovery_used = true;
-                            next_required_account_id = Some(release_account_id);
-                            continue;
-                        }
                         Err(ResponseDispatchError::Upstream(error))
                             if is_rate_limit_upstream_error(&error) =>
                         {
@@ -320,6 +302,21 @@ impl ResponseDispatchService {
                         Err(error) => {
                             self.account_pool.release(&release_account_id).await;
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
+                                let history_unavailable =
+                                    is_history_recovery_upstream_error(upstream_error);
+                                if history_unavailable
+                                    && self
+                                        .try_recover_implicit_resume(
+                                            &mut request,
+                                            &mut implicit_resume,
+                                            &release_account_id,
+                                            client_error_invalid_reasoning_replay(upstream_error),
+                                        )
+                                        .await
+                                {
+                                    next_required_account_id = Some(release_account_id);
+                                    continue;
+                                }
                                 record_response_upstream_error_event(
                                     ResponseUpstreamErrorEventRecord {
                                         recorder: &self.recorder,
@@ -338,6 +335,11 @@ impl ResponseDispatchService {
                                     },
                                 )
                                 .await;
+                                if history_unavailable {
+                                    return Err(ResponseDispatchError::HistoryUnavailable {
+                                        upstream_error: upstream_error_body(upstream_error),
+                                    });
+                                }
                                 return Err(error);
                             }
                             return_stream_dispatch_error!(
@@ -359,15 +361,17 @@ impl ResponseDispatchService {
                         }
                     };
                     if let Some(failure) = first_failure {
-                        if is_history_recovery_sse_failure(&failure) && !history_recovery_used {
+                        if is_history_recovery_sse_failure(&failure)
+                            && self
+                                .try_recover_implicit_resume(
+                                    &mut request,
+                                    &mut implicit_resume,
+                                    &release_account_id,
+                                    sse_failure_invalid_reasoning_replay(&failure),
+                                )
+                                .await
+                        {
                             self.account_pool.release(&release_account_id).await;
-                            if sse_failure_invalid_reasoning_replay(&failure) {
-                                self.evict_reasoning_replay(&request, &release_account_id)
-                                    .await;
-                            }
-                            self.recover_request_history(&mut request, &mut implicit_resume)
-                                .await;
-                            history_recovery_used = true;
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
@@ -440,7 +444,14 @@ impl ResponseDispatchService {
                             },
                         )
                         .await;
-                        return Err(ResponseDispatchError::Failed(failure.clone()));
+                        let error = if is_history_recovery_sse_failure(&failure) {
+                            ResponseDispatchError::HistoryUnavailable {
+                                upstream_error: sse_failure_error_body(&failure),
+                            }
+                        } else {
+                            ResponseDispatchError::Failed(failure.clone())
+                        };
+                        return Err(error);
                     }
 
                     let context = LiveResponseStreamContext {
@@ -494,19 +505,6 @@ impl ResponseDispatchService {
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
                     excluded_account_ids.push(release_account_id);
-                }
-                Err(error)
-                    if is_history_recovery_upstream_error(&error) && !history_recovery_used =>
-                {
-                    self.account_pool.release(&release_account_id).await;
-                    if client_error_invalid_reasoning_replay(&error) {
-                        self.evict_reasoning_replay(&request, &release_account_id)
-                            .await;
-                    }
-                    self.recover_request_history(&mut request, &mut implicit_resume)
-                        .await;
-                    history_recovery_used = true;
-                    next_required_account_id = Some(release_account_id);
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
                     self.account_pool.release(&release_account_id).await;
@@ -578,6 +576,20 @@ impl ResponseDispatchService {
                 }
                 Err(error) => {
                     self.account_pool.release(&release_account_id).await;
+                    let history_unavailable = is_history_recovery_upstream_error(&error);
+                    if history_unavailable
+                        && self
+                            .try_recover_implicit_resume(
+                                &mut request,
+                                &mut implicit_resume,
+                                &release_account_id,
+                                client_error_invalid_reasoning_replay(&error),
+                            )
+                            .await
+                    {
+                        next_required_account_id = Some(release_account_id);
+                        continue;
+                    }
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
                         recorder: &self.recorder,
                         request_id,
@@ -594,6 +606,11 @@ impl ResponseDispatchService {
                         attempt: Some(&attempt),
                     })
                     .await;
+                    if history_unavailable {
+                        return Err(ResponseDispatchError::HistoryUnavailable {
+                            upstream_error: upstream_error_body(&error),
+                        });
+                    }
                     return Err(ResponseDispatchError::Upstream(error));
                 }
             }

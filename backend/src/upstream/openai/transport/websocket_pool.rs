@@ -88,7 +88,7 @@ pub struct CodexWebSocketPoolConfig {
     pub ping_timeout: Duration,
     /// idle socket 无活动多久后视为失活。
     pub liveness_timeout: Option<Duration>,
-    /// 首个内容帧到达前的绝对超时；`None` 表示禁用首 token 熔断。
+    /// 首个真实输出到达前的绝对超时；`None` 表示禁用首 token 熔断。
     pub first_token_timeout: Option<Duration>,
 }
 
@@ -147,7 +147,7 @@ impl CodexWebSocketPool {
         self.config.keepalive()
     }
 
-    /// 首个内容帧到达前的绝对超时；`None` 表示禁用首 token 熔断。
+    /// 首个真实输出到达前的绝对超时；`None` 表示禁用首 token 熔断。
     pub(crate) fn first_token_timeout(&self) -> Option<Duration> {
         self.config.first_token_timeout
     }

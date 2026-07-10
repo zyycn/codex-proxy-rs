@@ -1040,13 +1040,13 @@ async fn responses_stream_should_return_model_unsupported_error_when_fallback_is
 }
 
 #[tokio::test]
-async fn responses_should_strip_history_after_previous_response_not_found() {
+async fn responses_explicit_previous_response_should_fail_without_transparent_retry() {
     let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
+        spawn_single_websocket_sequence_upstream(vec![response_failed_websocket_message(
             "resp_previous_missing_failed",
             "previous_response_not_found",
             "Previous response with id resp_stale was not found",
-        ))
+        )])
         .await;
     let (app, api_key, _pool, _dir) =
         test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
@@ -1075,31 +1075,24 @@ async fn responses_should_strip_history_after_previous_response_not_found() {
     let body = response_json(response).await;
     let captured = upstream.await.unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["id"], "resp_after_history_recovery");
-    assert_eq!(
-        captured_header(&captured.first_ws_headers, "x-codex-turn-state"),
-        Some("turn-stale")
-    );
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert_eq!(
-        captured.first_ws_payload["previous_response_id"],
-        "resp_stale"
-    );
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("resend the complete input"));
+    assert_eq!(captured.payload["previous_response_id"], "resp_stale");
+    assert!(!captured.retry_attempted);
 }
 
 #[tokio::test]
-async fn responses_should_strip_history_after_unanswered_function_call() {
+async fn responses_explicit_unanswered_function_call_should_not_retry_without_full_context() {
     let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
+        spawn_single_websocket_sequence_upstream(vec![response_failed_websocket_message(
             "resp_unanswered_call_failed",
             "invalid_request",
             "No tool output found for function call call_1",
-        ))
+        )])
         .await;
     let (app, api_key, _pool, _dir) =
         test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
@@ -1128,23 +1121,20 @@ async fn responses_should_strip_history_after_unanswered_function_call() {
     let body = response_json(response).await;
     let captured = upstream.await.unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["id"], "resp_after_history_recovery");
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert_eq!(captured.payload["previous_response_id"], "resp_stale");
+    assert!(!captured.retry_attempted);
 }
 
 #[tokio::test]
-async fn responses_should_strip_history_after_websocket_invalid_encrypted_reasoning_replay() {
+async fn responses_explicit_invalid_reasoning_replay_should_not_retry_without_full_context() {
     let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
+        spawn_single_websocket_sequence_upstream(vec![response_failed_websocket_message(
             "resp_invalid_reasoning_failed",
             "invalid_encrypted_content",
             "Invalid encrypted content in reasoning replay",
-        ))
+        )])
         .await;
     let (app, api_key, _pool, _dir) =
         test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
@@ -1173,73 +1163,44 @@ async fn responses_should_strip_history_after_websocket_invalid_encrypted_reason
     let body = response_json(response).await;
     let captured = upstream.await.unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["id"], "resp_after_history_recovery");
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert_eq!(captured.payload["previous_response_id"], "resp_stale");
+    assert!(!captured.retry_attempted);
 }
 
 #[tokio::test]
-async fn responses_should_strip_history_after_sse_invalid_encrypted_reasoning_replay() {
-    let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
-            "resp_invalid_reasoning_failed",
-            "invalid_encrypted_content",
-            "Invalid encrypted content in reasoning replay",
-        ))
-        .await;
-    let (app, api_key, _pool, _dir) =
-        test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/responses")
-                .header("authorization", format!("Bearer {api_key}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "model": "gpt-5.5",
-                        "previous_response_id": "resp_stale",
-                        "turnState": "turn-stale",
-                        "input": [{"role": "user", "content": "Continue"}],
-                        "stream": false
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let body = response_json(response).await;
-    let captured = upstream.await.unwrap();
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["id"], "resp_after_history_recovery");
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
-}
-
-#[tokio::test]
-async fn responses_stream_should_strip_history_after_previous_response_not_found() {
-    let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
+async fn responses_stream_structural_events_should_not_commit_before_history_failure() {
+    let (base_url, upstream) = spawn_single_websocket_sequence_upstream(vec![
+        json!({
+            "type": "response.created",
+            "response": {
+                "id": "resp_previous_missing_failed",
+                "object": "response",
+                "status": "in_progress"
+            }
+        })
+        .to_string(),
+        json!({
+            "type": "response.content_part.added",
+            "response_id": "resp_previous_missing_failed",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []}
+        })
+        .to_string(),
+        response_failed_websocket_message(
             "resp_previous_missing_failed",
             "previous_response_not_found",
             "Previous response with id resp_stale was not found",
-        ))
-        .await;
+        ),
+    ])
+    .await;
     let (app, api_key, _pool, _dir) =
         test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
-    let response = app
-        .oneshot(
+    let response = timeout(
+        StdDuration::from_secs(2),
+        app.oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/v1/responses")
@@ -1256,40 +1217,57 @@ async fn responses_stream_should_strip_history_after_previous_response_not_found
                     .to_string(),
                 ))
                 .unwrap(),
-        )
-        .await
-        .unwrap();
+        ),
+    )
+    .await
+    .expect("dispatch should classify the failure before starting the live stream")
+    .unwrap();
     let status = response.status();
     let body = response_text(response).await;
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("resp_after_history_recovery"));
-    assert_eq!(
-        captured_header(&captured.first_ws_headers, "x-codex-turn-state"),
-        Some("turn-stale")
-    );
-    assert_eq!(
-        captured.first_ws_payload["previous_response_id"],
-        "resp_stale"
-    );
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
+    assert!(body.contains("previous_response_unavailable"));
+    assert!(!body.contains("response.created"));
+    assert_eq!(captured.payload["previous_response_id"], "resp_stale");
+    assert!(!captured.retry_attempted);
 }
 
 #[tokio::test]
-async fn responses_stream_should_strip_history_after_websocket_invalid_encrypted_reasoning_replay()
-{
-    let (base_url, upstream) =
-        spawn_websocket_failure_then_websocket_success_upstream(response_failed_websocket_message(
-            "resp_invalid_reasoning_failed",
-            "invalid_encrypted_content",
-            "Invalid encrypted content in reasoning replay",
-        ))
-        .await;
+async fn responses_stream_should_not_retry_history_failure_after_real_output() {
+    let (base_url, upstream) = spawn_single_websocket_sequence_upstream(vec![
+        json!({
+            "type": "response.created",
+            "response": {
+                "id": "resp_output_then_failed",
+                "object": "response",
+                "status": "in_progress"
+            }
+        })
+        .to_string(),
+        json!({
+            "type": "response.content_part.added",
+            "response_id": "resp_output_then_failed",
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []}
+        })
+        .to_string(),
+        json!({
+            "type": "response.output_text.delta",
+            "response_id": "resp_output_then_failed",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "visible output"
+        })
+        .to_string(),
+        response_failed_websocket_message(
+            "resp_output_then_failed",
+            "previous_response_not_found",
+            "Previous response with id resp_stale was not found",
+        ),
+    ])
+    .await;
     let (app, api_key, _pool, _dir) =
         test_app_with_account_pool_and_affinity(base_url, "resp_stale").await;
     let response = app
@@ -1318,20 +1296,10 @@ async fn responses_stream_should_strip_history_after_websocket_invalid_encrypted
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("resp_after_history_recovery"));
-    assert_eq!(
-        captured_header(&captured.first_ws_headers, "x-codex-turn-state"),
-        Some("turn-stale")
-    );
-    assert_eq!(
-        captured.first_ws_payload["previous_response_id"],
-        "resp_stale"
-    );
-    assert!(captured_header(&captured.second_ws_headers, "x-codex-turn-state").is_none());
-    assert!(captured
-        .second_ws_payload
-        .get("previous_response_id")
-        .is_none());
+    assert!(body.contains("visible output"));
+    assert!(body.contains("response.failed"));
+    assert_eq!(captured.payload["previous_response_id"], "resp_stale");
+    assert!(!captured.retry_attempted);
 }
 
 #[tokio::test]

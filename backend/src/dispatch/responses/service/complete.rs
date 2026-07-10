@@ -16,7 +16,6 @@ impl ResponseDispatchService {
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
-        let explicit_previous_response_id = request.previous_response_id().map(ToString::to_string);
         let mut implicit_resume = self.prepare_response_session(&mut request).await;
         let account_affinity = self.account_affinity_for_request(&request, now).await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
@@ -25,7 +24,6 @@ impl ResponseDispatchService {
         }
         let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
-        let mut history_recovery_used = false;
         let mut next_required_account_id: Option<String> = None;
         let mut empty_response_retries = 0u8;
         let mut quota_verify_attempts = 0usize;
@@ -135,7 +133,6 @@ impl ResponseDispatchService {
                 &mut implicit_resume,
                 account_affinity.preferred_account_id(),
                 &acquired.account.id,
-                explicit_previous_response_id.as_deref(),
             )
             .await;
             Self::strip_history_if_account_changed(
@@ -216,14 +213,16 @@ impl ResponseDispatchService {
                         }
                     }
                     if let CollectedResponse::Failed(failure) = &collected_response {
-                        if is_history_recovery_sse_failure(failure) && !history_recovery_used {
-                            if sse_failure_invalid_reasoning_replay(failure) {
-                                self.evict_reasoning_replay(&request, &release_account_id)
-                                    .await;
-                            }
-                            self.recover_request_history(&mut request, &mut implicit_resume)
-                                .await;
-                            history_recovery_used = true;
+                        if is_history_recovery_sse_failure(failure)
+                            && self
+                                .try_recover_implicit_resume(
+                                    &mut request,
+                                    &mut implicit_resume,
+                                    &release_account_id,
+                                    sse_failure_invalid_reasoning_replay(failure),
+                                )
+                                .await
+                        {
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
@@ -308,18 +307,6 @@ impl ResponseDispatchService {
                         .await;
                     excluded_account_ids.push(release_account_id);
                 }
-                Err(error)
-                    if is_history_recovery_upstream_error(&error) && !history_recovery_used =>
-                {
-                    if client_error_invalid_reasoning_replay(&error) {
-                        self.evict_reasoning_replay(&request, &release_account_id)
-                            .await;
-                    }
-                    self.recover_request_history(&mut request, &mut implicit_resume)
-                        .await;
-                    history_recovery_used = true;
-                    next_required_account_id = Some(release_account_id);
-                }
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
@@ -396,6 +383,20 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) => {
+                    let history_unavailable = is_history_recovery_upstream_error(&error);
+                    if history_unavailable
+                        && self
+                            .try_recover_implicit_resume(
+                                &mut request,
+                                &mut implicit_resume,
+                                &release_account_id,
+                                client_error_invalid_reasoning_replay(&error),
+                            )
+                            .await
+                    {
+                        next_required_account_id = Some(release_account_id);
+                        continue;
+                    }
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
                         recorder: &self.recorder,
                         request_id,
@@ -412,6 +413,11 @@ impl ResponseDispatchService {
                         attempt: Some(&attempt),
                     })
                     .await;
+                    if history_unavailable {
+                        return Err(ResponseDispatchError::HistoryUnavailable {
+                            upstream_error: upstream_error_body(&error),
+                        });
+                    }
                     return Err(ResponseDispatchError::Upstream(error));
                 }
             }
@@ -477,7 +483,13 @@ impl ResponseDispatchService {
                 Ok(body)
             }
             CollectedResponse::Failed(failure) => {
-                let error = ResponseDispatchError::Failed(failure);
+                let error = if is_history_recovery_sse_failure(&failure) {
+                    ResponseDispatchError::HistoryUnavailable {
+                        upstream_error: sse_failure_error_body(&failure),
+                    }
+                } else {
+                    ResponseDispatchError::Failed(failure)
+                };
                 self.record_response_dispatch_error(
                     request_id,
                     route,
