@@ -21,7 +21,7 @@ use crate::{
         protocol::{
             responses::{
                 reconvert_responses_sse_event_tuple_values, response_sse_event_is_terminal,
-                update_first_response_event_ms,
+                update_first_response_output_ms,
             },
             sse::{
                 encode_sse_event, parse_sse_events, sse_body_has_done, sse_frame_end,
@@ -78,7 +78,7 @@ pub(super) fn spawn_live_response_stream(
             context.account_pool.release(&context.account_id).await;
             return;
         }
-        update_first_response_event_ms(context.started_at, &body_bytes, &mut first_token_ms);
+        update_first_response_output_ms(context.started_at, &body_bytes, &mut first_token_ms);
 
         loop {
             let next = tokio::select! {
@@ -104,7 +104,7 @@ pub(super) fn spawn_live_response_stream(
                         context.account_pool.release(&context.account_id).await;
                         return;
                     }
-                    update_first_response_event_ms(
+                    update_first_response_output_ms(
                         context.started_at,
                         &body_bytes,
                         &mut first_token_ms,

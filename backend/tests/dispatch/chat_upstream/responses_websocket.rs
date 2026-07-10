@@ -348,7 +348,7 @@ async fn responses_websocket_should_reuse_connection_for_recorded_conversation()
 }
 
 #[tokio::test]
-async fn responses_websocket_should_retry_fresh_connection_when_reused_connection_dies_before_first_frame(
+async fn responses_websocket_should_retry_fresh_connection_when_reused_connection_dies_before_first_output(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -1405,10 +1405,29 @@ async fn responses_websocket_should_restore_full_history_when_implicit_resume_pr
             WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
         )
         .await;
-        let implicit_payload = accept_followup_websocket_response(
+        let implicit_payload = accept_followup_websocket_response_sequence(
             &listener,
             &mut websocket,
-            WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
+            vec![
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_implicit_resume_failed",
+                        "object": "response",
+                        "status": "in_progress"
+                    }
+                })
+                .to_string(),
+                json!({
+                    "type": "response.content_part.added",
+                    "response_id": "resp_implicit_resume_failed",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []}
+                })
+                .to_string(),
+                WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
+            ],
         )
         .await;
         let _ = websocket.close(None).await;
@@ -1442,7 +1461,7 @@ async fn responses_websocket_should_restore_full_history_when_implicit_resume_pr
             &json!({
                 "model": "gpt-5.5",
                 "instructions": "answer briefly",
-                "stream": false,
+                "stream": true,
                 "input": [
                     {"role": "user", "content": "remember this"},
                     {"role": "assistant", "content": "cached answer"},
@@ -1452,9 +1471,10 @@ async fn responses_websocket_should_restore_full_history_when_implicit_resume_pr
         ))
         .await
         .unwrap();
-    let body = response_json(second_response).await;
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let body = response_text(second_response).await;
     let (_first_payload, implicit_payload, restored_payload) = upstream.await.unwrap();
-    assert_eq!(body["id"], "resp_implicit_resume_restored");
+    assert!(body.contains("resp_implicit_resume_restored"));
     assert_eq!(
         implicit_payload["previous_response_id"],
         "resp_implicit_resume_first"
@@ -1610,15 +1630,14 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
 }
 
 #[tokio::test]
-async fn responses_websocket_non_stream_unknown_previous_response_should_strip_history_before_upstream(
-) {
+async fn responses_websocket_non_stream_should_forward_unknown_previous_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secret",
-            websocket_completed_response("resp_after_history_strip", 3, 1),
+            websocket_completed_response("resp_unknown_previous_forwarded", 3, 1),
         )
         .await
     });
@@ -1639,19 +1658,19 @@ async fn responses_websocket_non_stream_unknown_previous_response_should_strip_h
     let body = response_json(response).await;
     let payload = upstream.await.unwrap();
 
-    assert_eq!(body["id"], "resp_after_history_strip");
-    assert!(payload.get("previous_response_id").is_none());
+    assert_eq!(body["id"], "resp_unknown_previous_forwarded");
+    assert_eq!(payload["previous_response_id"], "resp_missing");
 }
 
 #[tokio::test]
-async fn responses_websocket_should_strip_known_history_when_preferred_account_is_full() {
+async fn responses_websocket_should_preserve_known_history_on_fallback_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secondary",
-            websocket_completed_response("resp_after_fallback_history_strip", 3, 1),
+            websocket_completed_response("resp_history_forwarded_to_fallback", 3, 1),
         )
         .await
     });
@@ -1677,19 +1696,19 @@ async fn responses_websocket_should_strip_known_history_when_preferred_account_i
     let body = response_json(response).await;
     let payload = upstream.await.unwrap();
 
-    assert_eq!(body["id"], "resp_after_fallback_history_strip");
-    assert!(payload.get("previous_response_id").is_none());
+    assert_eq!(body["id"], "resp_history_forwarded_to_fallback");
+    assert_eq!(payload["previous_response_id"], "resp_owned_by_primary");
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_should_strip_known_history_when_preferred_account_is_full() {
+async fn responses_websocket_stream_should_preserve_known_history_on_fallback_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secondary",
-            websocket_completed_response("resp_stream_after_fallback_history_strip", 3, 1),
+            websocket_completed_response("resp_stream_history_forwarded_to_fallback", 3, 1),
         )
         .await
     });
@@ -1715,20 +1734,19 @@ async fn responses_websocket_stream_should_strip_known_history_when_preferred_ac
     let body = response_text(response).await;
     let payload = upstream.await.unwrap();
 
-    assert!(body.contains("resp_stream_after_fallback_history_strip"));
-    assert!(payload.get("previous_response_id").is_none());
+    assert!(body.contains("resp_stream_history_forwarded_to_fallback"));
+    assert_eq!(payload["previous_response_id"], "resp_owned_by_primary");
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_unknown_previous_response_should_strip_history_before_upstream()
-{
+async fn responses_websocket_stream_should_forward_unknown_previous_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         accept_websocket_response_with_authorization_and_message(
             &listener,
             "Bearer access-secret",
-            websocket_completed_response("resp_stream_after_history_strip", 3, 1),
+            websocket_completed_response("resp_stream_unknown_previous_forwarded", 3, 1),
         )
         .await
     });
@@ -1749,51 +1767,8 @@ async fn responses_websocket_stream_unknown_previous_response_should_strip_histo
     let body = response_text(response).await;
     let payload = upstream.await.unwrap();
 
-    assert!(body.contains("\"id\":\"resp_stream_after_history_strip\""));
-    assert!(payload.get("previous_response_id").is_none());
-}
-
-#[tokio::test]
-async fn responses_websocket_non_stream_unanswered_function_call_should_strip_history_and_retry_same_account(
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secret",
-            WEBSOCKET_UNANSWERED_FUNCTION_CALL.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secret",
-            websocket_completed_response("resp_after_function_call_strip", 3, 1),
-        )
-        .await;
-        (first_payload, second_payload)
-    });
-    let (app, api_key, _pool, _dir) =
-        test_app_with_account_pool_and_affinity(base_url, "resp_with_call").await;
-
-    let response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "input": [],
-                "stream": false,
-                "previous_response_id": "resp_with_call"
-            }),
-        ))
-        .await
-        .unwrap();
-    let body = response_json(response).await;
-    let (first_payload, second_payload) = upstream.await.unwrap();
-
-    assert_eq!(body["id"], "resp_after_function_call_strip");
-    assert_eq!(first_payload["previous_response_id"], "resp_with_call");
-    assert!(second_payload.get("previous_response_id").is_none());
+    assert!(body.contains("\"id\":\"resp_stream_unknown_previous_forwarded\""));
+    assert_eq!(payload["previous_response_id"], "resp_missing");
 }
 
 #[tokio::test]
@@ -1840,9 +1815,7 @@ async fn responses_websocket_previous_response_id_should_retry_fallback_account_
             .unwrap();
 
     assert!(body.contains("\"id\":\"resp_history_fallback\""));
-    // 亲和缓存无 `resp_prev` 记录（Unknown owner），换账号前历史即被剥离，
-    // 由 `input` 让备用账号重建上下文，不把上一账号作用域的 id 透传给它。
-    assert_eq!(fallback_payload.get("previous_response_id"), None);
+    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
     assert_eq!(secondary_usage.0, 1);
 }
 
@@ -1892,9 +1865,7 @@ async fn responses_websocket_non_stream_previous_response_id_should_retry_fallba
             .unwrap();
 
     assert_eq!(body["id"], "resp_history_fallback_non_stream");
-    // 亲和缓存无 `resp_prev` 记录（Unknown owner），换账号前历史即被剥离，
-    // 由 `input` 让备用账号重建上下文，不把上一账号作用域的 id 透传给它。
-    assert_eq!(fallback_payload.get("previous_response_id"), None);
+    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
     assert_eq!(secondary_usage.0, 1);
 }
 
@@ -2340,9 +2311,10 @@ async fn responses_stream_with_previous_response_id_should_forward_websocket_chu
         captured_header(&captured.headers, "authorization"),
         Some("Bearer access-secret")
     );
-    // 亲和缓存无该 previous_response_id 的记录（Unknown），故上游 payload 里应被剥离，
-    // 靠已展开的 input 让选中账号自行重建续链——与 sub2api/codex2api 的默认行为一致。
-    assert_eq!(captured.payload["previous_response_id"], Value::Null);
+    assert_eq!(
+        captured.payload["previous_response_id"],
+        "resp_runtime_pool_previous"
+    );
 }
 
 #[tokio::test]
@@ -2370,8 +2342,10 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert!(body.contains("resp_live_websocket_stream"));
-    // 亲和缓存无记录（Unknown）→ 上游 payload 里 previous_response_id 被剥离。
-    assert_eq!(captured.payload["previous_response_id"], Value::Null);
+    assert_eq!(
+        captured.payload["previous_response_id"],
+        "resp_runtime_pool_previous"
+    );
     assert_eq!(event.level, "info");
     assert_eq!(metadata["stream"], true);
     assert_eq!(event.transport.as_deref(), Some("websocket"));

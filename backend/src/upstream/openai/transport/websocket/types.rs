@@ -131,14 +131,14 @@ pub enum CodexWebSocketExchangeError {
     /// 上游返回非文本事件帧。
     #[error("unexpected binary websocket event")]
     UnexpectedBinaryEvent,
-    /// 复用的池连接在首个响应帧前失效。
-    #[error("reused websocket connection died before first response frame: {message}")]
-    ReusedConnectionDiedBeforeFirstFrame {
+    /// 复用的池连接在首个真实输出前失效。
+    #[error("reused websocket connection died before first output: {message}")]
+    ReusedConnectionDiedBeforeFirstOutput {
         /// 底层失效原因。
         message: String,
     },
-    /// 首个内容帧在配置的绝对超时内未到达（连接落到病态上游后端）。
-    #[error("websocket first content frame not received within {timeout:?}")]
+    /// 首个真实输出在配置的绝对超时内未到达（连接落到病态上游后端）。
+    #[error("websocket first output not received within {timeout:?}")]
     FirstTokenTimeout {
         /// 首 token 超时时长。
         timeout: Duration,

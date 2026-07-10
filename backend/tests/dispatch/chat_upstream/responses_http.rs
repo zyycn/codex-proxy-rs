@@ -1201,7 +1201,7 @@ async fn responses_should_prefer_session_affinity_account_for_previous_response(
 }
 
 #[tokio::test]
-async fn responses_should_strip_banned_affinity_history_when_switching_to_active_account() {
+async fn responses_should_preserve_explicit_history_when_banned_affinity_switches_account() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_after_banned_affinity").await;
     let (app, state, api_key, _pool, _dir) =
@@ -1244,13 +1244,19 @@ async fn responses_should_strip_banned_affinity_history_when_switching_to_active
         captured_header(&captured.headers, "chatgpt-account-id"),
         Some("chatgpt-primary")
     );
-    assert!(captured_header(&captured.headers, "x-codex-turn-state").is_none());
-    assert!(captured.payload.get("previous_response_id").is_none());
+    assert_eq!(
+        captured_header(&captured.headers, "x-codex-turn-state"),
+        Some("turn_affinity_risk")
+    );
+    assert_eq!(
+        captured.payload["previous_response_id"],
+        "resp_affinity_risk"
+    );
     assert!(affinity.is_none());
 }
 
 #[tokio::test]
-async fn responses_should_strip_quota_history_when_switching_to_active_account() {
+async fn responses_should_preserve_explicit_history_when_quota_affinity_switches_account() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_after_quota_affinity").await;
     let (app, state, api_key, _pool, _dir) =
@@ -1289,7 +1295,13 @@ async fn responses_should_strip_quota_history_when_switching_to_active_account()
         captured_header(&captured.headers, "authorization"),
         Some("Bearer access-primary")
     );
-    assert!(captured_header(&captured.headers, "x-codex-turn-state").is_none());
-    assert!(captured.payload.get("previous_response_id").is_none());
+    assert_eq!(
+        captured_header(&captured.headers, "x-codex-turn-state"),
+        Some("turn_affinity_risk")
+    );
+    assert_eq!(
+        captured.payload["previous_response_id"],
+        "resp_affinity_risk"
+    );
     assert!(affinity.is_some());
 }
