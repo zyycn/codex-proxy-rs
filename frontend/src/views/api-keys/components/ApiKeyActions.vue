@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Power, Terminal, Trash2, Upload } from '@lucide/vue'
+import { Power, Trash2, Upload } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -12,7 +12,6 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  use: [apiKey: any]
   importCcs: [apiKey: any]
   toggle: [apiKey: any]
   delete: [apiKey: any]
@@ -25,17 +24,7 @@ const emit = defineEmits<{
       icon-only
       variant="ghost"
       size="sm"
-      label="使用密钥"
-      @click.stop="emit('use', apiKey)"
-    >
-      <Terminal class="size-3.5 text-(--cp-normal)" />
-    </BaseButton>
-
-    <BaseButton
-      icon-only
-      variant="ghost"
-      size="sm"
-      label="导入 CCS"
+      label="导入 CCSwitch"
       @click.stop="emit('importCcs', apiKey)"
     >
       <Upload class="size-3.5 text-(--cp-info)" />

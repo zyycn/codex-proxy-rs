@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Activity, CircleAlert, FileText, Timer } from '@lucide/vue'
+import { Activity, Database, FileText, Timer } from '@lucide/vue'
 
 const props = defineProps<{
   summary: any
@@ -8,7 +8,7 @@ const props = defineProps<{
 const items = [
   {
     key: 'requests',
-    label: '总请求',
+    label: '成功请求',
     icon: Activity,
     value: () => props.summary.totalRequests,
     detail: () => '筛选范围内',
@@ -23,19 +23,19 @@ const items = [
     tone: 'text-(--cp-success-text) bg-(--cp-success-bg)',
   },
   {
-    key: 'errors',
-    label: '错误请求',
-    icon: CircleAlert,
-    value: () => props.summary.errorRequests,
-    detail: () => `错误率 ${props.summary.errorRate}`,
-    tone: 'text-(--cp-danger-text) bg-(--cp-danger-bg)',
+    key: 'cached',
+    label: '缓存 Token',
+    icon: Database,
+    value: () => props.summary.cachedTokens,
+    detail: () => '缓存读取命中',
+    tone: 'text-(--cp-warning-text) bg-(--cp-warning-bg)',
   },
   {
     key: 'latency',
     label: '平均耗时',
     icon: Timer,
     value: () => props.summary.averageLatencyMs,
-    detail: () => `缓存 ${props.summary.cachedTokens}`,
+    detail: () => '成功请求平均值',
     tone: 'text-(--cp-normal-text) bg-(--cp-normal-bg)',
   },
 ]

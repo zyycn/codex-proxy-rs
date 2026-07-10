@@ -6,7 +6,6 @@ import BaseCard from '@/components/base/BaseCard.vue'
 
 interface AdminApiKeyStatus {
   exists: boolean
-  maskedKey: string | null
 }
 
 defineProps<{
@@ -73,12 +72,14 @@ const emit = defineEmits<{
               {{ status.exists ? '已启用' : '未生成' }}
             </p>
             <p
-              class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+              class="mt-1.5 mb-0 truncate text-[12px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
             >
               {{
                 loading
                   ? '加载中...'
-                  : status.maskedKey || '外部系统暂时无法通过 API Key 调用管理接口'
+                  : status.exists
+                    ? '管理员 API 访问已启用，服务端仅保存凭证摘要'
+                    : '外部系统暂时无法通过 API Key 调用管理接口'
               }}
             </p>
           </div>

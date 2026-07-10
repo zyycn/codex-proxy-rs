@@ -44,7 +44,6 @@ interface RotationOption {
 
 interface AdminApiKeyStatus {
   exists: boolean
-  maskedKey: string | null
 }
 
 const loading = shallowRef(true)
@@ -69,7 +68,6 @@ const form = reactive<SettingsForm>({
 const aliasRows = ref<AliasRow[]>([])
 const adminApiKeyStatus = reactive<AdminApiKeyStatus>({
   exists: false,
-  maskedKey: null,
 })
 
 const rotationOptions: RotationOption[] = [
@@ -156,11 +154,6 @@ function applySettings(data: any) {
 
 function applyAdminApiKeyStatus(data: any) {
   adminApiKeyStatus.exists = Boolean(data?.exists)
-  adminApiKeyStatus.maskedKey = data?.maskedKey || null
-}
-
-function maskAdminApiKey(key: string) {
-  return key.length > 14 ? `${key.slice(0, 10)}...${key.slice(-4)}` : key
 }
 
 function addAliasRow() {
@@ -231,10 +224,7 @@ async function handleRegenerateAdminApiKey() {
     const wasEnabled = adminApiKeyStatus.exists
     const data = await regenerateAdminApiKey()
     generatedAdminApiKey.value = data.key
-    applyAdminApiKeyStatus({
-      exists: true,
-      maskedKey: maskAdminApiKey(data.key),
-    })
+    applyAdminApiKeyStatus({ exists: true })
     toast.success(wasEnabled ? '管理员 API Key 已更新' : '管理员 API Key 已生成')
   } catch (error: any) {
     toast.error(error.message || '生成失败')
@@ -249,7 +239,7 @@ async function handleDeleteAdminApiKey() {
   try {
     adminKeyDeleting.value = true
     await deleteAdminApiKey()
-    applyAdminApiKeyStatus({ exists: false, maskedKey: null })
+    applyAdminApiKeyStatus({ exists: false })
     generatedAdminApiKey.value = ''
     showDeleteAdminKeyModal.value = false
     toast.success('管理员 API Key 已删除')

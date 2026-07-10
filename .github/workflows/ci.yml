@@ -16,6 +16,29 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: codex_proxy
+          POSTGRES_USER: codex_proxy
+          POSTGRES_PASSWORD: codex_proxy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U codex_proxy -d codex_proxy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,6 +60,9 @@ jobs:
       - name: Rust clippy
         working-directory: backend
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Architecture boundaries
+        run: backend/scripts/check_architecture.sh
 
       - name: Rust tests
         working-directory: backend

@@ -41,10 +41,7 @@ const latencyPoints = computed(() => props.insights?.latencyTrend ?? [])
 const hasTrend = computed(() =>
   trendPoints.value.some(
     (point: any) =>
-      point.totalTokensValue > 0 ||
-      point.cacheCreationTokensValue > 0 ||
-      point.cachedTokensValue > 0 ||
-      point.averageLatencyMsValue > 0,
+      point.totalTokensValue > 0 || point.cachedTokensValue > 0 || point.averageLatencyMsValue > 0,
   ),
 )
 const hasLatencyTrend = computed(() =>
@@ -59,7 +56,7 @@ const trendOption = computed<EChartsOption>(() => ({
     itemWidth: 8,
     itemHeight: 8,
     icon: 'circle',
-    data: ['输入', '输出', '缓存写入', '缓存读取', '缓存命中率'],
+    data: ['输入', '输出', '缓存读取', '缓存命中率'],
     textStyle: {
       color: themeColor('--cp-text-secondary', '#64748B'),
       fontSize: 12,
@@ -183,11 +180,6 @@ function trendSeries() {
       themeColor('--cp-success', '#10B981'),
     ),
     lineSeries(
-      '缓存写入',
-      trendPoints.value.map((point: any) => point.cacheCreationTokensValue),
-      themeColor('--cp-warning', '#D97706'),
-    ),
-    lineSeries(
       '缓存读取',
       trendPoints.value.map((point: any) => point.cachedTokensValue),
       themeColor('--cp-info-text', '#0EA5E9'),
@@ -267,7 +259,6 @@ function tooltipIndex(source: unknown) {
 function trendPointDisplay(point: any, name: string) {
   if (name === '输入') return point?.inputTokens
   if (name === '输出') return point?.outputTokens
-  if (name === '缓存写入') return point?.cacheCreationTokens
   if (name === '缓存读取') return point?.cachedTokens
   if (name === '缓存命中率') return point?.cacheHitRate
   return ''

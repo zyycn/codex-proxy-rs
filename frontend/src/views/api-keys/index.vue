@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref } from 'vue'
 
+import { API_BASE_URL } from '@/api/constants'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { API_BASE_URL } from '@/api/constants'
 import { apiKeyColumns } from './constants'
 import { useApiKeyFilters } from './composables/useApiKeyFilters'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
@@ -17,11 +17,8 @@ import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
-import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 
 const selectedIds = ref<Set<string>>(new Set())
-const showUseKeyModal = shallowRef(false)
-const selectedUseKey = shallowRef<any | null>(null)
 const {
   loading,
   apiKeys,
@@ -30,6 +27,7 @@ const {
   showSingleDeleteModal,
   showKeyModal,
   createdKey,
+  createdKeyName,
   pendingDeleteKey,
   creatingKey,
   deletingKey,
@@ -42,7 +40,6 @@ const {
   handleBatchDelete,
   handleToggleStatus,
   copyToClipboard,
-  maskKey,
 } = useApiKeyMutations(selectedIds)
 
 const { searchQuery, pagedKeys, apiKeyPagination, handlePageChange, handlePageSizeChange } =
@@ -59,12 +56,12 @@ const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
 function resolveServiceRootUrl() {
   const normalizedApiBase = API_BASE_URL.trim().replace(/\/+$/, '')
 
-  if (normalizedApiBase.match(/^https?:\/\//i)) {
+  if (/^https?:\/\//i.test(normalizedApiBase)) {
     return normalizedApiBase
   }
 
   if (typeof window === 'undefined') {
-    return normalizedApiBase || ''
+    return normalizedApiBase
   }
 
   const origin = window.location.origin.replace(/\/+$/, '')
@@ -75,19 +72,24 @@ function resolveServiceRootUrl() {
   return `${origin}${normalizedApiBase.startsWith('/') ? normalizedApiBase : `/${normalizedApiBase}`}`
 }
 
-function openUseKeyModal(apiKey: any) {
-  selectedUseKey.value = apiKey
-  showUseKeyModal.value = true
+function importCreatedKeyToCcs() {
+  if (!createdKey.value) return
+
+  window.location.href = buildCodexCcSwitchImportDeeplink({
+    apiKey: createdKey.value,
+    baseUrl: openAiBaseUrl.value,
+    providerName: createdKeyName.value || 'codex-proxy-rs',
+  })
 }
 
 function importToCcs(apiKey: any) {
-  const deeplink = buildCodexCcSwitchImportDeeplink({
+  if (!apiKey.key) return
+
+  window.location.href = buildCodexCcSwitchImportDeeplink({
     apiKey: apiKey.key,
     baseUrl: openAiBaseUrl.value,
     providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
   })
-
-  window.location.href = deeplink
 }
 </script>
 
@@ -155,11 +157,7 @@ function importToCcs(apiKey: any) {
           </template>
 
           <template #prefix="{ row }">
-            <ApiKeyPrefixCell
-              :key-value="row.key"
-              :masked-prefix="maskKey(row.prefix)"
-              @copy="copyToClipboard"
-            />
+            <ApiKeyPrefixCell :key-value="row.key" :prefix="row.prefix" @copy="copyToClipboard" />
           </template>
 
           <template #enabled="{ row }">
@@ -174,7 +172,6 @@ function importToCcs(apiKey: any) {
               @delete="requestDeleteKey"
               @import-ccs="importToCcs"
               @toggle="handleToggleStatus"
-              @use="openUseKeyModal"
             />
           </template>
         </BaseTable>
@@ -189,14 +186,7 @@ function importToCcs(apiKey: any) {
       :saving="creatingKey"
       @copy="copyToClipboard"
       @create="handleCreate"
-    />
-
-    <ApiKeyUseModal
-      v-model="showUseKeyModal"
-      :api-key="selectedUseKey"
-      :service-root-url="serviceRootUrl"
-      :api-base-url="openAiBaseUrl"
-      @copy="copyToClipboard"
+      @import-ccs="importCreatedKeyToCcs"
     />
 
     <BaseConfirmModal

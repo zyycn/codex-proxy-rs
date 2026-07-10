@@ -9,7 +9,8 @@
   <img src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" />
   <img src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vuedotjs&logoColor=white" />
   <img src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white" />
-  <img src="https://img.shields.io/badge/SQLite-local-003b57?style=flat-square&logo=sqlite" />
+  <img src="https://img.shields.io/badge/PostgreSQL-18-4169e1?style=flat-square&logo=postgresql&logoColor=white" />
+  <img src="https://img.shields.io/badge/Redis-8-ff4438?style=flat-square&logo=redis&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" />
 </p>
 
@@ -17,15 +18,16 @@
 
 Codex Proxy RS 是一个单进程网关：
 
-- Rust/Axum 后端提供 Responses 兼容代理、管理端 API、SQLite 持久化和静态前端托管。
+- Rust/Axum 后端提供 Responses 兼容代理、管理端 API、PostgreSQL 持久化、Redis 运行态存储和静态前端托管。
 - Vue 管理端负责账号导入、API Key、用量统计、请求记录、运行参数、模型映射和系统更新。
-- 运行数据默认写入仓库 `.runtime/`；Docker 部署也使用这套宿主机目录挂载。
+- 应用本地文件默认写入仓库 `.runtime/`；PostgreSQL 与 Redis 数据由各自服务管理。
 
 ## 环境
 
 - Rust 1.95
 - Node 24 或兼容版本，pnpm 11（只在开发前端或构建镜像时需要）
-- Docker / Docker Compose（部署或验证镜像时需要）
+- PostgreSQL 18、Redis 8
+- Docker / Docker Compose（推荐用于启动依赖、部署或验证镜像）
 
 ## 本地运行
 
@@ -35,11 +37,14 @@ Codex Proxy RS 是一个单进程网关：
 cp deploy/config.example.yaml .runtime/config.yaml
 ```
 
-如果直接用本地二进制而不是 Docker，确保 `.runtime/config.yaml` 里的路径是宿主机路径：
+如果直接用本地二进制而不是 Docker，确保 `.runtime/config.yaml` 使用宿主机可访问的连接地址与日志路径：
 
 ```yaml
 database:
-  url: 'sqlite://.runtime/data/codex-proxy-rs.sqlite'
+  url: 'postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy'
+
+redis:
+  url: 'redis://127.0.0.1:6379/'
 
 logging:
   directory: .runtime/logs
@@ -59,11 +64,13 @@ CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.tom
 
 ## Docker 部署
 
-Compose 默认把宿主机 `.runtime` 映射进容器：
+Compose 同时启动 PostgreSQL、Redis 和主服务。主服务默认把宿主机 `.runtime` 映射进容器：
 
 - `.runtime/config.yaml` -> `/app/config.yaml`
-- `.runtime/data` -> `/app/data`
+- `.runtime/data` -> `/app/data`（installation id 与在线更新状态，不含数据库）
 - `.runtime/logs` -> `/app/logs`
+
+PostgreSQL 与 Redis 分别使用 `postgres-data`、`redis-data` 命名卷。
 
 初始化配置：
 
@@ -77,7 +84,10 @@ Docker 配置文件里路径保持容器路径：
 
 ```yaml
 database:
-  url: 'sqlite:///app/data/codex-proxy-rs.sqlite'
+  url: 'postgres://codex_proxy:codex_proxy@postgres:5432/codex_proxy'
+
+redis:
+  url: 'redis://redis:6379/'
 
 logging:
   directory: /app/logs
@@ -142,20 +152,19 @@ CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.tom
 管理端功能：
 
 - 账号导入、OAuth 授权、连接测试、quota 刷新、token 刷新。
-- 客户端 API Key 管理。
+- 客户端 API Key 管理，完整 Key 可长期复制并导入 CCSwitch。
 - Dashboard、请求记录、Token 用量、模型用量和账号额度。
 - 运行参数、模型别名、账号选择策略。
 - 版本检查、在线更新、更新日志、重启和回滚。
 
 ## 配置与运行数据
 
-配置文件只承载启动必需项。账号、API Key、模型映射、账号选择策略和多数运行参数由管理端写入 SQLite。
+配置文件只承载启动必需项。账号、API Key、模型映射、账号选择策略和多数运行参数由管理端写入 PostgreSQL；管理会话、刷新租约、会话亲和与模型缓存位于 Redis。
 
 `.runtime` 约定：
 
 ```text
 .runtime/config.yaml                # 本地或 Docker 启动配置，路径按运行环境写
-.runtime/data/codex-proxy-rs.sqlite # SQLite 数据库
 .runtime/data/installation_id       # 上游 installation id
 .runtime/data/update-state.json     # 在线更新状态
 .runtime/data/update.lock           # 在线更新锁
@@ -184,7 +193,7 @@ release/publish 1.0.4
 ## 项目结构
 
 ```text
-backend/       Rust/Axum 后端、SQLite migration、集成测试
+backend/       Rust/Axum 后端、PostgreSQL migration、SQLite 导入工具、集成测试
 frontend/      Vue 3 管理端
 deploy/        Dockerfile、Compose、部署配置模板
 docs/          架构和维护文档

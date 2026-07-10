@@ -21,7 +21,6 @@ import {
   visibleRequestText,
   visibleResponseText,
 } from '../constants'
-import UsageLevelBadge from './UsageLevelBadge.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const open = defineModel<boolean>({ default: false })
@@ -85,8 +84,8 @@ const detailGroups = computed(() => [
       { label: '传输方式', value: props.record?.transport, mono: true },
       { label: '事件类型', value: props.record?.kind, mono: true },
       { label: '尝试序号', value: props.record?.attemptIndex },
-      { label: '上游状态码', value: props.record?.upstreamStatusCode },
-      { label: '失败分类', value: props.record?.failureClass, mono: true },
+      { label: '服务层级', value: props.record?.serviceTier, mono: true },
+      { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true },
     ],
   },
 ])
@@ -234,12 +233,6 @@ function themeColor(name: string, fallback: string) {
         <dl
           class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
         >
-          <div class="min-w-0">
-            <dt :class="fieldLabelClass">结果</dt>
-            <dd class="mt-1.5 mb-0">
-              <UsageLevelBadge :level="record.level" />
-            </dd>
-          </div>
           <div class="min-w-0">
             <dt :class="fieldLabelClass">状态码</dt>
             <dd class="mt-1.5 mb-0">

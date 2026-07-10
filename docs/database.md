@@ -48,7 +48,7 @@
 | JSON | `*_json`,**jsonb** | `metadata_json` |
 | 布尔 | 裸形容词/过去式,**boolean** | `enabled` |
 | 外键/逻辑引用列 | `<被引用实体单数>_id` | `client_api_key_id` |
-| 凭据哈希 | `*_hash`,明文永不落库(§2.6) | `key_hash`、`token_hash` |
+| 凭据哈希 | `*_hash`,用于不可逆凭据(§2.6) | `password_hash`、`token_hash` |
 | 主键 | `id`,除非自然复合键或哈希键 | — |
 | 普通/唯一索引 | `idx_<表>_<列摘要>` / `ux_<表>_<列摘要>` | `ux_accounts_chatgpt_identity` |
 | 双端状态码 | 视角前缀 | `status_code` / `client_status_code` / `upstream_status_code` |
@@ -76,7 +76,7 @@
 
 ### 2.4 ID
 
-主键一律 text 随机 ID(`infra/identity.rs` 生成):无中心分配、写入前可生成、跨表无碰撞。例外:`schema_migrations.version`(天然有序整数)、`runtime_settings.id`(单例锚点)、凭据存储以哈希为键(§2.6)。**不用 serial/identity/uuid 列类型**——ID 是业务字符串,不是数据库生成物。
+主键一律 text 随机 ID(`infra/identity.rs` 生成):无中心分配、写入前可生成、跨表无碰撞。例外:`schema_migrations.version`(天然有序整数)、`runtime_settings.id`(单例锚点)。**不用 serial/identity/uuid 列类型**——ID 是业务字符串,不是数据库生成物。
 
 ### 2.5 NULL 与 sentinel
 
@@ -84,14 +84,14 @@
 - 聚合维度列不可空时,未知值用 `__unknown__`;预聚合汇总行(预留)用 `__all__`。
 - 唯一例外:`ux_accounts_chatgpt_identity` 的索引表达式 `coalesce(chatgpt_user_id, '')`——空串只存在于索引表达式,不是存储值,不构成先例。
 
-### 2.6 Secret 纪律(无例外)
+### 2.6 Secret 纪律与可取回边界
 
-凡是"出示即获得权限"的值都是凭据,**明文一律不落库(PG 与 Redis 同等适用)**:
+凡是"出示即获得权限"的值都是凭据。默认只保存不可逆摘要；但客户端 API key 与上游凭据有明确的可取回功能需求，必须可逆保存。所有可逆凭据均不得进入日志、遥测或非管理端响应，数据库备份与访问权限必须按 secret 级别保护。
 
 | 凭据 | 存储 | 哈希类型 | 理由 |
 | --- | --- | --- | --- |
 | 管理员密码 | PG `admin_users.password_hash` | 慢哈希(argon2) | 低熵人类输入,必须抗字典攻击 |
-| 客户端 API key | PG `client_api_keys.key_hash` | SHA-256 | 高熵随机串无字典攻击面,快哈希保住 unique 索引查找;明文只在创建响应出现一次,`prefix` 供事后定位 |
+| 客户端 API key | PG `client_api_keys.key` 明文列,标记 secret | —(功能上必须可逆) | 管理端需要长期复制并导入 CCSwitch；鉴权走 `key` unique 索引点查，列表只对已认证管理员返回完整值 |
 | 管理端 session token | Redis `cpr:admin:session:<token_hash>` | SHA-256 | 键即哈希。Redis RDB/AOF 或内存转储泄露不再等于会话劫持 |
 | 管理 API key | PG `runtime_settings.admin_api_key_hash` | SHA-256 | 校验 = 哈希后 `ct_eq`;哈希不可脱敏展示,状态 API 只回答"是否已启用" |
 | 上游 access/refresh token、Cookie value | PG 明文列,标记 secret | —(功能上必须可逆) | 不进日志、不进列表 API;静态加密的触发条件见 §8 |
@@ -220,7 +220,7 @@ create table client_api_keys (
   id text primary key,
   name text not null,
   prefix text not null,
-  key_hash text not null unique,
+  key text not null unique,
   label text,
   enabled boolean not null default true,
   created_at timestamptz not null,
@@ -234,12 +234,12 @@ create index idx_client_api_keys_created_id on client_api_keys(created_at desc, 
 | --- | --- |
 | `id` | 稳定标识;管理操作与事实归因(`usage_records.client_api_key_id`)都引用 id,key 轮换不影响引用 |
 | `name` / `label` | `name` 必填主展示,`label` 可选注记 |
-| `prefix` | 明文前几位(`sk_abc1…`),明文销毁后定位 key 的唯一手段 |
-| `key_hash` | `SHA-256(key)` hex,unique 索引即鉴权查找路径。明文只在创建响应出现一次,**管理端列表 API 永不回显完整 key** |
+| `prefix` | 明文前几位(`sk_abc1…`),用于列表快速定位与遮罩展示 |
+| `key` | 完整客户端凭据,unique 索引即鉴权查找路径。只在已认证管理端列表/创建响应返回,供长期复制与导入 CCSwitch；严禁进入日志和遥测 |
 | `enabled` | 软开关;刻意不建索引(低基数布尔) |
 | `last_used_at` | 鉴权成功后延迟批量更新(1s 去抖),不在请求关键路径强一致 |
 
-**鉴权路径**:`SHA-256(来键)` → `where key_hash = $1 and enabled` 单点查询,**删除进程内明文鉴权表**——单一代码路径、禁用即刻生效、无缓存同步逻辑;一次 unique 索引点查的代价可忽略。每 key 配额/限流不进本表(§8)。
+**鉴权路径**:`where key = $1 and enabled` unique 索引单点查询,**删除进程内明文鉴权表**——单一代码路径、禁用即刻生效、无缓存同步逻辑。管理端取回与客户端鉴权读取同一事实列,不存在 hash/明文双写。每 key 配额/限流不进本表(§8)。
 
 ### 4.4 runtime_settings
 
@@ -709,7 +709,7 @@ errors:    错误分布 / 排查                                   ← ops_error
 
 ## 6. SQLite v3 → PG 一次性搬迁
 
-引擎切换,不存在就地迁移:PG 库由 0001 基线全新建立,历史数据经**导入命令**搬入。旧文档的 0004 迁移草案(数据决策 1–4 与哈希回填)全部由导入命令吸收,SQLite 侧不再演进(v3 即其终版)。
+引擎切换,不存在就地迁移:PG 库由 0001 基线全新建立,历史数据经**导入命令**搬入。旧文档的 0004 迁移草案(数据决策 1–4 与管理 API key 哈希回填)全部由导入命令吸收,SQLite 侧不再演进(v3 即其终版)。
 
 ### 6.1 导入命令
 
@@ -721,16 +721,16 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 - 源库校验:`schema_migrations` 最高版本必须为 3,否则拒绝(未知谱系不猜)。
 - 全程单个 PG 事务:要么全部导入,要么全部回滚。源库只读打开。
 - Redis 不参与导入:v3 的运行态数据按 §6.3 显式丢弃。
-- 结束打印逐表行数与丢弃计数报告。
+- 结束打印逐表行数、规范化计数与丢弃计数报告。
 
 ### 6.2 逐表规则
 
 | v3 源表 | 终态去向 | 变换 |
 | --- | --- | --- |
 | `admin_users` | PG 原样 | 时间戳 text→timestamptz |
-| `client_api_keys` | PG | `key` 明文 → SHA-256 落 `key_hash`;明文自此不存在于任何存储 |
+| `client_api_keys` | PG | `key`、`prefix` 原值搬迁；完整 key 继续作为管理端长期复制与 CCSwitch 导入的唯一事实 |
 | `runtime_settings` | PG | `admin_api_key` 明文 → 哈希落 `admin_api_key_hash`;三个 retention 列取默认值 |
-| `accounts` | PG 原样 | 布尔 0/1→boolean,时间戳→timestamptz |
+| `accounts` | PG | 布尔 0/1→boolean,时间戳→timestamptz；旧版曾落库的瞬态 `refreshing` → `expired` 并清空 `next_refresh_at`，防止迁移后自动消费 RT；其余业务状态原样 |
 | `account_usage` / `account_model_usage` | PG 原样 | 同上 |
 | `account_cookies` | PG | `expires_at` 字符串解析为 timestamptz(RFC2822/RFC3339);解析失败 → NULL(降级为会话 Cookie)并计数报告 |
 | `fingerprints` / `fingerprint_update_history` | PG 原样 | JSON text→jsonb |
@@ -749,6 +749,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 
 - 全部管理端会话(重新登录)、会话亲和(退化为重新调度)、刷新租约(自愈)、模型清单快照(按需重拉)——运行态按 §2.9 本就可丢弃;
 - v3 usage_records 中的噪音行(决策 3);
+- 旧版误落库的 `accounts.status='refreshing'` 不作为业务状态保留，按 §6.2 规范化为 `expired`；
 - 历史桶中错误路径污染的 token 按旧口径保留展示、不追溯清洗;事实保留期内的窗口随后由 `rebuild-buckets` 用新口径重算覆盖。
 
 ### 6.4 迁移后动作与验收
@@ -757,7 +758,8 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 | --- | --- | --- |
 | 1 | 服务指向 PG+Redis 启动 | `/healthz` 204(PG `select 1` + Redis `PING` 双活) |
 | 2 | 管理员重新登录 | 登录成功;Redis 出现 `cpr:admin:session:*`,TTL ≈ session_ttl |
-| 3 | 抽查 `select count(*) from client_api_keys where length(key_hash) <> 64` = 0 | 明文 key 消失,旧 key 鉴权仍通过 |
+| 3 | 抽查 `select count(*) from client_api_keys where key is null or key = ''` = 0 | 旧 key 值不变；鉴权、管理端复制与 CCSwitch 导入均可用 |
+| 3a | 抽查 `select count(*) from accounts where status = 'refreshing'` = 0 | 旧瞬态状态已规范化为 `expired`，且 `next_refresh_at is null` |
 | 4 | 执行 `rebuild-buckets`(§7),用新口径重算事实保留期内的桶 | 保留期内桶 token 列 = usage_records 聚合值 |
 | 5 | 核对 Dashboard 卡片全部走 bucket 口径,生命周期数字标注"成功累计" | 同卡片无混合口径数字 |
 
@@ -765,19 +767,19 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 
 ## 7. 代码改造清单(本次交付)
 
-与导入命令同一 PR 交付,按依赖顺序:
+与导入命令同一 PR 交付,按依赖顺序。**2026-07-10 已逐项核验完成**，对应自动化验收由后端集成测试、前端构建、架构检查和 Compose 配置检查共同覆盖：
 
-1. **连接层**(`infra/database.rs` + 新增 `infra/redis.rs`):PgPool(参数见 §1)+ 迁移框架(PG 谱系 0001 起);Redis ConnectionManager + 键前缀 + `PING` 健康检查。`Cargo.toml`:sqlx 加 `postgres`(保留 `sqlite` 仅供导入命令读源库),新增 `redis` crate。
-2. **配置**(`config/schema.rs`、`deploy/config.example.yaml`):`database.url` 改 `postgres://…`,新增 `redis.url`。
-3. **鉴权归因**(`admin/keys/service.rs`、`proxy/auth.rs`):key 创建落 `key_hash`;鉴权 = SHA-256 后 PG 点查(删除进程内明文鉴权表);`authorize_client_api_key_result` 返回 key `id`,调用链把 `client_api_key_id` 装进请求上下文直至事件写入。key 列表响应删除完整 key 字段(只余 `prefix`)——**前端同步移除完整 key 展示**。
-4. **事件结构**(`usage_record_model.rs`、`ops_error_model.rs`、`usage_events.rs`、`event_recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
-5. **写入路径**(usage record store、ops error store):§5.2 的两条 PG 事务;错误路径对桶只 `error_count + 1`;`__unknown__` sentinel;min/max 延迟直接 `least()`/`greatest()`(无 0-sentinel 分支);内联 trim 移除。
-6. **查询路径**(`usage_record_store/service/routes`、`dashboard.rs`、`account_usage_store.rs`、`admin/accounts/routes.rs`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 改卡片来源与文案。
-7. **运行态改 Redis**(`admin/auth/service.rs` 会话、`token_refresh` 租约、`session_affinity.rs`、`models/snapshot_store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。
+1. **连接层**(`infra/database.rs` + `infra/redis.rs`):PgPool(参数见 §1)+ 迁移框架(PG 谱系 0001 起);Redis ConnectionManager + 键前缀 + `PING` 健康检查。`Cargo.toml`:sqlx 加 `postgres`(保留 `sqlite` 仅供导入命令读源库),新增 `redis` crate。
+2. **配置**(`bootstrap/config.rs`、`deploy/config.example.yaml`):`database.url` 改 `postgres://…`,新增 `redis.url`。
+3. **鉴权归因**(`keys/{store,service,manage}.rs`、`api/client/auth.rs`):key 创建落唯一 `key` 列；鉴权按完整 key 做 PG unique 点查(删除进程内鉴权缓存);鉴权返回 key `id`,调用链把 `client_api_key_id` 装进请求上下文直至事件写入。管理端列表持续返回完整 key，前端长期保留复制与 CCSwitch 导入入口。
+4. **事件结构**(`telemetry/{usage,ops}`、`telemetry/recorder.rs`、`dispatch/responses/event_recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
+5. **写入路径**(`telemetry/usage/store.rs`、`telemetry/ops/store.rs`、`telemetry/buckets/store.rs`):§5.2 的两条 PG 事务;错误路径对桶只 `error_count + 1`;`__unknown__` sentinel;min/max 延迟使用 nullable-safe 的 `least()`/`greatest()`;内联 trim 移除。
+6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 改卡片来源与文案。
+7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。
 8. **维护命令**(`main.rs` CLI):`import-sqlite <path>`(§6);`rebuild-buckets`——删除事实保留期内的桶并从两张事实表重算(15 分钟槽对齐在 SQL 侧 `floor(epoch/900)*900`,§2.3);保留期外只读不动。范围明确**不含** `account_usage` / `account_model_usage`(§2.10,不可重建)。
-9. **清理任务**(`runtime/tasks/`):三张增长表的周期 trim(读 `runtime_settings` 三列);cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
-10. **健康检查**(`http/router.rs`):PG `select 1` + Redis `PING`,任一失败即 503。
-11. **测试**(`backend/tests/`):support 换 PG(每测试独立数据库,`CPR_TEST_DATABASE_URL` 指定服务端)+ Redis(每测试随机键前缀,`CPR_TEST_REDIS_URL`);storage 测试断言终态 DDL、导入拆分规则(成功行迁入 / error 行转 ops / 噪音行丢弃)、两条写入事务的原子性、0ms 延迟样本可入桶、租约原子性。
+9. **清理任务**(`bootstrap/tasks/`):三张增长表的周期 trim(读 `runtime_settings` 三列);cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
+10. **健康检查**(`api/router.rs`):PG `select 1` + Redis `PING`,任一失败即 503。
+11. **测试**(`backend/tests/`):support 换 PG(每测试独立数据库,`CPR_TEST_DATABASE_URL` 指定服务端)+ Redis(每测试随机键前缀,`CPR_TEST_REDIS_URL`);storage 测试断言终态 DDL、导入拆分规则(成功行迁入 / error 行转 ops / 噪音行丢弃 / 旧 `refreshing` 规范化)、两条写入事务的原子性、0ms 延迟样本可入桶、租约原子性。
 12. **部署**(`deploy/docker-compose.yml`):新增 postgres、redis 服务与健康检查依赖。
 
 ---

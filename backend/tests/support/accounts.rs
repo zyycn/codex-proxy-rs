@@ -1,5 +1,5 @@
 use chrono::{Duration, Utc};
-use codex_proxy_rs::upstream::accounts::model::{Account, AccountStatus};
+use codex_proxy_rs::accounts::account::{Account, AccountStatus};
 
 pub(crate) fn test_account(id: &str, status: AccountStatus) -> Account {
     Account {

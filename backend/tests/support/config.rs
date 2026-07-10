@@ -1,6 +1,6 @@
-use codex_proxy_rs::config::schema::{
+use codex_proxy_rs::bootstrap::config::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
-    LoggingConfig, QuotaConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
+    LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
 };
 
 pub(crate) fn test_config(database_url: String) -> AppConfig {
@@ -29,6 +29,9 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
             skip_exhausted: true,
         },
         database: DatabaseConfig { url: database_url },
+        redis: RedisConfig {
+            url: crate::support::storage::test_redis_url(),
+        },
         tls: TlsConfig {
             force_http11: false,
         },
@@ -36,7 +39,6 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         fingerprint: FingerprintConfig::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
-            session_cleanup_interval_secs: 3600,
             default_username: "admin".to_string(),
             default_password: "test-admin-password".to_string(),
         },

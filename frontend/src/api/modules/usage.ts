@@ -8,6 +8,14 @@ export function getUsageRecords(params?: any) {
   })
 }
 
+export function getOpsErrors(params?: any) {
+  return request({
+    url: '/api/admin/ops/errors',
+    method: 'GET',
+    params,
+  })
+}
+
 export function getUsageRecordDetail(params: any) {
   return request({
     url: '/api/admin/usage/records/detail',

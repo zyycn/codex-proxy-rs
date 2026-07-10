@@ -1,8 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue'
-
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import {
   usageAccountText,
@@ -16,24 +13,11 @@ import UsageCostCell from '@/views/usage/components/UsageCostCell.vue'
 import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
 import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
 
-const props = defineProps<{
+defineProps<{
   rows: any[]
 }>()
 
-const activeFilter = shallowRef('all')
-const filters = [
-  { label: '全部', value: 'all' },
-  { label: '错误', value: 'error' },
-]
 const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column.key !== 'actions')
-
-const filteredRows = computed(() => {
-  if (activeFilter.value === 'error') {
-    return props.rows.filter((row) => row.level === 'error' || Number(row.statusCode || 0) >= 400)
-  }
-
-  return props.rows
-})
 </script>
 
 <template>
@@ -41,20 +25,16 @@ const filteredRows = computed(() => {
     as="article"
     variant="dashboard"
     title="使用记录"
-    description="最近 10 条网关请求"
+    description="最近 10 条成功请求"
     class="h-117 w-full"
   >
-    <template #actions>
-      <BaseSegmented v-model="activeFilter" :options="filters" class="w-38" />
-    </template>
-
     <template #body>
       <div class="mt-4.25 flex h-91 w-full overflow-hidden">
         <BaseTable
           class="min-w-0 flex-1"
           :columns="dashboardUsageRecordColumns"
-          :rows="filteredRows"
-          :empty-text="rows.length === 0 ? '暂无使用记录' : '没有匹配记录'"
+          :rows="rows"
+          empty-text="暂无成功记录"
           min-width="1824px"
         >
           <template #accountEmail="{ row }">

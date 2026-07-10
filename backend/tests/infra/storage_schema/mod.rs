@@ -1,708 +1,193 @@
-use std::path::Path;
+use std::collections::BTreeSet;
 
-use codex_proxy_rs::infra::database::connect_sqlite;
+use crate::support::storage::init_test_db;
 
 #[tokio::test]
-async fn sqlite_schema_should_create_current_tables() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name in ('schema_migrations', 'admin_users', 'admin_sessions', 'client_api_keys', 'runtime_settings', 'accounts', 'account_refresh_leases', 'account_usage', 'account_model_usage', 'usage_time_buckets', 'account_cookies', 'fingerprints', 'fingerprint_update_history', 'usage_records', 'ops_error_logs', 'model_plan_snapshots', 'session_affinities') order by name",
+async fn postgres_schema_is_terminal_v1_without_runtime_tables() {
+    let (pool, _guard) = init_test_db("schema-terminal-v1").await;
+    let tables = sqlx::query_scalar::<_, String>(
+        "select table_name
+         from information_schema.tables
+         where table_schema = current_schema() and table_type = 'BASE TABLE'
+         order by table_name",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
     assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "account_cookies",
-            "account_model_usage",
-            "account_refresh_leases",
-            "account_usage",
-            "accounts",
-            "admin_sessions",
-            "admin_users",
-            "client_api_keys",
-            "fingerprint_update_history",
-            "fingerprints",
-            "model_plan_snapshots",
-            "ops_error_logs",
-            "runtime_settings",
-            "schema_migrations",
-            "session_affinities",
-            "usage_records",
-            "usage_time_buckets",
-        ]
+        tables.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from_iter(
+            [
+                "account_cookies",
+                "account_model_usage",
+                "account_usage",
+                "accounts",
+                "admin_users",
+                "client_api_keys",
+                "fingerprint_update_history",
+                "fingerprints",
+                "ops_error_logs",
+                "request_time_buckets",
+                "runtime_settings",
+                "schema_migrations",
+                "usage_records",
+            ]
+            .map(str::to_string)
+        )
     );
+
+    let versions = sqlx::query_as::<_, (i64, String)>(
+        "select version, name from schema_migrations order by version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(versions, vec![(1, "initial".to_string())]);
 }
 
 #[tokio::test]
-async fn sqlite_schema_should_record_applied_migrations() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("schema-migrations.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
+async fn postgres_schema_keeps_retrievable_client_keys_and_hashes_admin_credentials() {
+    let (pool, _guard) = init_test_db("schema-credential-storage").await;
+    let key_columns = columns(&pool, "client_api_keys").await;
+    assert!(key_columns.contains("key"));
+    assert!(!key_columns.contains("key_hash"));
+    let settings_columns = columns(&pool, "runtime_settings").await;
+    assert!(settings_columns.contains("admin_api_key_hash"));
+    assert!(!settings_columns.contains("admin_api_key"));
 
-    let rows: Vec<(i64, String)> =
-        sqlx::query_as("select version, name from schema_migrations order by version")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-
-    assert_eq!(
-        rows,
-        [
-            (1, "initial".to_string()),
-            (2, "rename_rotation_strategies".to_string()),
-            (3, "ops_error_logs".to_string()),
-        ]
-    );
+    let key_unique: bool = sqlx::query_scalar(
+        "select exists (
+           select 1 from pg_indexes
+           where schemaname = current_schema()
+             and tablename = 'client_api_keys'
+             and indexdef ilike '%unique%key%'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(key_unique);
 }
 
 #[tokio::test]
-async fn sqlite_schema_should_reject_refreshing_account_status() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("account-status.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
+async fn postgres_schema_separates_success_and_error_facts() {
+    let (pool, _guard) = init_test_db("schema-fact-split").await;
+    let usage_columns = columns(&pool, "usage_records").await;
+    for column in [
+        "client_api_key_id",
+        "provider",
+        "requested_model",
+        "upstream_model",
+        "service_tier",
+        "first_token_ms",
+        "input_tokens",
+        "output_tokens",
+        "cached_tokens",
+        "reasoning_tokens",
+    ] {
+        assert!(usage_columns.contains(column), "missing {column}");
+    }
+    assert!(!usage_columns.contains("level"));
+    assert!(!usage_columns.contains("failure_class"));
 
-    let error = sqlx::query(
+    let error_columns = columns(&pool, "ops_error_logs").await;
+    for column in [
+        "client_api_key_id",
+        "provider",
+        "client_status_code",
+        "upstream_status_code",
+        "failure_class",
+    ] {
+        assert!(error_columns.contains(column), "missing {column}");
+    }
+
+    assert!(sqlx::query(
+        "insert into usage_records (
+           id, kind, provider, account_id, model, status_code, message, metadata_json, created_at
+         ) values ('bad', 'request', 'openai', 'acct', 'gpt-5', 500, 'bad', '{}'::jsonb, now())",
+    )
+    .execute(&pool)
+    .await
+    .is_err());
+    assert!(sqlx::query(
+        "insert into ops_error_logs (id, kind, status_code, message, metadata_json, created_at)
+         values ('bad', 'request', 700, 'bad', '{}'::jsonb, now())",
+    )
+    .execute(&pool)
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn postgres_schema_has_required_fact_and_bucket_indexes() {
+    let (pool, _guard) = init_test_db("schema-indexes").await;
+    let indexes = sqlx::query_scalar::<_, String>(
+        "select indexname from pg_indexes where schemaname = current_schema()",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    for index in [
+        "idx_usage_records_created_id",
+        "idx_usage_records_key_created",
+        "idx_usage_records_response_id",
+        "idx_ops_error_logs_created_id",
+        "idx_ops_error_logs_key_created",
+        "idx_ops_error_logs_failure_class",
+        "idx_request_time_buckets_model",
+    ] {
+        assert!(indexes.contains(index), "missing {index}");
+    }
+}
+
+#[tokio::test]
+async fn postgres_schema_enforces_account_and_counter_constraints() {
+    let (pool, _guard) = init_test_db("schema-constraints").await;
+    assert!(sqlx::query(
         "insert into accounts (id, access_token, status, added_at, updated_at)
-         values ('acct_refreshing', 'access', 'refreshing', '2026-07-09T00:00:00Z', '2026-07-09T00:00:00Z')",
+         values ('acct_bad', 'token', 'refreshing', now(), now())",
     )
     .execute(&pool)
     .await
-    .unwrap_err();
-
-    assert!(error.to_string().contains("CHECK constraint failed"));
-}
-
-#[test]
-fn initial_migration_should_not_use_idempotent_business_schema_ddl() {
-    let migration_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("infra")
-        .join("migrations")
-        .join("0001_initial.sql");
-    let migration = std::fs::read_to_string(migration_path).unwrap();
-
-    assert!(!migration.to_lowercase().contains("if not exists"));
-}
-
-#[tokio::test]
-async fn connect_sqlite_should_reject_unversioned_existing_schema() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("unversioned.sqlite");
-    let url = format!("sqlite://{}", db.display());
-
-    std::fs::File::create(&db).unwrap();
-    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
-    sqlx::query("create table admin_users (id text primary key)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
-
-    let err = match connect_sqlite(&url).await {
-        Ok(pool) => {
-            pool.close().await;
-            panic!("unversioned sqlite schema should be rejected");
-        }
-        Err(err) => err,
-    };
-
-    assert!(err.to_string().contains("unversioned sqlite schema"));
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_runtime_settings_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("settings.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('runtime_settings') where name in ('id', 'model_aliases_json', 'refresh_margin_seconds', 'refresh_concurrency', 'max_concurrent_per_account', 'request_interval_ms', 'rotation_strategy', 'admin_api_key', 'updated_at') order by name",
+    .is_err());
+    assert!(sqlx::query(
+        "insert into request_time_buckets (
+           bucket_start, provider, account_id, model, service_tier, success_count
+         ) values (now(), 'openai', 'acct', 'gpt-5', '__unknown__', -1)",
     )
-    .fetch_all(&pool)
+    .execute(&pool)
     .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "admin_api_key",
-            "id",
-            "max_concurrent_per_account",
-            "model_aliases_json",
-            "refresh_concurrency",
-            "refresh_margin_seconds",
-            "request_interval_ms",
-            "rotation_strategy",
-            "updated_at",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_runtime_query_indexes() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("indexes.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'index' and name in ('idx_accounts_added_id', 'idx_account_usage_last_used_account', 'idx_account_model_usage_last_used', 'idx_client_api_keys_created_id', 'idx_fingerprint_update_history_created_id') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "idx_account_model_usage_last_used",
-            "idx_account_usage_last_used_account",
-            "idx_accounts_added_id",
-            "idx_client_api_keys_created_id",
-            "idx_fingerprint_update_history_created_id",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_diagnostic_filter_indexes() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("diagnostic-indexes.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'index' and name in ('idx_account_cookies_expires', 'idx_usage_records_level_created', 'idx_usage_records_model_created', 'idx_usage_records_route_created', 'idx_usage_records_status_created', 'idx_usage_records_upstream_status_created', 'idx_ops_error_logs_created_id', 'idx_ops_error_logs_status_created', 'idx_ops_error_logs_failure_class', 'idx_session_affinities_active_order', 'idx_usage_time_buckets_bucket', 'idx_usage_time_buckets_model_bucket') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "idx_account_cookies_expires",
-            "idx_ops_error_logs_created_id",
-            "idx_ops_error_logs_failure_class",
-            "idx_ops_error_logs_status_created",
-            "idx_session_affinities_active_order",
-            "idx_usage_records_level_created",
-            "idx_usage_records_model_created",
-            "idx_usage_records_route_created",
-            "idx_usage_records_status_created",
-            "idx_usage_records_upstream_status_created",
-            "idx_usage_time_buckets_bucket",
-            "idx_usage_time_buckets_model_bucket",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_account_model_usage_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("model-usage.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_model_usage') where name in ('account_id', 'model', 'request_count', 'error_count', 'input_tokens', 'output_tokens', 'cached_tokens', 'last_used_at') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "account_id",
-            "cached_tokens",
-            "error_count",
-            "input_tokens",
-            "last_used_at",
-            "model",
-            "output_tokens",
-            "request_count",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_usage_time_bucket_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("usage-time-buckets.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('usage_time_buckets') where name in ('bucket_start', 'account_id', 'model', 'service_tier', 'request_count', 'error_count', 'input_tokens', 'output_tokens', 'cached_tokens', 'first_token_latency_sum', 'first_token_latency_count', 'latency_sum', 'latency_count', 'max_latency_ms', 'min_latency_ms', 'updated_at') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "account_id",
-            "bucket_start",
-            "cached_tokens",
-            "error_count",
-            "first_token_latency_count",
-            "first_token_latency_sum",
-            "input_tokens",
-            "latency_count",
-            "latency_sum",
-            "max_latency_ms",
-            "min_latency_ms",
-            "model",
-            "output_tokens",
-            "request_count",
-            "service_tier",
-            "updated_at",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_plain_account_cookie_value_column() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("cookies.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let value_column: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_cookies') where name = 'value'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(value_column, Some(("value".to_string(),)));
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_account_usage_window_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_usage') where name in ('window_request_count', 'window_input_tokens', 'window_output_tokens', 'window_cached_tokens', 'window_started_at', 'window_reset_at', 'limit_window_seconds') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "limit_window_seconds",
-            "window_cached_tokens",
-            "window_input_tokens",
-            "window_output_tokens",
-            "window_request_count",
-            "window_reset_at",
-            "window_started_at",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_image_generation_usage_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_usage') where name in ('image_input_tokens', 'image_output_tokens', 'image_request_count', 'image_request_failed_count', 'window_image_input_tokens', 'window_image_output_tokens', 'window_image_request_count', 'window_image_request_failed_count') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "image_input_tokens",
-            "image_output_tokens",
-            "image_request_count",
-            "image_request_failed_count",
-            "window_image_input_tokens",
-            "window_image_output_tokens",
-            "window_image_request_count",
-            "window_image_request_failed_count",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_token_total_usage_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('account_usage') where name in ('reasoning_tokens', 'total_tokens') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        ["reasoning_tokens", "total_tokens"]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_quota_verify_required_flag() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let row: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('accounts') where name = 'quota_verify_required'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(row, Some(("quota_verify_required".to_string(),)));
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_enforce_unique_chatgpt_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("account-identity.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
+    .is_err());
     sqlx::query(
-        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token, status, added_at, updated_at) values ('acct_a', 'chatgpt-account', 'chatgpt-user', 'access-token-a', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+        "insert into runtime_settings (
+           id, refresh_margin_seconds, refresh_concurrency,
+           max_concurrent_per_account, request_interval_ms,
+           rotation_strategy, updated_at
+         ) values (1, 3600, 2, 1, 0, 'smart', now())",
     )
     .execute(&pool)
     .await
     .unwrap();
-    let result = sqlx::query(
-        "insert into accounts (id, chatgpt_account_id, chatgpt_user_id, access_token, status, added_at, updated_at) values ('acct_b', 'chatgpt-account', 'chatgpt-user', 'access-token-b', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_session_affinity_function_call_ids() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("test.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let row: Option<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('session_affinities') where name = 'function_call_ids_json'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(row, Some(("function_call_ids_json".to_string(),)));
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_complete_current_fingerprint_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("fingerprints.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('fingerprints') where name in ('originator', 'app_version', 'build_number', 'platform', 'arch', 'chromium_version', 'user_agent_template', 'default_headers_json', 'header_order_json', 'source', 'created_at', 'updated_at') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "app_version",
-            "arch",
-            "build_number",
-            "chromium_version",
-            "created_at",
-            "default_headers_json",
-            "header_order_json",
-            "originator",
-            "platform",
-            "source",
-            "updated_at",
-            "user_agent_template",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_fingerprint_history_table() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("fingerprint-history.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let row: Option<(String,)> = sqlx::query_as(
-        "select name from sqlite_master where type = 'table' and name = 'fingerprint_update_history'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(row, Some(("fingerprint_update_history".to_string(),)));
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_structured_event_diagnostic_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("event-diagnostics.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('usage_records') where name in ('transport', 'attempt_index', 'upstream_status_code', 'failure_class', 'response_id', 'upstream_request_id') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "attempt_index",
-            "failure_class",
-            "response_id",
-            "transport",
-            "upstream_request_id",
-            "upstream_status_code",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_persist_ops_error_log_columns() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("ops-error-columns.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select name from pragma_table_info('ops_error_logs') where name in ('request_id', 'account_id', 'route', 'model', 'status_code', 'client_status_code', 'upstream_status_code', 'transport', 'attempt_index', 'failure_class', 'response_id', 'upstream_request_id', 'latency_ms', 'metadata_json') order by name",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        rows.into_iter().map(|row| row.0).collect::<Vec<_>>(),
-        [
-            "account_id",
-            "attempt_index",
-            "client_status_code",
-            "failure_class",
-            "latency_ms",
-            "metadata_json",
-            "model",
-            "request_id",
-            "response_id",
-            "route",
-            "status_code",
-            "transport",
-            "upstream_request_id",
-            "upstream_status_code",
-        ]
-    );
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_invalid_account_status() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("status-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let result = sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_bad', 'access-token', 'unknown', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_invalid_usage_record_level() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("event-level-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let result = sqlx::query(
-        "insert into usage_records (id, kind, level, message, metadata_json, created_at) values ('usage_bad', 'request', 'fatal', 'bad', '{}', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_invalid_ops_error_status_code() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("ops-error-status-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let result = sqlx::query(
-        "insert into ops_error_logs (id, kind, status_code, message, metadata_json, created_at) values ('ops_bad', 'request', 99, 'bad', '{}', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_non_boolean_flags() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("boolean-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let api_key_result = sqlx::query(
-        "insert into client_api_keys (id, name, prefix, key, enabled, created_at) values ('key_bad', 'bad', 'sk_x', 'sk_test', 2, '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-    let account_result = sqlx::query(
-        "insert into accounts (id, access_token, status, quota_limit_reached, added_at, updated_at) values ('acct_bad', 'access-token', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-    let quota_verify_result = sqlx::query(
-        "insert into accounts (id, access_token, status, quota_verify_required, added_at, updated_at) values ('acct_verify_bad', 'access-token', 'active', 2, '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-    assert!(api_key_result.is_err());
-    assert!(account_result.is_err());
-    assert!(quota_verify_result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_invalid_runtime_settings() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("settings-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let invalid_id_result = sqlx::query(
-        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (2, 300, 2, 3, 50, 'smart', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-    let invalid_refresh_result = sqlx::query(
-        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 0, 2, 3, 50, 'smart', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-    let invalid_strategy_result = sqlx::query(
-        "insert into runtime_settings (id, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, updated_at) values (1, 300, 2, 3, 50, 'random', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(invalid_id_result.is_err());
-    assert!(invalid_refresh_result.is_err());
-    assert!(invalid_strategy_result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_negative_usage_time_bucket_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("usage-time-bucket-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    let result = sqlx::query(
-        "insert into usage_time_buckets (bucket_start, request_count, updated_at) values ('2026-06-14T00:00:00Z', -1, '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn sqlite_schema_should_reject_negative_account_usage_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("usage-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_a', 'access-token', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let result =
-        sqlx::query("insert into account_usage (account_id, request_count) values ('acct_a', -1)")
+    assert!(
+        sqlx::query("update runtime_settings set usage_retention_days = 0 where id = 1",)
             .execute(&pool)
-            .await;
-
-    assert!(result.is_err());
+            .await
+            .is_err()
+    );
 }
 
-#[tokio::test]
-async fn sqlite_schema_should_reject_negative_account_model_usage_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("model-usage-check.sqlite");
-    let url = format!("sqlite://{}", db.display());
-    let pool = connect_sqlite(&url).await.unwrap();
-
-    sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at) values ('acct_a', 'access-token', 'active', '2026-06-14T00:00:00Z', '2026-06-14T00:00:00Z')",
+async fn columns(pool: &sqlx::PgPool, table: &str) -> BTreeSet<String> {
+    sqlx::query_scalar::<_, String>(
+        "select column_name
+         from information_schema.columns
+         where table_schema = current_schema() and table_name = $1",
     )
-    .execute(&pool)
+    .bind(table)
+    .fetch_all(pool)
     .await
-    .unwrap();
-    let result = sqlx::query(
-        "insert into account_model_usage (account_id, model, request_count) values ('acct_a', 'gpt-5.5', -1)",
-    )
-    .execute(&pool)
-    .await;
-
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn connect_sqlite_creates_parent_directory_for_file_database() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("nested").join("startup.sqlite");
-    let url = format!("sqlite://{}", db.display());
-
-    let pool = connect_sqlite(&url).await.unwrap();
-    pool.close().await;
-
-    assert!(db.exists());
+    .unwrap()
+    .into_iter()
+    .collect()
 }

@@ -6,4 +6,4 @@ pub(crate) mod config;
 pub(crate) mod fingerprint;
 pub(crate) mod http;
 pub(crate) mod jwt;
-pub(crate) mod sqlite;
+pub(crate) mod storage;
