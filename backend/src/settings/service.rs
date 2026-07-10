@@ -17,9 +17,13 @@ use super::{
 
 const ROTATION_STRATEGIES: [&str; 4] = ["smart", "quota_reset_priority", "round_robin", "sticky"];
 
-/// 无状态的设置校验服务。
-#[derive(Debug, Clone, Default)]
-pub struct SettingsService;
+/// 持久化设置的当前快照。
+#[derive(Clone)]
+pub struct SettingsService {
+    store: PgSettingsStore,
+    sender: watch::Sender<SettingsSnapshot>,
+    update_lock: Arc<Mutex<()>>,
+}
 
 impl SettingsService {
     pub fn apply_patch(
@@ -46,17 +50,7 @@ impl SettingsService {
         }
         Ok(())
     }
-}
 
-/// 持久化设置的当前快照。
-#[derive(Clone)]
-pub struct RuntimeSettingsService {
-    store: PgSettingsStore,
-    sender: watch::Sender<SettingsSnapshot>,
-    update_lock: Arc<Mutex<()>>,
-}
-
-impl RuntimeSettingsService {
     pub fn new(settings: SettingsSnapshot, pool: sqlx::PgPool) -> Self {
         let (sender, _) = watch::channel(settings);
         Self {

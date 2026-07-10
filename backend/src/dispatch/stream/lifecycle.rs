@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Instant};
 use chrono::Utc;
 
 use crate::{
-    accounts::{account::AccountStatus, pool::AccountAcquireRequest},
     dispatch::{
         errors::{
             backend_transport_name, is_history_recovery_upstream_error,
@@ -43,6 +42,7 @@ use crate::{
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
+    fleet::{account::AccountStatus, pool::AccountAcquireRequest},
     upstream::openai::{
         protocol::responses::CodexResponsesRequest,
         transport::{backend_transport_for_response_request, is_banned_upstream_error},

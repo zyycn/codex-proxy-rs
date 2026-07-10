@@ -297,7 +297,7 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
     )
     .await;
     seed_test_account(&pool).await;
-    let store = codex_proxy_rs::accounts::store::PgAccountStore::new(pool.clone());
+    let store = codex_proxy_rs::fleet::store::PgAccountStore::new(pool.clone());
     store
         .set_status("acct_test", AccountStatus::QuotaExhausted)
         .await
@@ -383,7 +383,7 @@ async fn account_test_stream_should_preserve_manually_disabled_status_on_success
     )
     .await;
     seed_test_account(&pool).await;
-    let store = codex_proxy_rs::accounts::store::PgAccountStore::new(pool.clone());
+    let store = codex_proxy_rs::fleet::store::PgAccountStore::new(pool.clone());
     store
         .set_status("acct_test", AccountStatus::Disabled)
         .await
@@ -455,7 +455,7 @@ async fn account_test_stream_should_mark_expired_after_auth_failure() {
     )
     .unwrap();
     let events = test_events(&body);
-    let store = codex_proxy_rs::accounts::store::PgAccountStore::new(pool);
+    let store = codex_proxy_rs::fleet::store::PgAccountStore::new(pool);
     let stored = store.get("acct_test").await.unwrap().unwrap();
 
     assert_eq!(events.last().unwrap()["type"], "error");
@@ -515,7 +515,7 @@ async fn account_test_stream_should_mark_quota_exhausted_after_failed_sse() {
     )
     .unwrap();
     let events = test_events(&body);
-    let store = codex_proxy_rs::accounts::store::PgAccountStore::new(pool);
+    let store = codex_proxy_rs::fleet::store::PgAccountStore::new(pool);
     let stored = store.get("acct_test").await.unwrap().unwrap();
 
     assert_eq!(events.last().unwrap()["type"], "error");

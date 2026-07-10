@@ -17,7 +17,9 @@ use crate::support::{
 mod authorization;
 mod lifecycle;
 
-async fn admin_client_key_test_app(db_name: &str) -> (axum::Router, tempfile::TempDir) {
+async fn admin_client_key_test_app(
+    db_name: &str,
+) -> (axum::Router, crate::support::storage::TestDatabaseGuard) {
     let (pool, dir) = init_test_db(db_name).await;
     let redis = create_test_redis(db_name).await;
     seed_admin_session(&pool, &redis, "session_1").await;

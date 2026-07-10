@@ -127,7 +127,11 @@ async fn responses_route_should_default_omitted_stream_to_sse() {
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 
-async fn test_app_with_client_api_key() -> (axum::Router, String, tempfile::TempDir) {
+async fn test_app_with_client_api_key() -> (
+    axum::Router,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-responses-routes").await;
     let redis = create_test_redis("openai-responses-routes").await;
     let plaintext = insert_client_api_key(&pool).await;

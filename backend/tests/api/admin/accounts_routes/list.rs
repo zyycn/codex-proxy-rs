@@ -77,7 +77,7 @@ async fn admin_accounts_list_should_derive_refreshing_display_status_from_active
         .unwrap();
     let now = chrono::Utc::now();
     let refresh_leases =
-        codex_proxy_rs::accounts::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
+        codex_proxy_rs::fleet::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
     assert!(refresh_leases
         .try_acquire(
             "acct_refreshing",
@@ -126,7 +126,7 @@ async fn admin_accounts_list_should_ignore_refresh_lease_for_expired_account() {
         .unwrap();
     let now = chrono::Utc::now();
     let refresh_leases =
-        codex_proxy_rs::accounts::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
+        codex_proxy_rs::fleet::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
     assert!(refresh_leases
         .try_acquire(
             "acct_expired",

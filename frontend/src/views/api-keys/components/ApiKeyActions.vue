@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Power, Trash2, Upload } from '@lucide/vue'
+import { Power, Terminal, Trash2, Upload } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -12,6 +12,7 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  use: [apiKey: any]
   importCcs: [apiKey: any]
   toggle: [apiKey: any]
   delete: [apiKey: any]
@@ -20,6 +21,16 @@ const emit = defineEmits<{
 
 <template>
   <div class="flex items-center justify-start gap-1">
+    <BaseButton
+      icon-only
+      variant="ghost"
+      size="sm"
+      label="使用密钥"
+      @click.stop="emit('use', apiKey)"
+    >
+      <Terminal class="size-3.5 text-(--cp-normal)" />
+    </BaseButton>
+
     <BaseButton
       icon-only
       variant="ghost"

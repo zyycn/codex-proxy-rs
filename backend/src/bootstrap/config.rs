@@ -37,9 +37,9 @@ pub struct AppConfig {
     /// TLS 偏好配置。
     #[serde(default)]
     pub tls: TlsConfig,
-    /// WebSocket 连接池配置。
+    /// WebSocket 连接池启动设置。
     #[serde(default)]
-    pub ws_pool: WebSocketPoolConfig,
+    pub ws_pool: WebSocketPoolSettings,
     /// 上游请求指纹默认配置。
     #[serde(default)]
     pub fingerprint: FingerprintConfig,
@@ -158,10 +158,10 @@ pub struct TlsConfig {
     pub force_http11: bool,
 }
 
-/// WebSocket 连接池配置。
+/// WebSocket 连接池启动设置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WebSocketPoolConfig {
+pub struct WebSocketPoolSettings {
     /// 是否启用连接池。
     pub enabled: bool,
     /// 连接最大存活时长。
@@ -181,7 +181,7 @@ fn default_ws_first_token_timeout_ms() -> u64 {
     20_000
 }
 
-impl Default for WebSocketPoolConfig {
+impl Default for WebSocketPoolSettings {
     fn default() -> Self {
         Self {
             enabled: true,

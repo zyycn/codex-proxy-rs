@@ -1263,7 +1263,9 @@ async fn wait_for_operation_status(app: &axum::Router, expected: &str) -> Value 
     data
 }
 
-async fn admin_system_test_app(db_name: &str) -> (axum::Router, tempfile::TempDir) {
+async fn admin_system_test_app(
+    db_name: &str,
+) -> (axum::Router, crate::support::storage::TestDatabaseGuard) {
     let (pool, dir) = crate::support::storage::init_test_db(db_name).await;
     let redis = crate::support::storage::create_test_redis(db_name).await;
     seed_admin_session(&pool, &redis, "session_1").await;

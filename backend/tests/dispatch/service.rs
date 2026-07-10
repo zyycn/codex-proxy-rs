@@ -12,7 +12,6 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use codex_proxy_rs::{
-    accounts::{account::AccountStatus, cookies::PgCookieStore, pool::AccountAcquireRequest},
     api::router,
     api::AppState,
     bootstrap::config::AppConfig,
@@ -21,6 +20,7 @@ use codex_proxy_rs::{
         build_conversation_identity, compute_variant_hash, prepare_variant_identity,
         SessionAffinityEntry,
     },
+    fleet::{account::AccountStatus, cookies::PgCookieStore, pool::AccountAcquireRequest},
     infra::identity::hash_credential,
     telemetry::usage::store::{PgUsageRecordStore, UsageRecordFilter},
     upstream::openai::protocol::responses::CodexResponsesRequest,
@@ -279,14 +279,24 @@ async fn test_app_state_with_storage(
     AppState::from(&services)
 }
 
-async fn test_app_with_account(base_url: String) -> (axum::Router, String, tempfile::TempDir) {
+async fn test_app_with_account(
+    base_url: String,
+) -> (
+    axum::Router,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_account_and_installation_id(base_url, TEST_INSTALLATION_ID.to_string()).await
 }
 
 async fn test_app_with_account_and_installation_id(
     base_url: String,
     installation_id: String,
-) -> (axum::Router, String, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-chat-upstream").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
@@ -307,20 +317,35 @@ async fn test_app_with_account_and_installation_id(
 
 async fn test_app_with_account_and_pool(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_account_pool_config(base_url, |_| {}).await
 }
 
 async fn test_app_with_account_pool_and_affinity(
     base_url: String,
     response_id: &str,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_account_pool_config_and_affinity(base_url, |_| {}, Some(response_id)).await
 }
 
 async fn test_app_without_accounts(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-responses-no-accounts").await;
     let api_key = insert_client_api_key(&pool).await;
     let state = test_app_state_with_pool_and_installation_id(
@@ -340,7 +365,12 @@ async fn test_app_without_accounts(
 
 async fn test_app_with_account_pool_and_logging(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_account_pool_config(base_url, |config| {
         config.logging.enabled = true;
     })
@@ -349,7 +379,12 @@ async fn test_app_with_account_pool_and_logging(
 
 async fn test_app_with_account_pool_and_disabled_logging(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-record-disabled-logging").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
@@ -370,7 +405,12 @@ async fn test_app_with_account_pool_and_disabled_logging(
 
 async fn test_app_with_account_pool_and_logging_capture_body(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-record-capture-body").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
@@ -399,7 +439,12 @@ async fn test_app_with_account_pool_and_logging_capture_body(
 async fn test_app_with_account_pool_config(
     base_url: String,
     configure: impl FnOnce(&mut AppConfig),
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_account_pool_config_and_affinity(base_url, configure, None).await
 }
 
@@ -407,7 +452,12 @@ async fn test_app_with_account_pool_config_and_affinity(
     base_url: String,
     configure: impl FnOnce(&mut AppConfig),
     affinity_response_id: Option<&str>,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-record-affinity").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
@@ -433,7 +483,11 @@ async fn test_app_with_account_pool_config_and_affinity(
 
 async fn test_app_with_two_accounts_and_affinity(
     base_url: String,
-) -> (axum::Router, String, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-responses-affinity").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_named_account(&pool, "acct_a", "access-default", "chatgpt-default").await;
@@ -475,7 +529,13 @@ async fn test_app_with_two_accounts_and_affinity(
 async fn test_app_with_two_accounts_and_affinity_status(
     base_url: String,
     affinity_account_status: &str,
-) -> (axum::Router, AppState, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db(&format!(
         "openai-responses-affinity-{affinity_account_status}"
     ))
@@ -537,14 +597,24 @@ async fn test_app_with_two_accounts_and_affinity_status(
 
 async fn test_app_with_two_accounts(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (app, _state, api_key, pool, dir) = test_app_with_two_accounts_and_state(base_url).await;
     (app, api_key, pool, dir)
 }
 
 async fn test_app_with_two_accounts_and_logging(
     base_url: String,
-) -> (axum::Router, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (app, _state, api_key, pool, dir) =
         test_app_with_two_accounts_and_state_config(base_url, |config| {
             config.logging.enabled = true;
@@ -555,14 +625,26 @@ async fn test_app_with_two_accounts_and_logging(
 
 async fn test_app_with_two_accounts_and_state(
     base_url: String,
-) -> (axum::Router, AppState, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     test_app_with_two_accounts_and_state_config(base_url, |_| {}).await
 }
 
 async fn test_app_with_two_accounts_and_state_config(
     base_url: String,
     configure: impl FnOnce(&mut AppConfig),
-) -> (axum::Router, AppState, String, PgPool, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    AppState,
+    String,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db("openai-responses-fallback").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
@@ -683,7 +765,7 @@ async fn insert_model_snapshot(redis: &codex_proxy_rs::infra::redis::RedisConnec
 }
 
 async fn insert_session_affinity(
-    service: &codex_proxy_rs::dispatch::affinity::RuntimeSessionAffinityService,
+    service: &codex_proxy_rs::dispatch::affinity::SessionAffinityService,
     response_id: &str,
     account_id: &str,
 ) {

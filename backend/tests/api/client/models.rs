@@ -107,7 +107,11 @@ async fn model_detail_route_should_accept_configured_alias() {
 async fn test_app(
     db_name: &str,
     seed_client_key: bool,
-) -> (Router, Option<String>, tempfile::TempDir) {
+) -> (
+    Router,
+    Option<String>,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db(db_name).await;
     let plaintext = if seed_client_key {
         Some(insert_client_api_key(&pool).await)
@@ -121,7 +125,7 @@ async fn test_app(
 async fn test_app_with_aliases(
     db_name: &str,
     model_aliases: BTreeMap<String, String>,
-) -> (Router, String, tempfile::TempDir) {
+) -> (Router, String, crate::support::storage::TestDatabaseGuard) {
     let (pool, dir) = init_test_db(db_name).await;
     let plaintext = insert_client_api_key(&pool).await;
     let mut config = test_config(test_database_url());
@@ -138,9 +142,13 @@ async fn build_test_app(
     pool: sqlx::PgPool,
     config: codex_proxy_rs::bootstrap::config::AppConfig,
     plaintext: Option<String>,
-    dir: tempfile::TempDir,
+    dir: crate::support::storage::TestDatabaseGuard,
     label: &str,
-) -> (Router, Option<String>, tempfile::TempDir) {
+) -> (
+    Router,
+    Option<String>,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let redis = create_test_redis(label).await;
     seed_model_snapshot(&redis).await;
     let stores = background_task_stores(pool.clone(), redis);

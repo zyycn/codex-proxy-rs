@@ -9,19 +9,19 @@ use async_trait::async_trait;
 use axum::{extract::State, http::StatusCode, middleware, routing::get, Router};
 
 use crate::{
-    accounts::{
-        manage::AccountManageService, pool::RuntimeAccountPoolService,
-        refresh::RuntimeTokenRefreshService, store::AccountStore,
-    },
     api::{
         admin, assets, client,
         middleware::{request_id::attach_request_id, trace::http_trace_layer},
     },
     auth::service::SessionService,
-    dispatch::{affinity::RuntimeSessionAffinityService, service::ResponseDispatchService},
+    dispatch::{affinity::SessionAffinityService, service::ResponseDispatchService},
+    fleet::{
+        manage::AccountManageService, pool::AccountPoolService, refresh::TokenRefreshService,
+        store::AccountStore,
+    },
     keys::{manage::KeyManageService, service::KeyVerifier},
     models::service::ModelService,
-    settings::service::RuntimeSettingsService,
+    settings::service::SettingsService,
     telemetry::{
         account_usage::query::AccountUsageQueryService, ops::query::OpsQueryService,
         usage::query::UsageQueryService,
@@ -38,15 +38,15 @@ pub struct ApiServices {
     pub client_keys: Arc<KeyVerifier>,
     pub admin_client_keys: Arc<KeyManageService>,
     pub admin_sessions: Arc<SessionService>,
-    pub settings: Arc<RuntimeSettingsService>,
+    pub settings: Arc<SettingsService>,
     pub admin_accounts: Arc<AccountManageService>,
     pub usage_records: Arc<UsageQueryService>,
     pub ops_errors: Arc<OpsQueryService>,
     pub usage: Arc<AccountUsageQueryService>,
-    pub account_pool: Arc<RuntimeAccountPoolService>,
-    pub token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
+    pub account_pool: Arc<AccountPoolService>,
+    pub token_refresh: Arc<TokenRefreshService<OpenAiTokenClient>>,
     pub responses: Arc<ResponseDispatchService>,
-    pub session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub session_affinity: Arc<SessionAffinityService>,
     pub fingerprint: RuntimeFingerprint,
     pub process_control: Arc<dyn ProcessControl>,
 }

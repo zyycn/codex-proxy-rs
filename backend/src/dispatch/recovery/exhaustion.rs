@@ -1,6 +1,6 @@
 //! 账号耗尽状态聚合。
 
-use crate::accounts::account::AccountStatus;
+use crate::fleet::account::AccountStatus;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ExhaustedAccountKind {
