@@ -1,6 +1,5 @@
 //! 请求调度模块（账号选择、回退、恢复、会话亲和性）。
 
-mod auth_recovery;
 pub mod cloudflare;
 pub mod errors;
 mod exhaustion;

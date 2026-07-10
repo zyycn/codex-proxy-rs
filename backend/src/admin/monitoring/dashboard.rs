@@ -42,7 +42,10 @@ use crate::{
         },
     },
     runtime::state::AppState,
-    upstream::accounts::model::{Account, AccountStatus},
+    upstream::accounts::{
+        model::{Account, AccountStatus},
+        token_refresh::token_refresh_status_eligible,
+    },
 };
 
 const DASHBOARD_ACCOUNT_USAGE_LIMIT: u32 = 4;
@@ -825,8 +828,9 @@ fn account_pool_summary(
     };
     for account in accounts {
         match account.status {
-            AccountStatus::Active | AccountStatus::Expired
-                if refreshing_account_ids.contains(&account.id) =>
+            status
+                if token_refresh_status_eligible(status)
+                    && refreshing_account_ids.contains(&account.id) =>
             {
                 summary.refreshing += 1;
             }

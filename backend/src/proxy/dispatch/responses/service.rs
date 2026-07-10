@@ -22,7 +22,6 @@ use crate::{
         usage_record_service::AdminUsageRecordService,
     },
     proxy::dispatch::{
-        auth_recovery::trigger_refresh_after_auth_failure,
         cloudflare::{
             cloudflare_challenge_error_message, cloudflare_path_block_error_message,
             is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
@@ -56,7 +55,6 @@ use crate::{
     upstream::accounts::{
         model::{Account, AccountStatus},
         pool::{AccountAcquireRequest, RuntimeAccountPoolService},
-        token_refresh::RuntimeTokenRefreshService,
     },
     upstream::{
         models::service::ModelService,
@@ -67,7 +65,6 @@ use crate::{
                 CollectedResponse,
             },
         },
-        token_client::OpenAiTokenClient,
         transport::{
             backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
             CodexBackendResponse,
@@ -112,7 +109,6 @@ pub struct ResponseDispatchService {
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     usage_records: Arc<AdminUsageRecordService>,
     ops_errors: Arc<AdminOpsErrorLogService>,
-    token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -124,7 +120,6 @@ pub(crate) struct ResponseDispatchServiceParts {
     pub session_affinity: Arc<RuntimeSessionAffinityService>,
     pub usage_records: Arc<AdminUsageRecordService>,
     pub ops_errors: Arc<AdminOpsErrorLogService>,
-    pub token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
     pub installation_id: Option<String>,
     pub cloudflare: CloudflareRecovery,
 }
@@ -182,7 +177,6 @@ impl ResponseDispatchService {
             )))),
             usage_records: parts.usage_records,
             ops_errors: parts.ops_errors,
-            token_refresh: parts.token_refresh,
             installation_id: parts.installation_id,
             cloudflare: parts.cloudflare,
         }
@@ -713,11 +707,6 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            trigger_refresh_after_auth_failure(
-                                &self.token_refresh,
-                                &release_account_id,
-                                account_status,
-                            );
                             excluded_account_ids.push(release_account_id);
                             continue;
                         }
@@ -769,11 +758,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    trigger_refresh_after_auth_failure(
-                        &self.token_refresh,
-                        &release_account_id,
-                        account_status,
-                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1244,11 +1228,6 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            trigger_refresh_after_auth_failure(
-                                &self.token_refresh,
-                                &release_account_id,
-                                account_status,
-                            );
                             excluded_account_ids.push(release_account_id);
                             continue;
                         }
@@ -1415,11 +1394,6 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            trigger_refresh_after_auth_failure(
-                                &self.token_refresh,
-                                &release_account_id,
-                                account_status,
-                            );
                             excluded_account_ids.push(release_account_id);
                             self.account_pool.release(&account.id).await;
                             continue;
@@ -1527,11 +1501,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    trigger_refresh_after_auth_failure(
-                        &self.token_refresh,
-                        &release_account_id,
-                        account_status,
-                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
@@ -1798,11 +1767,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    trigger_refresh_after_auth_failure(
-                        &self.token_refresh,
-                        &release_account_id,
-                        account_status,
-                    );
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {

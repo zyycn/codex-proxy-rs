@@ -42,7 +42,7 @@ impl Default for AdminSettings {
     fn default() -> Self {
         Self {
             model_aliases: BTreeMap::new(),
-            refresh_margin_seconds: 300,
+            refresh_margin_seconds: 3600,
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,
             request_interval_ms: 50,

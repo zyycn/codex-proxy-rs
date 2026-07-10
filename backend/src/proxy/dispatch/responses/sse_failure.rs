@@ -52,7 +52,7 @@ where
     failure.upstream_code.as_deref().is_some_and(code_signal) || message_signal(&failure.message)
 }
 
-pub(super) fn is_quota_exhausted_sse_failure(failure: &ResponsesSseFailure) -> bool {
+pub(crate) fn is_quota_exhausted_sse_failure(failure: &ResponsesSseFailure) -> bool {
     sse_failure_matches_parts(
         failure,
         |code| matches!(code, "quota_exceeded" | "insufficient_quota"),
@@ -80,7 +80,7 @@ fn is_auth_sse_failure_message(message: &str) -> bool {
         || message.contains("token expired")
 }
 
-pub(super) fn is_auth_sse_failure(failure: &ResponsesSseFailure) -> bool {
+pub(crate) fn is_auth_sse_failure(failure: &ResponsesSseFailure) -> bool {
     sse_failure_matches_parts(
         failure,
         is_auth_sse_failure_code,
@@ -107,11 +107,21 @@ pub(super) fn client_error_invalid_reasoning_replay(error: &CodexClientError) ->
     )
 }
 
-pub(super) fn auth_sse_failure_account_status(failure: &ResponsesSseFailure) -> AccountStatus {
+pub(crate) fn auth_sse_failure_account_status(failure: &ResponsesSseFailure) -> AccountStatus {
     if sse_failure_matches(failure, is_banned_auth_signal) {
         AccountStatus::Banned
     } else {
         AccountStatus::Expired
+    }
+}
+
+pub(crate) fn sse_failure_account_status(failure: &ResponsesSseFailure) -> Option<AccountStatus> {
+    if is_quota_exhausted_sse_failure(failure) {
+        Some(AccountStatus::QuotaExhausted)
+    } else if is_auth_sse_failure(failure) {
+        Some(auth_sse_failure_account_status(failure))
+    } else {
+        None
     }
 }
 

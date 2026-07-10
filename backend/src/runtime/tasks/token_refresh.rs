@@ -73,7 +73,6 @@ where
                     info!(
                         scheduled = summary.scheduled,
                         immediate = summary.immediate,
-                        recovery_scheduled = summary.recovery_scheduled,
                         replaced = summary.replaced,
                         "token 刷新定时器已调度"
                     );

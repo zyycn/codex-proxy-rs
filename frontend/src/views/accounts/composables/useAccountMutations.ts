@@ -1,5 +1,5 @@
 import { clamp } from 'es-toolkit'
-import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { computed, onMounted, ref, type Ref } from 'vue'
 import dayjs from 'dayjs'
 
 import {
@@ -77,8 +77,6 @@ export function useAccountMutations(options: {
   const authorizingOAuth = authorizingOAuthAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
-  let tokenRefreshPollTimer: ReturnType<typeof window.setInterval> | undefined
-
   const createForm = ref({
     mode: 'oauth',
     tokenText: '',
@@ -404,42 +402,8 @@ export function useAccountMutations(options: {
     return `cpr-accounts-selected-${selectedCount}-${dayjs().format('YYYY-MM-DD')}.json`
   }
 
-  function hasTokenRefreshingAccount() {
-    return accounts.value.some((account) => account.tokenRefreshing)
-  }
-
-  function startTokenRefreshPolling() {
-    if (tokenRefreshPollTimer !== undefined) return
-    tokenRefreshPollTimer = window.setInterval(() => {
-      if (!loading.value && hasTokenRefreshingAccount()) {
-        void loadAccounts()
-      }
-    }, 2000)
-  }
-
-  function stopTokenRefreshPolling() {
-    if (tokenRefreshPollTimer === undefined) return
-    window.clearInterval(tokenRefreshPollTimer)
-    tokenRefreshPollTimer = undefined
-  }
-
-  watch(
-    () => hasTokenRefreshingAccount(),
-    (hasRefreshing) => {
-      if (hasRefreshing) {
-        startTokenRefreshPolling()
-      } else {
-        stopTokenRefreshPolling()
-      }
-    },
-  )
-
   onMounted(() => {
     loadAccounts()
-  })
-
-  onUnmounted(() => {
-    stopTokenRefreshPolling()
   })
 
   return {

@@ -57,7 +57,11 @@ interface AccountModelsResponse {
   }>
 }
 
-export function useAccountConnectionTest() {
+interface AccountConnectionTestOptions {
+  onResult?: () => void
+}
+
+export function useAccountConnectionTest(options: AccountConnectionTestOptions = {}) {
   const showConnectionTestModal = shallowRef(false)
   const testingAccount = shallowRef<ConnectionTestAccount | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
@@ -270,6 +274,7 @@ export function useAccountConnectionTest() {
         appendConnectionTestLog(connectionTestError.value, 'danger')
         finishConnectionTest('error')
       }
+      options.onResult?.()
       clearConnectionTestRun()
       return
     }
@@ -277,6 +282,7 @@ export function useAccountConnectionTest() {
       connectionTestError.value = event.error || '测试连接失败'
       appendConnectionTestLog(connectionTestError.value, 'danger')
       finishConnectionTest('error')
+      options.onResult?.()
       clearConnectionTestRun()
     }
   }

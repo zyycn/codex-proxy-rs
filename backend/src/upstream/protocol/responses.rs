@@ -200,7 +200,7 @@ pub struct ResponsesSseFailure {
 }
 
 impl ResponsesSseFailure {
-    fn from_event(event: &str, value: &Value) -> Self {
+    pub(crate) fn from_event(event: &str, value: &Value) -> Self {
         Self {
             event: event.to_string(),
             message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
