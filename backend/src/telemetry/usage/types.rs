@@ -141,7 +141,7 @@ pub(crate) fn metadata_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
 
 /// 响应事件记录（供 dispatch 模块使用）。
 pub struct ResponseUsageRecord<'a> {
-    pub usage_records: &'a crate::telemetry::usage::query::UsageQueryService,
+    pub recorder: &'a crate::telemetry::recorder::Recorder,
     pub request_id: &'a str,
     pub client_api_key_id: Option<&'a str>,
     pub account_id: &'a str,

@@ -3,15 +3,15 @@ use super::*;
 pub(super) fn dashboard_cards(
     accounts: &[Account],
     buckets: &[AccountUsageTimeBucket],
-    usage_summary: &UsageRecordSummary,
+    lifetime_usage: &AccountUsageSummary,
 ) -> DashboardCardsData {
-    dashboard_cards_at(accounts, buckets, usage_summary, Utc::now())
+    dashboard_cards_at(accounts, buckets, lifetime_usage, Utc::now())
 }
 
 pub(super) fn dashboard_cards_at(
     accounts: &[Account],
     buckets: &[AccountUsageTimeBucket],
-    usage_summary: &UsageRecordSummary,
+    lifetime_usage: &AccountUsageSummary,
     now: DateTime<Utc>,
 ) -> DashboardCardsData {
     let today_start = china_day_start(now);
@@ -19,10 +19,10 @@ pub(super) fn dashboard_cards_at(
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
     let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
-    let total_requests = usage_summary.total_requests;
-    let total_tokens = usage_summary.total_tokens;
-    let total_cached_tokens = usage_summary.cached_tokens;
-    let total_hit_rate = summary_cache_hit_rate(usage_summary);
+    let total_requests = nonnegative_i64_to_u64(lifetime_usage.request_count);
+    let total_tokens = nonnegative_i64_to_u64(lifetime_usage.total_tokens);
+    let total_cached_tokens = nonnegative_i64_to_u64(lifetime_usage.cached_tokens);
+    let total_hit_rate = summary_cache_hit_rate(lifetime_usage);
 
     let total_accounts = accounts.len() as u64;
     let enabled_accounts = accounts
@@ -77,10 +77,10 @@ pub(super) fn dashboard_cards_at(
     }
 }
 
-pub(super) fn summary_cache_hit_rate(summary: &UsageRecordSummary) -> Option<f64> {
-    let input_tokens = summary.input_tokens;
+pub(super) fn summary_cache_hit_rate(summary: &AccountUsageSummary) -> Option<f64> {
+    let input_tokens = nonnegative_i64_to_u64(summary.input_tokens);
     if input_tokens > 0 {
-        Some(summary.cached_tokens as f64 / input_tokens as f64)
+        Some(nonnegative_i64_to_u64(summary.cached_tokens) as f64 / input_tokens as f64)
     } else {
         None
     }

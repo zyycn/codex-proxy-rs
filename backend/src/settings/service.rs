@@ -1,9 +1,9 @@
-//! 运行时设置校验、持久化与快照广播。
+//! 运行时设置校验、持久化与当前快照。
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use subtle::ConstantTimeEq;
-use tokio::sync::watch;
+use tokio::sync::RwLock;
 
 use crate::infra::identity::{generate_admin_api_key, hash_credential};
 
@@ -48,19 +48,18 @@ impl SettingsService {
     }
 }
 
-/// 持久化设置的当前快照与变更广播。
+/// 持久化设置的当前快照。
 #[derive(Clone)]
 pub struct RuntimeSettingsService {
     store: PgSettingsStore,
-    sender: watch::Sender<Arc<SettingsSnapshot>>,
+    snapshot: Arc<RwLock<Arc<SettingsSnapshot>>>,
 }
 
 impl RuntimeSettingsService {
     pub fn new(settings: SettingsSnapshot, pool: sqlx::PgPool) -> Self {
-        let (sender, _) = watch::channel(Arc::new(settings));
         Self {
             store: PgSettingsStore::new(pool),
-            sender,
+            snapshot: Arc::new(RwLock::new(Arc::new(settings))),
         }
     }
 
@@ -73,23 +72,20 @@ impl RuntimeSettingsService {
             .await
     }
 
-    pub fn current(&self) -> Arc<SettingsSnapshot> {
-        self.sender.borrow().clone()
-    }
-
-    pub fn subscribe(&self) -> watch::Receiver<Arc<SettingsSnapshot>> {
-        self.sender.subscribe()
+    pub async fn current(&self) -> Arc<SettingsSnapshot> {
+        self.snapshot.read().await.clone()
     }
 
     pub async fn update(
         &self,
         patch: SettingsPatch,
     ) -> Result<Arc<SettingsSnapshot>, SettingsError> {
-        let mut next = (*self.current()).clone();
+        let mut current = self.snapshot.write().await;
+        let mut next = (**current).clone();
         SettingsService::apply_patch(&mut next, patch)?;
         self.store.save(&next).await?;
         let next = Arc::new(next);
-        self.sender.send_replace(next.clone());
+        *current = next.clone();
         Ok(next)
     }
 
@@ -98,7 +94,8 @@ impl RuntimeSettingsService {
     }
 
     pub async fn regenerate_admin_api_key(&self) -> Result<String, SettingsError> {
-        self.store.ensure(&self.current()).await?;
+        let current = self.current().await;
+        self.store.ensure(&current).await?;
         let key = generate_admin_api_key();
         self.store
             .set_admin_api_key_hash(&hash_credential(&key))

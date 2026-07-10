@@ -7,9 +7,10 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::dispatch::{errors::DispatchFailureClass, responses::errors::ResponseDispatchError};
-
-use super::responses::response_failed_sse_event as encode_response_failed_sse_event;
+use crate::{
+    dispatch::{errors::DispatchFailureClass, responses::errors::ResponseDispatchError},
+    upstream::openai::protocol::sse::response_failed_sse_event as encode_response_failed_sse_event,
+};
 
 const NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE: &str = "No active upstream account is available";
 const NO_AVAILABLE_RESPONSES_ACCOUNTS_MESSAGE: &str =

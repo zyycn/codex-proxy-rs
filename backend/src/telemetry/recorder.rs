@@ -7,15 +7,86 @@ use serde_json::Value;
 use crate::{
     infra::time::elapsed_millis_i64,
     telemetry::{
-        ops::query::OpsQueryService,
+        ops::store::{PgOpsErrorLogStore, PgOpsErrorLogStoreError},
         ops::types::OpsErrorLog,
-        usage::types::{ResponseUsageRecord, UsageRecord},
+        usage::{
+            store::{PgUsageRecordStore, PgUsageRecordStoreError},
+            types::{
+                metadata_i64, metadata_service_tier, metadata_string as metadata_string_any,
+                ResponseUsageRecord, UsageRecord,
+            },
+        },
     },
     upstream::openai::protocol::responses::{CodexCompactRequest, CodexResponsesRequest},
 };
 
+/// 成功与失败事实的唯一写入入口。
+#[derive(Clone)]
+pub struct Recorder {
+    usage_records: PgUsageRecordStore,
+    ops_errors: PgOpsErrorLogStore,
+    usage_enabled: bool,
+    capture_body: bool,
+}
+
+/// 遥测事实写入错误。
+#[derive(Debug, thiserror::Error)]
+pub enum RecorderError {
+    #[error("invalid success usage fact")]
+    InvalidUsageFact,
+    #[error(transparent)]
+    Usage(#[from] PgUsageRecordStoreError),
+    #[error(transparent)]
+    Ops(#[from] PgOpsErrorLogStoreError),
+}
+
+impl Recorder {
+    pub fn new(
+        usage_records: PgUsageRecordStore,
+        ops_errors: PgOpsErrorLogStore,
+        usage_enabled: bool,
+        capture_body: bool,
+    ) -> Self {
+        Self {
+            usage_records,
+            ops_errors,
+            usage_enabled,
+            capture_body,
+        }
+    }
+
+    /// 校验并写入一条成功事实及其时间桶。
+    pub async fn record_usage(&self, mut event: UsageRecord) -> Result<(), RecorderError> {
+        if !self.usage_enabled {
+            return Ok(());
+        }
+        if !is_usage_fact(&event) {
+            tracing::warn!(
+                usage_record_id = %event.id,
+                request_id = event.request_id.as_deref().unwrap_or(""),
+                account_id = event.account_id,
+                model = event.model,
+                status_code = event.status_code,
+                "rejected invalid success usage fact"
+            );
+            return Err(RecorderError::InvalidUsageFact);
+        }
+        apply_success_capture_body_policy(&mut event, self.capture_body);
+        self.usage_records.append(&event).await?;
+        Ok(())
+    }
+
+    /// 规范化并写入一条失败事实及其时间桶。
+    pub async fn record_error(&self, mut event: OpsErrorLog) -> Result<(), RecorderError> {
+        lift_error_fact_fields(&mut event);
+        apply_error_capture_body_policy(&mut event, self.capture_body);
+        self.ops_errors.append(&event).await?;
+        Ok(())
+    }
+}
+
 pub(crate) struct DispatchErrorLogRecord<'a> {
-    pub ops_errors: &'a OpsQueryService,
+    pub recorder: &'a Recorder,
     pub request_id: &'a str,
     pub client_api_key_id: Option<&'a str>,
     pub provider: Option<&'a str>,
@@ -43,7 +114,7 @@ pub(crate) async fn record_dispatch_error_event(record: DispatchErrorLogRecord<'
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
     event.metadata = metadata;
 
-    if let Err(error) = record.ops_errors.record(event).await {
+    if let Err(error) = record.recorder.record_error(event).await {
         tracing::warn!(
             account_id = record.account_id.unwrap_or(""),
             error = %error,
@@ -91,8 +162,117 @@ pub(crate) async fn record_response_event(record: ResponseUsageRecord<'_>) {
     lift_success_fact_fields(&mut event, &mut metadata);
     event.metadata = metadata;
 
-    if let Err(error) = record.usage_records.record(event).await {
+    if let Err(error) = record.recorder.record_usage(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
+    }
+}
+
+fn is_usage_fact(event: &UsageRecord) -> bool {
+    (200..=399).contains(&event.status_code)
+        && !event.provider.trim().is_empty()
+        && !event.account_id.trim().is_empty()
+        && !event.model.trim().is_empty()
+}
+
+fn apply_success_capture_body_policy(event: &mut UsageRecord, capture_body: bool) {
+    if capture_body {
+        return;
+    }
+    remove_body_fields(&mut event.metadata);
+}
+
+fn apply_error_capture_body_policy(event: &mut OpsErrorLog, capture_body: bool) {
+    let Some(metadata) = event.metadata.as_object_mut() else {
+        return;
+    };
+    for key in body_fields() {
+        if capture_body {
+            if let Some(Value::String(value)) = metadata.get_mut(key) {
+                value.truncate(4096);
+            }
+        } else {
+            metadata.remove(key);
+        }
+    }
+}
+
+fn remove_body_fields(metadata: &mut Value) {
+    let Some(metadata) = metadata.as_object_mut() else {
+        return;
+    };
+    for key in body_fields() {
+        metadata.remove(key);
+    }
+}
+
+fn body_fields() -> [&'static str; 5] {
+    [
+        "body",
+        "rawBody",
+        "requestBody",
+        "responseBody",
+        "upstreamBody",
+    ]
+}
+
+fn lift_error_fact_fields(event: &mut OpsErrorLog) {
+    event.client_status_code = event
+        .client_status_code
+        .or_else(|| metadata_i64(&event.metadata, &["clientStatusCode", "client_status_code"]));
+    event.upstream_status_code = event
+        .upstream_status_code
+        .or_else(|| metadata_i64(&event.metadata, &["upstreamStatusCode", "upstreamStatus"]));
+    event.transport = event
+        .transport
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["transport"]));
+    event.attempt_index = event
+        .attempt_index
+        .or_else(|| metadata_i64(&event.metadata, &["attemptIndex", "attempt_index"]));
+    event.failure_class = event
+        .failure_class
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["failureClass", "failure_class"]));
+    event.response_id = event
+        .response_id
+        .take()
+        .or_else(|| metadata_string_any(&event.metadata, &["responseId", "response_id"]));
+    event.upstream_request_id = event.upstream_request_id.take().or_else(|| {
+        metadata_string_any(
+            &event.metadata,
+            &[
+                "upstreamRequestId",
+                "upstream_request_id",
+                "openaiRequestId",
+            ],
+        )
+    });
+    event.service_tier = event
+        .service_tier
+        .take()
+        .or_else(|| metadata_service_tier(&event.metadata).map(ToString::to_string));
+
+    let Some(metadata) = event.metadata.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "clientStatusCode",
+        "client_status_code",
+        "upstreamStatusCode",
+        "upstreamStatus",
+        "transport",
+        "attemptIndex",
+        "attempt_index",
+        "failureClass",
+        "failure_class",
+        "responseId",
+        "response_id",
+        "upstreamRequestId",
+        "upstream_request_id",
+        "openaiRequestId",
+        "serviceTier",
+    ] {
+        metadata.remove(key);
     }
 }
 

@@ -29,13 +29,14 @@ use crate::{
         service::{ModelService, ModelServiceError},
         store::{ModelSnapshotStore, RedisModelSnapshotStore},
     },
-    settings::{service::RuntimeSettingsService, SettingsSnapshot},
+    settings::{service::RuntimeSettingsService, SettingsError, SettingsPatch, SettingsSnapshot},
     telemetry::{
         account_usage::query::AccountUsageQueryService,
         account_usage::store::PgAccountUsageStore,
         buckets::store::PgRequestBucketStore,
         ops::query::OpsQueryService,
         ops::store::PgOpsErrorLogStore,
+        recorder::Recorder,
         usage::query::UsageQueryService,
         usage::store::{PgUsageRecordStore, DEFAULT_USAGE_RECORD_CAPTURE_BODY},
     },
@@ -109,6 +110,7 @@ pub struct Services {
     pub installation_id: Option<String>,
     pub background_tasks: BackgroundTaskStores,
     account_pool_static: AccountPoolStaticSettings,
+    settings_update_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -203,13 +205,12 @@ impl Services {
                 Arc::new(client)
             }
         };
-        let usage_records = Arc::new(UsageQueryService::new(
+        let usage_records = Arc::new(UsageQueryService::new(stores.usage_records.clone()));
+        let ops_errors = Arc::new(OpsQueryService::new(stores.ops_errors.clone()));
+        let recorder = Arc::new(Recorder::new(
             stores.usage_records.clone(),
-            usage_record_options.enabled,
-            usage_record_options.capture_body,
-        ));
-        let ops_errors = Arc::new(OpsQueryService::new(
             stores.ops_errors.clone(),
+            usage_record_options.enabled,
             usage_record_options.capture_body,
         ));
         let account_pool_static = AccountPoolStaticSettings {
@@ -287,8 +288,7 @@ impl Services {
             models: models.clone(),
             codex: codex.clone(),
             session_affinity: session_affinity.clone(),
-            usage_records: usage_records.clone(),
-            ops_errors: ops_errors.clone(),
+            recorder,
             installation_id: installation_id.clone(),
             cloudflare: cloudflare_recovery,
         }));
@@ -317,6 +317,7 @@ impl Services {
             installation_id,
             background_tasks: stores,
             account_pool_static,
+            settings_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -326,8 +327,18 @@ impl Services {
         Ok(())
     }
 
-    /// 将已持久化的设置快照同步到各运行时消费者。
-    pub async fn apply_settings(&self, settings: &SettingsSnapshot) {
+    /// 持久化设置并同步到所有运行时消费者。
+    pub async fn update_settings(
+        &self,
+        patch: SettingsPatch,
+    ) -> Result<Arc<SettingsSnapshot>, SettingsError> {
+        let _guard = self.settings_update_lock.lock().await;
+        let settings = self.settings.update(patch).await?;
+        self.apply_settings(&settings).await;
+        Ok(settings)
+    }
+
+    async fn apply_settings(&self, settings: &SettingsSnapshot) {
         self.models.update_config(ModelConfig {
             model_aliases: settings.model_aliases.clone(),
         });

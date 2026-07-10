@@ -1,5 +1,6 @@
 //! SSE 事件解析与编码。
 
+use serde_json::json;
 use thiserror::Error;
 
 /// 单条 SSE 事件。
@@ -20,6 +21,41 @@ pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 
 /// SSE 流结束标记帧。
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
+
+/// 编码 OpenAI Responses `response.failed` SSE 事件。
+pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
+    response_failed_sse_event_with_id(None, error_type, code, message)
+}
+
+/// 使用指定 response id 编码 OpenAI Responses `response.failed` SSE 事件。
+pub fn response_failed_sse_event_with_id(
+    response_id: Option<&str>,
+    error_type: &str,
+    code: &str,
+    message: &str,
+) -> String {
+    let error = json!({
+        "type": error_type,
+        "code": code,
+        "message": message,
+    });
+    let response_id = response_id
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(
+            || format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
+            ToString::to_string,
+        );
+    let data = json!({
+        "type": "response.failed",
+        "response": {
+            "id": response_id,
+            "status": "failed",
+            "error": error,
+        },
+        "error": error,
+    });
+    encode_sse_event("response.failed", &data.to_string())
+}
 
 /// 判断 SSE 文本是否已经包含结束标记。
 pub fn sse_body_has_done(body: &str) -> bool {

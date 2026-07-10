@@ -54,7 +54,7 @@ async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_mis
 #[tokio::test]
 async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets(
 ) {
-    let (app, store, _pool, _dir) = dashboard_test_app(
+    let (app, store, pool, _dir) = dashboard_test_app(
         "dashboard-traffic-latency",
         crate::support::fingerprint::test_fingerprint(),
     )
@@ -80,22 +80,23 @@ async fn dashboard_summary_should_calculate_today_traffic_and_average_first_toke
         .append(&usage_record_with_tokens(yesterday_record_at, 30))
         .await
         .unwrap();
+    seed_lifetime_usage_summary(&pool, 7, 400, 500, 100).await;
 
     let body = dashboard_summary(app).await;
 
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequests"], "2");
     assert_eq!(body["data"]["cards"]["traffic"]["todayRequestsValue"], 2);
-    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "3");
+    assert_eq!(body["data"]["cards"]["traffic"]["totalRequests"], "7");
     assert_eq!(
         body["data"]["cards"]["traffic"]["yesterdayRequestsValue"],
         1
     );
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokens"], "30");
     assert_eq!(body["data"]["cards"]["tokens"]["todayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "60");
+    assert_eq!(body["data"]["cards"]["tokens"]["totalTokens"], "900");
     assert_eq!(body["data"]["cards"]["tokens"]["yesterdayTokensValue"], 30);
-    assert_eq!(body["data"]["cards"]["cache"]["totalHitRate"], "0.0%");
-    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "0");
+    assert_eq!(body["data"]["cards"]["cache"]["totalHitRate"], "25.0%");
+    assert_eq!(body["data"]["cards"]["cache"]["totalCachedTokens"], "100");
     assert_eq!(
         body["data"]["cards"]["cache"]["averageFirstTokenLatencyMs"],
         "300 ms"
@@ -698,6 +699,30 @@ async fn dashboard_trend(app: axum::Router, kind: &str) -> Value {
 async fn seed_usage_summary(pool: &PgPool, input_tokens: u64, output_tokens: u64) {
     seed_usage_summary_with_last_used(pool, input_tokens, output_tokens, "2026-06-18T00:00:00Z")
         .await;
+}
+
+async fn seed_lifetime_usage_summary(
+    pool: &PgPool,
+    request_count: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+) {
+    seed_dashboard_account(pool, "acct_lifetime", "lifetime@example.com").await;
+    sqlx::query(
+        "insert into account_usage
+         (account_id, request_count, input_tokens, output_tokens, cached_tokens, total_tokens)
+         values ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("acct_lifetime")
+    .bind(request_count as i64)
+    .bind(input_tokens as i64)
+    .bind(output_tokens as i64)
+    .bind(cached_tokens as i64)
+    .bind((input_tokens + output_tokens) as i64)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn seed_usage_summary_with_last_used(

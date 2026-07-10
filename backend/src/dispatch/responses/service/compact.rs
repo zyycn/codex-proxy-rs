@@ -138,7 +138,7 @@ impl ResponseDispatchService {
                     insert_response_upstream_diagnostics(&mut metadata, &response.diagnostics);
                     insert_response_trace_metadata(&mut metadata, &trace, Some(&attempt));
                     record_response_event(ResponseUsageRecord {
-                        usage_records: &self.usage_records,
+                        recorder: &self.recorder,
                         request_id,
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: &account.id,
@@ -273,7 +273,7 @@ impl ResponseDispatchService {
         error: &ResponseDispatchError,
     ) {
         record_response_dispatch_error_event(ResponseDispatchErrorEventRecord {
-            ops_errors: &self.ops_errors,
+            recorder: &self.recorder,
             request_id,
             client_api_key_id,
             account_id,

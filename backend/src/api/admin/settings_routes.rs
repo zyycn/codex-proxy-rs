@@ -52,7 +52,7 @@ pub(crate) async fn settings(
     State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    let config = state.services.settings.current();
+    let config = state.services.settings.current().await;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AdminSettingsData::from_settings(&config)),
@@ -68,11 +68,9 @@ pub(crate) async fn update_settings(
     let patch = parse_settings_patch(&body)?;
     let config = state
         .services
-        .settings
-        .update(patch)
+        .update_settings(patch)
         .await
         .map_err(settings_service_error)?;
-    state.services.apply_settings(&config).await;
 
     Ok(AdminResponse::new(
         StatusCode::OK,

@@ -322,7 +322,7 @@ impl ResponseDispatchService {
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
                                 record_response_upstream_error_event(
                                     ResponseUpstreamErrorEventRecord {
-                                        ops_errors: &self.ops_errors,
+                                        recorder: &self.recorder,
                                         request_id,
                                         account_id: &release_account_id,
                                         account_email: account.email.as_deref(),
@@ -422,7 +422,7 @@ impl ResponseDispatchService {
                         self.account_pool.release(&release_account_id).await;
                         record_prefetched_response_stream_failure_event(
                             ResponseStreamFailureEventRecord {
-                                ops_errors: &self.ops_errors,
+                                recorder: &self.recorder,
                                 request_id,
                                 account_id: &release_account_id,
                                 route,
@@ -447,8 +447,7 @@ impl ResponseDispatchService {
                         account_pool: Arc::clone(&self.account_pool),
                         session_affinity: Arc::clone(&self.session_affinity),
                         reasoning_replay: Arc::clone(&self.reasoning_replay),
-                        usage_records: Arc::clone(&self.usage_records),
-                        ops_errors: Arc::clone(&self.ops_errors),
+                        recorder: Arc::clone(&self.recorder),
                         cloudflare: self.cloudflare.clone(),
                         account_id: account.id,
                         account_plan_type: account.plan_type,
@@ -580,7 +579,7 @@ impl ResponseDispatchService {
                 Err(error) => {
                     self.account_pool.release(&release_account_id).await;
                     record_response_upstream_error_event(ResponseUpstreamErrorEventRecord {
-                        ops_errors: &self.ops_errors,
+                        recorder: &self.recorder,
                         request_id,
                         account_id: &release_account_id,
                         account_email: account.email.as_deref(),

@@ -5,7 +5,6 @@ use tokio::sync::Mutex;
 
 use crate::{
     accounts::pool::RuntimeAccountPoolService,
-    api::client::responses::response_failed_sse_event_with_id,
     dispatch::{
         affinity::{
             resolve::{evict_reasoning_replay, record_response_affinity},
@@ -15,15 +14,12 @@ use crate::{
         reasoning_replay::ReasoningReplayCache,
     },
     infra::time::elapsed_millis_i64,
-    telemetry::{
-        ops::query::OpsQueryService, usage::query::UsageQueryService,
-        usage::types::UsageRecordLevel,
-    },
+    telemetry::{recorder::Recorder, usage::types::UsageRecordLevel},
     upstream::openai::{
         protocol::{
             events::extract_sse_usage,
             responses::{response_from_codex_sse, CodexResponsesRequest, CollectedResponse},
-            sse::parse_sse_events,
+            sse::{parse_sse_events, response_failed_sse_event_with_id},
         },
         transport::{
             CodexBackendTransport, CodexRateLimitHeaderUpdates, CodexTurnStateUpdate,
@@ -50,8 +46,7 @@ pub(super) struct LiveResponseStreamContext {
     pub(super) account_pool: Arc<RuntimeAccountPoolService>,
     pub(super) session_affinity: Arc<RuntimeSessionAffinityService>,
     pub(super) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
-    pub(super) usage_records: Arc<UsageQueryService>,
-    pub(super) ops_errors: Arc<OpsQueryService>,
+    pub(super) recorder: Arc<Recorder>,
     pub(super) cloudflare: CloudflareRecovery,
     pub(super) account_id: String,
     pub(super) account_plan_type: Option<String>,

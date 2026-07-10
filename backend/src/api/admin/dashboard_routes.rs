@@ -36,13 +36,13 @@ use crate::{
         },
     },
     telemetry::{
-        account_usage::query::AccountUsageTimeBucket,
+        account_usage::query::{AccountUsageSummary, AccountUsageTimeBucket},
         diagnostics::{
             fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
         },
         usage::{
             query::UsageQueryFilter,
-            store::{UsageRecordAccountUsage, UsageRecordSummary},
+            store::UsageRecordAccountUsage,
             types::{metadata_string, UsageRecord},
         },
     },
@@ -292,12 +292,7 @@ pub(crate) async fn dashboard_summary(
     let capacity = state.services.account_pool.capacity_summary_now().await;
     let now = Utc::now();
     let today_filter = today_usage_record_filter(now);
-    let usage_summary = state
-        .services
-        .usage_records
-        .summary(UsageQueryFilter::default())
-        .await
-        .unwrap_or_else(|_| UsageRecordSummary::default());
+    let lifetime_usage = state.services.usage.summary().await.unwrap_or_default();
     let account_usage_records = state
         .services
         .usage_records
@@ -327,7 +322,7 @@ pub(crate) async fn dashboard_summary(
     let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
     let quota_used_by_account =
         account_quota_used_percent_by_id(&state, &account_usage_records).await;
-    let settings = state.services.settings.current();
+    let settings = state.services.settings.current().await;
     let recent_usage_records = recent_events;
     let account_emails = state
         .services
@@ -341,7 +336,7 @@ pub(crate) async fn dashboard_summary(
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(DashboardSummaryData {
-            cards: dashboard_cards(&accounts, &time_buckets, &usage_summary),
+            cards: dashboard_cards(&accounts, &time_buckets, &lifetime_usage),
             trend,
             health_timeline: dashboard_health_timeline_data(&time_buckets),
             account_usage: account_usage_data(

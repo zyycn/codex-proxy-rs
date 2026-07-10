@@ -50,12 +50,10 @@ use crate::{
     },
     models::service::ModelService,
     telemetry::{
-        ops::query::OpsQueryService,
         recorder::{
             reasoning_effort_from_compact_request, reasoning_effort_from_request,
-            record_response_event,
+            record_response_event, Recorder,
         },
-        usage::query::UsageQueryService,
         usage::types::ResponseUsageRecord,
     },
     upstream::openai::{
@@ -107,8 +105,7 @@ pub struct ResponseDispatchService {
     codex: Arc<CodexBackendClient>,
     session_affinity: Arc<RuntimeSessionAffinityService>,
     reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
-    usage_records: Arc<UsageQueryService>,
-    ops_errors: Arc<OpsQueryService>,
+    recorder: Arc<Recorder>,
     installation_id: Option<String>,
     cloudflare: CloudflareRecovery,
 }
@@ -118,8 +115,7 @@ pub(crate) struct ResponseDispatchServiceParts {
     pub models: Arc<ModelService>,
     pub codex: Arc<CodexBackendClient>,
     pub session_affinity: Arc<RuntimeSessionAffinityService>,
-    pub usage_records: Arc<UsageQueryService>,
-    pub ops_errors: Arc<OpsQueryService>,
+    pub recorder: Arc<Recorder>,
     pub installation_id: Option<String>,
     pub cloudflare: CloudflareRecovery,
 }
@@ -175,8 +171,7 @@ impl ResponseDispatchService {
             reasoning_replay: Arc::new(Mutex::new(ReasoningReplayCache::new(Duration::seconds(
                 DEFAULT_REASONING_REPLAY_TTL_SECS,
             )))),
-            usage_records: parts.usage_records,
-            ops_errors: parts.ops_errors,
+            recorder: parts.recorder,
             installation_id: parts.installation_id,
             cloudflare: parts.cloudflare,
         }

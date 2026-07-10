@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::{
     api::middleware::request_id::{ClientIp, RequestId},
@@ -16,7 +16,7 @@ use crate::{
     dispatch::responses::{errors::ResponseDispatchError, service::ResponseDispatchStream},
     upstream::openai::protocol::{
         responses::{CodexCompactRequest, CodexResponsesRequest},
-        sse::{encode_sse_event, sse_body_has_done},
+        sse::sse_body_has_done,
     },
 };
 
@@ -189,41 +189,6 @@ impl ContextField {
             Self::ParentThreadId => request.parent_thread_id = value,
         }
     }
-}
-
-/// 编码 OpenAI Responses `response.failed` SSE 事件。
-pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
-    response_failed_sse_event_with_id(None, error_type, code, message)
-}
-
-/// 使用指定 response id 编码 OpenAI Responses `response.failed` SSE 事件。
-pub fn response_failed_sse_event_with_id(
-    response_id: Option<&str>,
-    error_type: &str,
-    code: &str,
-    message: &str,
-) -> String {
-    let error = json!({
-        "type": error_type,
-        "code": code,
-        "message": message,
-    });
-    let response_id = response_id
-        .filter(|value| !value.trim().is_empty())
-        .map_or_else(
-            || format!("resp_proxy_{}", uuid::Uuid::new_v4().simple()),
-            ToString::to_string,
-        );
-    let data = json!({
-        "type": "response.failed",
-        "response": {
-            "id": response_id,
-            "status": "failed",
-            "error": error,
-        },
-        "error": error,
-    });
-    encode_sse_event("response.failed", &data.to_string())
 }
 
 // ====================================================================

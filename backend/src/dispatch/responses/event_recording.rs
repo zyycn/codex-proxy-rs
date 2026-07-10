@@ -9,12 +9,11 @@ use crate::{
     },
     infra::time::elapsed_millis_i64,
     telemetry::{
-        ops::query::OpsQueryService,
         ops::types::OpsErrorLog,
         recorder::{
             enrich_event_route_metadata, enrich_usage_record_identity,
             event_kind as response_event_kind, reasoning_effort_from_request,
-            record_dispatch_error_event, DispatchErrorLogRecord,
+            record_dispatch_error_event, DispatchErrorLogRecord, Recorder,
         },
         usage::types::UsageRecordLevel,
     },
@@ -37,7 +36,7 @@ use super::{
 };
 
 pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
-    pub(super) ops_errors: &'a OpsQueryService,
+    pub(super) recorder: &'a Recorder,
     pub(super) request_id: &'a str,
     pub(super) account_id: &'a str,
     pub(super) account_email: Option<&'a str>,
@@ -53,7 +52,7 @@ pub(super) struct ResponseUpstreamErrorEventRecord<'a> {
 }
 
 pub(super) struct ResponseStreamFailureEventRecord<'a> {
-    pub(super) ops_errors: &'a OpsQueryService,
+    pub(super) recorder: &'a Recorder,
     pub(super) request_id: &'a str,
     pub(super) account_id: &'a str,
     pub(super) route: &'a str,
@@ -71,7 +70,7 @@ pub(super) struct ResponseStreamFailureEventRecord<'a> {
 }
 
 pub(super) struct ResponseDispatchErrorEventRecord<'a> {
-    pub(super) ops_errors: &'a OpsQueryService,
+    pub(super) recorder: &'a Recorder,
     pub(super) request_id: &'a str,
     pub(super) client_api_key_id: Option<&'a str>,
     pub(super) account_id: Option<&'a str>,
@@ -111,7 +110,7 @@ pub(super) async fn record_response_dispatch_error_event(
         );
     }
     record_dispatch_error_event(DispatchErrorLogRecord {
-        ops_errors: record.ops_errors,
+        recorder: record.recorder,
         request_id: record.request_id,
         client_api_key_id: record.client_api_key_id,
         provider: Some("openai"),
@@ -177,7 +176,7 @@ pub(super) async fn record_response_upstream_error_event(
         record.request.service_tier(),
     );
     event.metadata = metadata;
-    if let Err(error) = record.ops_errors.record(event).await {
+    if let Err(error) = record.recorder.record_error(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
     }
 }
@@ -244,7 +243,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         }
     }
     event.metadata = metadata;
-    if let Err(error) = record.ops_errors.record(event).await {
+    if let Err(error) = record.recorder.record_error(event).await {
         tracing::warn!(account_id = %record.account_id, error = %error, "failed to record prefetched stream error event");
     }
 }
@@ -506,7 +505,7 @@ pub(super) async fn record_live_response_stream_event(
     if is_success_usage_event(level, status_code) {
         crate::telemetry::recorder::record_response_event(
             crate::telemetry::usage::types::ResponseUsageRecord {
-                usage_records: &context.usage_records,
+                recorder: &context.recorder,
                 request_id: &context.request_id,
                 client_api_key_id: context.request.client_api_key_id.as_deref(),
                 account_id: &context.account_id,
@@ -536,7 +535,7 @@ pub(super) async fn record_live_response_stream_event(
         event.status_code = Some(status_code);
         event.latency_ms = Some(elapsed_millis_i64(context.started_at));
         event.metadata = metadata;
-        if let Err(error) = context.ops_errors.record(event).await {
+        if let Err(error) = context.recorder.record_error(event).await {
             tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream error event");
         }
     }
