@@ -176,6 +176,7 @@ impl AccountUpdate {
 pub struct BatchDeleteAccounts {
     pub deleted: u32,
     pub not_found: Vec<String>,
+    pub(crate) deleted_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

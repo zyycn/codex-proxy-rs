@@ -12,8 +12,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     api::middleware::request_id::{ClientIp, RequestId},
-    bootstrap::state::AppState,
-    dispatch::responses::{errors::ResponseDispatchError, service::ResponseDispatchStream},
+    api::AppState,
+    dispatch::{errors::ResponseDispatchError, service::ResponseDispatchStream},
     upstream::openai::protocol::{
         responses::{CodexCompactRequest, CodexResponsesRequest},
         sse::sse_body_has_done,

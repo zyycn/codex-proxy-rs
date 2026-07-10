@@ -14,7 +14,6 @@ use crate::{
         refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy},
         store::PgAccountStore,
     },
-    dispatch::affinity::RedisSessionAffinityStore,
     models::service::ModelService,
     upstream::openai::{token_client::TokenRefresher, transport::CodexBackendClient},
 };
@@ -30,7 +29,6 @@ pub struct AccountManageService {
     pub(crate) account_pool: Arc<RuntimeAccountPoolService>,
     pub(crate) token_refresher: Arc<dyn TokenRefresher>,
     pub(crate) refresh_leases: RedisRefreshLeaseStore,
-    pub(crate) session_affinity: RedisSessionAffinityStore,
     pub(crate) refresh_lease_owner_prefix: String,
     pub(crate) oauth: oauth::AccountOAuthService,
     pub(crate) refresh_policy: RuntimeRefreshPolicy,
@@ -45,7 +43,6 @@ pub struct AccountManageServiceParts {
     pub account_pool: Arc<RuntimeAccountPoolService>,
     pub token_refresher: Arc<dyn TokenRefresher>,
     pub refresh_leases: RedisRefreshLeaseStore,
-    pub session_affinity: RedisSessionAffinityStore,
     pub oauth: oauth::AccountOAuthService,
     pub refresh_policy: RuntimeRefreshPolicy,
     pub installation_id: Option<String>,
@@ -61,7 +58,6 @@ impl AccountManageService {
             account_pool: parts.account_pool,
             token_refresher: parts.token_refresher,
             refresh_leases: parts.refresh_leases,
-            session_affinity: parts.session_affinity,
             refresh_lease_owner_prefix: format!(
                 "admin-account-refresh:{}",
                 Uuid::new_v4().simple()

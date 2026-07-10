@@ -6,7 +6,7 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 
 use crate::{
     accounts::{
-        account::{Account, AccountStatus, AccountUsageDelta},
+        account::{Account, AccountStatus},
         quota::{quota_snapshot_limit_window_seconds, quota_snapshot_reset_at},
     },
     infra::{format::nonnegative_i64_to_u64, json::Page},
@@ -15,7 +15,7 @@ use crate::{
 use super::{
     queries::{GET_POOL_ACCOUNT_SQL, LIST_POOL_ACCOUNTS_SQL},
     AccountQuotaSnapshot, AccountStoreError, PgAccountStore, PgAccountStoreError,
-    PgAccountStoreResult, StoredAccount, StoredAccountMetadata, UsageDelta,
+    PgAccountStoreResult, StoredAccount, StoredAccountMetadata,
 };
 
 pub(super) async fn list_pool_accounts(
@@ -69,52 +69,27 @@ pub(super) fn pool_account_from_row(row: &PgRow) -> PgAccountStoreResult<Account
         quota_verify_required: row.get("quota_verify_required"),
         quota_cooldown_until: row.get("quota_cooldown_until"),
         cloudflare_cooldown_until: row.get("cloudflare_cooldown_until"),
-        request_count: nonnegative_i64_to_u64(row.get::<i64, _>("usage_request_count")),
-        empty_response_count: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_empty_response_count"),
-        ),
-        image_input_tokens: nonnegative_i64_to_u64(row.get::<i64, _>("usage_image_input_tokens")),
-        image_output_tokens: nonnegative_i64_to_u64(row.get::<i64, _>("usage_image_output_tokens")),
-        image_request_count: nonnegative_i64_to_u64(row.get::<i64, _>("usage_image_request_count")),
-        image_request_failed_count: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_image_request_failed_count"),
-        ),
-        window_request_count: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_request_count"),
-        ),
-        window_input_tokens: nonnegative_i64_to_u64(row.get::<i64, _>("usage_window_input_tokens")),
-        window_output_tokens: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_output_tokens"),
-        ),
-        window_cached_tokens: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_cached_tokens"),
-        ),
-        window_image_input_tokens: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_image_input_tokens"),
-        ),
-        window_image_output_tokens: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_image_output_tokens"),
-        ),
-        window_image_request_count: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_image_request_count"),
-        ),
-        window_image_request_failed_count: nonnegative_i64_to_u64(
-            row.get::<i64, _>("usage_window_image_request_failed_count"),
-        ),
-        window_started_at: row.get("usage_window_started_at"),
-        window_reset_at: row
-            .get::<Option<chrono::DateTime<chrono::Utc>>, _>("usage_window_reset_at")
-            .or(quota_window_reset_at),
-        limit_window_seconds: optional_positive_i64_to_u64(
-            row.get::<Option<i64>, _>("usage_limit_window_seconds"),
-        )
-        .or(quota_limit_window_seconds),
+        request_count: 0,
+        empty_response_count: 0,
+        image_input_tokens: 0,
+        image_output_tokens: 0,
+        image_request_count: 0,
+        image_request_failed_count: 0,
+        window_request_count: 0,
+        window_input_tokens: 0,
+        window_output_tokens: 0,
+        window_cached_tokens: 0,
+        window_image_input_tokens: 0,
+        window_image_output_tokens: 0,
+        window_image_request_count: 0,
+        window_image_request_failed_count: 0,
+        window_started_at: None,
+        window_reset_at: quota_window_reset_at,
+        limit_window_seconds: quota_limit_window_seconds,
         added_at: row
             .get::<chrono::DateTime<chrono::Utc>, _>("added_at")
             .to_rfc3339(),
-        last_used_at: row
-            .get::<Option<chrono::DateTime<chrono::Utc>>, _>("usage_last_used_at")
-            .map(|value| value.to_rfc3339()),
+        last_used_at: None,
     })
 }
 
@@ -168,38 +143,6 @@ pub(super) fn map_account_store_error(error: &impl ToString) -> AccountStoreErro
     }
 }
 
-pub(super) fn pg_usage_delta(usage: AccountUsageDelta) -> UsageDelta {
-    let request_count = u64_to_i64_saturating(usage.requests);
-    let input_tokens = u64_to_i64_saturating(usage.input_tokens);
-    let output_tokens = u64_to_i64_saturating(usage.output_tokens);
-    let cached_tokens = u64_to_i64_saturating(usage.cached_tokens);
-    let image_input_tokens = u64_to_i64_saturating(usage.image_input_tokens);
-    let image_output_tokens = u64_to_i64_saturating(usage.image_output_tokens);
-    let image_request_count = u64_to_i64_saturating(usage.image_requests);
-    let image_request_failed_count = u64_to_i64_saturating(usage.image_request_failures);
-    UsageDelta {
-        request_count,
-        empty_response_count: u64_to_i64_saturating(usage.empty_responses),
-        input_tokens,
-        output_tokens,
-        cached_tokens,
-        reasoning_tokens: u64_to_i64_saturating(usage.reasoning_tokens),
-        total_tokens: u64_to_i64_saturating(usage.total_tokens),
-        image_input_tokens,
-        image_output_tokens,
-        image_request_count,
-        image_request_failed_count,
-        window_request_count: request_count,
-        window_input_tokens: input_tokens,
-        window_output_tokens: output_tokens,
-        window_cached_tokens: cached_tokens,
-        window_image_input_tokens: image_input_tokens,
-        window_image_output_tokens: image_output_tokens,
-        window_image_request_count: image_request_count,
-        window_image_request_failed_count: image_request_failed_count,
-    }
-}
-
 pub(super) fn quota_plan_type(quota_json: &str) -> Option<String> {
     serde_json::from_str::<Value>(quota_json)
         .ok()?
@@ -243,16 +186,6 @@ pub(super) fn status_from_db(value: &str) -> PgAccountStoreResult<AccountStatus>
         "banned" => Ok(AccountStatus::Banned),
         other => Err(PgAccountStoreError::InvalidStatus(other.to_string())),
     }
-}
-
-pub(super) fn u64_to_i64_saturating(value: u64) -> i64 {
-    value.min(i64::MAX as u64) as i64
-}
-
-pub(super) fn optional_positive_i64_to_u64(value: Option<i64>) -> Option<u64> {
-    value
-        .and_then(|value| u64::try_from(value).ok())
-        .filter(|value| *value > 0)
 }
 
 pub(super) async fn count_account_metadata(

@@ -60,6 +60,14 @@ impl RuntimeSessionAffinityService {
             .and_then(|entry| entry.turn_state)
     }
 
+    pub async fn lookup(
+        &self,
+        response_id: &str,
+        now: DateTime<Utc>,
+    ) -> Option<SessionAffinityEntry> {
+        self.entry(response_id, now).await
+    }
+
     pub async fn lookup_instructions_hash(
         &self,
         response_id: &str,

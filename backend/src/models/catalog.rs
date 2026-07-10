@@ -2,12 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::upstream::openai::protocol::model_catalog::{BackendModelEntry, BackendReasoningEffort};
-
-use super::{
-    config::ModelConfig,
-    info::{CodexModelInfo, ReasoningEffortInfo},
-    snapshot::ModelPlanSnapshot,
+use super::types::{
+    BackendModelEntry, BackendReasoningEffort, CodexModelInfo, ModelConfig, ModelPlanSnapshot,
+    ReasoningEffortInfo,
 };
 
 const BUILTIN_CODEX_MODELS: [(&str, &str, bool); 8] = [
@@ -40,6 +37,20 @@ impl ModelPlanSnapshot {
             plan_type: plan_type.into(),
             models: entries.into_iter().map(normalize_backend_model).collect(),
         }
+    }
+
+    /// 将上游 JSON 条目解析并标准化为可持久化快照。
+    pub fn from_backend_values(
+        plan_type: impl Into<String>,
+        entries: Vec<serde_json::Value>,
+    ) -> Self {
+        Self::from_backend_entries(
+            plan_type,
+            entries
+                .into_iter()
+                .filter_map(|entry| serde_json::from_value(entry).ok())
+                .collect(),
+        )
     }
 }
 

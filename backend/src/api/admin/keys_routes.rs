@@ -11,11 +11,11 @@ use serde_json::Value;
 
 use crate::{
     api::admin::response::{
-        AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse, BatchDeleteData,
+        parse_editable_update, AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse,
+        BatchDeleteData, EditableUpdateMessages,
     },
     api::admin::session::AdminAuth,
-    api::admin::update_payload::{parse_editable_update, EditableUpdateMessages},
-    bootstrap::state::AppState,
+    api::AppState,
     infra::{
         json::{clamp_limit, Page},
         time::{china_relative_time_str, china_rfc3339_str},

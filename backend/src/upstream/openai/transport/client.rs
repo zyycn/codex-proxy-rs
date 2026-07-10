@@ -24,7 +24,6 @@ use uuid::Uuid;
 
 use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
-use crate::upstream::openai::protocol::model_catalog::BackendModelEntry;
 use crate::upstream::openai::protocol::responses::{
     http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,
     CodexTransport,
@@ -201,7 +200,7 @@ pub trait CodexModelCatalogClient: Send + Sync + 'static {
     async fn fetch_models(
         &self,
         request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<BackendModelEntry>, CodexModelCatalogClientError>;
+    ) -> Result<Vec<Value>, CodexModelCatalogClientError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +344,7 @@ impl CodexModelCatalogClient for CodexBackendClient {
     async fn fetch_models(
         &self,
         request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<BackendModelEntry>, CodexModelCatalogClientError> {
+    ) -> Result<Vec<Value>, CodexModelCatalogClientError> {
         self.fetch_models_with_context(CodexRequestContext {
             access_token: request.access_token,
             account_id: request.account_id,
@@ -446,7 +445,7 @@ pub(super) async fn read_capped_error_body(
 // Model entry extraction
 // ---------------------------------------------------------------------------
 
-fn extract_backend_model_entries(value: &Value) -> Vec<BackendModelEntry> {
+fn extract_model_entries(value: &Value) -> Vec<Value> {
     let Some(models) = value
         .pointer("/chat_models/models")
         .or_else(|| value.get("models"))
@@ -460,22 +459,23 @@ fn extract_backend_model_entries(value: &Value) -> Vec<BackendModelEntry> {
     let mut entries = Vec::new();
     for model in models {
         if let Some(nested) = model.get("models").and_then(Value::as_array) {
-            entries.extend(nested.iter().filter_map(parse_backend_model_entry));
-        } else if let Some(entry) = parse_backend_model_entry(model) {
-            entries.push(entry);
+            entries.extend(nested.iter().filter(|entry| is_model_entry(entry)).cloned());
+        } else if is_model_entry(model) {
+            entries.push(model.clone());
         }
     }
     entries
 }
 
-fn parse_backend_model_entry(value: &Value) -> Option<BackendModelEntry> {
-    let entry = serde_json::from_value::<BackendModelEntry>(value.clone()).ok()?;
-    (entry.slug.is_some()
-        || entry.id.is_some()
-        || entry.name.is_some()
-        || entry.display_name.is_some()
-        || entry.title.is_some())
-    .then_some(entry)
+fn is_model_entry(value: &Value) -> bool {
+    ["slug", "id", "name", "display_name", "title"]
+        .into_iter()
+        .any(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
 }
 
 // ---------------------------------------------------------------------------

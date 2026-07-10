@@ -9,12 +9,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::AppState,
     api::{
         admin::response::{AdminEnvelope, AdminError, AdminResponse},
         middleware::request_id::ClientIp,
     },
     auth::types::SessionError,
-    bootstrap::state::AppState,
     infra::time::china_rfc3339,
 };
 

@@ -9,5 +9,4 @@ pub mod router;
 pub mod session;
 pub mod settings_routes;
 pub mod system_routes;
-pub mod update_payload;
 pub mod usage_routes;

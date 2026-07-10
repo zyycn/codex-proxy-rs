@@ -277,13 +277,22 @@ pub(crate) async fn batch_delete_accounts(
         .batch_delete(payload.ids)
         .await
     {
-        Ok(result) => Ok(AdminResponse::new(
-            StatusCode::OK,
-            AdminEnvelope::ok(BatchDeleteData {
-                deleted: result.deleted,
-                not_found: result.not_found,
-            }),
-        )),
+        Ok(result) => {
+            for account_id in &result.deleted_ids {
+                state
+                    .services
+                    .session_affinity
+                    .forget_account(account_id)
+                    .await;
+            }
+            Ok(AdminResponse::new(
+                StatusCode::OK,
+                AdminEnvelope::ok(BatchDeleteData {
+                    deleted: result.deleted,
+                    not_found: result.not_found,
+                }),
+            ))
+        }
         Err(error) => Err(account_error(&error)),
     }
 }

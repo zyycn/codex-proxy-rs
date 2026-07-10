@@ -18,6 +18,9 @@ use crate::accounts::{
 };
 use crate::{
     accounts::cookies::PgCookieStore,
+    telemetry::account_usage::store::{
+        AccountUsageStore, AccountUsageStoreError, PgAccountUsageStore,
+    },
     upstream::openai::transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
 };
 
@@ -28,6 +31,7 @@ const COOLDOWN_REFRESH_GRACE_SECS: i64 = 30;
 /// 运行时 quota refresh 服务。
 pub struct RuntimeQuotaRefreshService {
     store: PgAccountStore,
+    usage_store: PgAccountUsageStore,
     codex: Arc<CodexBackendClient>,
     min_refresh_interval_secs: u64,
     request_spacing: Duration,
@@ -38,9 +42,14 @@ pub struct RuntimeQuotaRefreshService {
 
 impl RuntimeQuotaRefreshService {
     /// 构造默认 quota refresh 服务。
-    pub fn new(store: PgAccountStore, codex: Arc<CodexBackendClient>) -> Self {
+    pub fn new(
+        store: PgAccountStore,
+        usage_store: PgAccountUsageStore,
+        codex: Arc<CodexBackendClient>,
+    ) -> Self {
         Self {
             store,
+            usage_store,
             codex,
             min_refresh_interval_secs: MIN_REFRESH_INTERVAL_SECS,
             request_spacing: Self::default_request_spacing(),
@@ -57,11 +66,13 @@ impl RuntimeQuotaRefreshService {
     /// 使用自定义最小刷新间隔构造 quota refresh 服务。
     pub fn with_min_refresh_interval_secs(
         store: PgAccountStore,
+        usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
         min_refresh_interval_secs: u64,
     ) -> Self {
         Self {
             store,
+            usage_store,
             codex,
             min_refresh_interval_secs,
             request_spacing: Self::default_request_spacing(),
@@ -182,7 +193,7 @@ impl RuntimeQuotaRefreshService {
                         summary.missing += 1;
                     }
                     if let Some(reset_at) = reset_at {
-                        self.store
+                        self.usage_store
                             .sync_rate_limit_window(
                                 &account.id,
                                 reset_at,
@@ -267,6 +278,9 @@ pub enum QuotaRefreshServiceError {
     /// 账号写入失败。
     #[error("failed to persist quota refresh result: {0}")]
     Store(#[from] PgAccountStoreError),
+    /// 用量窗口写入失败。
+    #[error("failed to persist quota usage window: {0}")]
+    UsageStore(#[from] AccountUsageStoreError),
     /// 上游 usage 请求失败。
     #[error("failed to fetch quota usage: {0}")]
     Codex(#[from] CodexClientError),

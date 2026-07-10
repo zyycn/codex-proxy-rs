@@ -30,13 +30,13 @@ use crate::{
     },
     api::admin::{
         response::{
-            AdminEnvelope, AdminError, AdminResponse, BatchDeleteData, CursorPageMeta,
-            NumberedPageMeta, PageMeta, ADMIN_OK_CODE, ADMIN_OK_MESSAGE,
+            parse_editable_update, AdminEnvelope, AdminError, AdminResponse, BatchDeleteData,
+            CursorPageMeta, EditableUpdateMessages, NumberedPageMeta, PageMeta, ADMIN_OK_CODE,
+            ADMIN_OK_MESSAGE,
         },
         session::AdminAuth,
-        update_payload::{parse_editable_update, EditableUpdateMessages},
     },
-    bootstrap::state::AppState,
+    api::AppState,
     infra::{
         format::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,

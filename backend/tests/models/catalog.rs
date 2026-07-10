@@ -10,14 +10,13 @@ use async_trait::async_trait;
 
 use codex_proxy_rs::accounts::account::{Account, AccountStatus};
 use codex_proxy_rs::models::catalog::ModelCatalog;
-use codex_proxy_rs::models::config::ModelConfig;
 use codex_proxy_rs::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
-use codex_proxy_rs::models::snapshot::ModelPlanSnapshot;
 use codex_proxy_rs::models::store::{ModelSnapshotStore, ModelSnapshotStoreResult};
-use codex_proxy_rs::upstream::openai::protocol::model_catalog::{
-    BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy,
+use codex_proxy_rs::models::types::{
+    BackendModelEntry, BackendReasoningEffort, BackendTruncationPolicy, ModelConfig,
+    ModelPlanSnapshot,
 };
 use codex_proxy_rs::upstream::openai::transport::{
     CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
@@ -236,7 +235,8 @@ fn active_account(id: &str, plan_type: &str) -> Account {
 fn refresh_plan_account(plan_type: &str, account: Account) -> ModelRefreshPlanAccount {
     ModelRefreshPlanAccount {
         plan_type: plan_type.to_string(),
-        account,
+        access_token: account.access_token,
+        account_id: account.account_id,
     }
 }
 
@@ -289,7 +289,7 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
     async fn fetch_models(
         &self,
         request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<BackendModelEntry>, CodexModelCatalogClientError> {
+    ) -> Result<Vec<serde_json::Value>, CodexModelCatalogClientError> {
         self.requested_plan_types
             .lock()
             .await
@@ -298,6 +298,9 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
             .models_by_plan
             .get(request.plan_type)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|model| serde_json::to_value(model).unwrap())
+            .collect())
     }
 }

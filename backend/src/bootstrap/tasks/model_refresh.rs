@@ -75,7 +75,8 @@ impl ModelRefreshTask {
             .iter()
             .map(|selected| ModelRefreshPlanAccount {
                 plan_type: selected.plan_type.clone(),
-                account: selected.account.clone(),
+                access_token: selected.account.access_token.clone(),
+                account_id: selected.account.account_id.clone(),
             })
             .collect::<Vec<_>>();
 

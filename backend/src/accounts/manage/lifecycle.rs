@@ -238,25 +238,24 @@ impl AccountManageService {
             return Err(AccountManageError::EmptyIds);
         }
         let mut deleted = 0u32;
+        let mut deleted_ids = Vec::new();
         let mut not_found = Vec::new();
         for id in ids {
             match self.store.delete(&id).await {
                 Ok(true) => {
                     deleted += 1;
                     self.account_pool.remove_account(&id).await;
-                    if let Err(error) = self.session_affinity.forget_account(&id).await {
-                        tracing::warn!(
-                            account_id = id,
-                            error = %error,
-                            "failed to remove Redis affinities for deleted account"
-                        );
-                    }
+                    deleted_ids.push(id);
                 }
                 Ok(false) => not_found.push(id),
                 Err(_) => return Err(AccountManageError::Delete),
             }
         }
-        Ok(BatchDeleteAccounts { deleted, not_found })
+        Ok(BatchDeleteAccounts {
+            deleted,
+            not_found,
+            deleted_ids,
+        })
     }
     pub async fn refresh_account(
         &self,

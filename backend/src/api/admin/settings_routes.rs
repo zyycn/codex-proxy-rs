@@ -10,7 +10,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
     },
-    bootstrap::state::AppState,
+    api::AppState,
     settings::{SettingsError, SettingsPatch, SettingsSnapshot, SettingsValidationError},
 };
 
@@ -52,7 +52,7 @@ pub(crate) async fn settings(
     State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    let config = state.services.settings.current().await;
+    let config = state.services.settings.current();
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AdminSettingsData::from_settings(&config)),
@@ -68,7 +68,8 @@ pub(crate) async fn update_settings(
     let patch = parse_settings_patch(&body)?;
     let config = state
         .services
-        .update_settings(patch)
+        .settings
+        .update(patch)
         .await
         .map_err(settings_service_error)?;
 

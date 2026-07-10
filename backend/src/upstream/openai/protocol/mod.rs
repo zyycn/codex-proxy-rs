@@ -2,8 +2,6 @@
 
 /// Codex 事件语义与用量提取。
 pub mod events;
-/// 上游模型目录响应类型。
-pub mod model_catalog;
 /// Codex Responses / Compact 请求体。
 pub mod responses;
 /// Codex JSON schema 处理。

@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::{
     accounts::{
         account::{Account, AccountStatus},
+        pool::AccountCapacitySummary,
         refresh::token_refresh_status_eligible,
     },
     api::admin::{
@@ -24,21 +25,20 @@ use crate::{
             UsageRecordCostDetailsData, UsageRecordTokenDetailsData,
         },
     },
-    bootstrap::state::AppState,
+    api::AppState,
     infra::{
-        format::{
-            format_compact_number, format_cost, format_duration_ms, format_percent, format_rate,
-            format_tokens, nonnegative_i64_to_u64,
-        },
+        format::{format_duration_ms, format_tokens},
         time::{
-            china_datetime, china_datetime_rfc3339_str, china_day_start, china_hour,
-            china_hour_start, china_quarter_hour_start, china_relative_time,
+            china_datetime, china_datetime_rfc3339_str, china_day_start, china_quarter_hour_start,
+            china_relative_time,
         },
     },
     telemetry::{
-        account_usage::query::{AccountUsageSummary, AccountUsageTimeBucket},
-        diagnostics::{
-            fingerprint_diagnostics, AccountCapacityDiagnostics, AccountPoolDiagnostics,
+        account_usage::query::AccountUsageTimeBucket,
+        dashboard::{
+            dashboard_cards, dashboard_health_timeline_data, dashboard_trend_data,
+            DashboardAccountCounts, DashboardCardsData, DashboardHealthTimelineData,
+            DashboardTrendData, DashboardTrendKind,
         },
         usage::{
             query::UsageQueryFilter,
@@ -46,14 +46,13 @@ use crate::{
             types::{metadata_string, UsageRecord},
         },
     },
+    upstream::openai::fingerprint::Fingerprint,
 };
 
 const DASHBOARD_ACCOUNT_USAGE_LIMIT: u32 = 4;
 const DASHBOARD_USAGE_RECORD_LIMIT: u32 = 10;
-const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
+const DASHBOARD_TIME_BUCKET_MINUTES: i64 = 15;
 const DASHBOARD_TIME_BUCKET_SLOTS: i64 = 7 * 24 * 4;
-const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
-const HEALTH_TIMELINE_STABLE_SUCCESS_THRESHOLD: u64 = 3;
 const FIVE_HOUR_WINDOW_SECONDS: u64 = 18_000;
 const WEEK_WINDOW_SECONDS: u64 = 604_800;
 const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
@@ -62,15 +61,6 @@ const MONTH_WINDOW_SECONDS: u64 = 2_592_000;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DashboardTrendQuery {
     kind: Option<DashboardTrendKind>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum DashboardTrendKind {
-    #[default]
-    Usage,
-    Latency,
-    Errors,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,107 +75,6 @@ struct DashboardSummaryData {
     pool_summary: AccountPoolDiagnostics,
     capacity_info: AccountCapacityDiagnostics,
     rotation_strategy: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardHealthTimelineData {
-    title: String,
-    description: String,
-    reliability_display: String,
-    points: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardCardsData {
-    accounts: DashboardAccountsCardData,
-    traffic: DashboardTrafficCardData,
-    tokens: DashboardTokenCardData,
-    cache: DashboardCacheCardData,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardAccountsCardData {
-    total: String,
-    total_value: u64,
-    enabled: String,
-    enabled_value: u64,
-    abnormal: String,
-    abnormal_value: u64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardTrafficCardData {
-    today_requests: String,
-    today_requests_value: u64,
-    yesterday_requests_value: u64,
-    total_requests: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardTokenCardData {
-    today_tokens: String,
-    today_tokens_value: u64,
-    yesterday_tokens_value: u64,
-    total_tokens: String,
-    today_cost_usd: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardCacheCardData {
-    today_hit_rate: String,
-    today_hit_rate_value: Option<f64>,
-    yesterday_hit_rate_value: Option<f64>,
-    total_hit_rate: String,
-    total_cached_tokens: String,
-    average_first_token_latency_ms: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardTrendData {
-    kind: DashboardTrendKind,
-    points: Vec<DashboardTrendPointData>,
-    summary: Vec<DashboardTrendSummaryData>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardTrendPointData {
-    time: String,
-    requests: String,
-    requests_value: u64,
-    input_tokens: String,
-    input_tokens_value: u64,
-    output_tokens: String,
-    output_tokens_value: u64,
-    cached_tokens: String,
-    cached_tokens_value: u64,
-    cache_hit_rate_value: f64,
-    tokens_value: u64,
-    errors: String,
-    errors_value: u64,
-    latency: String,
-    latency_value: u64,
-    max_latency: String,
-    max_latency_value: u64,
-    min_latency: String,
-    min_latency_value: u64,
-    success_rate: String,
-    success_rate_value: f64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardTrendSummaryData {
-    label: String,
-    value: String,
-    ratio: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -229,17 +118,65 @@ struct DashboardServiceStatusData {
     tone: String,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct UsageWindow {
-    requests: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    errors: u64,
-    first_token_latency_sum: u64,
-    first_token_latency_count: u64,
-    max_first_token_bucket_latency: u64,
-    min_first_token_bucket_latency: u64,
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountPoolDiagnostics {
+    total: usize,
+    active: usize,
+    expired: usize,
+    quota_exhausted: usize,
+    refreshing: usize,
+    disabled: usize,
+    banned: usize,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountCapacityDiagnostics {
+    max_concurrent_per_account: usize,
+    total_slots: usize,
+    used_slots: usize,
+    available_slots: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FingerprintDiagnostics {
+    source: &'static str,
+    originator: String,
+    app_version: String,
+    build_number: String,
+    platform: String,
+    arch: String,
+    chromium_version: String,
+    user_agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+}
+
+fn fingerprint_diagnostics(fingerprint: &Fingerprint) -> FingerprintDiagnostics {
+    FingerprintDiagnostics {
+        source: "runtime",
+        originator: fingerprint.originator.clone(),
+        app_version: fingerprint.app_version.clone(),
+        build_number: fingerprint.build_number.clone(),
+        platform: fingerprint.platform.clone(),
+        arch: fingerprint.arch.clone(),
+        chromium_version: fingerprint.chromium_version.clone(),
+        user_agent: fingerprint.user_agent(),
+        updated_at: fingerprint.updated_at.clone(),
+    }
+}
+
+impl From<AccountCapacitySummary> for AccountCapacityDiagnostics {
+    fn from(summary: AccountCapacitySummary) -> Self {
+        Self {
+            max_concurrent_per_account: summary.max_concurrent_per_account,
+            total_slots: summary.total_slots,
+            used_slots: summary.used_slots,
+            available_slots: summary.available_slots,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,33 +185,6 @@ enum QuotaWindowPriority {
     Weekly,
     Monthly,
     Other,
-}
-
-impl UsageWindow {
-    fn tokens(self) -> u64 {
-        self.input_tokens + self.output_tokens
-    }
-
-    fn cache_hit_rate(self) -> Option<f64> {
-        if self.input_tokens > 0 {
-            Some(self.cached_tokens as f64 / self.input_tokens as f64)
-        } else {
-            None
-        }
-    }
-
-    fn avg_first_token_latency(self) -> Option<u64> {
-        self.first_token_latency_sum
-            .checked_div(self.first_token_latency_count)
-    }
-
-    fn max_first_token_bucket_latency(self) -> Option<u64> {
-        (self.max_first_token_bucket_latency > 0).then_some(self.max_first_token_bucket_latency)
-    }
-
-    fn min_first_token_bucket_latency(self) -> Option<u64> {
-        (self.min_first_token_bucket_latency > 0).then_some(self.min_first_token_bucket_latency)
-    }
 }
 
 /// `GET /api/admin/dashboard/summary`
@@ -322,7 +232,7 @@ pub(crate) async fn dashboard_summary(
     let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
     let quota_used_by_account =
         account_quota_used_percent_by_id(&state, &account_usage_records).await;
-    let settings = state.services.settings.current().await;
+    let settings = state.services.settings.current();
     let recent_usage_records = recent_events;
     let account_emails = state
         .services
@@ -336,7 +246,11 @@ pub(crate) async fn dashboard_summary(
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(DashboardSummaryData {
-            cards: dashboard_cards(&accounts, &time_buckets, &lifetime_usage),
+            cards: dashboard_cards(
+                dashboard_account_counts(&accounts),
+                &time_buckets,
+                &lifetime_usage,
+            ),
             trend,
             health_timeline: dashboard_health_timeline_data(&time_buckets),
             account_usage: account_usage_data(

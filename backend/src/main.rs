@@ -6,7 +6,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     match arguments.next().as_deref().and_then(|value| value.to_str()) {
         None | Some("serve") => {
             reject_extra_arguments(arguments)?;
-            codex_proxy_rs::bootstrap::application::run().await
+            codex_proxy_rs::bootstrap::services::run().await
         }
         Some("import-sqlite") => {
             let source = arguments

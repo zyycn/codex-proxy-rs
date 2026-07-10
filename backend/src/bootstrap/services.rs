@@ -1,17 +1,18 @@
 //! 运行时服务集合。
 
-use std::sync::Arc;
+use std::{env, error::Error, sync::Arc, time::Duration};
+
+use axum::Router;
 
 use crate::{
     accounts::{
         cookies::PgCookieStore,
         manage::{AccountManageService, AccountManageServiceParts},
-        pool::RuntimeAccountPoolService,
-        pool::{AccountPoolOptions, RotationStrategy},
+        pool::{AccountPoolOptions, AccountPoolStaticSettings, RuntimeAccountPoolService},
         refresh::{
             RedisRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy, RuntimeTokenRefreshService,
         },
-        store::{AccountStore as AccountStoreTrait, PgAccountStore},
+        store::{AccountStore, PgAccountStore},
     },
     auth::{
         service::SessionService,
@@ -20,19 +21,24 @@ use crate::{
     bootstrap::config::AppConfig,
     dispatch::{
         affinity::{RedisSessionAffinityStore, RuntimeSessionAffinityService},
-        responses::service::{ResponseDispatchService, ResponseDispatchServiceParts},
+        service::{ResponseDispatchService, ResponseDispatchServiceParts},
     },
-    infra::redis::RedisConnection,
+    infra::{
+        database::connect,
+        logging::{init_tracing, LogGuard, RotationConfig},
+        paths::{ensure_data_dir, load_or_create_installation_id},
+        redis::RedisConnection,
+    },
     keys::{manage::KeyManageService, service::KeyVerifier, store::PgClientKeyStore},
     models::{
-        config::ModelConfig,
         service::{ModelService, ModelServiceError},
         store::{ModelSnapshotStore, RedisModelSnapshotStore},
+        types::ModelConfig,
     },
-    settings::{service::RuntimeSettingsService, SettingsError, SettingsPatch, SettingsSnapshot},
+    settings::{service::RuntimeSettingsService, SettingsSnapshot},
     telemetry::{
         account_usage::query::AccountUsageQueryService,
-        account_usage::store::PgAccountUsageStore,
+        account_usage::store::{AccountUsageStore, PgAccountUsageStore},
         buckets::store::PgRequestBucketStore,
         ops::query::OpsQueryService,
         ops::store::PgOpsErrorLogStore,
@@ -49,6 +55,8 @@ use crate::{
         },
     },
 };
+
+const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
 
 /// 运行时热路径内存状态初始化错误。
 #[derive(Debug, thiserror::Error)]
@@ -90,7 +98,7 @@ pub struct Services {
     pub database: sqlx::PgPool,
     pub redis: RedisConnection,
     pub models: Arc<ModelService>,
-    pub accounts: Arc<dyn AccountStoreTrait>,
+    pub accounts: Arc<dyn AccountStore>,
     pub client_keys: Arc<KeyVerifier>,
     pub admin_client_keys: Arc<KeyManageService>,
     pub admin_sessions: Arc<SessionService>,
@@ -109,14 +117,7 @@ pub struct Services {
     pub fingerprint: RuntimeFingerprint,
     pub installation_id: Option<String>,
     pub background_tasks: BackgroundTaskStores,
-    account_pool_static: AccountPoolStaticSettings,
-    settings_update_lock: Arc<tokio::sync::Mutex<()>>,
-}
-
-#[derive(Debug, Clone)]
-struct AccountPoolStaticSettings {
-    skip_quota_limited: bool,
-    tier_priority: Vec<String>,
+    pub(crate) account_pool_static: AccountPoolStaticSettings,
 }
 
 /// 使用记录运行选项。
@@ -178,7 +179,9 @@ impl Services {
         let installation_id = installation_id.filter(|id| !id.trim().is_empty());
         let database = stores.accounts.pool().clone();
         let redis = stores.redis.clone();
-        let account_store_trait = Arc::new(stores.accounts.clone()) as Arc<dyn AccountStoreTrait>;
+        let account_store = Arc::new(stores.accounts.clone()) as Arc<dyn AccountStore>;
+        let account_usage_store_trait =
+            Arc::new(stores.account_usage.clone()) as Arc<dyn AccountUsageStore>;
         let websocket_pool = config.ws_pool.enabled.then(|| {
             Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
                 enabled: true,
@@ -213,24 +216,23 @@ impl Services {
             usage_record_options.enabled,
             usage_record_options.capture_body,
         ));
+        let settings_snapshot = settings_snapshot_from_config(config);
         let account_pool_static = AccountPoolStaticSettings {
             skip_quota_limited: config.quota.skip_exhausted,
             tier_priority: config.auth.tier_priority.clone(),
         };
         let account_pool = Arc::new(RuntimeAccountPoolService::new(
-            account_store_trait.clone(),
-            account_pool_options_from_settings(
-                &settings_snapshot_from_config(config),
-                &account_pool_static,
-            ),
-            config.auth.request_interval_ms,
+            account_store.clone(),
+            account_usage_store_trait,
+            account_pool_static.pool_options(&settings_snapshot),
+            settings_snapshot.request_interval_ms,
         ));
         let refresh_policy = RuntimeRefreshPolicy::new(RefreshPolicy {
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,
         });
         let settings = Arc::new(RuntimeSettingsService::new(
-            settings_snapshot_from_config(config),
+            settings_snapshot,
             stores.accounts.pool().clone(),
         ));
         let admin_sessions = Arc::new(SessionService::new(
@@ -267,7 +269,6 @@ impl Services {
             account_pool: account_pool.clone(),
             token_refresher: Arc::new(token_client),
             refresh_leases: stores.refresh_leases.clone(),
-            session_affinity: stores.session_affinity.clone(),
             oauth: crate::accounts::manage::oauth::AccountOAuthService::new(
                 reqwest::Client::new(),
                 config.auth.oauth_client_id.clone(),
@@ -282,7 +283,7 @@ impl Services {
         ));
 
         let cloudflare_recovery =
-            crate::dispatch::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
+            crate::dispatch::recovery::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
         let responses = Arc::new(ResponseDispatchService::new(ResponseDispatchServiceParts {
             account_pool: account_pool.clone(),
             models: models.clone(),
@@ -297,7 +298,7 @@ impl Services {
             database,
             redis,
             models,
-            accounts: account_store_trait,
+            accounts: account_store,
             client_keys,
             admin_client_keys,
             admin_sessions,
@@ -317,7 +318,6 @@ impl Services {
             installation_id,
             background_tasks: stores,
             account_pool_static,
-            settings_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -326,32 +326,46 @@ impl Services {
         self.models.reload_from_store().await?;
         Ok(())
     }
+}
 
-    /// 持久化设置并同步到所有运行时消费者。
-    pub async fn update_settings(
-        &self,
-        patch: SettingsPatch,
-    ) -> Result<Arc<SettingsSnapshot>, SettingsError> {
-        let _guard = self.settings_update_lock.lock().await;
-        let settings = self.settings.update(patch).await?;
-        self.apply_settings(&settings).await;
-        Ok(settings)
+impl From<&Services> for crate::api::router::ApiServices {
+    fn from(services: &Services) -> Self {
+        Self {
+            health_probe: Arc::new(crate::bootstrap::state::RuntimeHealthProbe::new(
+                services.database.clone(),
+                services.redis.clone(),
+            )),
+            models: services.models.clone(),
+            accounts: services.accounts.clone(),
+            client_keys: services.client_keys.clone(),
+            admin_client_keys: services.admin_client_keys.clone(),
+            admin_sessions: services.admin_sessions.clone(),
+            settings: services.settings.clone(),
+            admin_accounts: services.admin_accounts.clone(),
+            usage_records: services.usage_records.clone(),
+            ops_errors: services.ops_errors.clone(),
+            usage: services.usage.clone(),
+            account_pool: services.account_pool.clone(),
+            token_refresh: services.token_refresh.clone(),
+            responses: services.responses.clone(),
+            session_affinity: services.session_affinity.clone(),
+            fingerprint: services.fingerprint.clone(),
+            process_control: Arc::new(crate::bootstrap::shutdown::RuntimeProcessControl),
+        }
     }
+}
 
-    async fn apply_settings(&self, settings: &SettingsSnapshot) {
-        self.models.update_config(ModelConfig {
-            model_aliases: settings.model_aliases.clone(),
-        });
-        self.account_pool
-            .apply_options(
-                account_pool_options_from_settings(settings, &self.account_pool_static),
-                settings.request_interval_ms,
-            )
-            .await;
-        self.refresh_policy.update(RefreshPolicy {
-            refresh_margin_seconds: settings.refresh_margin_seconds,
-            refresh_concurrency: settings.refresh_concurrency,
-        });
+impl From<&Services> for crate::api::router::AppState {
+    fn from(services: &Services) -> Self {
+        Self {
+            services: crate::api::router::ApiServices::from(services),
+        }
+    }
+}
+
+impl From<Services> for crate::api::router::AppState {
+    fn from(services: Services) -> Self {
+        Self::from(&services)
     }
 }
 
@@ -403,31 +417,163 @@ pub fn fingerprint_from_config(
     }
 }
 
-fn account_pool_options_from_settings(
-    settings: &SettingsSnapshot,
-    static_settings: &AccountPoolStaticSettings,
-) -> AccountPoolOptions {
-    AccountPoolOptions {
-        max_concurrent_per_account: settings.max_concurrent_per_account,
-        rotation_strategy: match settings.rotation_strategy.as_str() {
-            "smart" => RotationStrategy::Smart,
-            "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
-            "round_robin" => RotationStrategy::RoundRobin,
-            "sticky" => RotationStrategy::Sticky,
-            _ => RotationStrategy::Smart,
-        },
-        skip_quota_limited: static_settings.skip_quota_limited,
-        tier_priority: static_settings.tier_priority.clone(),
-        ..AccountPoolOptions::default()
+pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOptions {
+    AccountPoolStaticSettings {
+        skip_quota_limited: config.quota.skip_exhausted,
+        tier_priority: config.auth.tier_priority.clone(),
     }
+    .pool_options(&settings_snapshot_from_config(config))
 }
 
-pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOptions {
-    account_pool_options_from_settings(
-        &settings_snapshot_from_config(config),
-        &AccountPoolStaticSettings {
-            skip_quota_limited: config.quota.skip_exhausted,
-            tier_priority: config.auth.tier_priority.clone(),
-        },
+pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
+    wait_for_scheduled_restart().await;
+
+    let config = AppConfig::load()?;
+    let host = config.server.host.clone();
+    let port = config.server.port;
+    let log_guard = init_logging(&config)?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    let (router, task_coordinator) = build_router(config).await?;
+
+    let serve_result = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(crate::bootstrap::shutdown::shutdown_signal())
+    .await;
+
+    task_coordinator.shutdown().await;
+    serve_result?;
+
+    if let Some(executable_path) = crate::bootstrap::shutdown::restart_executable_path() {
+        tracing::info!(
+            executable = %executable_path.display(),
+            "正在以更新后的二进制替换当前进程"
+        );
+        drop(log_guard);
+        exec_replacement_process(executable_path)?;
+    }
+
+    Ok(())
+}
+
+async fn build_router(
+    mut config: AppConfig,
+) -> Result<
+    (
+        Router,
+        crate::bootstrap::tasks::coordinator::TaskCoordinator,
+    ),
+    Box<dyn Error + Send + Sync>,
+> {
+    let pool = connect(&config.database.url).await?;
+    let redis = RedisConnection::connect(&config.redis.url, "cpr").await?;
+    let settings =
+        RuntimeSettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool)
+            .await?;
+    apply_settings_to_config(&mut config, &settings);
+
+    let fingerprint_store = PgFingerprintStore::new(pool.clone());
+    let stores = BackgroundTaskStores {
+        redis: redis.clone(),
+        accounts: PgAccountStore::new(pool.clone()),
+        admin_users: PgAdminUserStore::new(pool.clone()),
+        admin_sessions: RedisAdminSessionStore::new(redis.clone()),
+        cookies: PgCookieStore::new(pool.clone()),
+        fingerprints: fingerprint_store.clone(),
+        session_affinity: RedisSessionAffinityStore::new(redis.clone()),
+        refresh_leases: RedisRefreshLeaseStore::new(redis.clone()),
+        model_snapshots: RedisModelSnapshotStore::new(redis.clone()),
+        client_keys: PgClientKeyStore::new(pool.clone()),
+        usage_records: PgUsageRecordStore::new(pool.clone()),
+        ops_errors: PgOpsErrorLogStore::new(pool.clone()),
+        account_usage: PgAccountUsageStore::new(pool.clone()),
+        request_buckets: PgRequestBucketStore::new(pool),
+    };
+
+    config.admin.validate_default_password()?;
+    let default_admin_password = config.admin.default_password.clone();
+    let data_dir = ensure_data_dir()?;
+    let installation_id = load_or_create_installation_id(Some(&data_dir))?;
+    let default_fingerprint = fingerprint_from_config(&config.fingerprint);
+    let runtime_fingerprint = fingerprint_store
+        .ensure_current_seed(&default_fingerprint)
+        .await?;
+    let runtime_fingerprint = RuntimeFingerprint::new(runtime_fingerprint);
+    let runtime_config = crate::bootstrap::state::RuntimeConfig::from(config.clone());
+    let services = Services::try_with_installation_id(
+        &config,
+        stores,
+        runtime_fingerprint,
+        Some(installation_id),
+    )?;
+    services.initialize_hot_path_state().await?;
+
+    let created_default_admin = services
+        .admin_sessions
+        .ensure_default_admin(&default_admin_password)
+        .await?;
+    tracing::info!(
+        created = created_default_admin,
+        "默认管理员账号已完成初始化检查"
+    );
+
+    let restored_accounts = services.account_pool.restore_from_store().await?;
+    tracing::info!(
+        count = restored_accounts,
+        "运行时账号池已从 PostgreSQL 恢复"
+    );
+
+    let task_coordinator =
+        crate::bootstrap::tasks::coordinator::TaskCoordinator::start(&runtime_config, &services);
+    let app_state = crate::api::AppState::from(&services);
+
+    Ok((
+        crate::api::router::router().with_state(app_state),
+        task_coordinator,
+    ))
+}
+
+fn init_logging(config: &AppConfig) -> Result<Option<LogGuard>, crate::infra::logging::LogError> {
+    if !config.logging.enabled {
+        return Ok(None);
+    }
+
+    let rotation = RotationConfig::new(&config.logging.directory, config.logging.retention_days);
+    Ok(Some(init_tracing(&rotation)?))
+}
+
+async fn wait_for_scheduled_restart() {
+    let Some(delay_ms) = env::var(RESTART_DELAY_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+    else {
+        return;
+    };
+
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+}
+
+#[cfg(unix)]
+fn exec_replacement_process(
+    executable_path: std::path::PathBuf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    let error = Command::new(executable_path)
+        .args(env::args_os().skip(1))
+        .exec();
+    Err(Box::new(error))
+}
+
+#[cfg(not(unix))]
+fn exec_replacement_process(
+    _executable_path: std::path::PathBuf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    Err(Box::new(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process exec restart is only supported on Unix",
+    )))
 }

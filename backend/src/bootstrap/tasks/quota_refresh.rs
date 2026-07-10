@@ -12,6 +12,7 @@ use crate::{
         quota::{QuotaRefreshSummary, RuntimeQuotaRefreshService},
         store::PgAccountStore,
     },
+    telemetry::account_usage::store::PgAccountUsageStore,
     upstream::openai::transport::CodexBackendClient,
 };
 
@@ -31,6 +32,7 @@ impl QuotaRefreshTask {
     /// 使用自定义间隔构造配额刷新后台任务。
     pub fn with_intervals(
         store: PgAccountStore,
+        usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
         interval_secs: u64,
         min_refresh_interval_secs: u64,
@@ -38,6 +40,7 @@ impl QuotaRefreshTask {
         Self {
             service: RuntimeQuotaRefreshService::with_min_refresh_interval_secs(
                 store,
+                usage_store,
                 codex,
                 min_refresh_interval_secs,
             ),

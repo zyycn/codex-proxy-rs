@@ -3,7 +3,7 @@
 pub mod account_usage;
 pub(crate) mod billing;
 pub mod buckets;
-pub mod diagnostics;
+pub mod dashboard;
 pub mod ops;
 pub mod rebuild;
 pub mod recorder;

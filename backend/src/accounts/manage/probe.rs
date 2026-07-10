@@ -7,23 +7,16 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::{
-    accounts::{
-        account::{Account, AccountStatus},
-        store::StoredAccount,
-    },
-    dispatch::{
-        errors::{
-            auth_failure_account_status, is_auth_upstream_error, is_quota_exhausted_upstream_error,
-        },
-        responses::sse_failure::sse_failure_account_status,
-    },
-    models::{info::CodexModelInfo, service::ModelRefreshPlanAccount},
+    accounts::{account::AccountStatus, store::StoredAccount},
+    models::{service::ModelRefreshPlanAccount, types::CodexModelInfo},
     upstream::openai::{
         protocol::{
             responses::{CodexResponsesRequest, ResponsesSseFailure},
             sse::{encode_sse_event, parse_sse_events, SseEvent},
         },
-        transport::{is_banned_upstream_error, CodexClientError, CodexRequestContext},
+        transport::{
+            is_banned_auth_signal, is_banned_upstream_error, CodexClientError, CodexRequestContext,
+        },
     },
 };
 
@@ -87,7 +80,8 @@ impl AccountManageService {
         let request_id = uuid::Uuid::new_v4().to_string();
         let plan_account = ModelRefreshPlanAccount {
             plan_type: plan_type.to_string(),
-            account: stored_account_to_model_refresh_account(account.clone()),
+            access_token: account.access_token.expose_secret().to_string(),
+            account_id: account.account_id.clone(),
         };
         if let Err(error) = self
             .models
@@ -257,47 +251,6 @@ fn account_plan_type(account: &StoredAccount) -> String {
         .to_string()
 }
 
-fn stored_account_to_model_refresh_account(stored: StoredAccount) -> Account {
-    Account {
-        id: stored.id,
-        email: stored.email,
-        account_id: stored.account_id,
-        user_id: stored.user_id,
-        label: stored.label,
-        plan_type: stored.plan_type,
-        access_token: stored.access_token.expose_secret().to_string(),
-        refresh_token: stored
-            .refresh_token
-            .map(|token| token.expose_secret().to_string()),
-        access_token_expires_at: stored.access_token_expires_at,
-        next_refresh_at: stored.next_refresh_at,
-        status: stored.status,
-        quota_limit_reached: false,
-        quota_verify_required: false,
-        quota_cooldown_until: None,
-        cloudflare_cooldown_until: None,
-        request_count: 0,
-        empty_response_count: 0,
-        image_input_tokens: 0,
-        image_output_tokens: 0,
-        image_request_count: 0,
-        image_request_failed_count: 0,
-        window_request_count: 0,
-        window_input_tokens: 0,
-        window_output_tokens: 0,
-        window_cached_tokens: 0,
-        window_image_input_tokens: 0,
-        window_image_output_tokens: 0,
-        window_image_request_count: 0,
-        window_image_request_failed_count: 0,
-        window_started_at: None,
-        window_reset_at: None,
-        limit_window_seconds: None,
-        added_at: stored.added_at,
-        last_used_at: None,
-    }
-}
-
 fn test_responses_request(model: String) -> CodexResponsesRequest {
     let mut request = CodexResponsesRequest::new_http_sse(
         model,
@@ -396,13 +349,52 @@ async fn process_sse_event(
 fn account_status_from_client_error(error: &CodexClientError) -> Option<AccountStatus> {
     if is_banned_upstream_error(error) {
         Some(AccountStatus::Banned)
-    } else if is_quota_exhausted_upstream_error(error) {
-        Some(AccountStatus::QuotaExhausted)
-    } else if is_auth_upstream_error(error) {
-        Some(auth_failure_account_status(error))
     } else {
-        None
+        match error {
+            CodexClientError::Upstream { status, .. } if status.as_u16() == 402 => {
+                Some(AccountStatus::QuotaExhausted)
+            }
+            CodexClientError::Upstream { status, body, .. } if status.as_u16() == 401 => {
+                Some(if is_banned_auth_signal(body) {
+                    AccountStatus::Banned
+                } else {
+                    AccountStatus::Expired
+                })
+            }
+            _ => None,
+        }
     }
+}
+
+fn sse_failure_account_status(failure: &ResponsesSseFailure) -> Option<AccountStatus> {
+    let code = failure
+        .upstream_code
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let message = failure.message.to_ascii_lowercase();
+    if matches!(code.as_str(), "quota_exceeded" | "insufficient_quota") || message.contains("quota")
+    {
+        return Some(AccountStatus::QuotaExhausted);
+    }
+    let authentication_failed = matches!(
+        code.as_str(),
+        "token_invalid"
+            | "token_expired"
+            | "token_revoked"
+            | "account_deactivated"
+            | "unauthorized"
+            | "invalid_api_key"
+    ) || message.contains("token revoked")
+        || message.contains("token invalid")
+        || message.contains("token expired");
+    authentication_failed.then(|| {
+        if is_banned_auth_signal(&failure.message) {
+            AccountStatus::Banned
+        } else {
+            AccountStatus::Expired
+        }
+    })
 }
 
 fn take_sse_frame(buffer: &mut String) -> Option<String> {

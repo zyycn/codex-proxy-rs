@@ -1,9 +1,6 @@
-use codex_proxy_rs::{
-    models::{
-        snapshot::ModelPlanSnapshot,
-        store::{ModelSnapshotStore, RedisModelSnapshotStore},
-    },
-    upstream::openai::protocol::model_catalog::BackendModelEntry,
+use codex_proxy_rs::models::{
+    store::{ModelSnapshotStore, RedisModelSnapshotStore},
+    types::{BackendModelEntry, ModelPlanSnapshot},
 };
 
 use crate::support::storage::create_test_redis;

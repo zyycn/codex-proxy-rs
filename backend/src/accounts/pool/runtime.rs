@@ -1,9 +1,36 @@
 use super::*;
 
+/// 账号运行参数中不支持热更新的部分。
+#[derive(Debug, Clone)]
+pub struct AccountPoolStaticSettings {
+    pub skip_quota_limited: bool,
+    pub tier_priority: Vec<String>,
+}
+
+impl AccountPoolStaticSettings {
+    /// 将设置快照转换为账号池选项。
+    pub fn pool_options(&self, settings: &crate::settings::SettingsSnapshot) -> AccountPoolOptions {
+        AccountPoolOptions {
+            max_concurrent_per_account: settings.max_concurrent_per_account,
+            rotation_strategy: match settings.rotation_strategy.as_str() {
+                "smart" => RotationStrategy::Smart,
+                "quota_reset_priority" => RotationStrategy::QuotaResetPriority,
+                "round_robin" => RotationStrategy::RoundRobin,
+                "sticky" => RotationStrategy::Sticky,
+                _ => RotationStrategy::Smart,
+            },
+            skip_quota_limited: self.skip_quota_limited,
+            tier_priority: self.tier_priority.clone(),
+            ..AccountPoolOptions::default()
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeAccountPoolService {
     pool: Arc<tokio::sync::Mutex<AccountPool>>,
     store: Arc<dyn AccountStore>,
+    usage_store: Arc<dyn AccountUsageStore>,
     request_interval: Arc<std::sync::RwLock<StdDuration>>,
 }
 
@@ -11,12 +38,14 @@ impl RuntimeAccountPoolService {
     /// 构造运行时账号池服务。
     pub fn new(
         store: Arc<dyn AccountStore>,
+        usage_store: Arc<dyn AccountUsageStore>,
         options: AccountPoolOptions,
         request_interval_ms: u64,
     ) -> Self {
         Self {
             pool: Arc::new(tokio::sync::Mutex::new(AccountPool::with_options(options))),
             store,
+            usage_store,
             request_interval: Arc::new(std::sync::RwLock::new(StdDuration::from_millis(
                 request_interval_ms,
             ))),
@@ -36,6 +65,22 @@ impl RuntimeAccountPoolService {
             StdDuration::from_millis(request_interval_ms);
     }
 
+    /// 持续接收运行时设置并更新账号池参数。
+    pub async fn subscribe_settings(
+        self: Arc<Self>,
+        mut receiver: tokio::sync::watch::Receiver<crate::settings::SettingsSnapshot>,
+        static_settings: AccountPoolStaticSettings,
+    ) {
+        while receiver.changed().await.is_ok() {
+            let settings = receiver.borrow_and_update().clone();
+            self.apply_options(
+                static_settings.pool_options(&settings),
+                settings.request_interval_ms,
+            )
+            .await;
+        }
+    }
+
     /// 更新模型到可用账号计划的调度约束。
     pub(crate) async fn apply_model_plan_routing(
         &self,
@@ -49,11 +94,25 @@ impl RuntimeAccountPoolService {
 
     /// 从持久化账号恢复运行时账号池。
     pub async fn restore_from_store(&self) -> Result<usize, RuntimeAccountPoolError> {
-        let accounts = self
+        let mut accounts = self
             .store
             .list_pool_accounts()
             .await
             .map_err(|_| RuntimeAccountPoolError::Generic)?;
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id.clone())
+            .collect::<Vec<_>>();
+        let mut usage = self
+            .usage_store
+            .snapshots(&account_ids)
+            .await
+            .map_err(|_| RuntimeAccountPoolError::Generic)?;
+        for account in &mut accounts {
+            if let Some(snapshot) = usage.remove(&account.id) {
+                apply_usage_snapshot(account, snapshot);
+            }
+        }
         let count = accounts.len();
         let mut pool = self.pool.lock().await;
         pool.clear();
@@ -105,7 +164,7 @@ impl RuntimeAccountPoolService {
         if !record_request_usage {
             return;
         }
-        if let Err(error) = self.store.record_request(account_id).await {
+        if let Err(error) = self.usage_store.record_request(account_id).await {
             tracing::warn!(
                 account_id,
                 error = %error,
@@ -120,7 +179,7 @@ impl RuntimeAccountPoolService {
             return;
         };
         if let Err(error) = self
-            .store
+            .usage_store
             .record_model_usage_delta(
                 account_id,
                 &model,
@@ -202,7 +261,7 @@ impl RuntimeAccountPoolService {
         for refreshed in refreshed_states {
             if let Err(error) = self
                 .store
-                .sync_runtime_account_state(&refreshed.account, refreshed.sync_usage_window)
+                .sync_runtime_account_state(&refreshed.account)
                 .await
             {
                 tracing::warn!(
@@ -210,6 +269,22 @@ impl RuntimeAccountPoolService {
                     error = %error,
                     "failed to persist refreshed runtime account state"
                 );
+            }
+            if refreshed.sync_usage_window {
+                if let Err(error) = self
+                    .usage_store
+                    .sync_runtime_window(
+                        &refreshed.account.id,
+                        account_usage_window(&refreshed.account),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        account_id = %refreshed.account.id,
+                        error = %error,
+                        "failed to persist refreshed runtime account usage window"
+                    );
+                }
             }
         }
     }
@@ -264,7 +339,7 @@ impl RuntimeAccountPoolService {
             ..AccountUsageDelta::default()
         };
         if let Err(error) = self
-            .store
+            .usage_store
             .record_usage_delta(account_id, persisted_usage)
             .await
         {
@@ -275,7 +350,7 @@ impl RuntimeAccountPoolService {
             );
         }
         if let Err(error) = self
-            .store
+            .usage_store
             .record_model_usage_delta(
                 account_id,
                 model,
@@ -321,7 +396,7 @@ impl RuntimeAccountPoolService {
             image_request_failures: u64::from(image_generation_requested),
             ..AccountUsageDelta::default()
         };
-        if let Err(error) = self.store.record_usage_delta(account_id, usage).await {
+        if let Err(error) = self.usage_store.record_usage_delta(account_id, usage).await {
             tracing::warn!(
                 account_id,
                 error = %error,
@@ -329,7 +404,7 @@ impl RuntimeAccountPoolService {
             );
         }
         if let Err(error) = self
-            .store
+            .usage_store
             .record_model_usage_delta(
                 account_id,
                 model,
@@ -429,7 +504,7 @@ impl RuntimeAccountPoolService {
 
         if let Some(reset_at) = reset_at {
             if let Err(error) = self
-                .store
+                .usage_store
                 .sync_rate_limit_window(account_id, reset_at, limit_window_seconds)
                 .await
             {
@@ -468,12 +543,20 @@ impl RuntimeAccountPoolService {
             .get_pool_account(account_id)
             .await
             .map_err(|_| RuntimeAccountPoolError::Generic)?;
-        let mut pool = self.pool.lock().await;
-        if let Some(account) = account {
-            pool.insert(account);
+        if let Some(mut account) = account {
+            let account_ids = vec![account.id.clone()];
+            let mut usage = self
+                .usage_store
+                .snapshots(&account_ids)
+                .await
+                .map_err(|_| RuntimeAccountPoolError::Generic)?;
+            if let Some(snapshot) = usage.remove(&account.id) {
+                apply_usage_snapshot(&mut account, snapshot);
+            }
+            self.pool.lock().await.insert(account);
             return Ok(true);
         }
-        Ok(pool.remove(account_id))
+        Ok(self.pool.lock().await.remove(account_id))
     }
 
     /// 设置 Cloudflare 冷却状态。
@@ -503,6 +586,45 @@ impl RuntimeAccountPoolService {
             .await
             .set_cloudflare_cooldown_until(account_id, cooldown_until);
         persisted || in_memory
+    }
+}
+
+fn apply_usage_snapshot(account: &mut Account, snapshot: AccountUsageSnapshot) {
+    account.request_count = snapshot.request_count;
+    account.empty_response_count = snapshot.empty_response_count;
+    account.image_input_tokens = snapshot.image_input_tokens;
+    account.image_output_tokens = snapshot.image_output_tokens;
+    account.image_request_count = snapshot.image_request_count;
+    account.image_request_failed_count = snapshot.image_request_failed_count;
+    account.window_request_count = snapshot.window_request_count;
+    account.window_input_tokens = snapshot.window_input_tokens;
+    account.window_output_tokens = snapshot.window_output_tokens;
+    account.window_cached_tokens = snapshot.window_cached_tokens;
+    account.window_image_input_tokens = snapshot.window_image_input_tokens;
+    account.window_image_output_tokens = snapshot.window_image_output_tokens;
+    account.window_image_request_count = snapshot.window_image_request_count;
+    account.window_image_request_failed_count = snapshot.window_image_request_failed_count;
+    account.window_started_at = snapshot.window_started_at;
+    account.window_reset_at = snapshot.window_reset_at.or(account.window_reset_at);
+    account.limit_window_seconds = snapshot
+        .limit_window_seconds
+        .or(account.limit_window_seconds);
+    account.last_used_at = snapshot.last_used_at.map(|value| value.to_rfc3339());
+}
+
+fn account_usage_window(account: &Account) -> AccountUsageWindow {
+    AccountUsageWindow {
+        request_count: account.window_request_count,
+        input_tokens: account.window_input_tokens,
+        output_tokens: account.window_output_tokens,
+        cached_tokens: account.window_cached_tokens,
+        image_input_tokens: account.window_image_input_tokens,
+        image_output_tokens: account.window_image_output_tokens,
+        image_request_count: account.window_image_request_count,
+        image_request_failed_count: account.window_image_request_failed_count,
+        started_at: account.window_started_at,
+        reset_at: account.window_reset_at,
+        limit_window_seconds: account.limit_window_seconds,
     }
 }
 

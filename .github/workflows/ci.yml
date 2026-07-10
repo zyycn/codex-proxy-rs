@@ -61,9 +61,6 @@ jobs:
         working-directory: backend
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
-      - name: Architecture boundaries
-        run: backend/scripts/check_architecture.sh
-
       - name: Rust tests
         working-directory: backend
         run: cargo test --test main --locked

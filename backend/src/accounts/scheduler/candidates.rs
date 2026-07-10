@@ -7,7 +7,7 @@
 //!
 //! 1. 账号状态为 [`AccountStatus::Active`]；
 //! 2. 在途槽位数未达单账号并发上限；
-//! 3. 配额可用（[`AccountService::quota_available_at`]，受 `skip_quota_limited` 控制）；
+//! 3. 配额可用（受 `skip_quota_limited` 控制）；
 //! 4. 模型在账号订阅计划的允许列表内；
 //! 5. 不在本次请求的排除列表内；
 //! 6. 不处于 Cloudflare 冷却期。
@@ -18,7 +18,6 @@
 use chrono::{DateTime, Utc};
 
 use crate::accounts::account::{Account, AccountStatus};
-use crate::accounts::service::AccountService;
 
 /// 候选过滤所需的账号池策略参数（只读视图）。
 pub struct CandidateFilter<'a> {
@@ -78,7 +77,7 @@ fn is_base_available(
 ) -> bool {
     account.status == AccountStatus::Active
         && (filter.slot_count)(&account.id) < filter.max_concurrent_per_account
-        && AccountService::quota_available_at(account, request.now, filter.skip_quota_limited)
+        && quota_available_at(account, request.now, filter.skip_quota_limited)
         && is_model_allowed(
             account,
             request.model,
@@ -89,7 +88,7 @@ fn is_base_available(
             .exclude_account_ids
             .iter()
             .any(|account_id| account_id == &account.id)
-        && AccountService::cloudflare_available_at(account, request.now)
+        && cloudflare_available_at(account, request.now)
 }
 
 /// 判断模型是否允许该账号的订阅计划使用。
@@ -132,6 +131,25 @@ pub fn is_model_refresh_available(
 ) -> bool {
     account.status == AccountStatus::Active
         && slot_count(&account.id) < max_concurrent_per_account
-        && AccountService::quota_available_at(account, now, skip_quota_limited)
-        && AccountService::cloudflare_available_at(account, now)
+        && quota_available_at(account, now, skip_quota_limited)
+        && cloudflare_available_at(account, now)
+}
+
+pub(crate) fn quota_available_at(
+    account: &Account,
+    now: DateTime<Utc>,
+    skip_quota_limited: bool,
+) -> bool {
+    if !skip_quota_limited || !account.quota_limit_reached {
+        return true;
+    }
+    account
+        .quota_cooldown_until
+        .is_some_and(|cooldown_until| now >= cooldown_until)
+}
+
+fn cloudflare_available_at(account: &Account, now: DateTime<Utc>) -> bool {
+    account
+        .cloudflare_cooldown_until
+        .is_none_or(|cooldown_until| now >= cooldown_until)
 }

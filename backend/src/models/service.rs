@@ -6,17 +6,17 @@ use std::{
 };
 
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::{
-    accounts::account::Account,
+    settings::SettingsSnapshot,
     upstream::openai::transport::{CodexModelCatalogClient, CodexModelCatalogRequest},
 };
 
 use super::{
     catalog::ModelCatalog,
-    config::ModelConfig,
-    snapshot::ModelPlanSnapshot,
     store::{ModelSnapshotStore, ModelSnapshotStoreError},
+    types::{ModelConfig, ModelPlanSnapshot},
 };
 
 /// 模型刷新摘要。
@@ -76,8 +76,10 @@ pub struct ModelPlanRouting {
 pub struct ModelRefreshPlanAccount {
     /// 订阅计划类型。
     pub plan_type: String,
-    /// 用于刷新该计划模型列表的账号。
-    pub account: Account,
+    /// 用于访问模型目录的令牌。
+    pub access_token: String,
+    /// 上游账号标识。
+    pub account_id: Option<String>,
 }
 
 /// 模型目录服务。
@@ -114,6 +116,19 @@ impl ModelService {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
         self.rebuild_catalog_from_memory();
+    }
+
+    /// 持续接收运行时设置并更新模型别名。
+    pub async fn subscribe_settings(
+        self: Arc<Self>,
+        mut receiver: watch::Receiver<SettingsSnapshot>,
+    ) {
+        while receiver.changed().await.is_ok() {
+            let settings = receiver.borrow_and_update().clone();
+            self.update_config(ModelConfig {
+                model_aliases: settings.model_aliases,
+            });
+        }
     }
 
     /// 从快照存储加载运行时内存模型目录。
@@ -163,8 +178,8 @@ impl ModelService {
 
         for plan_account in plan_accounts {
             let request = CodexModelCatalogRequest {
-                access_token: &plan_account.account.access_token,
-                account_id: plan_account.account.account_id.as_deref(),
+                access_token: &plan_account.access_token,
+                account_id: plan_account.account_id.as_deref(),
                 request_id,
                 installation_id,
                 plan_type: &plan_account.plan_type,
@@ -184,7 +199,11 @@ impl ModelService {
             };
 
             let snapshot =
-                ModelPlanSnapshot::from_backend_entries(plan_account.plan_type.clone(), entries);
+                ModelPlanSnapshot::from_backend_values(plan_account.plan_type.clone(), entries);
+            if snapshot.models.is_empty() {
+                result.failed_plans += 1;
+                continue;
+            }
             result.model_count += snapshot.models.len();
             store
                 .replace_plan_snapshot(&snapshot)

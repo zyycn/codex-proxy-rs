@@ -4,7 +4,7 @@
 
 use axum::http::{header::AUTHORIZATION, HeaderMap};
 
-use crate::bootstrap::state::AppState;
+use crate::api::AppState;
 
 /// client API key 鉴权失败原因。
 #[derive(Debug, Clone, PartialEq, Eq)]

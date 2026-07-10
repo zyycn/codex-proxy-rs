@@ -1,6 +1,6 @@
 //! 后台任务协调器。
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
 use tokio::task::JoinHandle;
 
@@ -33,7 +33,7 @@ impl TaskCoordinator {
         config: &crate::bootstrap::state::RuntimeConfig,
         services: &crate::bootstrap::services::Services,
     ) -> Self {
-        let mut coordinator = TaskCoordinator::default();
+        let mut coordinator = Self::start_settings_subscriptions(services);
         let stores = &services.background_tasks;
 
         coordinator.push(
@@ -65,6 +65,7 @@ impl TaskCoordinator {
             "quota_refresh",
             QuotaRefreshTask::with_intervals(
                 stores.accounts.clone(),
+                stores.account_usage.clone(),
                 services.codex.clone(),
                 config
                     .quota
@@ -99,6 +100,37 @@ impl TaskCoordinator {
         coordinator
     }
 
+    /// 启动各领域的设置订阅任务。
+    pub fn start_settings_subscriptions(services: &crate::bootstrap::services::Services) -> Self {
+        let mut coordinator = TaskCoordinator::default();
+        coordinator.push(
+            "model_settings",
+            SchedulerHandle::spawn(
+                services
+                    .models
+                    .clone()
+                    .subscribe_settings(services.settings.subscribe()),
+            ),
+        );
+        coordinator.push(
+            "account_pool_settings",
+            SchedulerHandle::spawn(services.account_pool.clone().subscribe_settings(
+                services.settings.subscribe(),
+                services.account_pool_static.clone(),
+            )),
+        );
+        coordinator.push(
+            "refresh_policy_settings",
+            SchedulerHandle::spawn(
+                services
+                    .refresh_policy
+                    .clone()
+                    .subscribe_settings(services.settings.subscribe()),
+            ),
+        );
+        coordinator
+    }
+
     /// 关闭所有后台任务。
     pub async fn shutdown(self) {
         tracing::info!("正在关闭后台任务");
@@ -122,6 +154,17 @@ pub enum SchedulerHandle {
 }
 
 impl SchedulerHandle {
+    fn spawn(future: impl Future<Output = ()> + Send + 'static) -> Self {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                () = future => {}
+                _ = shutdown_rx.recv() => {}
+            }
+        });
+        Self::new(shutdown_tx, handle)
+    }
+
     /// 使用关闭 channel 构造句柄。
     pub(crate) fn new(shutdown_tx: tokio::sync::mpsc::Sender<()>, handle: JoinHandle<()>) -> Self {
         Self::Channel {
