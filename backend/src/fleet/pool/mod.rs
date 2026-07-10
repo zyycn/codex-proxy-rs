@@ -202,7 +202,7 @@ impl AccountPoolService {
             return;
         }
         if let Err(error) = self.usage_store.record_request(account_id).await {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 error = %error,
                 "failed to persist account request usage"
@@ -227,7 +227,7 @@ impl AccountPoolService {
             )
             .await
         {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 model,
                 error = %error,
@@ -241,7 +241,7 @@ impl AccountPoolService {
         let persisted = match self.store.set_status(account_id, status).await {
             Ok(persisted) => persisted,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     account_id,
                     error = %error,
                     "failed to persist account status"
@@ -258,7 +258,7 @@ impl AccountPoolService {
         let persisted = match self.store.mark_quota_limited_until(account_id, until).await {
             Ok(persisted) => persisted,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     account_id,
                     error = %error,
                     "failed to persist quota cooldown state"
@@ -301,7 +301,7 @@ impl AccountPoolService {
                 .sync_runtime_account_state(&refreshed.account)
                 .await
             {
-                tracing::warn!(
+                tracing::error!(
                     account_id = %refreshed.account.id,
                     error = %error,
                     "failed to persist refreshed runtime account state"
@@ -316,7 +316,7 @@ impl AccountPoolService {
                     )
                     .await
                 {
-                    tracing::warn!(
+                    tracing::error!(
                         account_id = %refreshed.account.id,
                         error = %error,
                         "failed to persist refreshed runtime account usage window"
@@ -380,7 +380,7 @@ impl AccountPoolService {
             .record_usage_delta(account_id, persisted_usage)
             .await
         {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 error = %error,
                 "failed to persist account token usage"
@@ -400,7 +400,7 @@ impl AccountPoolService {
             )
             .await
         {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 model,
                 error = %error,
@@ -434,7 +434,7 @@ impl AccountPoolService {
             ..AccountUsageDelta::default()
         };
         if let Err(error) = self.usage_store.record_usage_delta(account_id, usage).await {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 error = %error,
                 "failed to persist empty response usage"
@@ -452,7 +452,7 @@ impl AccountPoolService {
             )
             .await
         {
-            tracing::warn!(
+            tracing::error!(
                 account_id,
                 model,
                 error = %error,
@@ -498,7 +498,7 @@ impl AccountPoolService {
             Ok(Some(quota_json)) => serde_json::from_str::<serde_json::Value>(&quota_json).ok(),
             Ok(None) => None,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     account_id = %account_id,
                     error = %error,
                     "failed to read existing quota json before passive rate-limit sync"
@@ -530,7 +530,7 @@ impl AccountPoolService {
         {
             Ok(persisted) => persisted,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     account_id,
                     error = %error,
                     "failed to persist verified quota snapshot"
@@ -545,7 +545,7 @@ impl AccountPoolService {
                 .sync_rate_limit_window(account_id, reset_at, limit_window_seconds)
                 .await
             {
-                tracing::warn!(
+                tracing::error!(
                     account_id,
                     error = %error,
                     "failed to persist verified quota window"
@@ -609,7 +609,7 @@ impl AccountPoolService {
         {
             Ok(persisted) => persisted,
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     account_id,
                     error = %error,
                     "failed to persist Cloudflare cooldown state"

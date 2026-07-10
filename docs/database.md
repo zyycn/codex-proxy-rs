@@ -124,12 +124,17 @@
 | `ops_error_logs` | 30 天(默认) | `runtime_settings.ops_error_retention_days`,同上 |
 | `request_time_buckets` | 90 天(默认) | `runtime_settings.bucket_retention_days`,同上 |
 | `account_cookies` | 按 `expires_at` 清理 | 周期任务(PG) |
+| `account_usage` | 每账号 1 行 | 账号删除时 FK 级联删除 |
+| `account_model_usage` | 每账号最近 100 个模型 | 每小时按 `last_used_at desc nulls last, model` 裁剪 |
+| `fingerprints` | 当前指纹固定 1 行 | 固定 ID 覆盖更新 |
+| `fingerprint_update_history` | 全局最近 100 行 | 每小时按 `created_at desc, id desc` 裁剪 |
 | Redis 会话/租约/亲和 | TTL 自然过期 | 无清理任务 |
-| 其余 PG 表 | 常量级增长 | — |
+| 其余 PG 实体表 | 随管理实体数量增长 | 不随请求数增长 |
 
-- trim 是**周期后台任务**(每轮读 `runtime_settings` 三列),不再在每次写入后内联执行——v3 的"每写一次 delete 一次"是已知的写放大缺陷,终态修复。
+- trim 是**每小时执行的后台任务**:三张时间表每轮读 `runtime_settings` 保留列,两张历史/统计表使用上表的固定行数上限。不再在每次写入后内联执行——v3 的"每写一次 delete 一次"是已知的写放大缺陷,终态修复。
+- 30/30/90 天是数据时间窗,不是字节硬上限;高流量下时间窗内的事实仍可很大。PostgreSQL `autovacuum` 会回收 DELETE 后的页供后续复用,但不保证数据文件立即缩小;不周期执行会锁表的 `VACUUM FULL`。
 - `request_time_buckets` 在事实保留期内可由两张事实表重算(`rebuild-buckets` 命令,§7);超出事实保留期的桶是**因事实过期而升格的一级数据**,写入纪律 + 同事务写入(§5.2)是它们的唯一保障。
-- `account_usage` / `account_model_usage` 的累计列**不可重建**(事实早已过期),同样只受写入纪律保护。本文档不声称"一切派生皆可重算"。
+- `account_usage` / `account_model_usage` 的累计列**不可重建**(事实早已过期),同样只受写入纪律保护。模型维度超过 100 后丢弃最久未用的分项累计,账号总累计仍由 `account_usage` 保留。本文档不声称"一切派生皆可重算"。
 - `window_*` 列是运行态(窗口边界来自上游),不可重建,可丢弃。
 
 ---
@@ -379,6 +384,8 @@ create index idx_account_model_usage_last_used
 
 `error_count` 是**收窄口径**:仅统计已归属到账号+模型之后的失败,用作调度回避信号(频繁失败 → 降权)。这是全库唯一允许的口径重叠(与 ops_error_logs),因为用途不同(调度局部信号 vs 全局错误事实);Dashboard 错误率禁止取自本列。
 
+每小时按 `last_used_at desc nulls last, model` 为每个账号保留前 100 行。该硬上限限制历史模型名持续增长,不改变 `account_usage` 的账号总累计。
+
 ### 4.8 usage_records ★
 
 **每个成功的客户端请求恰好一行**。用量、token、成本、账号与调用方归因的唯一事实来源。这是系统的账本;"只收成功"的边界由 DB 约束兜底,不再只靠 service 层。
@@ -589,6 +596,8 @@ create table fingerprints (
 
 指纹更新审计。版本快照列固化"当时更新到了什么"——不能只存 FK,指纹行会被后续更新覆写。级联删除可接受:指纹本体删除后其历史无独立价值。
 
+每小时按 `created_at desc, id desc` 全局保留最新 100 行,让审计深度确定且不随运行年限增长。
+
 ```sql
 create table fingerprint_update_history (
   id text primary key,
@@ -777,7 +786,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 只改取数来源，不改既有文案。
 7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。
 8. **维护命令**(`main.rs` CLI):`import-sqlite <path>`(§6);`rebuild-buckets`——删除事实保留期内的桶并从两张事实表重算(15 分钟槽对齐在 SQL 侧 `floor(epoch/900)*900`,§2.3);保留期外只读不动。范围明确**不含** `account_usage` / `account_model_usage`(§2.10,不可重建)。
-9. **清理任务**(`bootstrap/tasks/`):三张增长表的周期 trim(读 `runtime_settings` 三列);cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
+9. **清理任务**(`bootstrap/tasks/`):三张时间增长表的周期 trim(读 `runtime_settings` 三列),`account_model_usage` 每账号 100 行与 `fingerprint_update_history` 全局 100 行硬上限;cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
 10. **健康检查**(`api/router.rs`):PG `select 1` + Redis `PING`,任一失败即 503。
 11. **测试**(`backend/tests/`):support 换 PG(每测试独立数据库,`CPR_TEST_DATABASE_URL` 指定服务端)+ Redis(每测试随机键前缀,`CPR_TEST_REDIS_URL`);storage 测试断言终态 DDL、导入拆分规则(成功行迁入 / error 行转 ops / 噪音行丢弃 / 旧 `refreshing` 规范化)、两条写入事务的原子性、0ms 延迟样本可入桶、租约原子性。
 12. **部署**(`deploy/docker-compose.yml`):新增 postgres、redis 服务与健康检查依赖。

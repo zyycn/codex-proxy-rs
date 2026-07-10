@@ -363,7 +363,7 @@ async fn test_app_without_accounts(
     (router::router().with_state(state), api_key, pool, dir)
 }
 
-async fn test_app_with_account_pool_and_logging(
+async fn test_app_with_account_pool_and_telemetry(
     base_url: String,
 ) -> (
     axum::Router,
@@ -372,12 +372,12 @@ async fn test_app_with_account_pool_and_logging(
     crate::support::storage::TestDatabaseGuard,
 ) {
     test_app_with_account_pool_config(base_url, |config| {
-        config.logging.enabled = true;
+        config.telemetry.enabled = true;
     })
     .await
 }
 
-async fn test_app_with_account_pool_and_disabled_logging(
+async fn test_app_with_account_pool_and_disabled_telemetry(
     base_url: String,
 ) -> (
     axum::Router,
@@ -403,7 +403,7 @@ async fn test_app_with_account_pool_and_disabled_logging(
     (router::router().with_state(state), api_key, pool, dir)
 }
 
-async fn test_app_with_account_pool_and_logging_capture_body(
+async fn test_app_with_account_pool_and_telemetry_capture_body(
     base_url: String,
 ) -> (
     axum::Router,
@@ -415,7 +415,7 @@ async fn test_app_with_account_pool_and_logging_capture_body(
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
     let mut config = test_config(test_database_url(), base_url);
-    config.logging.enabled = true;
+    config.telemetry.enabled = true;
     let usage_record_options = UsageRecordOptions {
         enabled: true,
         capture_body: true,
@@ -607,7 +607,7 @@ async fn test_app_with_two_accounts(
     (app, api_key, pool, dir)
 }
 
-async fn test_app_with_two_accounts_and_logging(
+async fn test_app_with_two_accounts_and_telemetry(
     base_url: String,
 ) -> (
     axum::Router,
@@ -617,7 +617,7 @@ async fn test_app_with_two_accounts_and_logging(
 ) {
     let (app, _state, api_key, pool, dir) =
         test_app_with_two_accounts_and_state_config(base_url, |config| {
-            config.logging.enabled = true;
+            config.telemetry.enabled = true;
         })
         .await;
     (app, api_key, pool, dir)

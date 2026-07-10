@@ -14,7 +14,7 @@ database:
 
 redis:
   # Redis 仅承载可丢弃的运行态与缓存。
-  url: 'redis://redis:6379/'
+  url: 'redis://:codex_proxy@redis:6379/'
 
 quota:
   # 账号额度刷新间隔，单位分钟。
@@ -89,8 +89,18 @@ admin:
   default_password: ''
 
 logging:
-  # Docker 部署默认写入 /app/logs，由 Compose 挂载到仓库 .runtime/logs。
-  directory: /app/logs
-  # 日志保留天数。
-  retention_days: 14
+  # RUST_LOG 存在时优先使用环境变量。
+  level: info
+  # 同时写入 docker logs。
+  stdout: true
+  file:
+    # 文件日志挂载到仓库 .runtime/logs。
+    enabled: true
+    directory: /app/logs
+    retention_days: 14
+    max_file_size_mb: 20
+    max_files: 20
+
+telemetry:
+  # 记录真实 /v1 代理调用的成功与失败事实。
   enabled: true

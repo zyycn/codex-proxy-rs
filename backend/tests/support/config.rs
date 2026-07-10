@@ -1,6 +1,7 @@
 use codex_proxy_rs::bootstrap::config::{
-    AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
-    LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TlsConfig, WebSocketPoolSettings,
+    AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FileLoggingConfig,
+    FingerprintConfig, LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TelemetryConfig,
+    TlsConfig, WebSocketPoolSettings,
 };
 
 pub(crate) fn test_config(database_url: String) -> AppConfig {
@@ -43,9 +44,16 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
             default_password: "test-admin-password".to_string(),
         },
         logging: LoggingConfig {
-            directory: "logs".to_string(),
-            retention_days: 14,
-            enabled: false,
+            level: "info".to_string(),
+            stdout: false,
+            file: FileLoggingConfig {
+                enabled: false,
+                directory: "logs".to_string(),
+                retention_days: 14,
+                max_file_size_mb: 20,
+                max_files: 20,
+            },
         },
+        telemetry: TelemetryConfig { enabled: false },
     }
 }

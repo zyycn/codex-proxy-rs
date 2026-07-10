@@ -1,5 +1,11 @@
 name: codex-proxy-rs
 
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -19,22 +25,39 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    logging: *json-logging
 
   redis:
     image: redis:8-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${CPR_REDIS_PASSWORD:-codex_proxy}",
+      ]
     volumes:
       - redis-data:/data
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "--no-auth-warning",
+          "-a",
+          "${CPR_REDIS_PASSWORD:-codex_proxy}",
+          "ping",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
     security_opt:
       - no-new-privileges:true
+    logging: *json-logging
 
   codex-proxy-rs:
     image: ${CPR_IMAGE:-ghcr.io/zyycn/codex-proxy-rs:latest}
@@ -90,6 +113,7 @@ services:
       CPR_UPDATE_LOCK_FILE: /app/data/update.lock
       CPR_WEB_DIST_DIR: /app/web/dist
       CPR_ENABLE_SELF_RESTART: "true"
+    logging: *json-logging
 
 volumes:
   postgres-data:

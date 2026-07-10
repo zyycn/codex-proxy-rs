@@ -1,6 +1,6 @@
 //! PostgreSQL 账号用量查询存储。
 
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZeroU32};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -12,6 +12,8 @@ use crate::infra::{
     json::{decode_cursor, encode_cursor, Page},
     time::parse_rfc3339_utc as parse_rfc3339,
 };
+
+use super::should_reset_usage_window;
 
 const RECORD_USAGE_SQL: &str = r"
 insert into account_usage (
@@ -387,6 +389,33 @@ impl PgAccountUsageStore {
         &self.pool
     }
 
+    /// 将每个账号的模型用量统计裁剪为最近使用的指定行数。
+    pub async fn trim_model_usage_to_limit(
+        &self,
+        max_models_per_account: NonZeroU32,
+    ) -> PgAccountUsageStoreResult<u64> {
+        let result = sqlx::query(
+            r"
+            delete from account_model_usage as target
+            using (
+              select account_id, model
+              from (
+                select account_id, model,
+                  row_number() over (partition by account_id order by last_used_at desc nulls last, model) as position
+                from account_model_usage
+              ) as ranked
+              where position > $1
+            ) as expired
+            where target.account_id = expired.account_id
+              and target.model = expired.model
+            ",
+        )
+        .bind(i64::from(max_models_per_account.get()))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn load_snapshots(
         &self,
         account_ids: &[String],
@@ -730,34 +759,6 @@ fn usage_snapshot_from_row(row: &PgRow) -> AccountUsageSnapshot {
         limit_window_seconds: optional_positive_i64_to_u64(row.get("limit_window_seconds")),
         last_used_at: row.get("last_used_at"),
     }
-}
-
-pub fn should_reset_usage_window(
-    existing_reset_at: Option<DateTime<Utc>>,
-    existing_limit_window_seconds: Option<u64>,
-    new_reset_at: DateTime<Utc>,
-    new_limit_window_seconds: Option<u64>,
-) -> bool {
-    let Some(existing_reset_at) = existing_reset_at else {
-        return false;
-    };
-    if existing_reset_at == new_reset_at {
-        return false;
-    }
-
-    let drift = existing_reset_at
-        .signed_duration_since(new_reset_at)
-        .num_seconds()
-        .unsigned_abs();
-    let window_seconds = new_limit_window_seconds
-        .or(existing_limit_window_seconds)
-        .unwrap_or(0);
-    let threshold = if window_seconds > 0 {
-        window_seconds / 2
-    } else {
-        3_600
-    };
-    drift >= threshold
 }
 
 fn u64_to_i64_saturating(value: u64) -> i64 {

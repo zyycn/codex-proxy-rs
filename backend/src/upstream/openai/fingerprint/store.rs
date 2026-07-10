@@ -1,5 +1,7 @@
 //! OpenAI 客户端指纹 PostgreSQL 存储。
 
+use std::num::NonZeroU32;
+
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -169,6 +171,33 @@ impl PgFingerprintStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// 将指纹更新历史裁剪为最新的指定条数。
+    pub async fn trim_update_history_to_limit(
+        &self,
+        max_entries: NonZeroU32,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            r"
+            delete from fingerprint_update_history as target
+            using (
+              select id
+              from (
+                select
+                  id,
+                  row_number() over (order by created_at desc, id desc) as position
+                from fingerprint_update_history
+              ) as ranked
+              where position > $1
+            ) as expired
+            where target.id = expired.id
+            ",
+        )
+        .bind(i64::from(max_entries.get()))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 

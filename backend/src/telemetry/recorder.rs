@@ -61,7 +61,7 @@ impl Recorder {
             return Ok(());
         }
         if !is_usage_fact(&event) {
-            tracing::warn!(
+            tracing::error!(
                 usage_record_id = %event.id,
                 request_id = event.request_id.as_deref().unwrap_or(""),
                 account_id = event.account_id,
@@ -115,7 +115,7 @@ pub(crate) async fn record_dispatch_error_event(record: DispatchErrorLogRecord<'
     event.metadata = metadata;
 
     if let Err(error) = record.recorder.record_error(event).await {
-        tracing::warn!(
+        tracing::error!(
             account_id = record.account_id.unwrap_or(""),
             error = %error,
             "failed to record dispatch error event"
@@ -163,7 +163,7 @@ pub(crate) async fn record_response_event(record: ResponseUsageRecord<'_>) {
     event.metadata = metadata;
 
     if let Err(error) = record.recorder.record_usage(event).await {
-        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record response event");
+        tracing::error!(account_id = %record.account_id, error = %error, "failed to record response event");
     }
 }
 

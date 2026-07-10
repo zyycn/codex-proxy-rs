@@ -541,6 +541,6 @@ fn test_config(database_url: String) -> AppConfig {
     config.auth.refresh_margin_seconds = 240;
     config.auth.max_concurrent_per_account = 4;
     config.auth.tier_priority = vec!["team".to_string(), "plus".to_string()];
-    config.logging.enabled = true;
+    config.telemetry.enabled = true;
     config
 }

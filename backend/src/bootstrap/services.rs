@@ -25,7 +25,7 @@ use crate::{
     },
     infra::{
         database::connect,
-        logging::{init_tracing, LogGuard, RotationConfig},
+        logging::{init_tracing, LogError, LogGuard, RotationConfig, TracingConfig},
         paths::{ensure_data_dir, load_or_create_installation_id},
         redis::RedisConnection,
     },
@@ -130,7 +130,7 @@ pub struct UsageRecordOptions {
 impl UsageRecordOptions {
     pub fn from_config(config: &AppConfig) -> Self {
         Self {
-            enabled: config.logging.enabled,
+            enabled: config.telemetry.enabled,
             capture_body: DEFAULT_USAGE_RECORD_CAPTURE_BODY,
         }
     }
@@ -532,13 +532,32 @@ async fn build_router(
     ))
 }
 
-fn init_logging(config: &AppConfig) -> Result<Option<LogGuard>, crate::infra::logging::LogError> {
-    if !config.logging.enabled {
-        return Ok(None);
-    }
+fn init_logging(config: &AppConfig) -> Result<LogGuard, LogError> {
+    const MEBIBYTE: u64 = 1024 * 1024;
 
-    let rotation = RotationConfig::new(&config.logging.directory, config.logging.retention_days);
-    Ok(Some(init_tracing(&rotation)?))
+    let file = if config.logging.file.enabled {
+        let max_file_size_bytes = config
+            .logging
+            .file
+            .max_file_size_mb
+            .checked_mul(MEBIBYTE)
+            .ok_or(LogError::InvalidConfiguration(
+                "logging.file.max_file_size_mb is too large",
+            ))?;
+        Some(RotationConfig::new(
+            &config.logging.file.directory,
+            config.logging.file.retention_days,
+            max_file_size_bytes,
+            config.logging.file.max_files,
+        ))
+    } else {
+        None
+    };
+    init_tracing(&TracingConfig::new(
+        &config.logging.level,
+        config.logging.stdout,
+        file,
+    ))
 }
 
 async fn wait_for_scheduled_restart() {

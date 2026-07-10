@@ -21,11 +21,15 @@
 
 ## P1 — Redis 裸奔,与 Postgres 不一致
 
+> 状态：2026-07-11 已完成。Compose 使用 `CPR_REDIS_PASSWORD` 配置 `requirepass`，健康检查与应用连接串已同步。
+
 - 现状:`docker-compose.yml` 中 Postgres 有密码,Redis 没有 `requirepass`——同 compose 网络内任何容器、以及宿主机本地进程(绑了 `127.0.0.1:6379`)均可无认证读写。
 - 建议:`command` 加 `--requirepass ${CPR_REDIS_PASSWORD:-...}`,应用侧连接串同步。
 - 顺带:pg / redis 的宿主端口映射(`127.0.0.1:5432` / `127.0.0.1:6379`)若只是偶尔调试用,建议注释掉——应用走 compose 内网,不需要它们。
 
 ## P1 — 日志与资源限制不一致
+
+> 状态：2026-07-11 已完成日志上限；PostgreSQL / Redis 资源上限仍待单独评估。三服务统一使用 `json-file` `10m × 5`。
 
 - 现状:三个服务的 stdout 走默认 `json-file` driver,没配 `max-size` / `max-file`,长期运行吃满磁盘(容器内 `/app/logs` 还写一份);postgres / redis 没有任何资源限制,而 app 有(`cpus` / `mem_limit` / `pids_limit`)——PG 内存失控会拖垮宿主。
 - 建议:三个服务统一加 `logging` 限制(或宿主 daemon.json 全局配);给 pg / redis 补资源上限;Postgres 大查询会碰默认 64MB shm,可按需加 `shm_size`。

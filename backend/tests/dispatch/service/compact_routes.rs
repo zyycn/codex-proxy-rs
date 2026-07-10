@@ -64,7 +64,7 @@ async fn responses_review_route_should_record_review_route_in_usage_record() {
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -121,7 +121,7 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -243,7 +243,7 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -309,7 +309,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()

@@ -49,6 +49,9 @@ pub struct AppConfig {
     /// 日志配置。
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// PostgreSQL 遥测事实记录配置。
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 /// HTTP 监听配置。
@@ -336,25 +339,67 @@ fn default_admin_password() -> String {
     String::new()
 }
 
-/// 日志持久化配置。
+/// 应用结构化日志配置。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
-    /// 日志目录。
-    pub directory: String,
-    /// 保留天数。
-    pub retention_days: usize,
-    /// 是否启用日志。
-    pub enabled: bool,
+    /// 默认日志级别；`RUST_LOG` 存在时优先使用环境变量。
+    pub level: String,
+    /// 是否写入标准输出。
+    pub stdout: bool,
+    /// 文件日志配置。
+    pub file: FileLoggingConfig,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
+            level: "info".to_string(),
+            stdout: true,
+            file: FileLoggingConfig::default(),
+        }
+    }
+}
+
+/// 应用结构化文件日志配置。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FileLoggingConfig {
+    /// 是否写入轮转文件。
+    pub enabled: bool,
+    /// 日志目录。
+    pub directory: String,
+    /// 按中国自然日计算的保留天数。
+    pub retention_days: usize,
+    /// 单文件大小上限，单位 MiB。
+    pub max_file_size_mb: u64,
+    /// 文件总数上限。
+    pub max_files: usize,
+}
+
+impl Default for FileLoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
             directory: ".runtime/logs".to_string(),
             retention_days: 14,
-            enabled: true,
+            max_file_size_mb: 20,
+            max_files: 20,
         }
+    }
+}
+
+/// PostgreSQL 遥测事实记录配置。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    /// 是否记录成功与失败代理事实。
+    pub enabled: bool,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

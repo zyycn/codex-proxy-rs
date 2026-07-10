@@ -10,9 +10,9 @@ use tower_http::{
     classify::{ServerErrorsAsFailures, ServerErrorsFailureClass, SharedClassifier},
     trace::TraceLayer,
 };
-use tracing::{info, warn, Span};
+use tracing::{debug, info, warn, Span};
 
-use crate::api::middleware::request_id::RequestId;
+use crate::api::middleware::request_id::{ClientIp, RequestId};
 
 /// HTTP tracing layer type.
 pub type HttpTraceLayer = TraceLayer<
@@ -36,27 +36,25 @@ pub fn http_trace_layer() -> HttpTraceLayer {
 
 fn make_http_span(request: &Request<Body>) -> Span {
     let request_id = request_id(request);
+    let client_ip = client_ip(request);
     let uri = sanitized_uri(request);
     tracing::info_span!(
         "http",
         request_id = request_id.as_deref(),
+        client_ip,
         method = %request.method(),
         uri = %uri
     )
 }
 
-fn on_http_request(request: &Request<Body>, _span: &Span) {
-    let request_id = request_id(request);
-    let uri = sanitized_uri(request);
-    info!(
-        request_id = request_id.as_deref(),
-        method = %request.method(),
-        uri = %uri,
-        "received HTTP request"
-    );
+fn on_http_request(_request: &Request<Body>, _span: &Span) {
+    debug!("received HTTP request");
 }
 
 fn on_http_response(response: &Response<Body>, latency: Duration, _span: &Span) {
+    if response.status().is_server_error() {
+        return;
+    }
     info!(
         status = response.status().as_u16(),
         latency_ms = latency.as_millis(),
@@ -81,6 +79,10 @@ fn request_id(request: &Request<Body>) -> Option<String> {
         .extensions()
         .get::<RequestId>()
         .map(|rid| rid.as_str().to_string())
+}
+
+fn client_ip(request: &Request<Body>) -> Option<&str> {
+    request.extensions().get::<ClientIp>().map(ClientIp::as_str)
 }
 
 fn sanitized_uri(request: &Request<Body>) -> String {

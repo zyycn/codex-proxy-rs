@@ -80,12 +80,15 @@ pub fn router() -> Router<AppState> {
 
 /// 使用指定前端构建产物目录构造整个 HTTP 服务路由。
 pub fn router_with_assets(dist_dir: impl AsRef<Path>) -> Router<AppState> {
-    Router::new()
-        .route("/healthz", get(healthz))
+    let traced_routes = Router::new()
         .merge(client::router::router())
         .merge(admin::router::router())
         .fallback_service(assets::spa_router(dist_dir))
-        .layer(http_trace_layer())
+        .layer(http_trace_layer());
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .merge(traced_routes)
         .layer(middleware::from_fn(attach_request_id))
 }
 
