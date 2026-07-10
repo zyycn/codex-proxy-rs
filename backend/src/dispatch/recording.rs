@@ -31,7 +31,7 @@ use super::{
         dispatch_error_metadata, enrich_response_dispatch_error_metadata, ResponseDispatchError,
     },
     stream::{
-        lifecycle::{latest_response_id, LiveResponseStreamContext},
+        live::{latest_response_id, LiveResponseStreamContext},
         sse_failure::{status_code_for_stream_failure, stream_failure_metadata},
         trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },

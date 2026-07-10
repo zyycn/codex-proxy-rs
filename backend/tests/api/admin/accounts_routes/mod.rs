@@ -28,13 +28,13 @@ use crate::support::{
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
 };
 
-mod export;
-mod import;
-mod lifecycle;
+mod export_routes;
+mod import_routes;
+mod lifecycle_routes;
 mod list;
-mod oauth;
-mod probe;
-mod quota;
+mod oauth_routes;
+mod probe_routes;
+mod quota_routes;
 
 struct AdminAccountsTestState {
     app_state: AppState,

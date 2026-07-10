@@ -1,4 +1,6 @@
-//! PostgreSQL 账号仓储 SQL。
+//! PostgreSQL 账号只读查询与 SQL。
+
+use super::*;
 
 // ============================================================================
 // SQL 常量
@@ -387,3 +389,161 @@ set
 where id = $7";
 
 pub(super) const DELETE_ACCOUNT_SQL: &str = "delete from accounts where id = $1";
+
+impl PgAccountStore {
+    /// 读取单个账号。
+    pub async fn get(&self, account_id: &str) -> PgAccountStoreResult<Option<StoredAccount>> {
+        let row = sqlx::query(SELECT_STORED_ACCOUNT_BY_ID_SQL)
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(stored_account_from_row).transpose()
+    }
+
+    /// 通过 ChatGPT 身份查找账号。
+    pub async fn find_by_chatgpt_identity(
+        &self,
+        chatgpt_account_id: &str,
+        chatgpt_user_id: Option<&str>,
+    ) -> PgAccountStoreResult<Option<StoredAccount>> {
+        let row = sqlx::query(SELECT_STORED_ACCOUNT_BY_CHATGPT_IDENTITY_SQL)
+            .bind(chatgpt_account_id)
+            .bind(chatgpt_user_id)
+            .bind(chatgpt_user_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(stored_account_from_row).transpose()
+    }
+
+    /// 分页列出所有账号（含 token）。
+    pub async fn list(
+        &self,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> PgAccountStoreResult<Page<StoredAccount>> {
+        let limit = limit.clamp(1, 200);
+        if let Some(cursor) = cursor {
+            let (added_at, id) =
+                decode_cursor(&cursor).ok_or(PgAccountStoreError::InvalidCursor)?;
+            let added_at =
+                parse_rfc3339_utc(&added_at).map_err(|_| PgAccountStoreError::InvalidCursor)?;
+            let rows = sqlx::query(LIST_STORED_ACCOUNTS_AFTER_CURSOR_SQL)
+                .bind(added_at)
+                .bind(added_at)
+                .bind(&id)
+                .bind(i64::from(limit) + 1)
+                .fetch_all(&self.pool)
+                .await?;
+            Ok(to_page(
+                &rows,
+                limit,
+                stored_account_from_row,
+                ("added_at", "id"),
+            ))
+        } else {
+            let rows = sqlx::query(LIST_STORED_ACCOUNTS_SQL)
+                .bind(i64::from(limit) + 1)
+                .fetch_all(&self.pool)
+                .await?;
+            Ok(to_page(
+                &rows,
+                limit,
+                stored_account_from_row,
+                ("added_at", "id"),
+            ))
+        }
+    }
+
+    /// 分页列出账号元数据（不含 token）。
+    pub async fn list_metadata(
+        &self,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> PgAccountStoreResult<Page<StoredAccountMetadata>> {
+        let limit = limit.clamp(1, 200);
+        if let Some(cursor) = cursor {
+            let (added_at, id) =
+                decode_cursor(&cursor).ok_or(PgAccountStoreError::InvalidCursor)?;
+            let added_at =
+                parse_rfc3339_utc(&added_at).map_err(|_| PgAccountStoreError::InvalidCursor)?;
+            let rows = sqlx::query(LIST_ACCOUNT_METADATA_AFTER_CURSOR_SQL)
+                .bind(added_at)
+                .bind(added_at)
+                .bind(&id)
+                .bind(i64::from(limit) + 1)
+                .fetch_all(&self.pool)
+                .await?;
+            Ok(to_page(&rows, limit, metadata_from_row, ("added_at", "id")))
+        } else {
+            let rows = sqlx::query(LIST_ACCOUNT_METADATA_SQL)
+                .bind(i64::from(limit) + 1)
+                .fetch_all(&self.pool)
+                .await?;
+            Ok(to_page(&rows, limit, metadata_from_row, ("added_at", "id")))
+        }
+    }
+
+    /// 按页码列出账号元数据（不含 token）。
+    pub async fn list_metadata_page(
+        &self,
+        page: u32,
+        page_size: u32,
+        search: Option<&str>,
+    ) -> PgAccountStoreResult<NumberedPage<StoredAccountMetadata>> {
+        let page_size = page_size.clamp(1, 200);
+        let search = search.map(str::trim).filter(|value| !value.is_empty());
+        let total = count_account_metadata(&self.pool, search).await?;
+        let offset = page_offset(page, page_size);
+
+        let mut builder = QueryBuilder::<Postgres>::new(LIST_ACCOUNT_METADATA_SELECT_SQL);
+        push_account_metadata_search(&mut builder, search);
+        builder.push(" order by added_at desc, id desc limit ");
+        builder.push_bind(i64::from(page_size));
+        builder.push(" offset ");
+        builder.push_bind(offset.min(i64::MAX as u64) as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        let items = rows
+            .iter()
+            .map(metadata_from_row)
+            .collect::<PgAccountStoreResult<Vec<_>>>()?;
+
+        Ok(NumberedPage {
+            items,
+            total,
+            page: page.max(1),
+            page_size,
+        })
+    }
+
+    /// 读取单个账号元数据（不含 token）。
+    pub async fn get_metadata(
+        &self,
+        account_id: &str,
+    ) -> PgAccountStoreResult<Option<StoredAccountMetadata>> {
+        let row = sqlx::query(SELECT_ACCOUNT_METADATA_BY_ID_SQL)
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(metadata_from_row).transpose()
+    }
+
+    /// 读取配额快照列表。
+    pub async fn list_quota_snapshots(&self) -> PgAccountStoreResult<Vec<AccountQuotaSnapshot>> {
+        let rows = sqlx::query(LIST_QUOTA_SNAPSHOTS_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(quota_snapshot_from_row).collect()
+    }
+
+    /// 读取单账号配额 JSON。
+    pub async fn get_quota_json(&self, account_id: &str) -> PgAccountStoreResult<Option<String>> {
+        let row = sqlx::query("select quota_json from accounts where id = $1")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row
+            .and_then(|row| row.get::<Option<sqlx::types::Json<Value>>, _>("quota_json"))
+            .map(|value| value.0.to_string()))
+    }
+}

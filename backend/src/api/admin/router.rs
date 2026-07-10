@@ -13,10 +13,10 @@ use super::{
         export_accounts, health_check_accounts, import_accounts, oauth_authorize_account,
         oauth_exchange_account, refresh_account, test_account_connection, update_account,
     },
+    auth_routes::{login, logout, session_status},
     dashboard_routes::{dashboard_summary, dashboard_trend},
     keys_routes::{api_keys, batch_delete_api_keys, create_api_key, update_api_key},
     ops_routes::ops_errors,
-    session::{login, logout, session_status},
     settings_routes::{
         admin_api_key_status, delete_admin_api_key, regenerate_admin_api_key, settings,
         update_settings,

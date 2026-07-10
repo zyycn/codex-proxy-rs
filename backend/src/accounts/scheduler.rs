@@ -15,16 +15,56 @@ pub mod candidates;
 pub mod feedback;
 pub mod strategy;
 
-use std::sync::Mutex;
+use std::{cmp::Ordering, sync::Mutex};
 
 use chrono::{DateTime, Utc};
 
 use crate::accounts::account::Account;
+use crate::infra::time::parse_rfc3339_utc;
 
 pub use candidates::{CandidateFilter, CandidateRequest};
 pub use feedback::{FeedbackSample, FeedbackStats};
 pub use strategy::smart::rank_candidates;
-pub use strategy::{RotationStrategy, ScoreBreakdown, ScoreWeights};
+pub use strategy::{ScoreBreakdown, ScoreWeights};
+
+/// 账号轮转策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationStrategy {
+    /// 加权线性打分调度。
+    Smart,
+    /// 优先消耗即将重置的额度窗口。
+    QuotaResetPriority,
+    /// 按候选账号顺序循环选择。
+    RoundRobin,
+    /// 优先选择最近使用过的账号。
+    Sticky,
+}
+
+impl RotationStrategy {
+    /// 返回策略的持久化与日志字符串。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Smart => "smart",
+            Self::QuotaResetPriority => "quota_reset_priority",
+            Self::RoundRobin => "round_robin",
+            Self::Sticky => "sticky",
+        }
+    }
+}
+
+/// 策略选择的运行时输入。
+pub struct SelectionInput<'a> {
+    /// 已过滤的候选账号集合。
+    pub candidates: &'a [Account],
+    /// 按账号 ID 读取当前在途槽位数。
+    pub slot_count: &'a dyn Fn(&str) -> usize,
+    /// 账号 EWMA 反馈存储。
+    pub feedback: &'a FeedbackStats,
+    /// Smart 策略打分权重。
+    pub weights: &'a ScoreWeights,
+    /// 当前时刻。
+    pub now: DateTime<Utc>,
+}
 
 /// 账号调度器：账号选择的对外门面。
 ///
@@ -78,7 +118,7 @@ impl AccountScheduler {
         slot_count: &dyn Fn(&str) -> usize,
         now: DateTime<Utc>,
     ) -> Option<Account> {
-        let input = strategy::SelectionInput {
+        let input = SelectionInput {
             candidates,
             slot_count,
             feedback: &self.feedback,
@@ -86,7 +126,7 @@ impl AccountScheduler {
             now,
         };
         let mut cursor = self.lock_cursor();
-        strategy::select(strategy, &input, &mut cursor)
+        select_with_strategy(strategy, &input, &mut cursor)
     }
 
     /// 回灌一次请求结果到运行时 EWMA 反馈（错误率 / TTFT），供 Smart 打分。
@@ -109,4 +149,60 @@ impl AccountScheduler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn select_with_strategy(
+    strategy: RotationStrategy,
+    input: &SelectionInput<'_>,
+    cursor: &mut usize,
+) -> Option<Account> {
+    match strategy {
+        RotationStrategy::Smart => strategy::smart::select(input, cursor),
+        RotationStrategy::QuotaResetPriority => strategy::quota_reset::select(input, cursor),
+        RotationStrategy::RoundRobin => strategy::round_robin::select(input, cursor),
+        RotationStrategy::Sticky => strategy::sticky::select(input, cursor),
+    }
+}
+
+pub(crate) fn select_by(
+    candidates: &[Account],
+    cursor: &mut usize,
+    compare: impl Fn(&Account, &Account) -> Ordering,
+) -> Option<Account> {
+    let mut sorted = candidates.iter().collect::<Vec<_>>();
+    sorted.sort_by(|a, b| compare(a, b));
+    let best = *sorted.first()?;
+    let tied_count = sorted
+        .iter()
+        .take_while(|account| compare(best, account) == Ordering::Equal)
+        .count();
+    let index = *cursor % tied_count;
+    *cursor = cursor.wrapping_add(1);
+    Some((*sorted[index]).clone())
+}
+
+pub(crate) fn account_window_token_count(account: &Account) -> u64 {
+    account
+        .window_input_tokens
+        .saturating_add(account.window_output_tokens)
+        .saturating_add(account.window_image_input_tokens)
+        .saturating_add(account.window_image_output_tokens)
+}
+
+pub(crate) fn compare_window_reset(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_) | None, None) | (None, Some(_)) => Ordering::Equal,
+    }
+}
+
+pub(crate) fn compare_last_used(a: Option<&str>, b: Option<&str>) -> Ordering {
+    last_used_millis(a).cmp(&last_used_millis(b))
+}
+
+fn last_used_millis(value: Option<&str>) -> i64 {
+    value
+        .and_then(|value| parse_rfc3339_utc(value).ok())
+        .map(|datetime| datetime.timestamp_millis())
+        .unwrap_or(0)
 }

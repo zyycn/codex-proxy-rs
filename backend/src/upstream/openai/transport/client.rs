@@ -337,6 +337,7 @@ pub struct CodexBackendClient {
     websocket_first_token_timeout: Option<Duration>,
 }
 
+#[path = "client_sse.rs"]
 mod requests;
 
 #[async_trait]

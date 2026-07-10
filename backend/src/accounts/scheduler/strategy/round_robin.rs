@@ -4,8 +4,7 @@
 //! 保证请求在候选账号间均匀轮转。
 
 use crate::accounts::account::Account;
-
-use super::SelectionInput;
+use crate::accounts::scheduler::SelectionInput;
 
 /// 按候选顺序做纯轮转选择。
 pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account> {

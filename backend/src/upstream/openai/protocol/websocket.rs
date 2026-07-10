@@ -216,8 +216,9 @@ pub fn websocket_incomplete_response_reason(raw: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-mod validation;
-pub use validation::*;
+#[path = "websocket_errors.rs"]
+mod errors;
+pub use errors::*;
 
 /// 判断 WebSocket 事件是否会结束当前响应流。
 pub fn is_terminal_websocket_event(event: &str) -> bool {

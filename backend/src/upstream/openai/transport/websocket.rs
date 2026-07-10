@@ -61,18 +61,63 @@ pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 // Types
 // ---------------------------------------------------------------------------
 
-/// WebSocket 连接适配器。
-mod stream;
-mod types;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexWebSocketConnection {
+    pub(super) endpoint: String,
+    pub(super) headers: Vec<(String, String)>,
+}
 
-pub use stream::execute_response_create_request;
-use stream::{
+/// 显式写入 WebSocket audit artifact。
+pub async fn write_websocket_audit_artifact_for_dir(
+    dir: Option<&Path>,
+    artifact: &WebSocketAuditArtifact,
+) -> io::Result<Option<PathBuf>> {
+    let Some(dir) = dir.filter(|dir| !dir.as_os_str().is_empty()) else {
+        return Ok(None);
+    };
+
+    tokio::fs::create_dir_all(dir).await?;
+    let path = dir.join(websocket_audit_file_name());
+    let body = serde_json::to_vec_pretty(artifact).map_err(io::Error::other)?;
+    tokio::fs::write(&path, body).await?;
+    Ok(Some(path))
+}
+
+/// 按环境变量配置写入 WebSocket audit artifact。
+pub async fn write_websocket_audit_artifact_from_env(
+    artifact: &WebSocketAuditArtifact,
+) -> io::Result<Option<PathBuf>> {
+    let Some(dir) = std::env::var_os(WS_AUDIT_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+
+    write_websocket_audit_artifact_for_dir(Some(&dir), artifact).await
+}
+
+/// Prepared Responses WebSocket request descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexWebSocketRequest {
+    pub(super) connection: CodexWebSocketConnection,
+    pub(super) payload_text: String,
+}
+
+#[path = "websocket_frames.rs"]
+mod frames;
+
+use frames::{
     audit_header_value, collect_websocket_response, is_first_token_timeout,
     prefetch_stream_frames_until_output_or_terminal, reusable_websocket_metadata,
     reused_stream_prefetch_error, stream_websocket_response, websocket_audit_file_name,
     websocket_connection_metadata, WebSocketStreamPoolReturn,
 };
-pub use types::*;
+pub use frames::{
+    execute_response_create_request, CodexWebSocketExchange, CodexWebSocketExchangeError,
+    CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketSseStream, CodexWebSocketStreamingExchange,
+    CodexWebSocketTurnStateUpdate, CodexWebSocketUpstreamError,
+};
 
 impl CodexWebSocketRequest {
     /// 返回连接描述。

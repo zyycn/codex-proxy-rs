@@ -599,8 +599,18 @@ pub(crate) async fn create_account(
     }
 }
 
-mod actions;
-mod stats;
+mod export_routes;
+mod import_routes;
+mod lifecycle_routes;
+mod oauth_routes;
+mod probe_routes;
+mod query;
+mod quota_routes;
 
-pub(crate) use actions::*;
-use stats::*;
+pub(crate) use export_routes::*;
+pub(crate) use import_routes::*;
+pub(crate) use lifecycle_routes::*;
+pub(crate) use oauth_routes::*;
+pub(crate) use probe_routes::*;
+use query::*;
+pub(crate) use quota_routes::*;
