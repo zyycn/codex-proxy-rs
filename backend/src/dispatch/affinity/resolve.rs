@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use crate::{
     dispatch::{
         affinity::{compute_variant_hash, hash_instructions, RuntimeSessionAffinityService},
-        reasoning_replay::ReasoningReplayCache,
+        recovery::reasoning_replay::ReasoningReplayCache,
     },
     upstream::openai::protocol::{
         events::TokenUsage,

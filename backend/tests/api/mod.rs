@@ -1,3 +1,4 @@
 pub(crate) mod admin;
+pub(crate) mod assets;
 pub(crate) mod client;
-pub(crate) mod http;
+pub(crate) mod middleware;

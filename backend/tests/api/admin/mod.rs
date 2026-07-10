@@ -1,7 +1,8 @@
-pub(crate) mod accounts;
-pub(crate) mod auth;
-pub(crate) mod keys;
-pub(crate) mod monitoring;
+pub(crate) mod accounts_routes;
+pub(crate) mod auth_routes;
+pub(crate) mod dashboard_routes;
+pub(crate) mod keys_routes;
 pub(crate) mod response;
-pub(crate) mod settings;
-pub(crate) mod system;
+pub(crate) mod settings_routes;
+pub(crate) mod system_routes;
+pub(crate) mod usage_routes;

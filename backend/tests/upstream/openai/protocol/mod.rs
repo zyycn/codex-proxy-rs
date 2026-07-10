@@ -45,7 +45,7 @@ use serde_json::json;
 
 use crate::support::assertions::assert_substrings_appear_in_order;
 
-mod codex_websocket;
-mod openai_responses;
-mod response_first_event;
-mod usage_rate_limits;
+mod events;
+mod responses;
+mod sse;
+mod websocket;

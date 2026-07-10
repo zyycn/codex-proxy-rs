@@ -12,7 +12,7 @@ use crate::{
         response::{AdminError, AdminPageEnvelope, AdminResponse},
         session::AdminAuth,
     },
-    bootstrap::state::AppState,
+    api::AppState,
     infra::{
         json::{clamp_limit, clamp_page, NumberedPage, Page},
         time::china_datetime,

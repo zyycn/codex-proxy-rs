@@ -1,8 +1,10 @@
 mod accounts;
 mod api;
+mod auth;
 mod bootstrap;
 mod dispatch;
 mod infra;
+mod keys;
 mod models;
 mod support;
 mod telemetry;

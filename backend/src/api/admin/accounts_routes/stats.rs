@@ -238,9 +238,8 @@ pub(super) async fn quota_snapshots_by_account(
 ) -> HashMap<String, AccountQuotaData> {
     state
         .services
-        .background_tasks
-        .accounts
-        .list_quota_snapshots()
+        .admin_accounts
+        .quota_snapshots()
         .await
         .unwrap_or_default()
         .into_iter()

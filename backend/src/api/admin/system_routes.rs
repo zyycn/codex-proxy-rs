@@ -3,7 +3,7 @@
 use std::{convert::Infallible, time::Duration};
 
 use axum::{
-    extract::{Json, Query},
+    extract::{Json, Query, State},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -18,7 +18,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
     },
-    bootstrap::shutdown::{request_process_restart, request_shutdown, shutdown_subscription},
+    api::AppState,
     update::{
         service::{self, RestartAction},
         state::operation_id,
@@ -56,10 +56,11 @@ pub(crate) async fn update_detail(
 }
 
 pub(crate) async fn update_event_stream(
+    State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError> {
     let receiver = service::subscribe_update_events();
-    let shutdown = shutdown_subscription();
+    let shutdown = state.services.process_control.subscribe_shutdown();
     let stream = futures::stream::unfold(
         (receiver, shutdown, false),
         |(mut receiver, mut shutdown, close_after_send)| async move {
@@ -122,14 +123,20 @@ pub(crate) async fn rollback(_auth: AdminAuth) -> Result<impl IntoResponse, Admi
     ))
 }
 
-pub(crate) async fn restart(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
+pub(crate) async fn restart(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<impl IntoResponse, AdminError> {
     let plan = service::restart_plan().map_err(update_error)?;
     let message = plan.message;
+    let process_control = state.services.process_control.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         match plan.action {
-            RestartAction::Exec(executable_path) => request_process_restart(executable_path),
-            RestartAction::Shutdown => request_shutdown(),
+            RestartAction::Exec(executable_path) => {
+                process_control.request_restart(executable_path);
+            }
+            RestartAction::Shutdown => process_control.request_shutdown(),
         }
     });
     Ok(AdminResponse::new(

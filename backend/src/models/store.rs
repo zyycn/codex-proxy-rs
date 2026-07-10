@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::infra::redis::RedisConnection;
 
-use super::{info::CodexModelInfo, snapshot::ModelPlanSnapshot};
+use super::types::{CodexModelInfo, ModelPlanSnapshot};
 
 /// 模型快照存储错误。
 #[derive(Debug, Error, PartialEq, Eq)]

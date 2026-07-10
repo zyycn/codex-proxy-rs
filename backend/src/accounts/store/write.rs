@@ -345,14 +345,12 @@ impl PgAccountStore {
     pub async fn sync_runtime_account_state(
         &self,
         account: &Account,
-        sync_usage_window: bool,
     ) -> PgAccountStoreResult<bool> {
         let now = Utc::now();
         let quota_limit_reached = account.quota_limit_reached;
         let quota_verify_required = account.quota_verify_required;
         let quota_cooldown_until = account.quota_cooldown_until;
         let cloudflare_cooldown_until = account.cloudflare_cooldown_until;
-        let mut tx = self.pool.begin().await?;
         let result = sqlx::query(SYNC_RUNTIME_ACCOUNT_STATE_SQL)
             .bind(quota_limit_reached)
             .bind(now)
@@ -372,36 +370,9 @@ impl PgAccountStore {
             .bind(cloudflare_cooldown_until)
             .bind(now)
             .bind(&account.id)
-            .execute(&mut *tx)
+            .execute(&self.pool)
             .await?;
-        if result.rows_affected() == 0 {
-            tx.commit().await?;
-            return Ok(false);
-        }
-
-        if sync_usage_window {
-            sqlx::query(SYNC_RUNTIME_ACCOUNT_USAGE_WINDOW_SQL)
-                .bind(&account.id)
-                .bind(u64_to_i64_saturating(account.window_request_count))
-                .bind(u64_to_i64_saturating(account.window_input_tokens))
-                .bind(u64_to_i64_saturating(account.window_output_tokens))
-                .bind(u64_to_i64_saturating(account.window_cached_tokens))
-                .bind(u64_to_i64_saturating(account.window_image_input_tokens))
-                .bind(u64_to_i64_saturating(account.window_image_output_tokens))
-                .bind(u64_to_i64_saturating(account.window_image_request_count))
-                .bind(u64_to_i64_saturating(
-                    account.window_image_request_failed_count,
-                ))
-                .bind(account.window_started_at)
-                .bind(account.window_reset_at)
-                .bind(account.limit_window_seconds.map(u64_to_i64_saturating))
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        tx.commit().await?;
-        Ok(true)
+        Ok(result.rows_affected() > 0)
     }
 
     /// 标记账号 Cloudflare 冷却期。
@@ -446,67 +417,6 @@ where id = $4",
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
-    }
-
-    /// 记录用量。
-    pub async fn record_usage(
-        &self,
-        account_id: &str,
-        delta: UsageDelta,
-    ) -> PgAccountStoreResult<()> {
-        let last_used_at = Utc::now();
-        sqlx::query(RECORD_USAGE_SQL)
-            .bind(account_id)
-            .bind(delta.request_count)
-            .bind(delta.empty_response_count)
-            .bind(delta.input_tokens)
-            .bind(delta.output_tokens)
-            .bind(delta.cached_tokens)
-            .bind(delta.reasoning_tokens)
-            .bind(delta.total_tokens)
-            .bind(delta.image_input_tokens)
-            .bind(delta.image_output_tokens)
-            .bind(delta.image_request_count)
-            .bind(delta.image_request_failed_count)
-            .bind(delta.window_request_count)
-            .bind(delta.window_input_tokens)
-            .bind(delta.window_output_tokens)
-            .bind(delta.window_cached_tokens)
-            .bind(delta.window_image_input_tokens)
-            .bind(delta.window_image_output_tokens)
-            .bind(delta.window_image_request_count)
-            .bind(delta.window_image_request_failed_count)
-            .bind(last_used_at)
-            .bind(last_used_at)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    /// 记录模型维度用量。
-    pub async fn record_model_usage(
-        &self,
-        account_id: &str,
-        model: &str,
-        delta: AccountModelUsageDelta,
-    ) -> PgAccountStoreResult<()> {
-        let model = model.trim();
-        if model.is_empty() {
-            return Ok(());
-        }
-        let last_used_at = Utc::now();
-        sqlx::query(RECORD_MODEL_USAGE_SQL)
-            .bind(account_id)
-            .bind(model)
-            .bind(u64_to_i64_saturating(delta.requests))
-            .bind(u64_to_i64_saturating(delta.errors))
-            .bind(u64_to_i64_saturating(delta.input_tokens))
-            .bind(u64_to_i64_saturating(delta.output_tokens))
-            .bind(u64_to_i64_saturating(delta.cached_tokens))
-            .bind(last_used_at)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     /// 读取配额快照列表。
@@ -600,53 +510,6 @@ where id = $4",
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
-    }
-
-    /// 同步 rate-limit 窗口（含重置）。
-    pub async fn sync_rate_limit_window(
-        &self,
-        account_id: &str,
-        reset_at: DateTime<Utc>,
-        limit_window_seconds: Option<u64>,
-    ) -> PgAccountStoreResult<()> {
-        let existing = sqlx::query(SELECT_RATE_LIMIT_WINDOW_SQL)
-            .bind(account_id)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let should_reset = existing
-            .as_ref()
-            .map(|row| {
-                let existing_reset_at = row.get::<Option<DateTime<Utc>>, _>("window_reset_at");
-                let existing_limit_window_seconds =
-                    optional_positive_i64_to_u64(row.get::<Option<i64>, _>("limit_window_seconds"));
-                should_reset_usage_window(
-                    existing_reset_at,
-                    existing_limit_window_seconds,
-                    reset_at,
-                    limit_window_seconds,
-                )
-            })
-            .unwrap_or_default();
-
-        if should_reset {
-            let window_started_at = Utc::now();
-            sqlx::query(SYNC_RATE_LIMIT_WINDOW_RESET_SQL)
-                .bind(account_id)
-                .bind(window_started_at)
-                .bind(reset_at)
-                .bind(limit_window_seconds.map(u64_to_i64_saturating))
-                .execute(&self.pool)
-                .await?;
-        } else {
-            sqlx::query(SYNC_RATE_LIMIT_WINDOW_SQL)
-                .bind(account_id)
-                .bind(reset_at)
-                .bind(limit_window_seconds.map(u64_to_i64_saturating))
-                .execute(&self.pool)
-                .await?;
-        }
-        Ok(())
     }
 
     /// 删除单个账号。

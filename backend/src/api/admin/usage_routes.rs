@@ -14,7 +14,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse},
         session::AdminAuth,
     },
-    bootstrap::state::AppState,
+    api::AppState,
     infra::{
         format::{
             format_compact_number, format_cost, format_duration_ms, format_duration_ms_f64,

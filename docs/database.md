@@ -772,7 +772,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 1. **连接层**(`infra/database.rs` + `infra/redis.rs`):PgPool(参数见 §1)+ 迁移框架(PG 谱系 0001 起);Redis ConnectionManager + 键前缀 + `PING` 健康检查。`Cargo.toml`:sqlx 加 `postgres`(保留 `sqlite` 仅供导入命令读源库),新增 `redis` crate。
 2. **配置**(`bootstrap/config.rs`、`deploy/config.example.yaml`):`database.url` 改 `postgres://…`,新增 `redis.url`。
 3. **鉴权归因**(`keys/{store,service,manage}.rs`、`api/client/auth.rs`):key 创建落唯一 `key` 列；鉴权按完整 key 做 PG unique 点查(删除进程内鉴权缓存);鉴权返回 key `id`,调用链把 `client_api_key_id` 装进请求上下文直至事件写入。管理端列表持续返回完整 key，前端长期保留复制与 CCSwitch 导入入口。
-4. **事件结构**(`telemetry/{usage,ops}`、`telemetry/recorder.rs`、`dispatch/responses/event_recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
+4. **事件结构**(`telemetry/{usage,ops}`、`telemetry/recorder.rs`、`dispatch/recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
 5. **写入路径**(`telemetry/usage/store.rs`、`telemetry/ops/store.rs`、`telemetry/buckets/store.rs`):§5.2 的两条 PG 事务;错误路径对桶只 `error_count + 1`;`__unknown__` sentinel;min/max 延迟使用 nullable-safe 的 `least()`/`greatest()`;内联 trim 移除。
 6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 只改取数来源，不改既有文案。
 7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。

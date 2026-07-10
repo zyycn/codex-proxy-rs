@@ -9,8 +9,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    api::client::auth::authorize_client_api_key, bootstrap::state::AppState,
-    models::catalog::ModelCatalog,
+    api::client::auth::authorize_client_api_key, api::AppState, models::catalog::ModelCatalog,
 };
 
 use super::errors::{missing_client_api_key_response, model_not_found_response};

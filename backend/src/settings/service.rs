@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use subtle::ConstantTimeEq;
-use tokio::sync::RwLock;
+use tokio::sync::{watch, Mutex};
 
 use crate::infra::identity::{generate_admin_api_key, hash_credential};
 
@@ -52,14 +52,17 @@ impl SettingsService {
 #[derive(Clone)]
 pub struct RuntimeSettingsService {
     store: PgSettingsStore,
-    snapshot: Arc<RwLock<Arc<SettingsSnapshot>>>,
+    sender: watch::Sender<SettingsSnapshot>,
+    update_lock: Arc<Mutex<()>>,
 }
 
 impl RuntimeSettingsService {
     pub fn new(settings: SettingsSnapshot, pool: sqlx::PgPool) -> Self {
+        let (sender, _) = watch::channel(settings);
         Self {
             store: PgSettingsStore::new(pool),
-            snapshot: Arc::new(RwLock::new(Arc::new(settings))),
+            sender,
+            update_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -72,20 +75,21 @@ impl RuntimeSettingsService {
             .await
     }
 
-    pub async fn current(&self) -> Arc<SettingsSnapshot> {
-        self.snapshot.read().await.clone()
+    pub fn current(&self) -> SettingsSnapshot {
+        self.sender.borrow().clone()
     }
 
-    pub async fn update(
-        &self,
-        patch: SettingsPatch,
-    ) -> Result<Arc<SettingsSnapshot>, SettingsError> {
-        let mut current = self.snapshot.write().await;
-        let mut next = (**current).clone();
+    /// 订阅设置快照变更。
+    pub fn subscribe(&self) -> watch::Receiver<SettingsSnapshot> {
+        self.sender.subscribe()
+    }
+
+    pub async fn update(&self, patch: SettingsPatch) -> Result<SettingsSnapshot, SettingsError> {
+        let _guard = self.update_lock.lock().await;
+        let mut next = self.current();
         SettingsService::apply_patch(&mut next, patch)?;
         self.store.save(&next).await?;
-        let next = Arc::new(next);
-        *current = next.clone();
+        self.sender.send_replace(next.clone());
         Ok(next)
     }
 
@@ -94,7 +98,7 @@ impl RuntimeSettingsService {
     }
 
     pub async fn regenerate_admin_api_key(&self) -> Result<String, SettingsError> {
-        let current = self.current().await;
+        let current = self.current();
         self.store.ensure(&current).await?;
         let key = generate_admin_api_key();
         self.store

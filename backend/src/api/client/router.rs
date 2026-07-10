@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 
-use crate::bootstrap::state::AppState;
+use crate::api::AppState;
 
 use super::{
     models::{model_catalog, model_detail, model_info, models},

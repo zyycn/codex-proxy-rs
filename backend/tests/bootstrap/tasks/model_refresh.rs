@@ -8,14 +8,11 @@ use std::{
 use codex_proxy_rs::{
     accounts::pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
     models::{
-        snapshot::ModelPlanSnapshot,
         store::{ModelSnapshotStore, ModelSnapshotStoreResult},
+        types::{BackendModelEntry, ModelPlanSnapshot},
     },
-    upstream::openai::{
-        protocol::model_catalog::BackendModelEntry,
-        transport::{
-            CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
-        },
+    upstream::openai::transport::{
+        CodexModelCatalogClient, CodexModelCatalogClientError, CodexModelCatalogRequest,
     },
 };
 
@@ -25,6 +22,7 @@ async fn model_refresh_task_should_start_and_shutdown() {
     let account_store = Arc::new(FakeAccountStore);
     let account_pool = Arc::new(RuntimeAccountPoolService::new(
         account_store.clone(),
+        Arc::new(FakeAccountUsageStore),
         AccountPoolOptions::default(),
         0,
     ));
@@ -52,16 +50,23 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
         Some(store),
         Some(upstream),
     ));
+    let request_usage_records = Arc::new(AtomicUsize::new(0));
+    let model_request_usage_records = Arc::new(AtomicUsize::new(0));
     let account_store = Arc::new(PlanAccountStore {
         accounts: vec![
             plan_account("acct-plus", "plus"),
             plan_account("acct-team", "team"),
         ],
-        request_usage_records: Arc::new(AtomicUsize::new(0)),
-        model_request_usage_records: Arc::new(AtomicUsize::new(0)),
+        request_usage_records: request_usage_records.clone(),
+        model_request_usage_records: model_request_usage_records.clone(),
+    });
+    let usage_store = Arc::new(PlanAccountUsageStore {
+        request_usage_records,
+        model_request_usage_records,
     });
     let account_pool = Arc::new(RuntimeAccountPoolService::new(
         account_store.clone(),
+        usage_store,
         AccountPoolOptions::default(),
         0,
     ));
@@ -147,12 +152,15 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
     async fn fetch_models(
         &self,
         request: &CodexModelCatalogRequest<'_>,
-    ) -> Result<Vec<BackendModelEntry>, CodexModelCatalogClientError> {
+    ) -> Result<Vec<serde_json::Value>, CodexModelCatalogClientError> {
         Ok(self
             .models_by_plan
             .get(request.plan_type)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|model| serde_json::to_value(model).unwrap())
+            .collect())
     }
 }
 
@@ -192,30 +200,6 @@ impl AccountStore for PlanAccountStore {
         Ok(true)
     }
 
-    async fn record_usage_delta(
-        &self,
-        _account_id: &str,
-        usage: AccountUsageDelta,
-    ) -> AccountStoreResult<()> {
-        if usage.requests > 0 {
-            self.request_usage_records.fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(())
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        _account_id: &str,
-        _model: &str,
-        usage: AccountModelUsageDelta,
-    ) -> AccountStoreResult<()> {
-        if usage.requests > 0 {
-            self.model_request_usage_records
-                .fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(())
-    }
-
     async fn get_quota_json(&self, _account_id: &str) -> AccountStoreResult<Option<String>> {
         Ok(None)
     }
@@ -230,12 +214,55 @@ impl AccountStore for PlanAccountStore {
         Ok(false)
     }
 
-    async fn sync_runtime_account_state(
-        &self,
-        _account: &Account,
-        _sync_usage_window: bool,
-    ) -> AccountStoreResult<bool> {
+    async fn sync_runtime_account_state(&self, _account: &Account) -> AccountStoreResult<bool> {
         Ok(false)
+    }
+}
+
+struct PlanAccountUsageStore {
+    request_usage_records: Arc<AtomicUsize>,
+    model_request_usage_records: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AccountUsageStore for PlanAccountUsageStore {
+    async fn snapshots(
+        &self,
+        _account_ids: &[String],
+    ) -> Result<HashMap<String, AccountUsageSnapshot>, AccountUsageStoreError> {
+        Ok(HashMap::new())
+    }
+
+    async fn record_usage_delta(
+        &self,
+        _account_id: &str,
+        usage: AccountUsageDelta,
+    ) -> Result<(), AccountUsageStoreError> {
+        if usage.requests > 0 {
+            self.request_usage_records.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    async fn record_model_usage_delta(
+        &self,
+        _account_id: &str,
+        _model: &str,
+        usage: AccountModelUsageDelta,
+    ) -> Result<(), AccountUsageStoreError> {
+        if usage.requests > 0 {
+            self.model_request_usage_records
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    async fn sync_runtime_window(
+        &self,
+        _account_id: &str,
+        _window: AccountUsageWindow,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
     }
 
     async fn sync_rate_limit_window(
@@ -243,7 +270,7 @@ impl AccountStore for PlanAccountStore {
         _account_id: &str,
         _reset_at: chrono::DateTime<Utc>,
         _limit_window_seconds: Option<u64>,
-    ) -> AccountStoreResult<()> {
+    ) -> Result<(), AccountUsageStoreError> {
         Ok(())
     }
 }

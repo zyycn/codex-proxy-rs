@@ -1,13 +1,16 @@
-use std::{sync::Arc, time::Duration as StdDuration};
+use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use codex_proxy_rs::accounts::account::{Account, AccountStatus};
-use codex_proxy_rs::accounts::account::{AccountModelUsageDelta, AccountUsageDelta};
 use codex_proxy_rs::accounts::cookies::PgCookieStore;
 use codex_proxy_rs::accounts::store::{AccountStore, AccountStoreResult};
-use codex_proxy_rs::models::config::ModelConfig;
 use codex_proxy_rs::models::service::ModelService;
+use codex_proxy_rs::models::types::ModelConfig;
+use codex_proxy_rs::telemetry::account_usage::store::{
+    AccountModelUsageDelta, AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore,
+    AccountUsageStoreError, AccountUsageWindow,
+};
 use codex_proxy_rs::upstream::openai::fingerprint::{PgFingerprintStore, RuntimeFingerprint};
 use wiremock::{
     matchers::{method, path},
@@ -18,7 +21,7 @@ use crate::support::storage::init_test_db;
 
 mod cleanup;
 mod coordinator;
-mod fingerprint;
+mod fingerprint_update;
 mod model_refresh;
 
 struct FakeAccountStore;
@@ -56,23 +59,6 @@ impl AccountStore for FakeAccountStore {
         Ok(true)
     }
 
-    async fn record_usage_delta(
-        &self,
-        _account_id: &str,
-        _usage: AccountUsageDelta,
-    ) -> AccountStoreResult<()> {
-        Ok(())
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        _account_id: &str,
-        _model: &str,
-        _usage: AccountModelUsageDelta,
-    ) -> AccountStoreResult<()> {
-        Ok(())
-    }
-
     async fn get_quota_json(&self, _account_id: &str) -> AccountStoreResult<Option<String>> {
         Ok(None)
     }
@@ -87,12 +73,45 @@ impl AccountStore for FakeAccountStore {
         Ok(false)
     }
 
-    async fn sync_runtime_account_state(
-        &self,
-        _account: &Account,
-        _sync_usage_window: bool,
-    ) -> AccountStoreResult<bool> {
+    async fn sync_runtime_account_state(&self, _account: &Account) -> AccountStoreResult<bool> {
         Ok(false)
+    }
+}
+
+struct FakeAccountUsageStore;
+
+#[async_trait]
+impl AccountUsageStore for FakeAccountUsageStore {
+    async fn snapshots(
+        &self,
+        _account_ids: &[String],
+    ) -> Result<HashMap<String, AccountUsageSnapshot>, AccountUsageStoreError> {
+        Ok(HashMap::new())
+    }
+
+    async fn record_usage_delta(
+        &self,
+        _account_id: &str,
+        _usage: AccountUsageDelta,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
+    }
+
+    async fn record_model_usage_delta(
+        &self,
+        _account_id: &str,
+        _model: &str,
+        _usage: AccountModelUsageDelta,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
+    }
+
+    async fn sync_runtime_window(
+        &self,
+        _account_id: &str,
+        _window: AccountUsageWindow,
+    ) -> Result<(), AccountUsageStoreError> {
+        Ok(())
     }
 
     async fn sync_rate_limit_window(
@@ -100,7 +119,7 @@ impl AccountStore for FakeAccountStore {
         _account_id: &str,
         _reset_at: chrono::DateTime<Utc>,
         _limit_window_seconds: Option<u64>,
-    ) -> AccountStoreResult<()> {
+    ) -> Result<(), AccountUsageStoreError> {
         Ok(())
     }
 }

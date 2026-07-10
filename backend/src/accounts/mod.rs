@@ -8,6 +8,5 @@ pub mod pool;
 pub mod quota;
 pub mod refresh;
 pub mod scheduler;
-pub mod service;
 pub mod store;
 mod window;

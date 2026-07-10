@@ -7,8 +7,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
-use crate::accounts::account::{Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta};
-use crate::accounts::window::should_reset_usage_window;
+use crate::accounts::account::{Account, AccountStatus};
 use crate::infra::{
     json::{decode_cursor, page_offset, NumberedPage, Page},
     time::parse_rfc3339_utc,
@@ -20,9 +19,8 @@ mod rows;
 use queries::*;
 use rows::{
     count_account_metadata, get_pool_account, list_pool_accounts, map_account_store_error,
-    metadata_from_row, optional_positive_i64_to_u64, optional_update_value, pg_usage_delta,
-    push_account_metadata_search, quota_plan_type, quota_snapshot_from_row, status_to_db,
-    stored_account_from_row, to_page, u64_to_i64_saturating,
+    metadata_from_row, optional_update_value, push_account_metadata_search, quota_plan_type,
+    quota_snapshot_from_row, status_to_db, stored_account_from_row, to_page,
 };
 
 // ============================================================================
@@ -210,30 +208,6 @@ pub struct AccountQuotaSnapshot {
     pub quota_fetched_at: Option<DateTime<Utc>>,
 }
 
-/// 用量增量（PostgreSQL 内部表示）。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct UsageDelta {
-    request_count: i64,
-    empty_response_count: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    cached_tokens: i64,
-    reasoning_tokens: i64,
-    total_tokens: i64,
-    image_input_tokens: i64,
-    image_output_tokens: i64,
-    image_request_count: i64,
-    image_request_failed_count: i64,
-    window_request_count: i64,
-    window_input_tokens: i64,
-    window_output_tokens: i64,
-    window_cached_tokens: i64,
-    window_image_input_tokens: i64,
-    window_image_output_tokens: i64,
-    window_image_request_count: i64,
-    window_image_request_failed_count: i64,
-}
-
 // ============================================================================
 // AccountStore 端口 trait
 // ============================================================================
@@ -284,21 +258,6 @@ pub trait AccountStore: Send + Sync + 'static {
     async fn set_status(&self, account_id: &str, status: AccountStatus)
         -> AccountStoreResult<bool>;
 
-    /// 记录账号用量增量。
-    async fn record_usage_delta(
-        &self,
-        account_id: &str,
-        usage: AccountUsageDelta,
-    ) -> AccountStoreResult<()>;
-
-    /// 记录账号模型维度用量增量。
-    async fn record_model_usage_delta(
-        &self,
-        account_id: &str,
-        model: &str,
-        usage: AccountModelUsageDelta,
-    ) -> AccountStoreResult<()>;
-
     /// 读取账号当前配额 JSON。
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>>;
 
@@ -312,31 +271,7 @@ pub trait AccountStore: Send + Sync + 'static {
     ) -> AccountStoreResult<bool>;
 
     /// 同步运行时自然刷新出来的账号状态。
-    async fn sync_runtime_account_state(
-        &self,
-        account: &Account,
-        sync_usage_window: bool,
-    ) -> AccountStoreResult<bool>;
-
-    /// 同步账号当前 rate-limit 统计窗口。
-    async fn sync_rate_limit_window(
-        &self,
-        account_id: &str,
-        reset_at: DateTime<Utc>,
-        limit_window_seconds: Option<u64>,
-    ) -> AccountStoreResult<()>;
-
-    /// 记录账号被用于一次外部请求。
-    async fn record_request(&self, account_id: &str) -> AccountStoreResult<()> {
-        self.record_usage_delta(
-            account_id,
-            AccountUsageDelta {
-                requests: 1,
-                ..AccountUsageDelta::default()
-            },
-        )
-        .await
-    }
+    async fn sync_runtime_account_state(&self, account: &Account) -> AccountStoreResult<bool>;
 }
 
 #[derive(Clone)]
@@ -409,27 +344,6 @@ impl AccountStore for PgAccountStore {
             .map_err(|error| map_account_store_error(&error))
     }
 
-    async fn record_usage_delta(
-        &self,
-        account_id: &str,
-        usage: AccountUsageDelta,
-    ) -> AccountStoreResult<()> {
-        self.record_usage(account_id, pg_usage_delta(usage))
-            .await
-            .map_err(|error| map_account_store_error(&error))
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        account_id: &str,
-        model: &str,
-        usage: AccountModelUsageDelta,
-    ) -> AccountStoreResult<()> {
-        self.record_model_usage(account_id, model, usage)
-            .await
-            .map_err(|error| map_account_store_error(&error))
-    }
-
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>> {
         PgAccountStore::get_quota_json(self, account_id)
             .await
@@ -454,23 +368,8 @@ impl AccountStore for PgAccountStore {
         .map_err(|error| map_account_store_error(&error))
     }
 
-    async fn sync_runtime_account_state(
-        &self,
-        account: &Account,
-        sync_usage_window: bool,
-    ) -> AccountStoreResult<bool> {
-        PgAccountStore::sync_runtime_account_state(self, account, sync_usage_window)
-            .await
-            .map_err(|error| map_account_store_error(&error))
-    }
-
-    async fn sync_rate_limit_window(
-        &self,
-        account_id: &str,
-        reset_at: DateTime<Utc>,
-        limit_window_seconds: Option<u64>,
-    ) -> AccountStoreResult<()> {
-        PgAccountStore::sync_rate_limit_window(self, account_id, reset_at, limit_window_seconds)
+    async fn sync_runtime_account_state(&self, account: &Account) -> AccountStoreResult<bool> {
+        PgAccountStore::sync_runtime_account_state(self, account)
             .await
             .map_err(|error| map_account_store_error(&error))
     }

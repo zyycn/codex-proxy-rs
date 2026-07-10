@@ -5,3 +5,5 @@ pub mod assets;
 pub mod client;
 pub mod middleware;
 pub mod router;
+
+pub use router::AppState;

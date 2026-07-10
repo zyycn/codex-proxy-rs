@@ -675,7 +675,7 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         .await
         .unwrap();
 
-    assert_eq!(models[0].slug.as_deref(), Some("gpt-5.5"));
+    assert_eq!(models[0]["slug"], "gpt-5.5");
     let requests = server.received_requests().await.unwrap();
     let models_request = requests
         .iter()

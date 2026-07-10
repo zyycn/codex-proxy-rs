@@ -15,6 +15,23 @@ static SHUTDOWN_REQUESTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESTART_EXECUTABLE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeProcessControl;
+
+impl crate::api::router::ProcessControl for RuntimeProcessControl {
+    fn request_shutdown(&self) {
+        request_shutdown();
+    }
+
+    fn request_restart(&self, executable_path: PathBuf) {
+        request_process_restart(executable_path);
+    }
+
+    fn subscribe_shutdown(&self) -> Receiver<()> {
+        shutdown_subscription()
+    }
+}
+
 /// 等待进程关闭信号（Ctrl+C 或 SIGTERM）。
 pub async fn shutdown_signal() {
     let mut requested = shutdown_sender().subscribe();

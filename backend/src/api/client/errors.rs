@@ -8,7 +8,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    dispatch::{errors::DispatchFailureClass, responses::errors::ResponseDispatchError},
+    dispatch::errors::{DispatchFailureClass, ResponseDispatchError},
     upstream::openai::protocol::sse::response_failed_sse_event as encode_response_failed_sse_event,
 };
 

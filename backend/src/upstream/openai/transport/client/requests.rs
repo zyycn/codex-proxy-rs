@@ -463,7 +463,7 @@ impl CodexBackendClient {
     pub(super) async fn fetch_models_with_context(
         &self,
         context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<Vec<BackendModelEntry>> {
+    ) -> CodexClientResult<Vec<Value>> {
         let fingerprint = self.fingerprint.current();
         let endpoints = [
             format!(
@@ -481,7 +481,7 @@ impl CodexBackendClient {
                 continue;
             }
             let parsed = response.json::<Value>().await?;
-            let models = extract_backend_model_entries(&parsed);
+            let models = extract_model_entries(&parsed);
             if !models.is_empty() {
                 return Ok(models);
             }

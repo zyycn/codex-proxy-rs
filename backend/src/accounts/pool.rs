@@ -17,10 +17,13 @@ use crate::accounts::scheduler::{
     AccountScheduler, ScoreWeights,
 };
 use crate::accounts::store::AccountStore;
-use crate::accounts::window::should_reset_usage_window;
 use crate::accounts::{
-    account::{Account, AccountModelUsageDelta, AccountStatus, AccountUsageDelta},
-    service::AccountService,
+    account::{Account, AccountStatus},
+    window::should_reset_usage_window,
+};
+use crate::telemetry::account_usage::store::{
+    AccountModelUsageDelta, AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore,
+    AccountUsageWindow,
 };
 use crate::upstream::openai::protocol::events::{
     parse_rate_limit_headers, rate_limit_quota, TokenUsage as CodexTokenUsage,
@@ -528,7 +531,7 @@ impl AccountPool {
         let refreshed_accounts = self.refresh_account_statuses(now);
         let is_capacity_account = |account: &Account| {
             account.status == AccountStatus::Active
-                && AccountService::quota_available_at(account, now, self.options.skip_quota_limited)
+                && candidates::quota_available_at(account, now, self.options.skip_quota_limited)
         };
         let active_accounts = self
             .accounts
