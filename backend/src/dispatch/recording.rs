@@ -179,7 +179,7 @@ pub(super) async fn record_response_upstream_error_event(
     );
     event.metadata = metadata;
     if let Err(error) = record.recorder.record_error(event).await {
-        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
+        tracing::error!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
     }
 }
 
@@ -246,7 +246,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
     }
     event.metadata = metadata;
     if let Err(error) = record.recorder.record_error(event).await {
-        tracing::warn!(account_id = %record.account_id, error = %error, "failed to record prefetched stream error event");
+        tracing::error!(account_id = %record.account_id, error = %error, "failed to record prefetched stream error event");
     }
 }
 
@@ -538,7 +538,7 @@ pub(super) async fn record_live_response_stream_event(
         event.latency_ms = Some(elapsed_millis_i64(context.started_at));
         event.metadata = metadata;
         if let Err(error) = context.recorder.record_error(event).await {
-            tracing::warn!(account_id = %context.account_id, error = %error, "failed to record live response stream error event");
+            tracing::error!(account_id = %context.account_id, error = %error, "failed to record live response stream error event");
         }
     }
 }

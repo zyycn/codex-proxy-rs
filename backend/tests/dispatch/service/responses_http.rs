@@ -267,7 +267,7 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
 async fn responses_non_stream_should_record_websocket_transport_metadata() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_ws_non_stream_log").await;
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(base_url).await;
 
     let response = app
         .oneshot(

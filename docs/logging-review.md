@@ -2,22 +2,22 @@
 
 > 审查基线：`5150eb7a`，分支 `feat/postgres-redis-migration`。
 >
-> 状态：设计已确认，代码实施待开始。
+> 状态：2026-07-11 已完成代码实施、全量质量门禁与容器运行验收。
 >
 > 范围：应用 tracing、HTTP 访问日志、Docker 容器日志、PostgreSQL stderr/WAL，以及 PostgreSQL 日志表与统计表的增长边界。
 
 ## 1. 结论
 
-当前日志系统的结构化、脱敏和文件轮转基础是正确的，但有四个需要优先修复的问题：
+审查基线的日志系统具备结构化、脱敏和按日文件轮转基础，但有四个需要优先修复的问题：
 
 1. 应用只写文件，`docker logs` 为空；关闭文件日志会同时关闭全部 tracing。
 2. 文件 writer 使用 `tracing_appender` 默认 lossy 模式，缓冲满时会静默丢日志，当前没有上报丢弃计数。
 3. HTTP 请求日志字段重复，5xx 同时产生 completed 和 failed 两条终态事件，`/healthz` 每 30 秒产生两条无价值 INFO。
 4. Docker 的应用、PostgreSQL、Redis 都使用无大小上限的 `json-file` 日志。
 
-PostgreSQL 三张主要增长表已有按时间保留策略，不会随运行年限无限增长；但是 `account_model_usage` 和 `fingerprint_update_history` 目前没有严格上限，需要补充硬上限。
+PostgreSQL 三张主要增长表已有按时间保留策略；基线中 `account_model_usage` 和 `fingerprint_update_history` 没有严格上限。本轮已关闭全部四项日志问题并补齐两张表的 100 行硬上限。
 
-## 2. 已核实的现状
+## 2. 已核实的改造前现状
 
 ### 2.1 应用日志
 
@@ -77,9 +77,9 @@ PostgreSQL 三张主要增长表已有按时间保留策略，不会随运行年
 | `request_time_buckets` | 默认 90 天 | 已按 `bucket_start` 删除，不会按运行年限无限增长 |
 | `account_cookies` | 按 `expires_at` 周期清理 | 有过期时间的 Cookie 有边界；会话 Cookie 受唯一键约束但没有时间保留期 |
 | `account_usage` | 每账号一行，账号删除级联 | 行数上限等于账号数，不随请求数增长 |
-| `account_model_usage` | 每账号/模型一行 | 历史模型名可持续增加；新增每账号最多保留最近 100 个模型的硬上限 |
+| `account_model_usage` | 基线为每账号/模型一行 | 已新增每账号最多保留最近 100 个模型的硬上限 |
 | `fingerprints` | 当前指纹固定 ID 覆盖更新 | 常量级 |
-| `fingerprint_update_history` | 每次实际更新插入一行 | 当前无上限；新增全局最多保留最近 100 条的硬上限 |
+| `fingerprint_update_history` | 基线为每次实际更新插入一行 | 已新增全局最多保留最近 100 条的硬上限 |
 
 时间保留限制的是数据时间范围，不是固定字节数：高流量下 30 天事实仍可达到很大体量。当前 PostgreSQL `autovacuum=on`，会回收 DELETE 后的页面供后续复用，但不会保证数据文件立即缩小；不应周期执行会锁表的 `VACUUM FULL`。
 
@@ -160,13 +160,13 @@ logging:
 
 本轮范围为全部 P0、P1，以及 panic hook 和启动期日志级别配置。运行时动态调级与故障风暴采样明确不在本轮范围。
 
-- [ ] P0：重构日志配置和 stdout/file 双输出。
-- [ ] P0：增加 Docker 三服务日志上限。
-- [ ] P0：保留并监测 non-blocking 丢弃计数。
-- [ ] P1：healthz 降噪、ClientIp span、HTTP 单终态事件。
-- [ ] P1：本地数据丢失路径升级为 ERROR。
-- [ ] P1：补齐 `account_model_usage` / `fingerprint_update_history` 硬上限。
-- [ ] P2：panic hook，保留原 hook 与 backtrace 行为。
+- [x] P0：重构日志配置和 stdout/file 双输出。
+- [x] P0：增加 Docker 三服务日志上限。
+- [x] P0：保留并监测 non-blocking 丢弃计数。
+- [x] P1：healthz 降噪、ClientIp span、HTTP 单终态事件。
+- [x] P1：本地数据丢失路径升级为 ERROR。
+- [x] P1：补齐 `account_model_usage` / `fingerprint_update_history` 硬上限。
+- [x] P2：panic hook，保留原 hook 与 backtrace 行为。
 - [ ] P2：运行时动态调整日志级别；本轮先支持启动配置和 `RUST_LOG`。
 - [ ] P2：上游故障风暴采样/限频；有实际告警系统后再设计。
 
@@ -181,4 +181,16 @@ logging:
 7. 三个容器 `json-file` 均为 `10m × 5`。
 8. 全量 retention 后，三张时间表满足保留期，两个历史/统计表满足 100 行硬上限。
 9. PostgreSQL 维持 `logging_collector=off`、无归档、无复制槽时 WAL 正常回收。
-10. Rust fmt、check、clippy `-D warnings`、612 项测试、Compose config、镜像构建与干净启动全部通过。
+10. Rust fmt、check、clippy `-D warnings`、全量测试、Compose config、镜像构建与干净启动全部通过。
+
+## 6. 验收结果（2026-07-11）
+
+- Rust：`cargo fmt --check`、all-targets/all-features Clippy `-D warnings` 全部通过；3 项库单测 + 619 项集成测试，0 失败。
+- 前端：锁定依赖安装、Prettier 检查、`vue-tsc` 和 Vite 生产构建通过。
+- 架构：权威文档 §9 临时门禁通过，没有恢复或留下检查脚本；所有 `backend/src` 文件不超过 800 行。
+- 日志：干净启动后 stdout 与文件各观测到同一批 10 条有效 JSON，WARN=0、ERROR=0；手工和 Docker 的 healthz 探测都不产生 HTTP trace。
+- 丢弃与轮转：小缓冲区单测确认紧急 JSON 告警；文件自然日、大小、总数上限以及 stdout-only/file-only 配置均通过测试。
+- 数据库：两项真实 PostgreSQL 测试均将 102 行精确裁剪为最新 100 行；本地演示数据的 8 账号、3 密钥、160 成功事实、28 错误事实、672 统计桶在换镜像前后数量一致。
+- PostgreSQL：`logging_collector=off`、`log_destination=stderr`、`archive_mode=off`、复制槽 0、WAL 实测 80MB；数据卷中没有 PG 日志文件。
+- Docker：镜像 `codex-proxy-rs:logging-review` 清单摘要 `sha256:cfdd38395d19602dbdd31aa1bae5a03eed2e071cf770b729849bd2db8605378f`；三服务均 healthy、restart=0、`json-file 10m × 5`，`/healthz` 返回 204。
+- 安全：Cargo audit、pnpm production audit 和镜像 HIGH/CRITICAL Trivy 均为 0 漏洞；Redis 已开启 `requirepass`，未认证 PING 返回 `NOAUTH`，启动 WARN=0。

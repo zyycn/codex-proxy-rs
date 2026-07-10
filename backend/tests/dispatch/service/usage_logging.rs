@@ -20,7 +20,7 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .clone()
         .oneshot(
@@ -101,7 +101,7 @@ async fn responses_usage_record_should_store_resolved_upstream_model_after_alias
         .await;
 
     let (app, api_key, pool, _dir) = test_app_with_account_pool_config(server.uri(), |config| {
-        config.logging.enabled = true;
+        config.telemetry.enabled = true;
         config
             .model_aliases
             .insert("client-alias".to_string(), "gpt-5.5".to_string());
@@ -143,7 +143,7 @@ async fn responses_usage_record_should_store_resolved_upstream_model_after_alias
 }
 
 #[tokio::test]
-async fn responses_should_skip_usage_record_when_logging_disabled() {
+async fn responses_should_skip_usage_record_when_telemetry_disabled() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -157,7 +157,7 @@ async fn responses_should_skip_usage_record_when_logging_disabled() {
         .await;
 
     let (app, api_key, pool, _dir) =
-        test_app_with_account_pool_and_disabled_logging(server.uri()).await;
+        test_app_with_account_pool_and_disabled_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -534,7 +534,7 @@ async fn responses_stream_should_record_usage_record_after_completed_stream() {
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -606,7 +606,7 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
         .await;
 
     let (app, api_key, pool, _dir) =
-        test_app_with_account_pool_and_logging_capture_body(server.uri()).await;
+        test_app_with_account_pool_and_telemetry_capture_body(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -657,7 +657,7 @@ async fn responses_stream_should_record_usage_record_after_late_disconnect() {
         )
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(base_url).await;
     let response_task = tokio::spawn(async move {
         app.oneshot(
             Request::builder()
@@ -723,7 +723,7 @@ async fn responses_stream_should_record_failure_detail_after_transport_error() {
         ))
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(base_url).await;
     let response_task = tokio::spawn(async move {
         app.oneshot(
             Request::builder()
@@ -767,7 +767,7 @@ async fn responses_stream_should_not_record_first_token_when_metadata_only_prefi
     )
     .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(base_url).await;
     let response_task = tokio::spawn(async move {
         app.oneshot(
             Request::builder()
@@ -890,7 +890,7 @@ async fn responses_should_record_attempt_trace_after_retrying_another_account() 
         .await;
 
     let secret_input = "do not persist this input";
-    let (app, api_key, pool, _dir) = test_app_with_two_accounts_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()

@@ -72,8 +72,15 @@ admin:
   default_username: admin
   default_password: test-admin-password
 logging:
-  directory: .runtime/logs
-  retention_days: 14
+  level: info
+  stdout: true
+  file:
+    enabled: true
+    directory: .runtime/logs
+    retention_days: 14
+    max_file_size_mb: 20
+    max_files: 20
+telemetry:
   enabled: true
 "#;
 
@@ -109,7 +116,8 @@ fn default_config_keeps_runtime_artifacts_under_runtime_directory() {
         "postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy"
     );
     assert_eq!(cfg.redis.url, "redis://127.0.0.1:6379");
-    assert_eq!(cfg.logging.directory, ".runtime/logs");
+    assert_eq!(cfg.logging.file.directory, ".runtime/logs");
+    assert!(cfg.telemetry.enabled);
 }
 
 #[test]
@@ -239,9 +247,14 @@ fingerprint:
 admin:
   session_ttl_minutes: 1440
 logging:
-  directory: .runtime/logs
-  retention_days: 14
-  enabled: false
+  level: info
+  stdout: true
+  file:
+    enabled: true
+    directory: .runtime/logs
+    retention_days: 14
+    max_file_size_mb: 20
+    max_files: 20
 "#,
     )
     .unwrap();
@@ -281,8 +294,10 @@ ws_pool:
     assert!(cfg.ws_pool.enabled);
     assert_eq!(cfg.ws_pool.max_age_ms, 3_300_000);
     assert_eq!(cfg.ws_pool.max_per_account, 8);
-    assert_eq!(cfg.logging.directory, ".runtime/logs");
-    assert_eq!(cfg.logging.retention_days, 14);
+    assert_eq!(cfg.logging.file.directory, ".runtime/logs");
+    assert_eq!(cfg.logging.file.retention_days, 14);
+    assert_eq!(cfg.logging.file.max_file_size_mb, 20);
+    assert_eq!(cfg.logging.file.max_files, 20);
 }
 
 #[test]
@@ -315,17 +330,22 @@ fn config_loader_should_read_explicit_config_file_from_env() {
 
     std::env::remove_var("CPR_CONFIG_FILE");
     assert_eq!(cfg.server.host, "127.0.0.2");
-    assert_eq!(cfg.logging.directory, ".runtime/env-logs");
+    assert_eq!(cfg.logging.file.directory, ".runtime/env-logs");
 }
 
 #[test]
 fn logging_config_should_reject_unknown_fields() {
     let err = parse_yaml_config::<LoggingConfig>(
         r"
-directory: .runtime/logs
+level: info
+stdout: true
 unexpected: true
-retention_days: 14
-enabled: false
+file:
+  enabled: false
+  directory: .runtime/logs
+  retention_days: 14
+  max_file_size_mb: 20
+  max_files: 20
 ",
     )
     .unwrap_err();

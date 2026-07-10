@@ -129,7 +129,7 @@ async fn monitoring_test_app(
         seed_admin_session(&pool, &redis, "session_1").await;
     }
     let mut config = test_config(test_database_url());
-    config.logging.enabled = true;
+    config.telemetry.enabled = true;
     let stores = background_task_stores(pool.clone(), redis);
     let services = Services::new(
         &config,

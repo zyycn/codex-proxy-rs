@@ -47,7 +47,17 @@ redis:
   url: 'redis://127.0.0.1:6379/'
 
 logging:
-  directory: .runtime/logs
+  level: info
+  stdout: true
+  file:
+    enabled: true
+    directory: .runtime/logs
+    retention_days: 14
+    max_file_size_mb: 20
+    max_files: 20
+
+telemetry:
+  enabled: true
 
 admin:
   default_password: '<set-a-long-random-password>'
@@ -87,10 +97,20 @@ database:
   url: 'postgres://codex_proxy:codex_proxy@postgres:5432/codex_proxy'
 
 redis:
-  url: 'redis://redis:6379/'
+  url: 'redis://:codex_proxy@redis:6379/'
 
 logging:
-  directory: /app/logs
+  level: info
+  stdout: true
+  file:
+    enabled: true
+    directory: /app/logs
+    retention_days: 14
+    max_file_size_mb: 20
+    max_files: 20
+
+telemetry:
+  enabled: true
 ```
 
 构建并启动：

@@ -17,7 +17,15 @@ cp deploy/config.example.yaml .runtime/config.yaml
 - `.runtime/data` -> `/app/data`
 - `.runtime/logs` -> `/app/logs`
 
+应用日志同时写入 `docker logs` 与 `.runtime/logs`。Compose 对应用、PostgreSQL、Redis
+统一启用 `json-file` 的 `10m × 5` 轮转；应用文件日志还受配置中的自然日、单文件大小和文件总数限制。
+
 复制后必须设置 `admin.default_password`。空值、长度不足 12 位或常见弱口令会被后端拒绝。
+
+Redis 默认密码为 `codex_proxy`，与 `deploy/config.example.yaml` 的连接串一致。生产部署通过
+`CPR_REDIS_PASSWORD` 覆盖后，必须同步更新 `.runtime/config.yaml` 中 URL 的密码（特殊字符需做 URL 编码）。
+本地 Rust 集成测试若复用该 Compose Redis，设置
+`CPR_TEST_REDIS_URL=redis://:codex_proxy@127.0.0.1:6379/`。
 
 如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，确保反代正常传递 `CF-Connecting-IP`、`X-Real-IP` 或 `X-Forwarded-For`。后端会按这组头自动解析真实客户端 IP；没有这些头时回落到直连 peer IP。
 

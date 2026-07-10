@@ -2081,7 +2081,7 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()
@@ -2153,7 +2153,7 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
         .mount(&server)
         .await;
 
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
     let response = app
         .oneshot(
             Request::builder()

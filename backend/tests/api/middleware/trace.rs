@@ -17,6 +17,7 @@ use codex_proxy_rs::api::middleware::{
     request_id::{attach_request_id, ClientIp},
     trace::http_trace_layer,
 };
+use serde_json::Value;
 use tokio::time::{sleep, Duration};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -74,6 +75,7 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
     let subscriber = tracing_subscriber::fmt()
         .json()
         .with_writer(logs.clone())
+        .with_max_level(tracing::Level::DEBUG)
         .with_current_span(true)
         .with_span_list(true)
         .with_ansi(false)
@@ -109,6 +111,117 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
             && output.contains("latency_ms"),
         "unexpected trace output: {output}"
     );
+    let received = json_events(&output)
+        .into_iter()
+        .find(|event| event["fields"]["message"] == "received HTTP request")
+        .expect("received event should exist");
+    assert!(received["fields"].get("request_id").is_none());
+    assert!(received["fields"].get("method").is_none());
+    assert!(received["fields"].get("uri").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_trace_should_include_resolved_client_ip_in_span() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_ansi(false)
+        .finish();
+    let app = Router::new()
+        .route("/trace-test", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(http_trace_layer())
+        .layer(from_fn(attach_request_id));
+    let mut request = Request::builder()
+        .uri("/trace-test")
+        .header("cf-connecting-ip", "203.0.113.43")
+        .body(Body::empty())
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 61234))));
+
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let response = app.oneshot(request).await.unwrap();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    let output = wait_for_trace_output(&logs).await;
+    assert!(
+        output.contains("\"client_ip\":\"203.0.113.43\""),
+        "unexpected trace output: {output}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_trace_should_emit_one_terminal_event_for_server_error() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_ansi(false)
+        .finish();
+    let app = Router::new()
+        .route(
+            "/trace-test",
+            get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        )
+        .layer(http_trace_layer())
+        .layer(from_fn(attach_request_id));
+
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/trace-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+    sleep(Duration::from_millis(10)).await;
+
+    let output = logs.content();
+    assert_eq!(output.matches("completed HTTP request").count(), 0);
+    assert_eq!(output.matches("failed HTTP request").count(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn health_route_outside_trace_layer_should_not_emit_http_events() {
+    let logs = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_ansi(false)
+        .finish();
+    let traced_routes = Router::new()
+        .route("/trace-test", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(http_trace_layer());
+    let app = Router::new()
+        .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
+        .merge(traced_routes)
+        .layer(from_fn(attach_request_id));
+
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _body = to_bytes(response.into_body(), 1024).await.unwrap();
+    sleep(Duration::from_millis(10)).await;
+
+    assert!(logs.content().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -216,6 +329,13 @@ async fn request_context_should_generate_new_request_id_for_invalid_header() {
         request_id.starts_with("req_") && request_id != "req invalid",
         "unexpected request id: {request_id}"
     );
+}
+
+fn json_events(output: &str) -> Vec<Value> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
 }
 
 #[tokio::test]

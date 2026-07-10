@@ -2313,7 +2313,7 @@ async fn responses_stream_with_previous_response_id_should_forward_websocket_chu
 async fn responses_stream_with_previous_response_id_should_record_websocket_audit_metadata() {
     let (base_url, first_chunk_sent_rx, finish_tx, upstream) =
         spawn_chunked_websocket_upstream().await;
-    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_logging(base_url).await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(base_url).await;
 
     let response = app
         .oneshot(responses_previous_stream_request(

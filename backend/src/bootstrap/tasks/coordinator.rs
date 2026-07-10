@@ -46,6 +46,8 @@ impl TaskCoordinator {
                 stores.usage_records.clone(),
                 stores.ops_errors.clone(),
                 stores.request_buckets.clone(),
+                stores.account_usage.clone(),
+                stores.fingerprints.clone(),
             )
             .start(),
         );
