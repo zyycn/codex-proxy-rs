@@ -1,8 +1,8 @@
-pub mod accounts;
 pub mod api;
 pub mod auth;
 pub mod bootstrap;
 pub mod dispatch;
+pub mod fleet;
 pub mod infra;
 pub mod keys;
 pub mod models;

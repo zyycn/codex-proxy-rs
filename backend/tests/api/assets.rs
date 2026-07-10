@@ -14,7 +14,10 @@ use crate::support::{
     config::test_config as base_test_config,
     fingerprint::runtime_fingerprint,
     http::response_json,
-    storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
+    storage::{
+        background_task_stores, create_test_redis, init_test_db, test_database_url,
+        TestDatabaseGuard,
+    },
 };
 
 #[tokio::test]
@@ -34,7 +37,7 @@ async fn server_router_should_serve_frontend_assets_without_shadowing_api_routes
     .expect("favicon should be written");
     std::fs::write(dist.join("assets").join("app.js"), "window.__asset = true;")
         .expect("asset should be written");
-    let (app, _pool) = router_with_dist_and_database(&dist, "assets-routes").await;
+    let (app, _pool, _guard) = router_with_dist_and_database(&dist, "assets-routes").await;
 
     let index = app.clone().oneshot(request("/")).await.expect("index");
     let route_fallback = app
@@ -99,7 +102,7 @@ async fn server_router_should_return_json_404_for_unknown_api_routes() {
         "<!doctype html><main id=\"app\">Codex Proxy Admin</main>",
     )
     .expect("index should be written");
-    let (app, _pool) = router_with_dist_and_database(&dist, "unknown-api-routes").await;
+    let (app, _pool, _guard) = router_with_dist_and_database(&dist, "unknown-api-routes").await;
 
     let admin = app
         .clone()
@@ -121,7 +124,7 @@ async fn healthz_should_report_unavailable_when_postgres_is_closed() {
     let dist = dir.path().join("dist");
     std::fs::create_dir_all(&dist).expect("dist dir should be created");
     std::fs::write(dist.join("index.html"), "<!doctype html>").expect("index should be written");
-    let (app, pool) = router_with_dist_and_database(&dist, "healthz-postgres").await;
+    let (app, pool, _guard) = router_with_dist_and_database(&dist, "healthz-postgres").await;
     pool.close().await;
 
     let response = app
@@ -170,8 +173,11 @@ fn assert_no_static_policy_headers(response: &axum::response::Response) {
     assert!(!response.headers().contains_key("referrer-policy"));
 }
 
-async fn router_with_dist_and_database(dist: &Path, label: &str) -> (Router, PgPool) {
-    let (pool, _guard) = init_test_db(label).await;
+async fn router_with_dist_and_database(
+    dist: &Path,
+    label: &str,
+) -> (Router, PgPool, TestDatabaseGuard) {
+    let (pool, guard) = init_test_db(label).await;
     let redis = create_test_redis(label).await;
     let config = test_config(test_database_url());
     let stores = background_task_stores(pool.clone(), redis);
@@ -185,6 +191,7 @@ async fn router_with_dist_and_database(dist: &Path, label: &str) -> (Router, PgP
     (
         codex_proxy_rs::api::router::router_with_assets(dist).with_state(state),
         pool,
+        guard,
     )
 }
 

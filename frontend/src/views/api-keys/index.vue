@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -17,8 +17,11 @@ import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
+import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 
 const selectedIds = ref<Set<string>>(new Set())
+const showUseKeyModal = shallowRef(false)
+const selectedUseKey = shallowRef<any | null>(null)
 const {
   loading,
   apiKeys,
@@ -80,6 +83,11 @@ function importCreatedKeyToCcs() {
     baseUrl: openAiBaseUrl.value,
     providerName: createdKeyName.value || 'codex-proxy-rs',
   })
+}
+
+function openUseKeyModal(apiKey: any) {
+  selectedUseKey.value = apiKey
+  showUseKeyModal.value = true
 }
 
 function importToCcs(apiKey: any) {
@@ -172,6 +180,7 @@ function importToCcs(apiKey: any) {
               @delete="requestDeleteKey"
               @import-ccs="importToCcs"
               @toggle="handleToggleStatus"
+              @use="openUseKeyModal"
             />
           </template>
         </BaseTable>
@@ -187,6 +196,13 @@ function importToCcs(apiKey: any) {
       @copy="copyToClipboard"
       @create="handleCreate"
       @import-ccs="importCreatedKeyToCcs"
+    />
+
+    <ApiKeyUseModal
+      v-model="showUseKeyModal"
+      :api-key="selectedUseKey"
+      :api-base-url="openAiBaseUrl"
+      @copy="copyToClipboard"
     />
 
     <BaseConfirmModal

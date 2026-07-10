@@ -118,7 +118,9 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
     );
 }
 
-async fn client_key_store(db_name: &str) -> (PgClientKeyStore, tempfile::TempDir) {
+async fn client_key_store(
+    db_name: &str,
+) -> (PgClientKeyStore, crate::support::storage::TestDatabaseGuard) {
     let (pool, dir) = init_test_db(db_name).await;
     (PgClientKeyStore::new(pool), dir)
 }

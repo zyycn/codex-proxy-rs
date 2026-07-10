@@ -11,11 +11,10 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::{
-    accounts::pool::RuntimeAccountPoolService,
     dispatch::{
         affinity::{
             resolve::{evict_reasoning_replay, record_response_affinity},
-            RuntimeSessionAffinityService,
+            SessionAffinityService,
         },
         errors::{backend_transport_name, ResponseDispatchStreamError},
         recording::{
@@ -25,6 +24,7 @@ use crate::{
         recovery::{cloudflare::CloudflareRecovery, reasoning_replay::ReasoningReplayCache},
         service::ResponseDispatchStream,
     },
+    fleet::pool::AccountPoolService,
     infra::time::elapsed_millis_i64,
     telemetry::{recorder::Recorder, usage::types::UsageRecordLevel},
     upstream::openai::{
@@ -339,8 +339,8 @@ fn missing_sse_event_separator(body: &str) -> Option<&'static str> {
 }
 
 pub(in crate::dispatch) struct LiveResponseStreamContext {
-    pub(in crate::dispatch) account_pool: Arc<RuntimeAccountPoolService>,
-    pub(in crate::dispatch) session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub(in crate::dispatch) account_pool: Arc<AccountPoolService>,
+    pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
     pub(in crate::dispatch) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
     pub(in crate::dispatch) cloudflare: CloudflareRecovery,

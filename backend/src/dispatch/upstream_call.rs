@@ -6,14 +6,6 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts::{
-        account::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, AcquiredAccount, RuntimeAccountPoolService},
-        quota::{
-            quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
-            quota_snapshot_reset_at,
-        },
-    },
     dispatch::{
         affinity::build_conversation_identity,
         errors::{
@@ -38,6 +30,14 @@ use crate::{
         },
         service::ResponseDispatchService,
         stream::trace::ResponseDispatchTrace,
+    },
+    fleet::{
+        account::{Account, AccountStatus},
+        pool::{AccountAcquireRequest, AccountPoolService, AcquiredAccount},
+        quota::{
+            quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
+            quota_snapshot_reset_at,
+        },
     },
     telemetry::{
         recorder::{reasoning_effort_from_compact_request, record_response_event},
@@ -69,7 +69,7 @@ pub(crate) enum QuotaVerificationDecision {
 }
 
 pub(crate) struct QuotaVerificationContext<'a> {
-    pub account_pool: &'a RuntimeAccountPoolService,
+    pub account_pool: &'a AccountPoolService,
     pub codex: &'a CodexBackendClient,
     pub cloudflare: &'a CloudflareRecovery,
     pub installation_id: Option<&'a str>,

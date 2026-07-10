@@ -6,10 +6,10 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::{
-    accounts::{
+    fleet::{
         cookies::PgCookieStore,
-        pool::RuntimeAccountPoolService,
-        quota::{QuotaRefreshSummary, RuntimeQuotaRefreshService},
+        pool::AccountPoolService,
+        quota::{QuotaRefreshService, QuotaRefreshSummary},
         store::PgAccountStore,
     },
     telemetry::account_usage::store::PgAccountUsageStore,
@@ -23,7 +23,7 @@ use super::{
 
 /// 主动配额刷新后台任务。
 pub struct QuotaRefreshTask {
-    service: RuntimeQuotaRefreshService,
+    service: QuotaRefreshService,
     interval_secs: u64,
     last_refreshed: HashMap<String, Instant>,
 }
@@ -38,7 +38,7 @@ impl QuotaRefreshTask {
         min_refresh_interval_secs: u64,
     ) -> Self {
         Self {
-            service: RuntimeQuotaRefreshService::with_min_refresh_interval_secs(
+            service: QuotaRefreshService::with_min_refresh_interval_secs(
                 store,
                 usage_store,
                 codex,
@@ -62,7 +62,7 @@ impl QuotaRefreshTask {
     }
 
     /// 设置运行时账号池，用于刷新后同步内存调度状态。
-    pub fn with_account_pool(mut self, account_pool: Arc<RuntimeAccountPoolService>) -> Self {
+    pub fn with_account_pool(mut self, account_pool: Arc<AccountPoolService>) -> Self {
         self.service = self.service.with_account_pool(account_pool);
         self
     }

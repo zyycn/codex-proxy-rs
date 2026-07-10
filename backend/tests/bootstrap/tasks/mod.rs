@@ -2,9 +2,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use codex_proxy_rs::accounts::account::{Account, AccountStatus};
-use codex_proxy_rs::accounts::cookies::PgCookieStore;
-use codex_proxy_rs::accounts::store::{AccountStore, AccountStoreResult};
+use codex_proxy_rs::fleet::account::{Account, AccountStatus};
+use codex_proxy_rs::fleet::cookies::PgCookieStore;
+use codex_proxy_rs::fleet::store::{AccountStore, AccountStoreResult};
 use codex_proxy_rs::models::service::ModelService;
 use codex_proxy_rs::models::types::ModelConfig;
 use codex_proxy_rs::telemetry::account_usage::store::{

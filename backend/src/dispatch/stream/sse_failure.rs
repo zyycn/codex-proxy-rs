@@ -1,11 +1,11 @@
 use serde_json::Value;
 
 use crate::{
-    accounts::account::AccountStatus,
     dispatch::errors::{
         is_history_recovery_signal, is_invalid_encrypted_content_signal,
         is_model_unsupported_signal,
     },
+    fleet::account::AccountStatus,
     upstream::openai::{
         protocol::{
             events::TokenUsage,

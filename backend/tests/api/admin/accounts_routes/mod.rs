@@ -5,13 +5,13 @@ use axum::{
     http::{Request, StatusCode},
 };
 use codex_proxy_rs::{
-    accounts::{
+    api::AppState,
+    bootstrap::services::Services,
+    fleet::{
         account::AccountStatus,
         cookies::PgCookieStore,
         store::{NewAccount, PgAccountStore},
     },
-    api::AppState,
-    bootstrap::services::Services,
     infra::redis::RedisConnection,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -114,7 +114,7 @@ async fn admin_accounts_test_app(
     axum::Router,
     AdminAccountsTestState,
     PgPool,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     admin_accounts_test_app_with_api_base_url(
         db_name,
@@ -132,7 +132,7 @@ async fn admin_accounts_test_app_with_api_base_url(
     axum::Router,
     AdminAccountsTestState,
     PgPool,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     admin_accounts_test_app_with_overrides(db_name, key_byte, api_base_url, None).await
 }
@@ -145,7 +145,7 @@ async fn admin_accounts_test_app_with_oauth_token_endpoint(
     axum::Router,
     AdminAccountsTestState,
     PgPool,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     admin_accounts_test_app_with_overrides(
         db_name,
@@ -165,7 +165,7 @@ async fn admin_accounts_test_app_with_api_base_url_and_oauth_token_endpoint(
     axum::Router,
     AdminAccountsTestState,
     PgPool,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     admin_accounts_test_app_with_overrides(
         db_name,
@@ -185,7 +185,7 @@ async fn admin_accounts_test_app_with_overrides(
     axum::Router,
     AdminAccountsTestState,
     PgPool,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     let (pool, dir) = init_test_db(db_name).await;
     let redis = create_test_redis(db_name).await;

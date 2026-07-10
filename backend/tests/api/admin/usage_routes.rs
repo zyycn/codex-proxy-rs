@@ -121,7 +121,7 @@ async fn monitoring_test_app(
     axum::Router,
     PgUsageRecordStore,
     PgOpsErrorLogStore,
-    tempfile::TempDir,
+    crate::support::storage::TestDatabaseGuard,
 ) {
     let (pool, guard) = init_test_db(label).await;
     let redis = create_test_redis(label).await;

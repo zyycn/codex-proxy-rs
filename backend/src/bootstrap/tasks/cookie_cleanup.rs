@@ -4,7 +4,7 @@ use std::future::Future;
 
 use chrono::{DateTime, Utc};
 
-use crate::accounts::cookies::{PgCookieStore, PgCookieStoreError};
+use crate::fleet::cookies::{PgCookieStore, PgCookieStoreError};
 
 use super::{
     cleanup::{CleanupTask, CleanupTaskMessages, ExpiredCleanupStore},

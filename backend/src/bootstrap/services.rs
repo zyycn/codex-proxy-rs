@@ -5,23 +5,23 @@ use std::{env, error::Error, sync::Arc, time::Duration};
 use axum::Router;
 
 use crate::{
-    accounts::{
-        cookies::PgCookieStore,
-        manage::{AccountManageService, AccountManageServiceParts},
-        pool::{AccountPoolOptions, AccountPoolStaticSettings, RuntimeAccountPoolService},
-        refresh::{
-            RedisRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy, RuntimeTokenRefreshService,
-        },
-        store::{AccountStore, PgAccountStore},
-    },
     auth::{
         service::SessionService,
         store::{PgAdminUserStore, RedisAdminSessionStore},
     },
     bootstrap::config::AppConfig,
     dispatch::{
-        affinity::{RedisSessionAffinityStore, RuntimeSessionAffinityService},
+        affinity::{RedisSessionAffinityStore, SessionAffinityService},
         service::{ResponseDispatchService, ResponseDispatchServiceParts},
+    },
+    fleet::{
+        cookies::PgCookieStore,
+        manage::{AccountManageService, AccountManageServiceParts},
+        pool::{AccountPoolOptions, AccountPoolService, AccountPoolStaticSettings},
+        refresh::{
+            RedisRefreshLeaseStore, RefreshPolicy, RuntimeRefreshPolicy, TokenRefreshService,
+        },
+        store::{AccountStore, PgAccountStore},
     },
     infra::{
         database::connect,
@@ -35,7 +35,7 @@ use crate::{
         store::{ModelSnapshotStore, RedisModelSnapshotStore},
         types::ModelConfig,
     },
-    settings::{service::RuntimeSettingsService, SettingsSnapshot},
+    settings::{service::SettingsService, SettingsSnapshot},
     telemetry::{
         account_usage::query::AccountUsageQueryService,
         account_usage::store::{AccountUsageStore, PgAccountUsageStore},
@@ -102,16 +102,16 @@ pub struct Services {
     pub client_keys: Arc<KeyVerifier>,
     pub admin_client_keys: Arc<KeyManageService>,
     pub admin_sessions: Arc<SessionService>,
-    pub settings: Arc<RuntimeSettingsService>,
+    pub settings: Arc<SettingsService>,
     pub refresh_policy: RuntimeRefreshPolicy,
     pub admin_accounts: Arc<AccountManageService>,
     pub usage_records: Arc<UsageQueryService>,
     pub ops_errors: Arc<OpsQueryService>,
     pub usage: Arc<AccountUsageQueryService>,
-    pub account_pool: Arc<RuntimeAccountPoolService>,
-    pub token_refresh: Arc<RuntimeTokenRefreshService<OpenAiTokenClient>>,
+    pub account_pool: Arc<AccountPoolService>,
+    pub token_refresh: Arc<TokenRefreshService<OpenAiTokenClient>>,
     pub responses: Arc<ResponseDispatchService>,
-    pub session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub session_affinity: Arc<SessionAffinityService>,
     pub codex: Arc<CodexBackendClient>,
     pub websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub fingerprint: RuntimeFingerprint,
@@ -221,7 +221,7 @@ impl Services {
             skip_quota_limited: config.quota.skip_exhausted,
             tier_priority: config.auth.tier_priority.clone(),
         };
-        let account_pool = Arc::new(RuntimeAccountPoolService::new(
+        let account_pool = Arc::new(AccountPoolService::new(
             account_store.clone(),
             account_usage_store_trait,
             account_pool_static.pool_options(&settings_snapshot),
@@ -231,7 +231,7 @@ impl Services {
             refresh_margin_seconds: config.auth.refresh_margin_seconds,
             refresh_concurrency: config.auth.refresh_concurrency,
         });
-        let settings = Arc::new(RuntimeSettingsService::new(
+        let settings = Arc::new(SettingsService::new(
             settings_snapshot,
             stores.accounts.pool().clone(),
         ));
@@ -245,7 +245,7 @@ impl Services {
         let client_keys = Arc::new(KeyVerifier::new(stores.client_keys.clone()));
         let token_client = default_openai_token_client(token_client_config(config));
         let token_refresh = Arc::new(
-            RuntimeTokenRefreshService::new(
+            TokenRefreshService::new(
                 stores.accounts.clone(),
                 refresh_policy.clone(),
                 token_client.clone(),
@@ -269,7 +269,7 @@ impl Services {
             account_pool: account_pool.clone(),
             token_refresher: Arc::new(token_client),
             refresh_leases: stores.refresh_leases.clone(),
-            oauth: crate::accounts::manage::oauth::AccountOAuthService::new(
+            oauth: crate::fleet::manage::oauth::AccountOAuthService::new(
                 reqwest::Client::new(),
                 config.auth.oauth_client_id.clone(),
                 config.auth.oauth_token_endpoint.clone(),
@@ -278,9 +278,8 @@ impl Services {
             installation_id: installation_id.clone(),
         }));
         let usage = Arc::new(AccountUsageQueryService::new(stores.account_usage.clone()));
-        let session_affinity = Arc::new(RuntimeSessionAffinityService::new(
-            stores.session_affinity.clone(),
-        ));
+        let session_affinity =
+            Arc::new(SessionAffinityService::new(stores.session_affinity.clone()));
 
         let cloudflare_recovery =
             crate::dispatch::recovery::cloudflare::CloudflareRecovery::new(stores.cookies.clone());
@@ -469,8 +468,7 @@ async fn build_router(
     let pool = connect(&config.database.url).await?;
     let redis = RedisConnection::connect(&config.redis.url, "cpr").await?;
     let settings =
-        RuntimeSettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool)
-            .await?;
+        SettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool).await?;
     apply_settings_to_config(&mut config, &settings);
 
     let fingerprint_store = PgFingerprintStore::new(pool.clone());

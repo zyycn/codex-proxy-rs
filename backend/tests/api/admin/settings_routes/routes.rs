@@ -9,14 +9,14 @@ use axum::{
 };
 use chrono::Utc;
 use codex_proxy_rs::{
-    accounts::pool::AccountAcquireRequest,
     api::AppState,
     bootstrap::{
         config::AppConfig,
         services::{apply_settings_to_config, settings_snapshot_from_config, Services},
         tasks::coordinator::TaskCoordinator,
     },
-    settings::service::RuntimeSettingsService,
+    fleet::pool::AccountAcquireRequest,
+    settings::service::SettingsService,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -333,7 +333,7 @@ async fn admin_settings_update_should_persist_runtime_settings_to_database() {
     assert!(!dir.path().join("config.yaml").exists());
 
     let restarted_settings =
-        RuntimeSettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool)
+        SettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool)
             .await
             .unwrap();
     let mut restarted_config = config.clone();
@@ -493,7 +493,9 @@ async fn admin_settings_update_should_reject_unsupported_or_invalid_fields() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-async fn admin_settings_test_app(db_name: &str) -> (axum::Router, tempfile::TempDir) {
+async fn admin_settings_test_app(
+    db_name: &str,
+) -> (axum::Router, crate::support::storage::TestDatabaseGuard) {
     let (pool, dir) = init_test_db(db_name).await;
     let redis = create_test_redis(db_name).await;
     seed_admin_session(&pool, &redis, "session_1").await;

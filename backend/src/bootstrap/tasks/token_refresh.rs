@@ -2,8 +2,8 @@
 
 use tracing::{debug, info, warn};
 
-use crate::accounts::{
-    refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy, RuntimeTokenRefreshService},
+use crate::fleet::{
+    refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy, TokenRefreshService},
     store::PgAccountStore,
 };
 use crate::upstream::openai::token_client::TokenRefresher;
@@ -20,7 +20,7 @@ pub struct TokenRefreshTask<C>
 where
     C: TokenRefresher,
 {
-    service: RuntimeTokenRefreshService<C>,
+    service: TokenRefreshService<C>,
     interval_secs: u64,
 }
 
@@ -31,13 +31,13 @@ where
     /// 构造默认后台任务。
     pub fn new(store: PgAccountStore, policy: RuntimeRefreshPolicy, client: C) -> Self {
         Self {
-            service: RuntimeTokenRefreshService::new(store, policy, client),
+            service: TokenRefreshService::new(store, policy, client),
             interval_secs: DEFAULT_INTERVAL_SECS,
         }
     }
 
     /// 使用已创建的运行时刷新服务构造后台任务。
-    pub fn from_service(service: RuntimeTokenRefreshService<C>) -> Self {
+    pub fn from_service(service: TokenRefreshService<C>) -> Self {
         Self {
             service,
             interval_secs: DEFAULT_INTERVAL_SECS,

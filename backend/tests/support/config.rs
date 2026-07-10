@@ -1,6 +1,6 @@
 use codex_proxy_rs::bootstrap::config::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FingerprintConfig,
-    LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TlsConfig, WebSocketPoolConfig,
+    LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TlsConfig, WebSocketPoolSettings,
 };
 
 pub(crate) fn test_config(database_url: String) -> AppConfig {
@@ -35,7 +35,7 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         tls: TlsConfig {
             force_http11: false,
         },
-        ws_pool: WebSocketPoolConfig::default(),
+        ws_pool: WebSocketPoolSettings::default(),
         fingerprint: FingerprintConfig::default(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,

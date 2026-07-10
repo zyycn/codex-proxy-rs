@@ -6,7 +6,7 @@ use std::{
 };
 
 use codex_proxy_rs::{
-    accounts::pool::{AccountAcquireRequest, AccountPoolOptions, RuntimeAccountPoolService},
+    fleet::pool::{AccountAcquireRequest, AccountPoolOptions, AccountPoolService},
     models::{
         store::{ModelSnapshotStore, ModelSnapshotStoreResult},
         types::{BackendModelEntry, ModelPlanSnapshot},
@@ -20,7 +20,7 @@ use codex_proxy_rs::{
 async fn model_refresh_task_should_start_and_shutdown() {
     let model_service = Arc::new(ModelService::new(empty_model_config(), None, None));
     let account_store = Arc::new(FakeAccountStore);
-    let account_pool = Arc::new(RuntimeAccountPoolService::new(
+    let account_pool = Arc::new(AccountPoolService::new(
         account_store.clone(),
         Arc::new(FakeAccountUsageStore),
         AccountPoolOptions::default(),
@@ -64,7 +64,7 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
         request_usage_records,
         model_request_usage_records,
     });
-    let account_pool = Arc::new(RuntimeAccountPoolService::new(
+    let account_pool = Arc::new(AccountPoolService::new(
         account_store.clone(),
         usage_store,
         AccountPoolOptions::default(),

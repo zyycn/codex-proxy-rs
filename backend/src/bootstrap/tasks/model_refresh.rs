@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::accounts::pool::RuntimeAccountPoolService;
+use crate::fleet::pool::AccountPoolService;
 use crate::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
@@ -20,7 +20,7 @@ use super::{
 /// 模型刷新任务接线器。
 pub struct ModelRefreshTask {
     model_service: Arc<ModelService>,
-    account_pool: Arc<RuntimeAccountPoolService>,
+    account_pool: Arc<AccountPoolService>,
     refresh_interval_secs: u64,
     initial_delay_ms: u64,
     retry_delay_ms: u64,
@@ -35,10 +35,7 @@ const MAX_RETRIES: u32 = 12;
 
 impl ModelRefreshTask {
     /// 构造默认任务。
-    pub fn new(
-        model_service: Arc<ModelService>,
-        account_pool: Arc<RuntimeAccountPoolService>,
-    ) -> Self {
+    pub fn new(model_service: Arc<ModelService>, account_pool: Arc<AccountPoolService>) -> Self {
         Self {
             model_service,
             account_pool,
@@ -119,6 +116,7 @@ impl PeriodicTaskRunner for ModelRefreshTask {
 
             let mut attempt = 0;
             let mut has_fetched_once = false;
+            let mut deferred_until_accounts_available = false;
 
             while attempt < self.max_retries {
                 match self.refresh_once().await {
@@ -134,7 +132,8 @@ impl PeriodicTaskRunner for ModelRefreshTask {
                     Err(error) => {
                         attempt += 1;
                         if matches!(error, ModelServiceError::NoAccounts) {
-                            warn!("首次模型刷新跳过：没有可用账户，将进入周期重试");
+                            info!("首次模型刷新跳过：没有可用账户，将进入周期重试");
+                            deferred_until_accounts_available = true;
                             break;
                         }
 
@@ -158,7 +157,7 @@ impl PeriodicTaskRunner for ModelRefreshTask {
                 }
             }
 
-            if !has_fetched_once {
+            if !has_fetched_once && !deferred_until_accounts_available {
                 warn!("模型刷新任务首次尝试全部失败，切换到周期刷新");
             }
 
@@ -168,8 +167,14 @@ impl PeriodicTaskRunner for ModelRefreshTask {
 
     fn tick(&mut self) -> super::periodic::TaskFuture<'_, ()> {
         Box::pin(async move {
-            if let Err(error) = self.refresh_once().await {
-                warn!(error = ?error, "刷新模型列表失败");
+            match self.refresh_once().await {
+                Ok(_) => {}
+                Err(ModelServiceError::NoAccounts) => {
+                    info!("模型刷新跳过：没有可用账户");
+                }
+                Err(error) => {
+                    warn!(error = ?error, "刷新模型列表失败");
+                }
             }
         })
     }

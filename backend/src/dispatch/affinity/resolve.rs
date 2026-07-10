@@ -7,17 +7,15 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    accounts::account::AccountStatus,
     dispatch::{
-        affinity::{
-            types::ConversationIdentity, RuntimeSessionAffinityService, SessionAffinityEntry,
-        },
+        affinity::{types::ConversationIdentity, SessionAffinityEntry, SessionAffinityService},
         recovery::{
             implicit_resume::{restore_full_request_without_history, ImplicitResumeSnapshot},
             reasoning_replay::ReasoningReplayCache,
         },
         service::ResponseDispatchService,
     },
+    fleet::account::AccountStatus,
     upstream::openai::protocol::{
         events::TokenUsage,
         responses::{completed_response_metadata, CodexResponsesRequest},
@@ -170,7 +168,7 @@ impl ResponseDispatchService {
 }
 
 pub(crate) async fn record_response_affinity(
-    session_affinity: &Arc<RuntimeSessionAffinityService>,
+    session_affinity: &Arc<SessionAffinityService>,
     reasoning_replay: &Arc<Mutex<ReasoningReplayCache>>,
     request: &CodexResponsesRequest,
     account_id: &str,

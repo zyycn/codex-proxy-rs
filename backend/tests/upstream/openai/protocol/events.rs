@@ -368,9 +368,9 @@ fn rate_limit_quota_should_block_when_window_is_exhausted_even_if_flag_is_false(
 async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_token() {
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, Utc};
-    use codex_proxy_rs::accounts::account::AccountStatus;
+    use codex_proxy_rs::fleet::account::AccountStatus;
     use codex_proxy_rs::{
-        accounts::refresh::{RefreshPolicy, RefreshScheduler},
+        fleet::refresh::{RefreshPolicy, RefreshScheduler},
         upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher},
     };
 

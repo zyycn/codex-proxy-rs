@@ -12,19 +12,19 @@ const DEFAULT_SESSION_AFFINITY_TTL_SECS: i64 = 4 * 60 * 60;
 
 /// 运行时会话亲和性服务。
 #[derive(Clone)]
-pub struct RuntimeSessionAffinityService {
+pub struct SessionAffinityService {
     store: RedisSessionAffinityStore,
     ttl: Duration,
 }
 
 /// 运行时会话亲和性错误。
 #[derive(Debug, Error)]
-pub enum RuntimeSessionAffinityError {
+pub enum SessionAffinityError {
     #[error("session affinity store error: {0}")]
     Store(#[from] RedisSessionAffinityStoreError),
 }
 
-impl RuntimeSessionAffinityService {
+impl SessionAffinityService {
     pub fn new(store: RedisSessionAffinityStore) -> Self {
         let ttl = Duration::seconds(DEFAULT_SESSION_AFFINITY_TTL_SECS);
         Self { store, ttl }
@@ -34,7 +34,7 @@ impl RuntimeSessionAffinityService {
         &self,
         response_id: String,
         entry: SessionAffinityEntry,
-    ) -> Result<(), RuntimeSessionAffinityError> {
+    ) -> Result<(), SessionAffinityError> {
         Ok(self.store.upsert(&response_id, &entry, self.ttl).await?)
     }
 

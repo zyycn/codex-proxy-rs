@@ -16,13 +16,9 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::{
-    accounts::{
-        account::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, RuntimeAccountPoolService},
-    },
     dispatch::{
         affinity::resolve::{evict_reasoning_replay, record_response_affinity},
-        affinity::RuntimeSessionAffinityService,
+        affinity::SessionAffinityService,
         errors::{
             backend_transport_name, is_history_recovery_upstream_error,
             is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
@@ -44,6 +40,10 @@ use crate::{
             QuotaVerificationContext, QuotaVerificationDecision,
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
+    },
+    fleet::{
+        account::{Account, AccountStatus},
+        pool::{AccountAcquireRequest, AccountPoolService},
     },
     models::service::ModelService,
     telemetry::{
@@ -85,10 +85,10 @@ use super::{
 /// OpenAI Responses 调度服务。
 #[derive(Clone)]
 pub struct ResponseDispatchService {
-    pub(in crate::dispatch) account_pool: Arc<RuntimeAccountPoolService>,
+    pub(in crate::dispatch) account_pool: Arc<AccountPoolService>,
     pub(in crate::dispatch) models: Arc<ModelService>,
     pub(in crate::dispatch) codex: Arc<CodexBackendClient>,
-    pub(in crate::dispatch) session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
     pub(in crate::dispatch) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
     pub(in crate::dispatch) installation_id: Option<String>,
@@ -96,10 +96,10 @@ pub struct ResponseDispatchService {
 }
 
 pub(crate) struct ResponseDispatchServiceParts {
-    pub account_pool: Arc<RuntimeAccountPoolService>,
+    pub account_pool: Arc<AccountPoolService>,
     pub models: Arc<ModelService>,
     pub codex: Arc<CodexBackendClient>,
-    pub session_affinity: Arc<RuntimeSessionAffinityService>,
+    pub session_affinity: Arc<SessionAffinityService>,
     pub recorder: Arc<Recorder>,
     pub installation_id: Option<String>,
     pub cloudflare: CloudflareRecovery,

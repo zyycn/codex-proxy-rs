@@ -173,7 +173,11 @@ async fn admin_login_should_not_write_usage_record_when_throttled() {
 async fn admin_login_test_app(
     db_name: &str,
     password: &str,
-) -> (axum::Router, tempfile::TempDir, PgPool) {
+) -> (
+    axum::Router,
+    crate::support::storage::TestDatabaseGuard,
+    PgPool,
+) {
     let (pool, dir) = init_test_db(db_name).await;
     let redis = create_test_redis(db_name).await;
     seed_admin_user(&pool, password).await;

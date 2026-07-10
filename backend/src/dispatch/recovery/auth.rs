@@ -1,7 +1,7 @@
 //! 上游认证失败分类。
 
 use crate::{
-    accounts::account::AccountStatus,
+    fleet::account::AccountStatus,
     upstream::openai::transport::{is_banned_auth_signal, CodexClientError},
 };
 

@@ -1,8 +1,8 @@
-mod accounts;
 mod api;
 mod auth;
 mod bootstrap;
 mod dispatch;
+mod fleet;
 mod infra;
 mod keys;
 mod models;

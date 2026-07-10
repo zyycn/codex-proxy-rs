@@ -1,11 +1,11 @@
-use std::env;
+use std::{env, thread};
 
 use chrono::{DateTime, Utc};
 use codex_proxy_rs::{
-    accounts::{cookies::PgCookieStore, refresh::RedisRefreshLeaseStore, store::PgAccountStore},
     auth::store::{PgAdminUserStore, RedisAdminSessionStore},
     bootstrap::services::BackgroundTaskStores,
     dispatch::affinity::RedisSessionAffinityStore,
+    fleet::{cookies::PgCookieStore, refresh::RedisRefreshLeaseStore, store::PgAccountStore},
     infra::{database::migrate, redis::RedisConnection},
     keys::store::PgClientKeyStore,
     models::store::RedisModelSnapshotStore,
@@ -15,7 +15,7 @@ use codex_proxy_rs::{
     },
     upstream::openai::fingerprint::PgFingerprintStore,
 };
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, Connection, PgConnection, PgPool};
 use uuid::Uuid;
 
 const DEFAULT_TEST_DATABASE_URL: &str =
@@ -23,18 +23,65 @@ const DEFAULT_TEST_DATABASE_URL: &str =
 const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:6379";
 static DATABASE_INIT_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
-pub(crate) async fn init_test_db(label: &str) -> (PgPool, tempfile::TempDir) {
-    let guard = tempfile::tempdir().expect("test database guard");
-    (create_test_database(label).await, guard)
+pub(crate) struct TestDatabaseGuard {
+    database_name: Option<String>,
+    base_url: String,
+    workspace: tempfile::TempDir,
 }
 
-pub(crate) async fn create_test_database(label: &str) -> PgPool {
-    let _permit = DATABASE_INIT_LIMIT.acquire().await.unwrap();
+impl TestDatabaseGuard {
+    pub(crate) fn path(&self) -> &std::path::Path {
+        self.workspace.path()
+    }
+}
+
+impl Drop for TestDatabaseGuard {
+    fn drop(&mut self) {
+        let Some(database_name) = self.database_name.take() else {
+            return;
+        };
+        let base_url = self.base_url.clone();
+        let thread_name = format!("drop-{database_name}");
+        let cleanup = thread::Builder::new().name(thread_name).spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            let Ok(runtime) = runtime else {
+                eprintln!("failed to create runtime for test database cleanup: {database_name}");
+                return;
+            };
+            if let Err(error) = runtime.block_on(drop_test_database(&base_url, &database_name)) {
+                eprintln!("failed to drop test database {database_name}: {error}");
+            }
+        });
+        match cleanup {
+            Ok(cleanup) => {
+                if cleanup.join().is_err() {
+                    eprintln!("test database cleanup thread panicked");
+                }
+            }
+            Err(error) => eprintln!("failed to start test database cleanup thread: {error}"),
+        }
+    }
+}
+
+pub(crate) async fn init_test_db(label: &str) -> (PgPool, TestDatabaseGuard) {
     let database_name = test_database_name(label);
     let base_url = test_database_url();
+    let guard = TestDatabaseGuard {
+        database_name: Some(database_name.clone()),
+        base_url: base_url.clone(),
+        workspace: tempfile::tempdir().expect("test database workspace"),
+    };
+    let pool = create_test_database(&base_url, &database_name).await;
+    (pool, guard)
+}
+
+async fn create_test_database(base_url: &str, database_name: &str) -> PgPool {
+    let _permit = DATABASE_INIT_LIMIT.acquire().await.unwrap();
     let admin = PgPoolOptions::new()
         .max_connections(1)
-        .connect(&base_url)
+        .connect(base_url)
         .await
         .unwrap_or_else(|error| panic!("connect CPR_TEST_DATABASE_URL: {error}"));
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -47,7 +94,7 @@ pub(crate) async fn create_test_database(label: &str) -> PgPool {
 
     let pool = PgPoolOptions::new()
         .max_connections(1)
-        .connect(&database_url_for(&base_url, &database_name))
+        .connect(&database_url_for(base_url, database_name))
         .await
         .unwrap_or_else(|error| panic!("connect test database {database_name}: {error}"));
     sqlx::query("set max_parallel_workers_per_gather = 0")
@@ -62,6 +109,16 @@ pub(crate) async fn create_test_database(label: &str) -> PgPool {
         .await
         .unwrap_or_else(|error| panic!("initialize test database {database_name}: {error}"));
     pool
+}
+
+async fn drop_test_database(base_url: &str, database_name: &str) -> Result<(), sqlx::Error> {
+    let mut connection = PgConnection::connect(base_url).await?;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        r#"drop database if exists "{database_name}" with (force)"#
+    )))
+    .execute(&mut connection)
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn create_test_redis(label: &str) -> RedisConnection {

@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use codex_proxy_rs::accounts::account::{Account, AccountStatus};
+use codex_proxy_rs::fleet::account::{Account, AccountStatus};
 use codex_proxy_rs::models::catalog::ModelCatalog;
 use codex_proxy_rs::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,

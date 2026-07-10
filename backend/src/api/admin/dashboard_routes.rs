@@ -12,11 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    accounts::{
-        account::{Account, AccountStatus},
-        pool::AccountCapacitySummary,
-        refresh::token_refresh_status_eligible,
-    },
     api::admin::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
@@ -26,6 +21,11 @@ use crate::{
         },
     },
     api::AppState,
+    fleet::{
+        account::{Account, AccountStatus},
+        pool::AccountCapacitySummary,
+        refresh::token_refresh_status_eligible,
+    },
     infra::{
         format::{format_duration_ms, format_tokens},
         time::{

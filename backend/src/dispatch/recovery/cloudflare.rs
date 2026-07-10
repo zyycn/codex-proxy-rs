@@ -5,10 +5,10 @@ use std::time::Duration as StdDuration;
 use chrono::Utc;
 
 use crate::{
-    accounts::{
+    fleet::{
         account::AccountStatus,
         cookies::{CloudflareChallengeCooldownTracker, CloudflarePathBlockTracker, PgCookieStore},
-        pool::RuntimeAccountPoolService,
+        pool::AccountPoolService,
     },
     upstream::openai::transport::CodexClientError,
 };
@@ -52,11 +52,7 @@ impl CloudflareRecovery {
         }
     }
 
-    pub async fn apply_challenge(
-        &self,
-        account_pool: &RuntimeAccountPoolService,
-        account_id: &str,
-    ) {
+    pub async fn apply_challenge(&self, account_pool: &AccountPoolService, account_id: &str) {
         let now = Utc::now();
         let cooldown = self
             .challenge_tracker
@@ -68,11 +64,7 @@ impl CloudflareRecovery {
         self.clear_challenge_cookies_after_cooldown(account_id, cooldown.delay_seconds);
     }
 
-    pub async fn apply_path_block(
-        &self,
-        account_pool: &RuntimeAccountPoolService,
-        account_id: &str,
-    ) {
+    pub async fn apply_path_block(&self, account_pool: &AccountPoolService, account_id: &str) {
         self.delete_account_cookies(account_id, "Cloudflare path-block")
             .await;
         let now = Utc::now();
