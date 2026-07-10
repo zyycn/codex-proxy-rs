@@ -6,6 +6,6 @@ mod event_recording;
 mod live_stream;
 mod prefetch;
 pub(crate) mod service;
-mod sse_failure;
+pub(crate) mod sse_failure;
 mod stream_lifecycle;
 mod trace;

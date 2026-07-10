@@ -6,14 +6,25 @@ use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::upstream::{
-    accounts::{model::Account, store::StoredAccount},
-    models::{info::CodexModelInfo, service::ModelRefreshPlanAccount},
-    protocol::{
-        responses::CodexResponsesRequest,
-        sse::{encode_sse_event, parse_sse_events, SseEvent},
+use crate::{
+    proxy::dispatch::{
+        errors::{
+            auth_failure_account_status, is_auth_upstream_error, is_quota_exhausted_upstream_error,
+        },
+        responses::sse_failure::sse_failure_account_status,
     },
-    transport::CodexRequestContext,
+    upstream::{
+        accounts::{
+            model::{Account, AccountStatus},
+            store::StoredAccount,
+        },
+        models::{info::CodexModelInfo, service::ModelRefreshPlanAccount},
+        protocol::{
+            responses::{CodexResponsesRequest, ResponsesSseFailure},
+            sse::{encode_sse_event, parse_sse_events, SseEvent},
+        },
+        transport::{is_banned_upstream_error, CodexClientError, CodexRequestContext},
+    },
 };
 
 use super::{contracts::AdminAccountError, AdminAccountService};
@@ -25,6 +36,27 @@ pub(super) type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infa
 pub struct AccountModelOption {
     pub id: String,
     pub label: String,
+}
+
+struct AccountTestOutcome {
+    event: Value,
+    status: Option<AccountStatus>,
+}
+
+impl AccountTestOutcome {
+    fn success() -> Self {
+        Self {
+            event: json!({ "type": "test_complete", "success": true }),
+            status: Some(AccountStatus::Active),
+        }
+    }
+
+    fn error(error: impl Into<String>, status: Option<AccountStatus>) -> Self {
+        Self {
+            event: json!({ "type": "error", "error": error.into() }),
+            status,
+        }
+    }
 }
 
 impl AdminAccountService {
@@ -97,6 +129,8 @@ impl AdminAccountService {
             .flatten();
         let installation_id = self.installation_id.clone();
         let codex = self.codex.clone();
+        let service = self.clone();
+        let stored_account_id = account.id.clone();
         let request_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel::<Bytes>(16);
 
@@ -137,19 +171,20 @@ impl AdminAccountService {
                 session_id: None,
             };
 
-            match codex.create_response_stream(&request, context).await {
-                Ok(response) => process_upstream_test_stream(response.body, tx).await,
-                Err(error) => {
-                    send_test_event(
-                        &tx,
-                        json!({
-                            "type": "error",
-                            "error": error.to_string()
-                        }),
-                    )
+            let outcome = match codex.create_response_stream(&request, context).await {
+                Ok(response) => process_upstream_test_stream(response.body, &tx).await,
+                Err(error) => AccountTestOutcome::error(
+                    error.to_string(),
+                    account_status_from_client_error(&error),
+                ),
+            };
+
+            if let Some(status) = outcome.status {
+                service
+                    .apply_connection_test_status(&stored_account_id, status)
                     .await;
-                }
             }
+            send_test_event(&tx, outcome.event).await;
         });
 
         let stream = futures::stream::unfold(rx, |mut rx| async {
@@ -158,6 +193,50 @@ impl AdminAccountService {
                 .map(|bytes| (Ok::<Bytes, Infallible>(bytes), rx))
         });
         Ok(Box::pin(stream))
+    }
+
+    async fn apply_connection_test_status(&self, account_id: &str, status: AccountStatus) {
+        let current = match self.store.get(account_id).await {
+            Ok(Some(account)) => account,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(
+                    account_id,
+                    error = %error,
+                    "failed to inspect account after connection test"
+                );
+                return;
+            }
+        };
+        if current.status == AccountStatus::Disabled {
+            return;
+        }
+
+        match self.store.set_status(account_id, status).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(
+                    account_id,
+                    status = %status,
+                    error = %error,
+                    "failed to persist account status after connection test"
+                );
+                return;
+            }
+        }
+
+        if matches!(status, AccountStatus::Expired | AccountStatus::Banned) {
+            if let Err(error) = self.store.set_next_refresh_at(account_id, None).await {
+                tracing::warn!(
+                    account_id,
+                    error = %error,
+                    "failed to clear token refresh schedule after connection test"
+                );
+            }
+        }
+        self.sync_account_pool_best_effort(account_id, "connection test")
+            .await;
     }
 }
 
@@ -239,69 +318,61 @@ fn test_responses_request(model: String) -> CodexResponsesRequest {
 
 async fn process_upstream_test_stream(
     mut body: crate::upstream::transport::CodexBackendSseStream,
-    tx: mpsc::Sender<Bytes>,
-) {
+    tx: &mpsc::Sender<Bytes>,
+) -> AccountTestOutcome {
     let mut buffer = String::new();
 
     while let Some(chunk) = body.next().await {
         let chunk = match chunk {
             Ok(bytes) => bytes,
             Err(error) => {
-                send_test_event(&tx, json!({ "type": "error", "error": error.to_string() })).await;
-                return;
+                return AccountTestOutcome::error(
+                    error.to_string(),
+                    account_status_from_client_error(&error),
+                );
             }
         };
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(frame) = take_sse_frame(&mut buffer) {
-            if process_sse_frame(&tx, &frame).await {
-                return;
+            if let Some(outcome) = process_sse_frame(tx, &frame).await {
+                return outcome;
             }
         }
     }
 
-    if !buffer.trim().is_empty() && process_sse_frame(&tx, &buffer).await {
-        return;
+    if !buffer.trim().is_empty() {
+        if let Some(outcome) = process_sse_frame(tx, &buffer).await {
+            return outcome;
+        }
     }
 
-    send_test_event(
-        &tx,
-        json!({
-            "type": "error",
-            "error": "Stream ended before response.completed"
-        }),
-    )
-    .await;
+    AccountTestOutcome::error("Stream ended before response.completed", None)
 }
 
-async fn process_sse_frame(tx: &mpsc::Sender<Bytes>, frame: &str) -> bool {
+async fn process_sse_frame(tx: &mpsc::Sender<Bytes>, frame: &str) -> Option<AccountTestOutcome> {
     let events = match parse_sse_events(frame) {
         Ok(events) => events,
         Err(error) => {
-            send_test_event(
-                tx,
-                json!({
-                    "type": "error",
-                    "error": error.to_string()
-                }),
-            )
-            .await;
-            return true;
+            return Some(AccountTestOutcome::error(error.to_string(), None));
         }
     };
 
     for event in events {
-        if process_sse_event(tx, &event).await {
-            return true;
+        if let Some(outcome) = process_sse_event(tx, &event).await {
+            return Some(outcome);
         }
     }
-    false
+    None
 }
 
-async fn process_sse_event(tx: &mpsc::Sender<Bytes>, event: &SseEvent) -> bool {
+async fn process_sse_event(
+    tx: &mpsc::Sender<Bytes>,
+    event: &SseEvent,
+) -> Option<AccountTestOutcome> {
     let value: Value = match serde_json::from_str(&event.data) {
         Ok(value) => value,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     match value.get("type").and_then(Value::as_str) {
         Some("response.output_text.delta") => {
@@ -310,57 +381,28 @@ async fn process_sse_event(tx: &mpsc::Sender<Bytes>, event: &SseEvent) -> bool {
                     send_test_event(tx, json!({ "type": "content", "text": delta })).await;
                 }
             }
-            false
+            None
         }
-        Some("response.completed" | "response.done") => {
-            send_test_event(tx, json!({ "type": "test_complete", "success": true })).await;
-            true
+        Some("response.completed" | "response.done") => Some(AccountTestOutcome::success()),
+        Some(event_name @ ("response.failed" | "error")) => {
+            let failure = ResponsesSseFailure::from_event(event_name, &value);
+            let status = sse_failure_account_status(&failure);
+            Some(AccountTestOutcome::error(failure.message, status))
         }
-        Some("response.failed") => {
-            send_test_event(
-                tx,
-                json!({
-                    "type": "error",
-                    "error": response_failure_message(&value)
-                }),
-            )
-            .await;
-            true
-        }
-        Some("error") => {
-            send_test_event(
-                tx,
-                json!({
-                    "type": "error",
-                    "error": error_event_message(&value)
-                }),
-            )
-            .await;
-            true
-        }
-        _ => false,
+        _ => None,
     }
 }
 
-fn response_failure_message(value: &Value) -> String {
-    value
-        .pointer("/response/error/message")
-        .or_else(|| value.pointer("/error/message"))
-        .or_else(|| value.get("message"))
-        .and_then(Value::as_str)
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or("OpenAI response failed")
-        .to_string()
-}
-
-fn error_event_message(value: &Value) -> String {
-    value
-        .pointer("/error/message")
-        .or_else(|| value.get("message"))
-        .and_then(Value::as_str)
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or("Unknown upstream error")
-        .to_string()
+fn account_status_from_client_error(error: &CodexClientError) -> Option<AccountStatus> {
+    if is_banned_upstream_error(error) {
+        Some(AccountStatus::Banned)
+    } else if is_quota_exhausted_upstream_error(error) {
+        Some(AccountStatus::QuotaExhausted)
+    } else if is_auth_upstream_error(error) {
+        Some(auth_failure_account_status(error))
+    } else {
+        None
+    }
 }
 
 fn take_sse_frame(buffer: &mut String) -> Option<String> {

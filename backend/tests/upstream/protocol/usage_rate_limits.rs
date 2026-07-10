@@ -370,7 +370,7 @@ async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_tok
     use chrono::{Duration as ChronoDuration, Utc};
     use codex_proxy_rs::upstream::accounts::model::AccountStatus;
     use codex_proxy_rs::upstream::accounts::token_refresh::{
-        RefreshFailure, RefreshPolicy, RefreshScheduler, RefreshTrigger, TokenPair, TokenRefresher,
+        RefreshFailure, RefreshPolicy, RefreshScheduler, TokenPair, TokenRefresher,
     };
 
     #[derive(Clone)]
@@ -403,7 +403,7 @@ async fn refresh_scheduler_should_refresh_before_expiry_and_preserve_refresh_tok
     );
 
     let refreshed = scheduler
-        .refresh_account_at(&account, RefreshTrigger::BeforeExpiry, now)
+        .refresh_account_at(&account, now)
         .await
         .expect("refresh should succeed");
 

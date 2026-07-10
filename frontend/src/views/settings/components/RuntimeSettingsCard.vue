@@ -29,7 +29,10 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
         </BaseInput>
       </BaseFormItem>
 
-      <BaseFormItem label="提前刷新秒数" description="Token 过期前多少秒触发刷新。">
+      <BaseFormItem
+        label="提前刷新秒数"
+        description="Token 过期前多少秒触发刷新，默认 3600 秒（1 小时）。"
+      >
         <BaseInput v-model="refreshMarginSeconds" type="number">
           <template #prefix>
             <Timer class="size-4" />

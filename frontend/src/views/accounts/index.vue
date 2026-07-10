@@ -24,25 +24,6 @@ import AccountStatusBadge from './components/AccountStatusBadge.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
 
-const {
-  showConnectionTestModal,
-  testingAccount,
-  connectionTestStatus,
-  connectionTestModel,
-  connectionTestLogs,
-  connectionTestError,
-  connectionTestStartedAt,
-  connectionTestFinishedAt,
-  connectionTestDurationMs,
-  testingConnectionIds,
-  loadingConnectionTestModels,
-  connectionTestSelectedModel,
-  connectionTestModelOptions,
-  connectionTestStatusView,
-  openConnectionTest,
-  handleTestConnection,
-} = useAccountConnectionTest()
-
 const selectedIds = ref<Set<string>>(new Set())
 const totalAccounts = ref(0)
 
@@ -93,6 +74,27 @@ const {
   searchQuery,
   selectedIds,
   totalAccounts,
+})
+
+const {
+  showConnectionTestModal,
+  testingAccount,
+  connectionTestStatus,
+  connectionTestModel,
+  connectionTestLogs,
+  connectionTestError,
+  connectionTestStartedAt,
+  connectionTestFinishedAt,
+  connectionTestDurationMs,
+  testingConnectionIds,
+  loadingConnectionTestModels,
+  connectionTestSelectedModel,
+  connectionTestModelOptions,
+  connectionTestStatusView,
+  openConnectionTest,
+  handleTestConnection,
+} = useAccountConnectionTest({
+  onResult: () => void loadAccounts(),
 })
 
 const {

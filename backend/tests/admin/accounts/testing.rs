@@ -320,6 +320,11 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
     )
     .await;
     seed_test_account(&pool).await;
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool.clone());
+    store
+        .set_status("acct_test", AccountStatus::QuotaExhausted)
+        .await
+        .expect("pre-test status should persist");
 
     let response = app
         .oneshot(
@@ -370,4 +375,120 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["store"], false);
+    assert_eq!(
+        store
+            .get("acct_test")
+            .await
+            .unwrap()
+            .expect("account should exist")
+            .status,
+        AccountStatus::Active
+    );
+}
+
+#[tokio::test]
+async fn account_test_stream_should_mark_expired_after_auth_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "token_expired",
+                "message": "token expired"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-test-expired.sqlite",
+        95,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_test_account(&pool).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/test?id=acct_test&modelId=gpt-5.5")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let events = test_events(&body);
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool);
+    let stored = store.get("acct_test").await.unwrap().unwrap();
+
+    assert_eq!(events.last().unwrap()["type"], "error");
+    assert_eq!(stored.status, AccountStatus::Expired);
+    assert!(stored.next_refresh_at.is_none());
+}
+
+#[tokio::test]
+async fn account_test_stream_should_mark_quota_exhausted_after_failed_sse() {
+    let server = MockServer::start().await;
+    let upstream_sse = encode_sse_event(
+        "",
+        &json!({
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "code": "quota_exceeded",
+                    "message": "quota exhausted"
+                }
+            }
+        })
+        .to_string(),
+    );
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(upstream_sse),
+        )
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_api_base_url(
+        "admin-account-test-quota.sqlite",
+        96,
+        format!("{}/backend-api", server.uri()),
+    )
+    .await;
+    seed_test_account(&pool).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/accounts/test?id=acct_test&modelId=gpt-5.5")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let events = test_events(&body);
+    let store = codex_proxy_rs::upstream::accounts::store::SqliteAccountStore::new(pool);
+    let stored = store.get("acct_test").await.unwrap().unwrap();
+
+    assert_eq!(events.last().unwrap()["type"], "error");
+    assert_eq!(stored.status, AccountStatus::QuotaExhausted);
 }

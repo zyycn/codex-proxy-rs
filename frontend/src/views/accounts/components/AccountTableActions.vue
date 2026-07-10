@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { KeyRound, LoaderCircle, MoreHorizontal, Power, RefreshCw, Trash2, Wifi } from '@lucide/vue'
+import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 
-defineProps<{
+const props = defineProps<{
   account: any
   deleting: boolean
   refreshing: boolean
@@ -12,6 +13,12 @@ defineProps<{
   updatingStatus: boolean
   scheduleLabel: string
 }>()
+
+const canRefreshToken = computed(
+  () =>
+    props.account.hasRefreshToken &&
+    (props.account.status === 'active' || props.account.status === 'quota_exhausted'),
+)
 
 const emit = defineEmits<{
   delete: [account: any]
@@ -54,7 +61,7 @@ const emit = defineEmits<{
           测试连接
         </button>
         <button
-          v-if="account.hasRefreshToken"
+          v-if="canRefreshToken"
           type="button"
           class="flex h-8.5 w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 bg-transparent px-3 text-left text-[13px] leading-none font-[650] text-(--cp-text-primary) transition-colors hover:bg-(--cp-default-bg-hover) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)"
           :disabled="refreshing"

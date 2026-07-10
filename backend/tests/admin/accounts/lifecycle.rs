@@ -474,6 +474,87 @@ async fn admin_account_refresh_should_skip_disabled_account_without_consuming_re
 }
 
 #[tokio::test]
+async fn admin_account_refresh_should_skip_expired_account_without_consuming_refresh_token() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/token"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": test_jwt(
+                "chatgpt-expired-refresh",
+                Some("user-expired-refresh"),
+                Some("expired-refresh@example.com"),
+                Some("plus"),
+            ),
+            "refresh_token": "refresh-expired-rotated"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let (app, _state, pool, _dir) = admin_accounts_test_app_with_oauth_token_endpoint(
+        "admin-account-refresh-expired-skip.sqlite",
+        124,
+        format!("{}/oauth/token", server.uri()),
+    )
+    .await;
+    seed_account(
+        &pool,
+        NewAccount {
+            id: "acct_refresh_expired".to_string(),
+            email: Some("expired-refresh@example.com".to_string()),
+            account_id: Some("chatgpt-expired-refresh".to_string()),
+            user_id: Some("user-expired-refresh".to_string()),
+            label: None,
+            plan_type: None,
+            access_token: SecretString::new(
+                test_jwt(
+                    "chatgpt-expired-refresh",
+                    Some("user-expired-refresh"),
+                    Some("expired-refresh@example.com"),
+                    Some("plus"),
+                )
+                .into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-expired".to_string().into())),
+            access_token_expires_at: None,
+            status: AccountStatus::Expired,
+            added_at: None,
+        },
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/accounts/refresh")
+                .header("content-type", "application/json")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::from(
+                    json!({"id": "acct_refresh_expired"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+    let stored = SqliteAccountStore::new(pool)
+        .get("acct_refresh_expired")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["result"], "skipped");
+    assert_eq!(body["data"]["error"], "account expired");
+    assert_eq!(stored.status, AccountStatus::Expired);
+    assert_eq!(
+        stored.refresh_token.unwrap().expose_secret(),
+        "refresh-expired"
+    );
+}
+
+#[tokio::test]
 async fn admin_account_refresh_should_skip_account_without_refresh_token() {
     let (app, _state, pool, _dir) =
         admin_accounts_test_app("admin-account-refresh-no-rt-skip.sqlite", 124).await;

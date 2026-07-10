@@ -47,7 +47,7 @@ use crate::{
         },
     },
     runtime::state::AppState,
-    upstream::accounts::model::AccountStatus,
+    upstream::accounts::{model::AccountStatus, token_refresh::token_refresh_status_eligible},
 };
 
 const ACCOUNT_STATS_PAGE_LIMIT: u32 = 200;
@@ -319,6 +319,8 @@ struct AccountQuotaUsageWindow {
 impl AccountListStats {
     fn data_for(&self, account: AdminAccountMetadata) -> AdminAccountData {
         let account_id = account.id.clone();
+        let token_refreshing = token_refresh_status_eligible(account.status)
+            && self.refreshing_account_ids.contains(&account_id);
         AdminAccountData::from_parts(
             account,
             self.usage_by_account.get(&account_id),
@@ -327,7 +329,7 @@ impl AccountListStats {
                 .get(&account_id)
                 .cloned()
                 .unwrap_or_default(),
-            self.refreshing_account_ids.contains(&account_id),
+            token_refreshing,
         )
     }
 }
@@ -958,7 +960,7 @@ async fn account_list_stats(
 }
 
 fn account_display_status(status: AccountStatus, token_refreshing: bool) -> &'static str {
-    if token_refreshing && matches!(status, AccountStatus::Active | AccountStatus::Expired) {
+    if token_refreshing {
         "refreshing"
     } else {
         status.as_str()

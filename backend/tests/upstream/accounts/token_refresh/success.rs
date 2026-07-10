@@ -213,9 +213,9 @@ async fn token_refresh_task_should_refresh_quota_exhausted_account_without_clear
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_not_clear_quota_limit_when_expired_token_refreshes() {
+async fn token_refresh_task_should_not_clear_quota_limit_when_exhausted_token_refreshes() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let db = dir.path().join("token-refresh-expired-quota.sqlite");
+    let db = dir.path().join("token-refresh-exhausted-quota.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
         .await
         .expect("sqlite pool");
@@ -226,21 +226,21 @@ async fn token_refresh_task_should_not_clear_quota_limit_when_expired_token_refr
     let new_access_token = test_jwt(new_expires_at.timestamp());
     store
         .insert(NewAccount {
-            id: "acct-expired-quota".to_string(),
-            email: Some("expired-quota@example.com".to_string()),
-            account_id: Some("chatgpt-expired-quota".to_string()),
-            user_id: Some("user-expired-quota".to_string()),
+            id: "acct-exhausted-quota".to_string(),
+            email: Some("exhausted-quota@example.com".to_string()),
+            account_id: Some("chatgpt-exhausted-quota".to_string()),
+            user_id: Some("user-exhausted-quota".to_string()),
             label: None,
             plan_type: Some("plus".to_string()),
             access_token: SecretString::new(
                 test_jwt((now - Duration::seconds(30)).timestamp()).into(),
             ),
             refresh_token: Some(SecretString::new(
-                "refresh-expired-quota".to_string().into(),
+                "refresh-exhausted-quota".to_string().into(),
             )),
             added_at: None,
             access_token_expires_at: Some(now - Duration::seconds(30)),
-            status: AccountStatus::Expired,
+            status: AccountStatus::QuotaExhausted,
         })
         .await
         .expect("account should be inserted");
@@ -248,7 +248,7 @@ async fn token_refresh_task_should_not_clear_quota_limit_when_expired_token_refr
         "update accounts set quota_limit_reached = 1, quota_cooldown_until = ? where id = ?",
     )
     .bind(cooldown_until.to_rfc3339())
-    .bind("acct-expired-quota")
+    .bind("acct-exhausted-quota")
     .execute(&pool)
     .await
     .unwrap();
@@ -270,16 +270,16 @@ async fn token_refresh_task_should_not_clear_quota_limit_when_expired_token_refr
     let summary = task
         .refresh_due_accounts_once_at(now)
         .await
-        .expect("expired quota-limited account should refresh token");
+        .expect("quota-exhausted account should refresh token");
     let stored = store
-        .get("acct-expired-quota")
+        .get("acct-exhausted-quota")
         .await
         .expect("account should load")
         .expect("account should exist");
     let quota_state: (i64, Option<String>) = sqlx::query_as(
         "select quota_limit_reached, quota_cooldown_until from accounts where id = ?",
     )
-    .bind("acct-expired-quota")
+    .bind("acct-exhausted-quota")
     .fetch_one(&pool)
     .await
     .unwrap();

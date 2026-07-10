@@ -59,7 +59,7 @@ const { copy } = useClipboard()
 
 const form = reactive<SettingsForm>({
   modelAliases: {},
-  refreshMarginSeconds: 300,
+  refreshMarginSeconds: 3600,
   refreshConcurrency: 2,
   maxConcurrentPerAccount: 3,
   requestIntervalMs: 50,
@@ -145,7 +145,7 @@ function rowsToAliases(rows: AliasRow[]) {
 
 function applySettings(data: any) {
   form.modelAliases = data.modelAliases || {}
-  form.refreshMarginSeconds = Number(data.refreshMarginSeconds ?? 300)
+  form.refreshMarginSeconds = Number(data.refreshMarginSeconds ?? 3600)
   form.refreshConcurrency = Number(data.refreshConcurrency ?? 2)
   form.maxConcurrentPerAccount = Number(data.maxConcurrentPerAccount ?? 3)
   form.requestIntervalMs = Number(data.requestIntervalMs ?? 50)

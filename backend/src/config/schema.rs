@@ -92,7 +92,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            refresh_margin_seconds: 300,
+            refresh_margin_seconds: 3600,
             refresh_enabled: true,
             refresh_concurrency: 2,
             max_concurrent_per_account: 3,

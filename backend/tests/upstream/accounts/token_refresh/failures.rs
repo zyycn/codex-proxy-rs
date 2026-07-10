@@ -69,7 +69,7 @@ async fn token_refresh_task_should_keep_business_status_before_refresher_call() 
 }
 
 #[tokio::test]
-async fn token_refresh_task_should_recover_expired_account_after_restart() {
+async fn token_refresh_task_should_skip_expired_account_after_restart() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("token-refresh-recovery.sqlite");
     let pool = connect_sqlite(&format!("sqlite://{}", db.display()))
@@ -78,7 +78,6 @@ async fn token_refresh_task_should_recover_expired_account_after_restart() {
     let store = SqliteAccountStore::new(pool);
     let now = Utc.with_ymd_and_hms(2026, 6, 19, 10, 0, 0).unwrap();
     let old_access_token = test_jwt((now + Duration::hours(1)).timestamp());
-    let new_access_token = test_jwt((now + Duration::hours(2)).timestamp());
     store
         .insert(NewAccount {
             id: "acct-expired-recovery".to_string(),
@@ -95,37 +94,30 @@ async fn token_refresh_task_should_recover_expired_account_after_restart() {
         })
         .await
         .expect("account should be inserted");
-    let refresher = StaticTokenRefresher {
-        response: Arc::new(Mutex::new(Ok(TokenPair {
-            access_token: new_access_token.clone(),
-            refresh_token: None,
-        }))),
-    };
+    let refresher = CountingTokenRefresher::default();
     let task = codex_proxy_rs::upstream::accounts::token_refresh::RuntimeTokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
             refresh_margin_seconds: 300,
             refresh_concurrency: 1,
         },
-        refresher,
+        refresher.clone(),
     );
 
     let summary = task
         .refresh_due_accounts_once_at(now)
         .await
-        .expect("expired account should recover");
+        .expect("expired account should be skipped");
     let stored = store
         .get("acct-expired-recovery")
         .await
         .expect("account should load")
         .expect("account should exist");
 
-    assert_eq!(summary.refreshed, 1);
-    assert_eq!(stored.status, AccountStatus::Active);
-    assert_eq!(
-        stored.access_token.expose_secret(),
-        new_access_token.as_str()
-    );
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(stored.status, AccountStatus::Expired);
+    assert!(stored.next_refresh_at.is_none());
 }
 
 #[tokio::test]

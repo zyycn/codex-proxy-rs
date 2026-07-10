@@ -244,15 +244,6 @@ fn jittered_refresh_margin_seconds(account_id: &str, margin_seconds: u64) -> i64
         .clamp(0.0, i64::MAX as f64) as i64
 }
 
-/// 触发刷新动作的原因。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshTrigger {
-    /// 在访问令牌即将过期前触发刷新。
-    BeforeExpiry,
-    /// 在上游返回未授权后立即刷新。
-    Unauthorized,
-}
-
 /// 上游刷新失败后的领域结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RefreshFailure {
@@ -315,7 +306,7 @@ where
         self.policy.update(policy);
     }
 
-    /// 在给定时间点按触发原因刷新账号。
+    /// 在给定时间点按到期策略刷新账号。
     ///
     /// 当账号不需要刷新时返回原账号快照；当刷新失败但属于可映射的领域错误时，
     /// 返回更新过状态的账号。
@@ -326,10 +317,9 @@ where
     pub async fn refresh_account_at(
         &self,
         account: &Account,
-        trigger: RefreshTrigger,
         now: DateTime<Utc>,
     ) -> Result<Account, RefreshError> {
-        if !self.should_refresh(account, trigger, now) {
+        if !self.should_refresh_account_at(account, now) {
             return Ok(account.clone());
         }
 
@@ -353,29 +343,10 @@ where
         }
     }
 
-    /// 判断账号在给定触发原因下是否需要刷新。
-    pub fn should_refresh_account_at(
-        &self,
-        account: &Account,
-        trigger: RefreshTrigger,
-        now: DateTime<Utc>,
-    ) -> bool {
-        self.should_refresh(account, trigger, now)
-    }
-
-    fn should_refresh(
-        &self,
-        account: &Account,
-        trigger: RefreshTrigger,
-        now: DateTime<Utc>,
-    ) -> bool {
-        match trigger {
-            RefreshTrigger::Unauthorized => can_refresh_after_auth_failure(account.status),
-            RefreshTrigger::BeforeExpiry => {
-                can_refresh_before_expiry(account.status)
-                    && self.should_refresh_before_expiry(account, now)
-            }
-        }
+    /// 判断账号在给定时间点是否需要刷新。
+    pub fn should_refresh_account_at(&self, account: &Account, now: DateTime<Utc>) -> bool {
+        token_refresh_status_eligible(account.status)
+            && self.should_refresh_before_expiry(account, now)
     }
 
     fn should_refresh_before_expiry(&self, account: &Account, now: DateTime<Utc>) -> bool {
@@ -398,25 +369,11 @@ where
     }
 }
 
-fn can_refresh_after_auth_failure(status: AccountStatus) -> bool {
-    matches!(
-        status,
-        AccountStatus::Active | AccountStatus::Expired | AccountStatus::QuotaExhausted
-    )
-}
-
-fn can_refresh_before_expiry(status: AccountStatus) -> bool {
+pub(crate) fn token_refresh_status_eligible(status: AccountStatus) -> bool {
     matches!(
         status,
         AccountStatus::Active | AccountStatus::QuotaExhausted
     )
-}
-
-fn status_after_successful_token_refresh(status: AccountStatus) -> AccountStatus {
-    match status {
-        AccountStatus::Expired => AccountStatus::Active,
-        status => status,
-    }
 }
 
 /// 将新的 token 对应用到账号快照上。
@@ -429,7 +386,6 @@ pub fn apply_token_pair(account: &Account, token_pair: TokenPair) -> Account {
         refreshed.refresh_token = Some(refresh_token);
     }
 
-    refreshed.status = status_after_successful_token_refresh(account.status);
     refreshed
 }
 

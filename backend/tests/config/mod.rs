@@ -81,7 +81,7 @@ fn default_config_keeps_only_codex_backend() {
     assert_eq!(cfg.server.host, "0.0.0.0");
     assert_eq!(cfg.api.base_url, "https://chatgpt.com/backend-api");
     assert!(cfg.model_aliases.is_empty());
-    assert_eq!(cfg.auth.refresh_margin_seconds, 300);
+    assert_eq!(cfg.auth.refresh_margin_seconds, 3600);
     assert_eq!(cfg.auth.rotation_strategy, "smart");
     assert_eq!(cfg.auth.oauth_client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
     assert_eq!(

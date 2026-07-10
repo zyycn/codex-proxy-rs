@@ -278,7 +278,6 @@ impl Services {
             session_affinity: session_affinity.clone(),
             usage_records: usage_records.clone(),
             ops_errors: ops_errors.clone(),
-            token_refresh: token_refresh.clone(),
             installation_id: installation_id.clone(),
             cloudflare: cloudflare_recovery,
         }));

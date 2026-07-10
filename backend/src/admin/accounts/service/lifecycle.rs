@@ -14,7 +14,7 @@ use crate::{
         json::{NumberedPage, Page},
         time::elapsed_millis_i64,
     },
-    upstream::accounts::store::AccountStore,
+    upstream::accounts::{model::AccountStatus, store::AccountStore},
 };
 
 use super::{
@@ -284,6 +284,13 @@ impl AdminAccountService {
             duration_ms: elapsed_millis_i64(started_at),
         };
 
+        match account.status {
+            AccountStatus::Active | AccountStatus::QuotaExhausted => {}
+            AccountStatus::Expired => return Ok(skipped("account expired")),
+            AccountStatus::Disabled => return Ok(skipped("manually disabled")),
+            AccountStatus::Banned => return Ok(skipped("account banned")),
+        }
+
         let Some(refresh_token) = account
             .refresh_token
             .as_ref()
@@ -291,9 +298,6 @@ impl AdminAccountService {
         else {
             return Ok(skipped("no refresh token"));
         };
-        if account.status == crate::upstream::accounts::model::AccountStatus::Disabled {
-            return Ok(skipped("manually disabled"));
-        }
 
         let lease_now = Utc::now();
         let lease_owner = format!(
