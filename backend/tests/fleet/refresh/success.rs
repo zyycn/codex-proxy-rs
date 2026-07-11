@@ -40,19 +40,19 @@ async fn token_refresh_task_should_persist_refreshed_access_token_and_keep_refre
         refresher,
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("refresh should succeed");
-    let stored = store
-        .get("acct-refresh")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
 
     assert_eq!(
         (
-            summary.refreshed,
+            timer_summary.immediate,
             stored.access_token.expose_secret(),
             stored
                 .refresh_token
@@ -111,17 +111,17 @@ async fn token_refresh_task_should_persist_rotated_refresh_token_when_returned()
         refresher,
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("refresh should succeed");
-    let stored = store
-        .get("acct-refresh-rotated")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-rotated", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
 
-    assert_eq!(summary.refreshed, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(stored.access_token.expose_secret(), new_access_token);
     assert_eq!(
         stored
@@ -178,18 +178,18 @@ async fn token_refresh_task_should_refresh_quota_exhausted_account_without_clear
         refresher,
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("quota-exhausted account should refresh token");
-    let stored = store
-        .get("acct-refresh-quota-exhausted")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("quota-exhausted refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-quota-exhausted", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(summary.refreshed, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(observed_statuses, [AccountStatus::QuotaExhausted]);
     assert_eq!(stored.status, AccountStatus::QuotaExhausted);
     assert_eq!(
@@ -251,15 +251,15 @@ async fn token_refresh_task_should_not_clear_quota_limit_when_exhausted_token_re
         refresher,
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("quota-exhausted account should refresh token");
-    let stored = store
-        .get("acct-exhausted-quota")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("quota-exhausted refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-exhausted-quota", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
     let quota_state: (bool, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
         "select quota_limit_reached, quota_cooldown_until from accounts where id = $1",
     )
@@ -268,7 +268,7 @@ async fn token_refresh_task_should_not_clear_quota_limit_when_exhausted_token_re
     .await
     .unwrap();
 
-    assert_eq!(summary.refreshed, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(stored.status, AccountStatus::QuotaExhausted);
     assert_eq!(
         stored.access_token.expose_secret(),
@@ -325,19 +325,18 @@ async fn token_refresh_task_should_persist_success_after_transient_transport_ret
     )
     .with_retry_delays(vec![StdDuration::ZERO; 4]);
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("retry should eventually refresh");
-    let stored = store
-        .get("acct-refresh-transient-success")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-transient-success", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(summary.refreshed, 1);
-    assert_eq!(summary.failed, 0);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(observed_statuses, [AccountStatus::Active; 2]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(

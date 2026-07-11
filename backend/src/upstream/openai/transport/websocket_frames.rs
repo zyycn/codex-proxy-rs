@@ -399,8 +399,7 @@ pub(super) fn reusable_websocket_metadata(
 // ---------------------------------------------------------------------------
 
 pub(super) struct WebSocketStreamPoolReturn {
-    pub(super) pool: CodexWebSocketPool,
-    pub(super) key: CodexWebSocketPoolKey,
+    pub(super) lease: WebSocketPoolLease,
     pub(super) created_at: Instant,
 }
 
@@ -716,15 +715,12 @@ async fn finish_stream_websocket(
         return;
     };
     pool_return
-        .pool
-        .put(
-            pool_return.key,
-            PooledWebSocketConnection {
-                websocket,
-                metadata: reusable_websocket_metadata(metadata),
-                created_at: pool_return.created_at,
-            },
-        )
+        .lease
+        .put(PooledWebSocketConnection {
+            websocket,
+            metadata: reusable_websocket_metadata(metadata),
+            created_at: pool_return.created_at,
+        })
         .await;
 }
 
@@ -739,7 +735,7 @@ async fn discard_stream_websocket(
         "discarding Responses WebSocket stream"
     );
     if let Some(pool_return) = pool_return {
-        pool_return.pool.discard(&pool_return.key).await;
+        pool_return.lease.discard().await;
     }
     websocket.close().await;
 }

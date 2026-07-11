@@ -92,6 +92,38 @@ fn quota_reset_priority_should_compare_request_count_when_only_one_account_has_w
 }
 
 #[test]
+fn release_should_remove_the_exact_concurrent_slot() {
+    let now = fixed_time();
+    let mut pool = AccountPool::with_options(AccountPoolOptions {
+        max_concurrent_per_account: 2,
+        ..AccountPoolOptions::default()
+    });
+    pool.insert(crate::support::accounts::test_account(
+        "acct_a",
+        AccountStatus::Active,
+    ));
+
+    let first = pool
+        .acquire_with(&AccountAcquireRequest::new("model-first", now))
+        .unwrap();
+    let second = pool
+        .acquire_with(&AccountAcquireRequest::new(
+            "model-second",
+            now + Duration::milliseconds(1),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        pool.release(&second).unwrap().model.as_deref(),
+        Some("model-second")
+    );
+    assert_eq!(
+        pool.release(&first).unwrap().model.as_deref(),
+        Some("model-first")
+    );
+}
+
+#[test]
 fn release_should_mark_runtime_usage_window() {
     let now = fixed_time();
     let mut pool = AccountPool::default();
@@ -106,7 +138,7 @@ fn release_should_mark_runtime_usage_window() {
     assert_eq!(acquired.account.request_count, 0);
     assert_eq!(acquired.account.window_request_count, 0);
 
-    pool.release(&acquired.account.id);
+    pool.release(&acquired);
     let released = pool.get(&acquired.account.id).unwrap();
 
     assert_eq!(released.request_count, 1);
@@ -129,7 +161,7 @@ fn release_should_start_usage_window_without_known_reset() {
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
 
-    pool.release(&acquired.account.id);
+    pool.release(&acquired);
     let released = pool.get(&acquired.account.id).unwrap();
 
     assert!(released.window_started_at.is_some());
@@ -153,7 +185,7 @@ fn release_should_mark_usage_after_stale_slot_cleanup() {
         .unwrap();
 
     let summary = pool.capacity_summary(now + Duration::minutes(6));
-    pool.release(&acquired.account.id);
+    pool.release(&acquired);
     let released = pool.get(&acquired.account.id).unwrap();
 
     assert_eq!(summary.used_slots, 0);

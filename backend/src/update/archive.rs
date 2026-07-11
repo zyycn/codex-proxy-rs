@@ -127,25 +127,62 @@ pub(super) fn replace_release_files(
     let binary_backup = backup_path_for(exe_path);
     if binary_backup.exists() {
         if let Err(error) = fs::remove_file(&binary_backup) {
+            let mut rollback_errors = Vec::new();
             if web_replaced {
-                let _ = restore_dir(web_dist_dir, &web_backup);
+                collect_rollback_error(
+                    &mut rollback_errors,
+                    "restore web assets",
+                    restore_dir(web_dist_dir, &web_backup),
+                );
             }
-            return Err(internal_error("Failed to remove old binary backup", error));
+            return Err(update_error_with_rollback(
+                "Failed to remove old binary backup",
+                error,
+                rollback_errors,
+            ));
         }
     }
     if let Err(error) = move_file(exe_path, &binary_backup) {
+        let mut rollback_errors = Vec::new();
         if web_replaced {
-            let _ = restore_dir(web_dist_dir, &web_backup);
+            collect_rollback_error(
+                &mut rollback_errors,
+                "restore web assets",
+                restore_dir(web_dist_dir, &web_backup),
+            );
         }
-        return Err(internal_error("Binary backup failed", error));
+        return Err(update_error_with_rollback(
+            "Binary backup failed",
+            error,
+            rollback_errors,
+        ));
     }
     if let Err(error) = move_file(&extracted.binary_path, exe_path) {
-        let _ = fs::remove_file(exe_path);
-        let _ = move_file(&binary_backup, exe_path);
-        if web_replaced {
-            let _ = restore_dir(web_dist_dir, &web_backup);
+        let mut rollback_errors = Vec::new();
+        if exe_path.exists() {
+            collect_rollback_error(
+                &mut rollback_errors,
+                "remove partial replacement binary",
+                fs::remove_file(exe_path),
+            );
         }
-        return Err(internal_error("Binary replace failed", error));
+        collect_rollback_error(
+            &mut rollback_errors,
+            "restore previous binary",
+            move_file(&binary_backup, exe_path),
+        );
+        if web_replaced {
+            collect_rollback_error(
+                &mut rollback_errors,
+                "restore web assets",
+                restore_dir(web_dist_dir, &web_backup),
+            );
+        }
+        return Err(update_error_with_rollback(
+            "Binary replace failed",
+            error,
+            rollback_errors,
+        ));
     }
     Ok(())
 }
@@ -159,12 +196,41 @@ fn replace_dir(current: &Path, backup: &Path, replacement: &Path) -> Result<(), 
         move_dir(current, backup).map_err(internal_error_with("Failed to backup web assets"))?;
     }
     if let Err(error) = move_dir(replacement, current) {
+        let mut rollback_errors = Vec::new();
         if backup.exists() {
-            let _ = restore_dir(current, backup);
+            collect_rollback_error(
+                &mut rollback_errors,
+                "restore previous web assets",
+                restore_dir(current, backup),
+            );
         }
-        return Err(internal_error("Failed to replace web assets", error));
+        return Err(update_error_with_rollback(
+            "Failed to replace web assets",
+            error,
+            rollback_errors,
+        ));
     }
     Ok(())
+}
+
+fn collect_rollback_error(errors: &mut Vec<String>, action: &'static str, result: io::Result<()>) {
+    if let Err(error) = result {
+        errors.push(format!("{action}: {error}"));
+    }
+}
+
+fn update_error_with_rollback(
+    context: &'static str,
+    error: impl std::fmt::Display,
+    rollback_errors: Vec<String>,
+) -> UpdateError {
+    if rollback_errors.is_empty() {
+        return internal_error(context, error);
+    }
+    UpdateError::internal(format!(
+        "{context}: {error}; rollback failed: {}",
+        rollback_errors.join("; ")
+    ))
 }
 
 fn restore_dir(current: &Path, backup: &Path) -> io::Result<()> {

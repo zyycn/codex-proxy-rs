@@ -225,7 +225,7 @@ fn sync_rate_limit_window_should_reset_window_counters_when_drift_crosses_thresh
     let acquired = pool
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
-    pool.release(&acquired.account.id);
+    pool.release(&acquired);
     let released = pool.get(&acquired.account.id).unwrap();
 
     assert_eq!(released.window_request_count, 1);

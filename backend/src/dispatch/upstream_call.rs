@@ -33,7 +33,7 @@ use crate::{
     },
     fleet::{
         account::{Account, AccountStatus},
-        pool::{AccountAcquireRequest, AccountPoolService, AcquiredAccount},
+        pool::{AccountAcquireRequest, AccountLease, AccountPoolService},
         quota::{
             quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
             quota_snapshot_reset_at,
@@ -62,7 +62,7 @@ pub(crate) const QUOTA_VERIFY_LIMIT_REACHED_MESSAGE: &str =
     "Upstream usage quota still reports limit_reached";
 
 pub(crate) enum QuotaVerificationDecision {
-    Ready(Box<AcquiredAccount>),
+    Ready(Box<AccountLease>),
     RetryWithAnotherAccount,
     RequiredAccountUnavailable,
     MaxAttemptsReached,
@@ -81,7 +81,7 @@ pub(crate) struct QuotaVerificationContext<'a> {
 
 pub(crate) async fn verify_acquired_quota_if_required(
     context: QuotaVerificationContext<'_>,
-    acquired: AcquiredAccount,
+    acquired: AccountLease,
 ) -> QuotaVerificationDecision {
     if !acquired.account.quota_verify_required {
         return QuotaVerificationDecision::Ready(Box::new(acquired));
@@ -133,10 +133,7 @@ pub(crate) async fn verify_acquired_quota_if_required(
         .apply_quota_snapshot(&account_id, &quota)
         .await;
     if quota_snapshot_limit_reached(&quota) {
-        context
-            .account_pool
-            .release_without_request_usage(&account_id)
-            .await;
+        acquired.release_without_usage().await;
         context.excluded_account_ids.push(account_id.clone());
         *context.verify_attempts += 1;
         let max_attempts_reached = *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS;
@@ -161,7 +158,7 @@ pub(crate) async fn verify_acquired_quota_if_required(
     QuotaVerificationDecision::Ready(Box::new(acquired_with_verified_quota(acquired, &quota)))
 }
 
-fn acquired_with_verified_quota(mut acquired: AcquiredAccount, quota: &Value) -> AcquiredAccount {
+fn acquired_with_verified_quota(mut acquired: AccountLease, quota: &Value) -> AccountLease {
     let limit_reached = quota_snapshot_limit_reached(quota);
     acquired.account.quota_verify_required = false;
     acquired.account.quota_limit_reached = limit_reached;
@@ -564,7 +561,7 @@ impl ResponseDispatchService {
                     return Err(error);
                 }
             };
-            let account = acquired.account;
+            let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_compact_response_with_account_retrying_5xx(
@@ -576,7 +573,7 @@ impl ResponseDispatchService {
                 &account,
             )
             .await;
-            self.account_pool.release(&release_account_id).await;
+            acquired.complete().await;
             if let Err(error) = &response_result {
                 self.cloudflare
                     .capture_set_cookie_headers(

@@ -81,6 +81,43 @@ async fn runtime_account_pool_should_restore_accounts_by_added_at_and_id() {
     assert_eq!(acquired.account.id, "acct_a");
 }
 
+#[tokio::test]
+async fn runtime_account_lease_drop_should_release_capacity() {
+    let (pool, _dir) = init_test_db("runtime-account-pool-lease-drop").await;
+    insert_account(&pool, "acct_drop").await;
+
+    let store = PgAccountStore::new(pool.clone());
+    let service = AccountPoolService::new(
+        Arc::new(store) as Arc<dyn AccountStore>,
+        Arc::new(PgAccountUsageStore::new(pool)),
+        AccountPoolOptions {
+            max_concurrent_per_account: 1,
+            ..AccountPoolOptions::default()
+        },
+        0,
+    );
+    service
+        .restore_from_store()
+        .await
+        .expect("account pool should restore");
+    let lease = service
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", Utc::now()))
+        .await
+        .expect("active account should be acquired");
+
+    drop(lease);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if service.capacity_summary_now().await.available_slots == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropped lease should release its slot");
+}
+
 async fn insert_account(pool: &sqlx::PgPool, id: &str) {
     sqlx::query(
         "insert into accounts (id, email, chatgpt_account_id, chatgpt_user_id, access_token, access_token_expires_at, status, added_at, updated_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",

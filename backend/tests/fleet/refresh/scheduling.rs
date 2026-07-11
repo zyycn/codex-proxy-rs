@@ -43,18 +43,19 @@ async fn token_refresh_task_should_skip_account_when_refresh_lease_is_held() {
     )
     .with_refresh_lease_store(leases);
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("refresh scan should skip lease-held account");
+        .expect("refresh timer should be scheduled");
+    wait_for_no_scheduled_timers(&task).await;
+    task.shutdown().await;
     let stored = store
         .get("acct-lease-held")
         .await
         .expect("account should load")
         .expect("account should exist");
 
-    assert_eq!(summary.skipped, 1);
-    assert_eq!(summary.refreshed, 0);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         stored.access_token.expose_secret(),
@@ -96,6 +97,88 @@ async fn token_refresh_task_should_skip_duplicate_in_flight_refresh() {
             refresh_token: None,
         }),
     };
+    let task = codex_proxy_rs::fleet::refresh::TokenRefreshService::new(
+        store.clone(),
+        RefreshPolicy {
+            refresh_margin_seconds: 300,
+            refresh_concurrency: 1,
+        },
+        refresher.clone(),
+    );
+
+    let started = refresher.started.notified();
+    tokio::pin!(started);
+    let first = task
+        .schedule_account_timers_once_at(now)
+        .await
+        .expect("first refresh timer should be scheduled");
+    timeout(StdDuration::from_secs(2), &mut started)
+        .await
+        .expect("first refresh should start");
+
+    let Ok(second) = timeout(
+        StdDuration::from_millis(100),
+        task.schedule_account_timers_once_at(now),
+    )
+    .await
+    else {
+        refresher.release.notify_waiters();
+        task.shutdown().await;
+        panic!("second timer scan should not wait on the in-flight refresh");
+    };
+    let second = second.expect("second refresh timer should be scheduled");
+    wait_for_no_scheduled_timers(&task).await;
+
+    refresher.release.notify_waiters();
+    task.shutdown().await;
+    let stored = wait_for_account(&store, "acct-refresh-in-flight", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+
+    assert_eq!(first.immediate, 1);
+    assert_eq!(second.immediate, 1);
+    assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stored.status, AccountStatus::Active);
+    assert_eq!(
+        stored.access_token.expose_secret(),
+        new_access_token.as_str()
+    );
+}
+
+#[tokio::test]
+async fn token_refresh_shutdown_should_wait_for_in_flight_refresh() {
+    let (pool, _guard) = init_test_db("token-refresh-shutdown").await;
+    let store = PgAccountStore::new(pool);
+    let now = Utc::now();
+    let new_access_token = test_jwt((now + Duration::hours(1)).timestamp());
+    store
+        .insert(NewAccount {
+            id: "acct-refresh-shutdown".to_string(),
+            email: Some("shutdown@example.com".to_string()),
+            account_id: Some("chatgpt-shutdown".to_string()),
+            user_id: Some("user-shutdown".to_string()),
+            label: None,
+            plan_type: Some("plus".to_string()),
+            access_token: SecretString::new(
+                test_jwt((now + Duration::seconds(30)).timestamp()).into(),
+            ),
+            refresh_token: Some(SecretString::new("refresh-shutdown".to_string().into())),
+            added_at: None,
+            access_token_expires_at: Some(now + Duration::seconds(30)),
+            status: AccountStatus::Active,
+        })
+        .await
+        .expect("account should be inserted");
+    let refresher = BlockingTokenRefresher {
+        calls: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+        response: Ok(TokenPair {
+            access_token: new_access_token.clone(),
+            refresh_token: None,
+        }),
+    };
     let task = Arc::new(codex_proxy_rs::fleet::refresh::TokenRefreshService::new(
         store.clone(),
         RefreshPolicy {
@@ -104,45 +187,34 @@ async fn token_refresh_task_should_skip_duplicate_in_flight_refresh() {
         },
         refresher.clone(),
     ));
+    let started = refresher.started.notified();
+    tokio::pin!(started);
+    task.schedule_account_timers_once_at(now)
+        .await
+        .expect("refresh timer should be scheduled");
+    timeout(StdDuration::from_secs(2), &mut started)
+        .await
+        .expect("refresh should start");
 
-    let first = {
-        let task = task.clone();
-        tokio::spawn(async move { task.refresh_due_accounts_once_at(now).await })
-    };
-    refresher.started.notified().await;
-
-    let second = {
-        let task = task.clone();
-        tokio::spawn(async move { task.refresh_due_accounts_once_at(now).await })
-    };
-    let Ok(result) = timeout(StdDuration::from_millis(100), second).await else {
-        refresher.release.notify_waiters();
-        let _ = first.await;
-        panic!("second scan should skip instead of waiting on duplicate refresh");
-    };
-    let second = result
-        .expect("second scan should join")
-        .expect("second scan should succeed");
+    let shutdown_task = task.clone();
+    let shutdown = tokio::spawn(async move { shutdown_task.shutdown().await });
+    tokio::pin!(shutdown);
+    assert!(timeout(StdDuration::from_millis(100), &mut shutdown)
+        .await
+        .is_err());
 
     refresher.release.notify_waiters();
-    let first = first
+    timeout(StdDuration::from_secs(2), &mut shutdown)
         .await
-        .expect("first scan should join")
-        .expect("first scan should succeed");
-    let stored = store
-        .get("acct-refresh-in-flight")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("shutdown should finish after refresh")
+        .expect("shutdown task should join");
+    let stored = wait_for_account(&store, "acct-refresh-shutdown", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
 
-    assert_eq!(first.refreshed, 1);
-    assert_eq!(second.skipped, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(stored.status, AccountStatus::Active);
-    assert_eq!(
-        stored.access_token.expose_secret(),
-        new_access_token.as_str()
-    );
+    assert_eq!(stored.access_token.expose_secret(), new_access_token);
 }
 
 #[tokio::test]
@@ -198,6 +270,7 @@ async fn token_refresh_task_should_schedule_future_per_account_timer_without_ref
     assert_ne!(scheduled_at, exact_margin_at);
     assert!(scheduled_at >= now + Duration::seconds(255));
     assert!(scheduled_at <= now + Duration::seconds(345));
+    task.shutdown().await;
 }
 
 #[tokio::test]
@@ -268,6 +341,7 @@ async fn token_refresh_task_should_cancel_future_timer_without_refreshing_expire
     );
     assert!(stored.next_refresh_at.is_none());
     assert_eq!(task.scheduled_timer_count().await, 0);
+    task.shutdown().await;
 }
 
 #[tokio::test]
@@ -327,9 +401,9 @@ async fn token_refresh_task_should_clear_stale_refresh_time_without_refresh_toke
         .expect("stale due refresh time should persist");
 
     let due_summary = task
-        .refresh_due_accounts_once_at(now)
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("due refresh scan should skip account without refresh token");
+        .expect("due timer scan should skip account without refresh token");
     let stored = store
         .get("acct-refresh-no-rt-clear-next")
         .await
@@ -346,6 +420,7 @@ async fn token_refresh_task_should_clear_stale_refresh_time_without_refresh_toke
         stored.access_token.expose_secret(),
         old_access_token.as_str()
     );
+    task.shutdown().await;
 }
 
 #[tokio::test]
@@ -398,12 +473,10 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
     timeout(StdDuration::from_secs(2), &mut started)
         .await
         .expect("scheduled timer should trigger refresh");
-    tokio::task::yield_now().await;
-    let stored = store
-        .get("acct-refresh-timer")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+    let stored = wait_for_account(&store, "acct-refresh-timer", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
 
     assert_eq!(summary.immediate, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
@@ -413,6 +486,7 @@ async fn token_refresh_task_should_fire_per_account_timer_at_refresh_time() {
         stored.access_token.expose_secret(),
         new_access_token.as_str()
     );
+    task.shutdown().await;
 }
 
 #[tokio::test]
@@ -468,22 +542,10 @@ async fn token_refresh_task_should_fire_quota_exhausted_timer_without_clearing_s
         .await
         .expect("quota-exhausted timer should trigger refresh");
 
-    let mut stored = store
-        .get("acct-refresh-quota-exhausted-timer")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
-    for _ in 0..50 {
-        if stored.access_token.expose_secret() == new_access_token.as_str() {
-            break;
-        }
-        sleep(StdDuration::from_millis(20)).await;
-        stored = store
-            .get("acct-refresh-quota-exhausted-timer")
-            .await
-            .expect("account should load")
-            .expect("account should exist");
-    }
+    let stored = wait_for_account(&store, "acct-refresh-quota-exhausted-timer", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
 
     assert_eq!(summary.scheduled, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
@@ -493,6 +555,7 @@ async fn token_refresh_task_should_fire_quota_exhausted_timer_without_clearing_s
         new_access_token.as_str()
     );
     assert!(stored.next_refresh_at.is_some());
+    task.shutdown().await;
 }
 
 #[tokio::test]
@@ -546,22 +609,10 @@ async fn token_refresh_task_should_reschedule_next_timer_after_scheduled_refresh
         .await
         .expect("scheduled timer should trigger refresh");
 
-    let mut stored = store
-        .get("acct-refresh-next-timer")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
-    for _ in 0..50 {
-        if stored.access_token.expose_secret() == new_access_token.as_str() {
-            break;
-        }
-        sleep(StdDuration::from_millis(20)).await;
-        stored = store
-            .get("acct-refresh-next-timer")
-            .await
-            .expect("account should load")
-            .expect("account should exist");
-    }
+    let stored = wait_for_account(&store, "acct-refresh-next-timer", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
 
     assert_eq!(summary.scheduled, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 1);
@@ -570,4 +621,5 @@ async fn token_refresh_task_should_reschedule_next_timer_after_scheduled_refresh
         new_access_token.as_str()
     );
     assert_eq!(task.scheduled_timer_count().await, 1);
+    task.shutdown().await;
 }

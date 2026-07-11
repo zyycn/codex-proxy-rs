@@ -85,10 +85,8 @@ impl ModelRefreshTask {
                 self.installation_id.as_deref(),
             )
             .await;
-        for selected in &selected_accounts {
-            self.account_pool
-                .release_without_request_usage(&selected.account.id)
-                .await;
+        for selected in selected_accounts {
+            selected.release().await;
         }
 
         let result = result?;

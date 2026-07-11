@@ -58,10 +58,12 @@ enum PumpCommand {
     },
 }
 
+const PUMP_MESSAGE_BUFFER: usize = 64;
+
 /// 由后台 pump 任务托管的 WebSocket 连接句柄。
 pub(crate) struct PumpedWebSocket {
     tx_command: mpsc::Sender<PumpCommand>,
-    rx_message: mpsc::UnboundedReceiver<Result<Message, tungstenite::Error>>,
+    rx_message: mpsc::Receiver<Result<Message, tungstenite::Error>>,
     closed: Arc<AtomicBool>,
     pump: Option<JoinHandle<()>>,
 }
@@ -78,7 +80,7 @@ impl PumpedWebSocket {
     /// 用底层流启动一个 pump 任务并返回句柄。
     pub(crate) fn new(inner: RawWsStream, keepalive: PumpKeepalive) -> Self {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
-        let (tx_message, rx_message) = mpsc::unbounded_channel();
+        let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
         let closed = Arc::new(AtomicBool::new(false));
         let closed_for_task = Arc::clone(&closed);
         let pump = tokio::spawn(async move {
@@ -138,7 +140,7 @@ impl Drop for PumpedWebSocket {
 async fn pump_loop(
     mut inner: RawWsStream,
     mut rx_command: mpsc::Receiver<PumpCommand>,
-    tx_message: mpsc::UnboundedSender<Result<Message, tungstenite::Error>>,
+    tx_message: mpsc::Sender<Result<Message, tungstenite::Error>>,
     keepalive: PumpKeepalive,
 ) {
     let mut last_activity = Instant::now();
@@ -191,7 +193,7 @@ async fn pump_loop(
                     Some(Ok(message)) => {
                         last_activity = Instant::now();
                         let is_close = matches!(message, Message::Close(_));
-                        if tx_message.send(Ok(message)).is_err() {
+                        if tx_message.try_send(Ok(message)).is_err() {
                             break;
                         }
                         if is_close {
@@ -199,7 +201,7 @@ async fn pump_loop(
                         }
                     }
                     Some(Err(err)) => {
-                        let _ = tx_message.send(Err(err));
+                        let _ = tx_message.try_send(Err(err));
                         break;
                     }
                 }

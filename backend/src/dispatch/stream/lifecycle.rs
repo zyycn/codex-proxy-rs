@@ -197,7 +197,7 @@ impl ResponseDispatchService {
             );
 
             self.account_pool.wait_for_request_interval(&acquired).await;
-            let account = acquired.account;
+            let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_response_stream_with_account_retrying_5xx(
@@ -239,7 +239,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_rate_limit_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             exhausted_accounts.record_rate_limited(
                                 Some(&release_account_id),
                                 upstream_error_body(&error),
@@ -254,7 +254,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_quota_exhausted_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             exhausted_accounts.record_quota_exhausted(
                                 Some(&release_account_id),
                                 upstream_error_body(&error),
@@ -268,7 +268,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_auth_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             let upstream_error = upstream_error_body(&error);
                             let account_status = auth_failure_account_status(&error);
                             exhausted_accounts.record_auth_failure(
@@ -286,7 +286,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_cloudflare_challenge_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             exhausted_accounts.record_cloudflare_challenge(
                                 Some(&release_account_id),
                                 cloudflare_challenge_error_message(),
@@ -300,7 +300,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_cloudflare_path_block_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             exhausted_accounts.record_cloudflare_path_blocked(
                                 Some(&release_account_id),
                                 cloudflare_path_block_error_message(),
@@ -314,7 +314,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_model_unsupported_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             let upstream_error = upstream_error_body(&error);
                             if let Some(exhausted) = exhausted_accounts
                                 .model_unsupported_retry_exhausted(upstream_error.clone())
@@ -335,7 +335,7 @@ impl ResponseDispatchService {
                         Err(ResponseDispatchError::Upstream(error))
                             if is_banned_upstream_error(&error) =>
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             exhausted_accounts.record_auth_failure(
                                 Some(&release_account_id),
                                 AccountStatus::Banned,
@@ -349,7 +349,7 @@ impl ResponseDispatchService {
                             continue;
                         }
                         Err(error) => {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
                                 let history_unavailable =
                                     is_history_recovery_upstream_error(upstream_error);
@@ -401,7 +401,7 @@ impl ResponseDispatchService {
                     let first_failure = match first_sse_failure(&prefetched) {
                         Ok(failure) => failure,
                         Err(error) => {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             return_stream_dispatch_error!(
                                 ResponseDispatchError::InvalidSse(error),
                                 account_id: Some(&release_account_id),
@@ -420,7 +420,7 @@ impl ResponseDispatchService {
                                 )
                                 .await
                         {
-                            self.account_pool.release(&release_account_id).await;
+                            acquired.complete().await;
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
@@ -429,7 +429,7 @@ impl ResponseDispatchService {
                             if let Some(exhausted) = exhausted_accounts
                                 .model_unsupported_retry_exhausted(upstream_error.clone())
                             {
-                                self.account_pool.release(&release_account_id).await;
+                                acquired.complete().await;
                                 return_stream_dispatch_error!(
                                     ResponseDispatchError::from_exhausted_account(exhausted),
                                     account_id: Some(&release_account_id),
@@ -441,7 +441,7 @@ impl ResponseDispatchService {
                                 upstream_error,
                             );
                             excluded_account_ids.push(release_account_id);
-                            self.account_pool.release(&account.id).await;
+                            acquired.complete().await;
                             continue;
                         }
                         if is_quota_exhausted_sse_failure(&failure) {
@@ -453,7 +453,7 @@ impl ResponseDispatchService {
                                 .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                                 .await;
                             excluded_account_ids.push(release_account_id);
-                            self.account_pool.release(&account.id).await;
+                            acquired.complete().await;
                             continue;
                         }
                         if is_auth_sse_failure(&failure) {
@@ -469,10 +469,10 @@ impl ResponseDispatchService {
                                 .set_status(&release_account_id, account_status)
                                 .await;
                             excluded_account_ids.push(release_account_id);
-                            self.account_pool.release(&account.id).await;
+                            acquired.complete().await;
                             continue;
                         }
-                        self.account_pool.release(&release_account_id).await;
+                        acquired.complete().await;
                         record_prefetched_response_stream_failure_event(
                             ResponseStreamFailureEventRecord {
                                 recorder: &self.recorder,
@@ -505,6 +505,7 @@ impl ResponseDispatchService {
 
                     let context = LiveResponseStreamContext {
                         account_pool: Arc::clone(&self.account_pool),
+                        account_lease: acquired,
                         session_affinity: Arc::clone(&self.session_affinity),
                         reasoning_replay: Arc::clone(&self.reasoning_replay),
                         recorder: Arc::clone(&self.recorder),
@@ -533,7 +534,7 @@ impl ResponseDispatchService {
                     return Ok(spawn_live_response_stream(context, prefetched, body));
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     exhausted_accounts.record_rate_limited(
                         Some(&release_account_id),
                         upstream_error_body(&error),
@@ -545,7 +546,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     exhausted_accounts.record_quota_exhausted(
                         Some(&release_account_id),
                         upstream_error_body(&error),
@@ -556,7 +557,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     let upstream_error = upstream_error_body(&error);
                     let account_status = auth_failure_account_status(&error);
                     exhausted_accounts.record_auth_failure(
@@ -571,7 +572,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     exhausted_accounts.record_cloudflare_challenge(
                         Some(&release_account_id),
                         cloudflare_challenge_error_message(),
@@ -582,7 +583,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     exhausted_accounts.record_cloudflare_path_blocked(
                         Some(&release_account_id),
                         cloudflare_path_block_error_message(),
@@ -593,7 +594,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     let upstream_error = upstream_error_body(&error);
                     if let Some(exhausted) =
                         exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
@@ -611,7 +612,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     exhausted_accounts.record_auth_failure(
                         Some(&release_account_id),
                         AccountStatus::Banned,
@@ -624,7 +625,7 @@ impl ResponseDispatchService {
                     excluded_account_ids.push(release_account_id);
                 }
                 Err(error) => {
-                    self.account_pool.release(&release_account_id).await;
+                    acquired.complete().await;
                     let history_unavailable = is_history_recovery_upstream_error(&error);
                     if history_unavailable
                         && self

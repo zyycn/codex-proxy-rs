@@ -132,6 +132,7 @@ pub struct AccountPool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccountSlot {
+    id: uuid::Uuid,
     created_at: DateTime<Utc>,
     model: Option<String>,
 }
@@ -360,9 +361,9 @@ impl AccountPool {
         // 亲和优先：required 硬锁定该账号；preferred 若在候选内则直接选中；
         // 二者都不命中时，回退到调度器按当前策略选择。
         let selected = if let Some(required_account_id) = &request.required_account_id {
-            candidates.first().cloned().map(|account| {
+            candidates.first().map(|account| {
                 (
-                    account,
+                    (*account).clone(),
                     self.previous_slot_at(required_account_id),
                     "required",
                 )
@@ -371,10 +372,9 @@ impl AccountPool {
             candidates
                 .iter()
                 .find(|account| account.id == *preferred_account_id)
-                .cloned()
                 .map(|account| {
                     (
-                        account,
+                        (*account).clone(),
                         self.previous_slot_at(preferred_account_id),
                         "preferred",
                     )
@@ -411,11 +411,12 @@ impl AccountPool {
         );
 
         let selected_id = selected.id.clone();
-        self.push_slot(&selected_id, request.now, Some(&request.model));
+        let slot_id = self.push_slot(&selected_id, request.now, Some(&request.model));
         AccountAcquireWithStatusRefresh {
             acquired: Some(AcquiredAccount {
                 account: selected,
                 previous_slot_at,
+                slot_id,
             }),
             refreshed_accounts,
         }
@@ -449,28 +450,32 @@ impl AccountPool {
     }
 
     /// 释放指定账号的一个在途槽位。
-    pub fn release(&mut self, account_id: &str) -> Option<ReleasedAccountUsage> {
-        self.release_slot(account_id, true)
+    pub fn release(&mut self, acquired: &AcquiredAccount) -> Option<ReleasedAccountUsage> {
+        self.release_slot(&acquired.account.id, acquired.slot_id, true)
     }
 
-    /// 释放指定账号的一个在途槽位，不累计请求用量。
-    pub fn release_without_request_usage(
+    /// 释放模型目录刷新选择的账号，不累计客户端请求用量。
+    pub fn release_distinct_plan_account(
         &mut self,
-        account_id: &str,
+        selected: &DistinctPlanAccount,
     ) -> Option<ReleasedAccountUsage> {
-        self.release_slot(account_id, false)
+        self.release_slot(&selected.account.id, selected.slot_id, false)
     }
 
-    fn release_slot(
+    pub(super) fn release_slot(
         &mut self,
         account_id: &str,
+        slot_id: uuid::Uuid,
         record_request_usage: bool,
     ) -> Option<ReleasedAccountUsage> {
         self.accounts.get(account_id)?;
 
         let mut remove_slots = false;
         let slot = self.slots.get_mut(account_id).and_then(|slots| {
-            let slot = slots.pop_front();
+            let slot = slots
+                .iter()
+                .position(|slot| slot.id == slot_id)
+                .and_then(|position| slots.remove(position));
             remove_slots = slots.is_empty();
             slot
         });
@@ -540,7 +545,7 @@ impl AccountPool {
     ) -> DistinctPlanAccountsWithStatusRefresh {
         self.cleanup_stale_slots(now);
         let refreshed_accounts = self.refresh_account_statuses(now);
-        let mut by_plan = IndexMap::<String, Vec<Account>>::new();
+        let mut by_plan = IndexMap::<String, Vec<&Account>>::new();
 
         let max_concurrent = self.options.max_concurrent_per_account;
         let skip_quota_limited = self.options.skip_quota_limited;
@@ -559,15 +564,12 @@ impl AccountPool {
                 let Some(plan_type) = account.plan_type.as_ref() else {
                     continue;
                 };
-                by_plan
-                    .entry(plan_type.clone())
-                    .or_default()
-                    .push(account.clone());
+                by_plan.entry(plan_type.clone()).or_default().push(account);
             }
         }
 
         let strategy = self.options.rotation_strategy;
-        let mut accounts = Vec::new();
+        let mut selected_accounts = Vec::new();
         for (plan_type, group) in by_plan {
             let Some(account) = self.select_candidate(&group, now) else {
                 continue;
@@ -586,8 +588,17 @@ impl AccountPool {
                 quota_cooldown_until = ?account.quota_cooldown_until,
                 "account selected for model refresh"
             );
-            self.push_slot(&account.id, now, None);
-            accounts.push(DistinctPlanAccount { plan_type, account });
+            selected_accounts.push((plan_type, account));
+        }
+
+        let mut accounts = Vec::with_capacity(selected_accounts.len());
+        for (plan_type, account) in selected_accounts {
+            let slot_id = self.push_slot(&account.id, now, None);
+            accounts.push(DistinctPlanAccount {
+                plan_type,
+                account,
+                slot_id,
+            });
         }
 
         DistinctPlanAccountsWithStatusRefresh {
@@ -607,14 +618,22 @@ impl AccountPool {
             .map(|slot| slot.created_at)
     }
 
-    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>, model: Option<&str>) {
+    fn push_slot(
+        &mut self,
+        account_id: &str,
+        now: DateTime<Utc>,
+        model: Option<&str>,
+    ) -> uuid::Uuid {
+        let slot_id = uuid::Uuid::new_v4();
         self.slots
             .entry(account_id.to_string())
             .or_default()
             .push_back(AccountSlot {
+                id: slot_id,
                 created_at: now,
                 model: model.map(str::to_string),
             });
+        slot_id
     }
 
     fn mark_request_usage(&mut self, account_id: &str, now: DateTime<Utc>) -> Option<Account> {
@@ -667,7 +686,7 @@ impl AccountPool {
     }
 
     /// 过滤出本次请求的可用候选集合（委托 [`candidates::filter`]）。
-    fn filter_candidates(&self, request: &AccountAcquireRequest) -> Vec<Account> {
+    fn filter_candidates(&self, request: &AccountAcquireRequest) -> Vec<&Account> {
         let slot_count = |account_id: &str| self.slots.get(account_id).map_or(0, VecDeque::len);
         candidates::filter(
             self.accounts.values(),
@@ -689,7 +708,7 @@ impl AccountPool {
     }
 
     /// 按当前策略从候选集合中选择一个账号（委托 [`AccountScheduler::select`]）。
-    fn select_candidate(&self, candidates: &[Account], now: DateTime<Utc>) -> Option<Account> {
+    fn select_candidate(&self, candidates: &[&Account], now: DateTime<Utc>) -> Option<Account> {
         let slot_count = |account_id: &str| self.slots.get(account_id).map_or(0, VecDeque::len);
         self.scheduler
             .select(self.options.rotation_strategy, candidates, &slot_count, now)
@@ -697,16 +716,13 @@ impl AccountPool {
 }
 
 fn access_token_expired(account: &Account, now: DateTime<Utc>) -> bool {
-    if account
-        .access_token_expires_at
-        .is_some_and(|expires_at| now >= expires_at)
-    {
-        return true;
+    if let Some(expires_at) = account.access_token_expires_at {
+        return now >= expires_at;
     }
 
     match jwt_expiry(&account.access_token, now) {
         JwtExpiry::Expired => true,
         JwtExpiry::Valid => false,
-        JwtExpiry::MissingOrInvalid => account.access_token_expires_at.is_none(),
+        JwtExpiry::MissingOrInvalid => true,
     }
 }

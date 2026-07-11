@@ -11,8 +11,9 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use codex_proxy_rs::fleet::account::AccountStatus;
 use codex_proxy_rs::fleet::refresh::{RedisRefreshLeaseStore, RefreshPolicy};
-use codex_proxy_rs::fleet::store::PgAccountStore;
-use codex_proxy_rs::fleet::store::{AccountClaimsUpdate, NewAccount};
+use codex_proxy_rs::fleet::store::{
+    AccountClaimsUpdate, NewAccount, PgAccountStore, StoredAccount,
+};
 use codex_proxy_rs::upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
@@ -176,4 +177,43 @@ impl TokenRefresher for RefreshTokenRotatingRefresher {
 fn test_jwt(exp: i64) -> String {
     let payload = json!({ "exp": exp });
     crate::support::jwt::unsigned_jwt(&payload)
+}
+
+async fn wait_for_account(
+    store: &PgAccountStore,
+    account_id: &str,
+    predicate: impl Fn(&StoredAccount) -> bool,
+) -> StoredAccount {
+    timeout(StdDuration::from_secs(2), async {
+        loop {
+            let account = store
+                .get(account_id)
+                .await
+                .expect("account should load")
+                .expect("account should exist");
+            if predicate(&account) {
+                return account;
+            }
+            sleep(StdDuration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("account {account_id} did not reach expected state"))
+}
+
+async fn wait_for_no_scheduled_timers<C>(
+    service: &codex_proxy_rs::fleet::refresh::TokenRefreshService<C>,
+) where
+    C: TokenRefresher,
+{
+    timeout(StdDuration::from_secs(2), async {
+        loop {
+            if service.scheduled_timer_count().await == 0 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scheduled refresh timers should finish");
 }

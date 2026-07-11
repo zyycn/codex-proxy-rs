@@ -1,7 +1,5 @@
 //! Cloudflare challenge and path-block recovery shared by dispatch routes.
 
-use std::time::Duration as StdDuration;
-
 use chrono::Utc;
 
 use crate::{
@@ -61,7 +59,17 @@ impl CloudflareRecovery {
         account_pool
             .set_cloudflare_cooldown_until(account_id, cooldown.cooldown_until)
             .await;
-        self.clear_challenge_cookies_after_cooldown(account_id, cooldown.delay_seconds);
+        if let Err(error) = self
+            .cookie_store
+            .expire_account_cookies_at(account_id, cooldown.cooldown_until)
+            .await
+        {
+            tracing::warn!(
+                account_id,
+                error = %error,
+                "failed to persist Cloudflare challenge cookie cleanup deadline"
+            );
+        }
     }
 
     pub async fn apply_path_block(&self, account_pool: &AccountPoolService, account_id: &str) {
@@ -89,17 +97,6 @@ impl CloudflareRecovery {
 
     async fn delete_account_cookies(&self, account_id: &str, reason: &str) {
         delete_account_cookies(&self.cookie_store, account_id, reason).await;
-    }
-
-    fn clear_challenge_cookies_after_cooldown(&self, account_id: &str, delay_seconds: i64) {
-        let cookie_store = self.cookie_store.clone();
-        let account_id = account_id.to_string();
-        let delay = StdDuration::from_secs(delay_seconds.max(0).cast_unsigned());
-
-        tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            delete_account_cookies(&cookie_store, &account_id, "Cloudflare challenge").await;
-        });
     }
 }
 

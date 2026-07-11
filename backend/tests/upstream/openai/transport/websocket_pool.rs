@@ -602,6 +602,68 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
 }
 
 #[tokio::test]
+async fn websocket_pool_should_release_fresh_reservation_when_prefetch_is_cancelled() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (first_request_received_tx, first_request_received_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+        let _first_message = first_websocket.next().await.unwrap().unwrap();
+        first_request_received_tx.send(()).unwrap();
+
+        let (second_stream, _) = listener.accept().await.unwrap();
+        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
+        let _second_message = second_websocket.next().await.unwrap().unwrap();
+        second_websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_after_cancelled_prefetch", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        second_websocket.close(None).await.unwrap();
+        drop(first_websocket);
+    });
+    let pool = Arc::new(CodexWebSocketPool::default());
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    )
+    .with_websocket_pool(pool);
+    let request = pooled_websocket_request("conversation-cancelled-prefetch");
+
+    {
+        let first_request = backend.create_response_stream(
+            &request,
+            request_context("req_cancelled_prefetch", Some("chatgpt-account")),
+        );
+        tokio::pin!(first_request);
+        tokio::select! {
+            _ = &mut first_request => {
+                panic!("prefetch request unexpectedly completed");
+            }
+            result = first_request_received_rx => {
+                result.expect("server should observe the first request");
+            }
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_after_cancelled_prefetch", Some("chatgpt-account")),
+        )
+        .await
+        .expect("request after cancelled prefetch should succeed");
+    server.await.unwrap();
+
+    assert!(second.body.contains("resp_after_cancelled_prefetch"));
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
+}
+
+#[tokio::test]
 async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

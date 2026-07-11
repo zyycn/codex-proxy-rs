@@ -22,7 +22,7 @@ fn account_pool_should_respect_max_concurrent_slots_per_account() {
     assert_ne!(first.id, second.id);
     assert!(third.is_none());
 
-    pool.release(&first.id);
+    pool.release(&first);
     assert_eq!(acquire_account(&mut pool, "gpt-5.5").unwrap().id, first.id);
 }
 
@@ -94,8 +94,8 @@ fn round_robin_should_keep_ts_cursor_when_candidates_recover() {
 
     let first = acquire_account(&mut pool, "gpt-5.5").unwrap();
     let second = acquire_account(&mut pool, "gpt-5.5").unwrap();
-    pool.release(&first.id);
-    pool.release(&second.id);
+    pool.release(&first);
+    pool.release(&second);
     let third = acquire_account(&mut pool, "gpt-5.5").unwrap();
 
     assert_eq!(third.id, "acct_c");
@@ -153,6 +153,20 @@ fn acquire_should_skip_accounts_with_expired_token_metadata() {
     let acquired = pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now));
 
     assert!(acquired.is_none());
+}
+
+#[test]
+fn acquire_should_trust_future_token_expiry_metadata_without_parsing_jwt() {
+    let now = fixed_time();
+    let mut active = crate::support::accounts::test_account("active", AccountStatus::Active);
+    active.access_token = test_jwt(-60);
+    active.access_token_expires_at = Some(now + Duration::hours(1));
+    let mut pool = AccountPool::default();
+    pool.insert(active);
+
+    let acquired = pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now));
+
+    assert_eq!(acquired.unwrap().account.id, "active");
 }
 
 #[test]
@@ -444,7 +458,12 @@ fn account_pool_distinct_plan_accounts_should_filter_like_model_refresh() {
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].plan_type, "plus");
     assert_eq!(selected[0].account.id, "plus-ok");
-    assert_eq!(pool.release("plus-ok").unwrap().model, None);
+    assert_eq!(
+        pool.release_distinct_plan_account(&selected[0])
+            .unwrap()
+            .model,
+        None
+    );
 }
 
 #[test]
@@ -609,7 +628,7 @@ fn smart_should_balance_released_requests_by_runtime_usage() {
     let first = pool
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
-    pool.release(&first.account.id);
+    pool.release(&first);
     let second = pool
         .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
@@ -675,7 +694,7 @@ fn smart_should_not_drain_earliest_reset_account_when_other_accounts_are_idle() 
             ))
             .unwrap();
         selected_ids.push(acquired.account.id.clone());
-        pool.release(&acquired.account.id);
+        pool.release(&acquired);
     }
 
     assert_eq!(
@@ -795,7 +814,7 @@ fn account_pool_should_rotate_tied_quota_reset_priority_accounts() {
     ));
 
     let first = acquire_account(&mut pool, "gpt-5.5").unwrap();
-    pool.release(&first.id);
+    pool.release(&first);
     let second = acquire_account(&mut pool, "gpt-5.5").unwrap();
 
     assert_ne!(first.id, second.id);
@@ -820,14 +839,11 @@ fn quota_reset_priority_should_prefer_lru_before_tie_rotation() {
     pool.insert(older);
     pool.insert(newer);
 
-    assert_eq!(
-        pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
-            .unwrap()
-            .account
-            .id,
-        "seed"
-    );
-    pool.release("seed");
+    let seed = pool
+        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+        .unwrap();
+    assert_eq!(seed.account.id, "seed");
+    pool.release(&seed);
     let acquired = pool
         .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
@@ -947,7 +963,7 @@ fn quota_reset_priority_should_not_mutate_candidate_order() {
     let selected = pool
         .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
         .unwrap();
-    pool.release(&selected.account.id);
+    pool.release(&selected);
     pool.set_options(AccountPoolOptions {
         rotation_strategy: RotationStrategy::RoundRobin,
         ..AccountPoolOptions::default()

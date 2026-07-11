@@ -13,7 +13,7 @@ use crate::fleet::scheduler::{compare_last_used, SelectionInput};
 /// `_cursor` 未使用：Sticky 由 `last_used_at` 决定顺序，不参与轮转破并列。
 pub fn select(input: &SelectionInput<'_>, _cursor: &mut usize) -> Option<Account> {
     let candidates = input.candidates;
-    let mut selected = candidates.first()?;
+    let mut selected = *candidates.first()?;
     for candidate in &candidates[1..] {
         if compare_last_used(
             candidate.last_used_at.as_deref(),

@@ -92,7 +92,7 @@ where
 
     fn shutdown(&mut self) -> super::periodic::TaskFuture<'_, ()> {
         Box::pin(async move {
-            self.service.clear_scheduled_timers().await;
+            self.service.shutdown().await;
         })
     }
 }

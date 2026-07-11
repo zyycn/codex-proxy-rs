@@ -24,7 +24,7 @@ use crate::{
         recovery::{cloudflare::CloudflareRecovery, reasoning_replay::ReasoningReplayCache},
         service::ResponseDispatchStream,
     },
-    fleet::pool::AccountPoolService,
+    fleet::pool::{AccountLease, AccountPoolService},
     infra::time::elapsed_millis_i64,
     telemetry::{recorder::Recorder, usage::types::UsageRecordLevel},
     upstream::openai::{
@@ -99,7 +99,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
         )
         .await
         {
-            context.account_pool.release(&context.account_id).await;
+            context.account_lease.complete().await;
             return;
         }
         update_first_response_output_ms(context.started_at, &body_bytes, &mut first_token_ms);
@@ -107,7 +107,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
         loop {
             let next = tokio::select! {
                 _ = &mut cancel_receiver => {
-                    context.account_pool.release(&context.account_id).await;
+                    context.account_lease.complete().await;
                     return;
                 }
                 next = body.next() => next,
@@ -125,7 +125,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                     )
                     .await
                     {
-                        context.account_pool.release(&context.account_id).await;
+                        context.account_lease.complete().await;
                         return;
                     }
                     update_first_response_output_ms(
@@ -142,7 +142,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                     )
                     .await
                     {
-                        context.account_pool.release(&context.account_id).await;
+                        context.account_lease.complete().await;
                         return;
                     }
                     let detail = error.to_string();
@@ -150,7 +150,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                         send_live_response_stream_tail(&sender, &mut body_bytes, Some(&detail))
                             .await
                     else {
-                        context.account_pool.release(&context.account_id).await;
+                        context.account_lease.complete().await;
                         return;
                     };
                     finalize_live_response_stream(context, body_text, first_token_ms).await;
@@ -166,12 +166,12 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
         )
         .await
         {
-            context.account_pool.release(&context.account_id).await;
+            context.account_lease.complete().await;
             return;
         }
         let Some(body_text) = send_live_response_stream_tail(&sender, &mut body_bytes, None).await
         else {
-            context.account_pool.release(&context.account_id).await;
+            context.account_lease.complete().await;
             return;
         };
 
@@ -340,6 +340,7 @@ fn missing_sse_event_separator(body: &str) -> Option<&'static str> {
 
 pub(in crate::dispatch) struct LiveResponseStreamContext {
     pub(in crate::dispatch) account_pool: Arc<AccountPoolService>,
+    pub(in crate::dispatch) account_lease: AccountLease,
     pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
     pub(in crate::dispatch) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
@@ -552,5 +553,5 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
         }
     }
 
-    context.account_pool.release(&context.account_id).await;
+    context.account_lease.complete().await;
 }

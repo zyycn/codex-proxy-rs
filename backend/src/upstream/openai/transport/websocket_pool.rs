@@ -9,6 +9,7 @@ use std::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use super::websocket_pump::{PumpKeepalive, PumpedWebSocket};
 
@@ -160,7 +161,7 @@ impl CodexWebSocketPool {
                 return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
             }
             match state.slots.get(key) {
-                Some(WebSocketPoolSlot::Busy) => {
+                Some(WebSocketPoolSlot::Busy(_)) => {
                     return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Busy);
                 }
                 Some(WebSocketPoolSlot::Idle(_)) => {
@@ -172,8 +173,11 @@ impl CodexWebSocketPool {
                     if connection.created_at.elapsed() < self.config.max_age
                         && !connection.websocket.is_closed()
                     {
-                        state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
-                        return WebSocketPoolAcquire::Reused(connection);
+                        let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
+                        state
+                            .slots
+                            .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
+                        return WebSocketPoolAcquire::Reused { connection, lease };
                     }
                     expired_connection = Some(*connection);
                 }
@@ -185,8 +189,11 @@ impl CodexWebSocketPool {
             {
                 WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
             } else {
-                state.slots.insert(key.clone(), WebSocketPoolSlot::Busy);
-                WebSocketPoolAcquire::FreshReserved
+                let lease = WebSocketPoolLease::reserve(self.clone(), key.clone());
+                state
+                    .slots
+                    .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
+                WebSocketPoolAcquire::FreshReserved(lease)
             }
         };
 
@@ -197,9 +204,10 @@ impl CodexWebSocketPool {
         acquire
     }
 
-    pub(crate) async fn put(
+    async fn put_reserved(
         &self,
-        key: CodexWebSocketPoolKey,
+        key: &CodexWebSocketPoolKey,
+        reservation_id: Uuid,
         connection: PooledWebSocketConnection,
     ) {
         let mut connection = Some(connection);
@@ -208,13 +216,18 @@ impl CodexWebSocketPool {
             let expired = connection
                 .as_ref()
                 .is_some_and(|connection| connection.created_at.elapsed() >= self.config.max_age);
-            if expired || state.shutting_down || !self.config.enabled {
-                state.slots.remove(&key);
-            } else if matches!(state.slots.get(&key), Some(WebSocketPoolSlot::Busy)) {
+            let owns_reservation = matches!(
+                state.slots.get(key),
+                Some(WebSocketPoolSlot::Busy(reservation))
+                    if reservation.id == reservation_id
+            );
+            if owns_reservation && (expired || state.shutting_down || !self.config.enabled) {
+                state.slots.remove(key);
+            } else if owns_reservation {
                 if let Some(connection) = connection.take() {
                     state
                         .slots
-                        .insert(key, WebSocketPoolSlot::Idle(Box::new(connection)));
+                        .insert(key.clone(), WebSocketPoolSlot::Idle(Box::new(connection)));
                 }
             }
         }
@@ -223,16 +236,13 @@ impl CodexWebSocketPool {
         }
     }
 
-    pub(crate) async fn discard(&self, key: &CodexWebSocketPoolKey) {
-        let idle_connection = {
-            let mut state = self.inner.lock().await;
-            match state.slots.remove(key) {
-                Some(WebSocketPoolSlot::Idle(connection)) => Some(*connection),
-                Some(WebSocketPoolSlot::Busy) | None => None,
-            }
-        };
-        if let Some(connection) = idle_connection {
-            close_pooled_connection(connection).await;
+    async fn discard_reserved(&self, key: &CodexWebSocketPoolKey, reservation_id: Uuid) {
+        let mut state = self.inner.lock().await;
+        if matches!(
+            state.slots.get(key),
+            Some(WebSocketPoolSlot::Busy(reservation)) if reservation.id == reservation_id
+        ) {
+            state.slots.remove(key);
         }
     }
 
@@ -266,20 +276,20 @@ impl CodexWebSocketPool {
                 .drain()
                 .filter_map(|(_, slot)| match slot {
                     WebSocketPoolSlot::Idle(connection) => Some(*connection),
-                    WebSocketPoolSlot::Busy => None,
+                    WebSocketPoolSlot::Busy(_) => None,
                 })
                 .collect::<Vec<_>>()
         };
         close_pooled_connections(idle_connections).await;
     }
 
-    /// 维护 idle 连接：清扫已被后台 pump 判定死亡或已超龄的连接。
+    /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation。
     ///
     /// 保活（ping/pong）与失活检测已下沉到每条连接的 pump 任务内部，此处不再做
     /// 同步 ping 探活，只负责把「后台已标记 closed」或「超过 max_age」的 idle
     /// 连接从池中摘除并关闭，避免它们占用 slot。
     pub async fn maintain_idle_connections(&self) {
-        let close = self.take_dead_idle_connections().await;
+        let close = self.take_expired_slots().await;
         close_pooled_connections(close).await;
     }
 
@@ -313,7 +323,7 @@ impl CodexWebSocketPool {
         self.inner.lock().await.shutting_down
     }
 
-    async fn take_dead_idle_connections(&self) -> Vec<PooledWebSocketConnection> {
+    async fn take_expired_slots(&self) -> Vec<PooledWebSocketConnection> {
         let mut close = Vec::new();
         let now = Instant::now();
         let mut state = self.inner.lock().await;
@@ -329,12 +339,26 @@ impl CodexWebSocketPool {
                 {
                     Some(key.clone())
                 }
-                WebSocketPoolSlot::Idle(_) | WebSocketPoolSlot::Busy => None,
+                WebSocketPoolSlot::Busy(reservation)
+                    if now.duration_since(reservation.reserved_at) >= self.config.max_age =>
+                {
+                    Some(key.clone())
+                }
+                WebSocketPoolSlot::Idle(_) | WebSocketPoolSlot::Busy(_) => None,
             })
             .collect::<Vec<_>>();
         for key in keys {
-            if let Some(WebSocketPoolSlot::Idle(connection)) = state.slots.remove(&key) {
-                close.push(*connection);
+            match state.slots.remove(&key) {
+                Some(WebSocketPoolSlot::Idle(connection)) => close.push(*connection),
+                Some(WebSocketPoolSlot::Busy(reservation)) => {
+                    tracing::warn!(
+                        account_id = key.account_id(),
+                        conversation_id_hash = key.conversation_id_hash(),
+                        reservation_id = %reservation.id,
+                        "removed stale WebSocket pool reservation"
+                    );
+                }
+                None => {}
             }
         }
         close
@@ -363,13 +387,74 @@ pub(crate) struct PooledWebSocketConnection {
 
 enum WebSocketPoolSlot {
     Idle(Box<PooledWebSocketConnection>),
-    Busy,
+    Busy(WebSocketPoolReservation),
 }
 
 pub(crate) enum WebSocketPoolAcquire {
-    Reused(Box<PooledWebSocketConnection>),
-    FreshReserved,
+    Reused {
+        connection: Box<PooledWebSocketConnection>,
+        lease: WebSocketPoolLease,
+    },
+    FreshReserved(WebSocketPoolLease),
     Bypass(WebSocketPoolBypassReason),
+}
+
+#[derive(Clone, Copy)]
+struct WebSocketPoolReservation {
+    id: Uuid,
+    reserved_at: Instant,
+}
+
+pub(crate) struct WebSocketPoolLease {
+    pool: CodexWebSocketPool,
+    key: CodexWebSocketPoolKey,
+    reservation: WebSocketPoolReservation,
+    armed: bool,
+}
+
+impl WebSocketPoolLease {
+    fn reserve(pool: CodexWebSocketPool, key: CodexWebSocketPoolKey) -> Self {
+        Self {
+            pool,
+            key,
+            reservation: WebSocketPoolReservation {
+                id: Uuid::new_v4(),
+                reserved_at: Instant::now(),
+            },
+            armed: true,
+        }
+    }
+
+    pub(crate) async fn put(mut self, connection: PooledWebSocketConnection) {
+        self.pool
+            .put_reserved(&self.key, self.reservation.id, connection)
+            .await;
+        self.armed = false;
+    }
+
+    pub(crate) async fn discard(mut self) {
+        self.pool
+            .discard_reserved(&self.key, self.reservation.id)
+            .await;
+        self.armed = false;
+    }
+}
+
+impl Drop for WebSocketPoolLease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let pool = self.pool.clone();
+        let key = self.key.clone();
+        let reservation_id = self.reservation.id;
+        runtime.spawn(async move {
+            pool.discard_reserved(&key, reservation_id).await;
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
