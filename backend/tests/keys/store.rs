@@ -9,10 +9,10 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
     let (store, _dir) = client_key_store("client-keys").await;
 
     let created = KeyManageService::new(store.clone())
-        .create("cursor")
+        .create("primary")
         .await
         .unwrap();
-    assert_eq!(created.name, "cursor");
+    assert_eq!(created.name, "primary");
     assert!(created.key.starts_with("sk_"));
 
     let stored_key: (String,) = sqlx::query_as("select key from client_api_keys where id = $1")
@@ -22,9 +22,9 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
         .unwrap();
     assert_eq!(stored_key.0, created.key);
 
-    let first_page = store.list(None, 10).await.unwrap();
+    let first_page = store.list_page(1, 10, None).await.unwrap();
     assert_eq!(first_page.items.len(), 1);
-    assert_eq!(first_page.items[0].name, "cursor");
+    assert_eq!(first_page.items[0].name, "primary");
     assert_eq!(first_page.items[0].prefix, created.prefix);
     assert_eq!(first_page.items[0].key, created.key);
     assert!(first_page.items[0].last_used_at.is_none());
@@ -97,7 +97,8 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
         .await
         .unwrap();
 
-    let first_page = store.list(None, 2).await.unwrap();
+    let first_page = store.list_page(1, 2, None).await.unwrap();
+    assert_eq!(first_page.total, 3);
     assert_eq!(
         first_page
             .items
@@ -107,7 +108,7 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
         ["c", "b"]
     );
 
-    let second_page = store.list(first_page.next_cursor, 2).await.unwrap();
+    let second_page = store.list_page(2, 2, None).await.unwrap();
     assert_eq!(
         second_page
             .items
@@ -116,6 +117,32 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
             .collect::<Vec<_>>(),
         ["a"]
     );
+}
+
+#[tokio::test]
+async fn client_key_store_should_search_name_label_and_id_before_paging() {
+    let (store, _dir) = client_key_store("client-keys-search").await;
+    let admin = KeyManageService::new(store.clone());
+    let matching = admin.create("automation").await.unwrap();
+    let named = admin.create("interactive").await.unwrap();
+    store
+        .set_label(&matching.id, Some("nightly-needle".to_string()))
+        .await
+        .unwrap();
+
+    let page = store
+        .list_page(1, 10, Some("nightly-needle"))
+        .await
+        .unwrap();
+
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].id, matching.id);
+
+    let name_page = store.list_page(1, 10, Some("interact")).await.unwrap();
+    assert_eq!(name_page.items[0].id, named.id);
+
+    let id_page = store.list_page(1, 10, Some(&matching.id)).await.unwrap();
+    assert_eq!(id_page.items[0].id, matching.id);
 }
 
 async fn client_key_store(

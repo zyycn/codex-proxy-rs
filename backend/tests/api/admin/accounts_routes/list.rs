@@ -28,7 +28,7 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts?limit=10")
+                .uri("/api/admin/accounts")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts_list")
                 .body(Body::empty())
@@ -39,6 +39,10 @@ async fn admin_accounts_list_should_not_expose_account_tokens() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
+    assert_eq!(body["data"]["page"]["page"], 1);
+    assert_eq!(body["data"]["page"]["pageSize"], 50);
+    assert_eq!(body["data"]["page"]["total"], 2);
+    assert!(body["data"]["page"].get("nextCursor").is_none());
     let items = body["data"]["items"].as_array().unwrap();
     let plain = items
         .iter()

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
-use crate::infra::{format::nonnegative_i64_to_u64, json::Page};
+use crate::infra::format::nonnegative_i64_to_u64;
 use crate::telemetry::{
     account_usage::store::{PgAccountUsageStore, UsageListRecord, UsageSummary},
     billing,
@@ -28,27 +28,6 @@ impl AccountUsageQueryService {
             buckets: PgRequestBucketQuery::new(store.pool().clone()),
             store,
         }
-    }
-
-    /// 分页列出账号用量。
-    pub async fn list(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> Result<Page<AccountUsageRecord>, AccountUsageQueryError> {
-        let page = self
-            .store
-            .list_usage(cursor, limit)
-            .await
-            .map_err(|_| AccountUsageQueryError::List)?;
-        Ok(Page {
-            items: page
-                .items
-                .into_iter()
-                .map(AccountUsageRecord::from)
-                .collect(),
-            next_cursor: page.next_cursor,
-        })
     }
 
     /// 按账号 ID 批量读取账号用量。

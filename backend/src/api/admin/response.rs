@@ -1,6 +1,6 @@
 //! 管理端响应封装与 From 转换。
 
-use crate::infra::json::{total_pages, NumberedPage, Page};
+use crate::infra::json::{total_pages, NumberedPage};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -187,31 +187,14 @@ impl<T> AdminEnvelope<T> {
     }
 }
 
-/// 分页元数据。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CursorPageMeta {
-    pub(crate) limit: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) next_cursor: Option<String>,
-}
-
 /// 页码分页元数据。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct NumberedPageMeta {
+pub(crate) struct PageMeta {
     pub(crate) page: u32,
     pub(crate) page_size: u32,
     pub(crate) total: u64,
     pub(crate) total_pages: u32,
-}
-
-/// 分页元数据。
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub(crate) enum PageMeta {
-    Cursor(CursorPageMeta),
-    Numbered(NumberedPageMeta),
 }
 
 /// 分页响应信封。
@@ -240,19 +223,7 @@ pub(crate) struct BatchDeleteData {
 }
 
 impl<T> AdminPageEnvelope<T> {
-    pub fn ok(page: Page<T>, limit: u32) -> Self {
-        let Page { items, next_cursor } = page;
-        Self {
-            code: ADMIN_OK_CODE,
-            message: ADMIN_OK_MESSAGE.into(),
-            data: PageData {
-                items,
-                page: PageMeta::Cursor(CursorPageMeta { limit, next_cursor }),
-            },
-        }
-    }
-
-    pub fn numbered(page: NumberedPage<T>) -> Self {
+    pub fn ok(page: NumberedPage<T>) -> Self {
         let NumberedPage {
             items,
             total,
@@ -264,12 +235,12 @@ impl<T> AdminPageEnvelope<T> {
             message: ADMIN_OK_MESSAGE.into(),
             data: PageData {
                 items,
-                page: PageMeta::Numbered(NumberedPageMeta {
+                page: PageMeta {
                     page,
                     page_size,
                     total,
                     total_pages: total_pages(total, page_size),
-                }),
+                },
             },
         }
     }

@@ -107,7 +107,7 @@ pub(super) async fn record_response_dispatch_error_event(
         insert_response_status_metadata_object(
             object,
             i64::from(record.error.http_status_code()),
-            dispatch_error_client_status_code(record.error, record.stream, record.compact),
+            dispatch_error_client_status_code(record.error, record.stream),
             dispatch_error_upstream_status_code(record.error),
         );
     }
@@ -152,7 +152,7 @@ pub(super) async fn record_response_upstream_error_event(
         insert_response_status_metadata_object(
             object,
             event_status_code,
-            upstream_failure_client_status_code(record.stream),
+            upstream_failure_client_status_code(event_status_code, record.stream),
             Some(event_status_code),
         );
         insert_response_request_summary_object(object, record.request, record.transport);
@@ -453,25 +453,20 @@ fn dispatch_error_upstream_status_code(error: &ResponseDispatchError) -> Option<
     }
 }
 
-fn dispatch_error_client_status_code(
-    error: &ResponseDispatchError,
-    stream: bool,
-    compact: bool,
-) -> i64 {
+fn dispatch_error_client_status_code(error: &ResponseDispatchError, stream: bool) -> i64 {
     if stream {
         return 200;
     }
-    if matches!(error, ResponseDispatchError::Upstream(_)) && !compact {
-        return 502;
-    }
-    i64::from(error.http_status_code())
+    i64::from(error.client_http_status_code())
 }
 
-fn upstream_failure_client_status_code(stream: bool) -> i64 {
+fn upstream_failure_client_status_code(upstream_status: i64, stream: bool) -> i64 {
     if stream {
         200
     } else {
-        502
+        i64::from(crate::dispatch::errors::client_upstream_http_status_code(
+            u16::try_from(upstream_status).unwrap_or(502),
+        ))
     }
 }
 

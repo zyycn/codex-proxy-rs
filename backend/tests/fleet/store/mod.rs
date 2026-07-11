@@ -54,7 +54,7 @@ async fn account_store_should_store_plain_tokens_and_load_secret_wrappers() {
 }
 
 #[tokio::test]
-async fn account_store_should_cursor_page_accounts_by_added_at_desc() {
+async fn account_store_should_page_account_metadata_by_added_at_desc() {
     let (pool, _dir) = account_store_parts("accounts", 5).await;
     let repo = PgAccountStore::new(pool.clone());
 
@@ -62,7 +62,7 @@ async fn account_store_should_cursor_page_accounts_by_added_at_desc() {
     seed_repo_account(&pool, "acct_b", "2026-06-11T00:01:00Z").await;
     seed_repo_account(&pool, "acct_c", "2026-06-11T00:02:00Z").await;
 
-    let first_page = repo.list(None, 2).await.unwrap();
+    let first_page = repo.list_metadata_page(1, 2, None).await.unwrap();
     assert_eq!(
         first_page
             .items
@@ -72,7 +72,7 @@ async fn account_store_should_cursor_page_accounts_by_added_at_desc() {
         ["acct_c", "acct_b"]
     );
 
-    let second_page = repo.list(first_page.next_cursor, 2).await.unwrap();
+    let second_page = repo.list_metadata_page(2, 2, None).await.unwrap();
     assert_eq!(
         second_page
             .items
@@ -100,7 +100,7 @@ async fn account_store_should_list_metadata_without_exposing_tokens() {
     .await
     .unwrap();
 
-    let page = repo.list_metadata(None, 10).await.unwrap();
+    let page = repo.list_metadata_page(1, 10, None).await.unwrap();
 
     assert_eq!(page.items[0].id, "acct_plain");
     assert_eq!(page.items[0].email.as_deref(), Some("user@example.com"));

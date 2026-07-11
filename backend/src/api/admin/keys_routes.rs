@@ -17,7 +17,7 @@ use crate::{
     api::admin::session::AdminAuth,
     api::AppState,
     infra::{
-        json::{clamp_limit, Page},
+        json::{clamp_limit, clamp_page, NumberedPage},
         time::{china_relative_time_str, china_rfc3339_str},
     },
     keys::types::{KeyManageError, ManagedClientApiKey},
@@ -26,8 +26,9 @@ use crate::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ApiKeysQuery {
-    cursor: Option<String>,
-    limit: Option<u32>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    search: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,21 +118,24 @@ pub(crate) async fn api_keys(
     _auth: AdminAuth,
     Query(query): Query<ApiKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let limit = clamp_limit(query.limit.unwrap_or(50));
+    let page = clamp_page(query.page.unwrap_or(1));
+    let page_size = clamp_limit(query.page_size.unwrap_or(50));
     match state
         .services
         .admin_client_keys
-        .list(query.cursor, limit)
+        .list_page(page, page_size, query.search)
         .await
     {
         Ok(page) => {
-            let page = Page {
+            let page = NumberedPage {
                 items: page.items.into_iter().map(ClientApiKeyData::from).collect(),
-                next_cursor: page.next_cursor,
+                total: page.total,
+                page: page.page,
+                page_size: page.page_size,
             };
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminPageEnvelope::ok(page, limit),
+                AdminPageEnvelope::ok(page),
             ))
         }
         Err(error) => Err(client_key_error(&error)),

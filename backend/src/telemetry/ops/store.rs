@@ -5,10 +5,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::{
-    infra::{
-        json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page},
-        time::parse_rfc3339_utc,
-    },
+    infra::json::{page_offset, NumberedPage},
     telemetry::{buckets::store::PgRequestBucketStore, ops::types::OpsErrorLog},
 };
 
@@ -25,8 +22,6 @@ pub enum PgOpsErrorLogStoreError {
     Database(#[from] sqlx::Error),
     #[error("invalid ops error retention days: {0}")]
     InvalidRetention(i64),
-    #[error("invalid ops error pagination cursor")]
-    InvalidCursor,
 }
 
 pub type PgOpsErrorLogStoreResult<T> = Result<T, PgOpsErrorLogStoreError>;
@@ -86,31 +81,6 @@ insert into ops_error_logs (
         Ok(())
     }
 
-    pub async fn list(
-        &self,
-        filter: OpsErrorFilter,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> PgOpsErrorLogStoreResult<Page<OpsErrorLog>> {
-        let limit = limit.clamp(1, 200);
-        let mut builder = QueryBuilder::<Postgres>::new(OPS_ERROR_SELECT_SQL);
-        push_filter(&mut builder, &filter, cursor.as_deref())?;
-        builder.push(" order by created_at desc, id desc limit ");
-        builder.push_bind(i64::from(limit) + 1);
-        let rows = builder.build().fetch_all(&self.pool).await?;
-        let has_next = rows.len() > limit as usize;
-        let items = rows
-            .into_iter()
-            .take(limit as usize)
-            .map(|row| ops_error_from_row(&row))
-            .collect::<Vec<_>>();
-        let next_cursor = has_next.then(|| {
-            let item = items.last().expect("next page requires an ops error");
-            encode_cursor(&item.created_at.to_rfc3339(), &item.id)
-        });
-        Ok(Page { items, next_cursor })
-    }
-
     pub async fn list_page(
         &self,
         filter: OpsErrorFilter,
@@ -120,7 +90,7 @@ insert into ops_error_logs (
         let page_size = page_size.clamp(1, 200);
         let total = count_ops_errors(&self.pool, &filter).await?;
         let mut builder = QueryBuilder::<Postgres>::new(OPS_ERROR_SELECT_SQL);
-        push_filter(&mut builder, &filter, None)?;
+        push_filter(&mut builder, &filter);
         builder.push(" order by created_at desc, id desc limit ");
         builder.push_bind(i64::from(page_size));
         builder.push(" offset ");
@@ -195,11 +165,7 @@ pub struct OpsErrorFilter {
     pub end_time: Option<DateTime<Utc>>,
 }
 
-fn push_filter(
-    builder: &mut QueryBuilder<Postgres>,
-    filter: &OpsErrorFilter,
-    cursor: Option<&str>,
-) -> PgOpsErrorLogStoreResult<()> {
+fn push_filter(builder: &mut QueryBuilder<Postgres>, filter: &OpsErrorFilter) {
     builder.push(" where true");
     push_optional_text(builder, "kind", filter.kind.as_deref());
     push_optional_text(
@@ -248,20 +214,6 @@ fn push_filter(
         builder.push(" and created_at <= ");
         builder.push_bind(end_time);
     }
-    if let Some(cursor) = cursor {
-        let (created_at, id) =
-            decode_cursor(cursor).ok_or(PgOpsErrorLogStoreError::InvalidCursor)?;
-        let created_at =
-            parse_rfc3339_utc(&created_at).map_err(|_| PgOpsErrorLogStoreError::InvalidCursor)?;
-        builder.push(" and (created_at < ");
-        builder.push_bind(created_at);
-        builder.push(" or (created_at = ");
-        builder.push_bind(created_at);
-        builder.push(" and id < ");
-        builder.push_bind(id);
-        builder.push("))");
-    }
-    Ok(())
 }
 
 fn push_optional_text(builder: &mut QueryBuilder<Postgres>, column: &str, value: Option<&str>) {
@@ -284,7 +236,7 @@ fn push_optional_i64(builder: &mut QueryBuilder<Postgres>, column: &str, value: 
 
 async fn count_ops_errors(pool: &PgPool, filter: &OpsErrorFilter) -> PgOpsErrorLogStoreResult<u64> {
     let mut builder = QueryBuilder::<Postgres>::new("select count(*) from ops_error_logs");
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     let total: i64 = builder.build_query_scalar().fetch_one(pool).await?;
     Ok(total.max(0) as u64)
 }

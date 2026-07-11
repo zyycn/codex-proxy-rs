@@ -2,6 +2,7 @@
 import { computed, ref, shallowRef } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
+import type { ClientApiKey } from '@/api/modules/api-keys'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -20,8 +21,20 @@ import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 
 const selectedIds = ref<Set<string>>(new Set())
+const totalApiKeys = ref(0)
 const showUseKeyModal = shallowRef(false)
-const selectedUseKey = shallowRef<any | null>(null)
+const selectedUseKey = shallowRef<ClientApiKey | null>(null)
+
+const {
+  page,
+  pageSize,
+  searchQuery,
+  apiKeyPagination,
+  bindApiKeyLoader,
+  handlePageChange,
+  handlePageSizeChange,
+} = useApiKeyFilters(totalApiKeys)
+
 const {
   loading,
   apiKeys,
@@ -37,21 +50,21 @@ const {
   batchDeleting,
   updatingStatusKeyIds,
   createForm,
+  loadApiKeys,
   handleCreate,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
   handleToggleStatus,
   copyToClipboard,
-} = useApiKeyMutations(selectedIds)
-
-const { searchQuery, pagedKeys, apiKeyPagination, handlePageChange, handlePageSizeChange } =
-  useApiKeyFilters(apiKeys)
+} = useApiKeyMutations({ page, pageSize, searchQuery, selectedIds, totalApiKeys })
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = useApiKeysTable(
-  pagedKeys,
+  apiKeys,
   selectedIds,
 )
+
+bindApiKeyLoader(loadApiKeys)
 
 const serviceRootUrl = computed(() => resolveServiceRootUrl())
 const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
@@ -85,12 +98,12 @@ function importCreatedKeyToCcs() {
   })
 }
 
-function openUseKeyModal(apiKey: any) {
+function openUseKeyModal(apiKey: ClientApiKey) {
   selectedUseKey.value = apiKey
   showUseKeyModal.value = true
 }
 
-function importToCcs(apiKey: any) {
+function importToCcs(apiKey: ClientApiKey) {
   if (!apiKey.key) return
 
   window.location.href = buildCodexCcSwitchImportDeeplink({
@@ -134,7 +147,7 @@ function importToCcs(apiKey: any) {
         <BaseTable
           class="min-h-0 flex-1"
           :columns="apiKeyColumns"
-          :rows="pagedKeys"
+          :rows="apiKeys"
           :loading="loading"
           :selected-row-keys="selectedRowKeys"
           :pagination="apiKeyPagination"

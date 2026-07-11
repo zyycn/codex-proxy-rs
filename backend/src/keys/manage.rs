@@ -1,6 +1,6 @@
 //! 客户端 API Key 管理服务。
 
-use crate::infra::json::Page;
+use crate::infra::json::NumberedPage;
 
 use super::{
     store::PgClientKeyStore,
@@ -31,19 +31,22 @@ impl KeyManageService {
             .map_err(|_| KeyManageError::Create)
     }
 
-    pub async fn list(
+    pub async fn list_page(
         &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> Result<Page<ManagedClientApiKey>, KeyManageError> {
+        page: u32,
+        page_size: u32,
+        search: Option<String>,
+    ) -> Result<NumberedPage<ManagedClientApiKey>, KeyManageError> {
         let page = self
             .store
-            .list(cursor, limit)
+            .list_page(page, page_size, search.as_deref())
             .await
             .map_err(|_| KeyManageError::List)?;
-        Ok(Page {
+        Ok(NumberedPage {
             items: page.items.into_iter().map(Into::into).collect(),
-            next_cursor: page.next_cursor,
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
         })
     }
 

@@ -20,8 +20,7 @@ use crate::{
     api::admin::{
         response::{
             parse_editable_update, AdminEnvelope, AdminError, AdminResponse, BatchDeleteData,
-            CursorPageMeta, EditableUpdateMessages, NumberedPageMeta, PageMeta, ADMIN_OK_CODE,
-            ADMIN_OK_MESSAGE,
+            EditableUpdateMessages, PageMeta, ADMIN_OK_CODE, ADMIN_OK_MESSAGE,
         },
         session::AdminAuth,
     },
@@ -41,7 +40,7 @@ use crate::{
         format::{
             format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
         },
-        json::{clamp_limit, clamp_page, total_pages, Page},
+        json::{clamp_limit, clamp_page, total_pages},
         time::{china_datetime, china_relative_time, china_rfc3339},
     },
     telemetry::{
@@ -57,8 +56,6 @@ const ACCOUNT_EXPORT_CONFIRMATION: &str = "export_sensitive_accounts";
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AccountsQuery {
-    cursor: Option<String>,
-    limit: Option<u32>,
     page: Option<u32>,
     page_size: Option<u32>,
     search: Option<String>,
@@ -361,22 +358,7 @@ struct AdminAccountPageEnvelope {
 }
 
 impl AdminAccountPageEnvelope {
-    fn cursor(page: Page<AdminAccountData>, limit: u32, summary: AdminAccountSummaryData) -> Self {
-        Self {
-            code: ADMIN_OK_CODE,
-            message: ADMIN_OK_MESSAGE.into(),
-            data: AdminAccountPageData {
-                items: page.items,
-                page: PageMeta::Cursor(CursorPageMeta {
-                    limit,
-                    next_cursor: page.next_cursor,
-                }),
-                summary,
-            },
-        }
-    }
-
-    fn numbered(
+    fn ok(
         page: crate::infra::json::NumberedPage<AdminAccountData>,
         summary: AdminAccountSummaryData,
     ) -> Self {
@@ -384,12 +366,12 @@ impl AdminAccountPageEnvelope {
             code: ADMIN_OK_CODE,
             message: ADMIN_OK_MESSAGE.into(),
             data: AdminAccountPageData {
-                page: PageMeta::Numbered(NumberedPageMeta {
+                page: PageMeta {
                     page: page.page,
                     page_size: page.page_size,
                     total: page.total,
                     total_pages: total_pages(page.total, page.page_size),
-                }),
+                },
                 items: page.items,
                 summary,
             },
@@ -521,58 +503,32 @@ pub(crate) async fn accounts(
     _auth: AdminAuth,
     Query(params): Query<AccountsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let limit = clamp_limit(params.page_size.or(params.limit).unwrap_or(50));
-    let use_numbered_page = params.page.is_some() || params.page_size.is_some();
+    let page = clamp_page(params.page.unwrap_or(1));
+    let page_size = clamp_limit(params.page_size.unwrap_or(50));
     let quota_by_account = quota_snapshots_by_account(&state).await;
     let summary = account_summary_data(&state, &quota_by_account).await;
-
-    if use_numbered_page {
-        return match state
-            .services
-            .admin_accounts
-            .list_page(clamp_page(params.page.unwrap_or(1)), limit, params.search)
-            .await
-        {
-            Ok(page) => {
-                let stats = account_list_stats(&state, &page.items, &quota_by_account).await?;
-                let page = crate::infra::json::NumberedPage {
-                    items: page
-                        .items
-                        .into_iter()
-                        .map(|item| stats.data_for(item))
-                        .collect(),
-                    total: page.total,
-                    page: page.page,
-                    page_size: page.page_size,
-                };
-                Ok(AdminResponse::new(
-                    StatusCode::OK,
-                    AdminAccountPageEnvelope::numbered(page, summary),
-                ))
-            }
-            Err(error) => Err(account_error(&error)),
-        };
-    }
 
     match state
         .services
         .admin_accounts
-        .list(params.cursor, limit)
+        .list_page(page, page_size, params.search)
         .await
     {
         Ok(page) => {
             let stats = account_list_stats(&state, &page.items, &quota_by_account).await?;
-            let page = Page {
+            let page = crate::infra::json::NumberedPage {
                 items: page
                     .items
                     .into_iter()
                     .map(|item| stats.data_for(item))
                     .collect(),
-                next_cursor: page.next_cursor,
+                total: page.total,
+                page: page.page,
+                page_size: page.page_size,
             };
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminAccountPageEnvelope::cursor(page, limit, summary),
+                AdminAccountPageEnvelope::ok(page, summary),
             ))
         }
         Err(error) => Err(account_error(&error)),

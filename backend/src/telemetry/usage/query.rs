@@ -7,10 +7,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::{
-    infra::{
-        format::optional_nonnegative_i64_to_u64,
-        json::{NumberedPage, Page},
-    },
+    infra::{format::optional_nonnegative_i64_to_u64, json::NumberedPage},
     telemetry::{
         billing,
         usage::store::{
@@ -129,15 +126,14 @@ impl UsageQueryService {
         Self { store }
     }
 
-    /// 分页查询日志。
-    pub async fn list(
+    /// 查询最近的日志。
+    pub async fn list_recent(
         &self,
-        cursor: Option<String>,
         limit: u32,
         filter: UsageQueryFilter,
-    ) -> Result<Page<UsageRecord>, UsageQueryError> {
+    ) -> Result<Vec<UsageRecord>, UsageQueryError> {
         self.store
-            .list(filter.into(), cursor, limit)
+            .list_recent(filter.into(), limit)
             .await
             .map_err(|_| UsageQueryError::List)
     }
@@ -298,7 +294,7 @@ pub(super) async fn count_usage_records(
     filter: &UsageRecordFilter,
 ) -> PgUsageRecordStoreResult<u64> {
     let mut builder = QueryBuilder::<Postgres>::new("select count(*) from usage_records");
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     let total: i64 = builder.build_query_scalar().fetch_one(pool).await?;
     Ok(total.max(0) as u64)
 }
@@ -317,7 +313,7 @@ select
   avg(latency_ms::double precision) as average_latency_ms
 from usage_records",
     );
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     let row = builder.build().fetch_one(pool).await?;
     let input_tokens = nonnegative(row.get("input_tokens"));
     let output_tokens = nonnegative(row.get("output_tokens"));
@@ -346,7 +342,7 @@ select
   max(created_at) as last_used_at
 from usage_records",
     );
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     builder.push(" group by account_id order by last_used_at desc, account_id limit ");
     builder.push_bind(i64::from(limit.clamp(1, 50)));
     Ok(builder
@@ -420,7 +416,7 @@ pub(super) async fn usage_breakdown(
   count(latency_ms) as latency_count
 from usage_records",
     );
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     builder.push(" group by name, billing_model, service_tier order by request_count desc limit ");
     builder.push_bind(i64::from(limit.clamp(1, 50) * 8));
 
@@ -484,7 +480,7 @@ select
   count(latency_ms) as latency_count
 from usage_records",
     );
-    push_filter(&mut builder, filter, None)?;
+    push_filter(&mut builder, filter);
     builder.push(" group by date, billing_model, service_tier order by date asc");
 
     let mut days = BTreeMap::<String, UsageTrendAccumulator>::new();

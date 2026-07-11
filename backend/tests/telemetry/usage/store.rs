@@ -7,7 +7,7 @@ use codex_proxy_rs::telemetry::{
 use crate::support::storage::init_test_db;
 
 #[tokio::test]
-async fn usage_store_filters_and_cursor_pages_success_facts() {
+async fn usage_store_should_filter_numbered_pages_of_success_facts() {
     let (pool, _guard) = init_test_db("usage-record-filter").await;
     let store = PgUsageRecordStore::new(pool);
     let mut matching = success_record("matching");
@@ -19,22 +19,48 @@ async fn usage_store_filters_and_cursor_pages_success_facts() {
     store.append(&success_record("other")).await.unwrap();
 
     let page = store
-        .list(
+        .list_page(
             UsageRecordFilter {
                 kind: Some("request".to_string()),
                 client_api_key_id: Some("key_1".to_string()),
                 search: Some("matching".to_string()),
                 ..UsageRecordFilter::default()
             },
-            None,
             1,
+            20,
         )
         .await
         .unwrap();
 
-    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total, 1);
     assert_eq!(page.items[0].id, "usage_matching");
     assert_eq!(page.items[0].request_id.as_deref(), Some("req_1"));
+}
+
+#[tokio::test]
+async fn usage_store_should_list_recent_records_in_descending_order() {
+    let (pool, _guard) = init_test_db("usage-record-recent").await;
+    let store = PgUsageRecordStore::new(pool);
+    let now = Utc::now();
+    for (id, seconds) in [("usage_old", 0), ("usage_middle", 1), ("usage_new", 2)] {
+        let mut record = success_record(id);
+        record.id = id.to_string();
+        record.created_at = now + Duration::seconds(seconds);
+        store.append(&record).await.unwrap();
+    }
+
+    let records = store
+        .list_recent(UsageRecordFilter::default(), 2)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        ["usage_new", "usage_middle"]
+    );
 }
 
 #[tokio::test]

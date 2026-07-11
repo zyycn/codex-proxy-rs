@@ -334,7 +334,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "codex_api_error");
+    assert_eq!(body["error"]["code"], "codex_client_error");
     let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
@@ -351,6 +351,84 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     assert!(metadata["error"]
         .as_str()
         .is_some_and(|value| value.contains("invalid_encrypted_content")));
+}
+
+#[tokio::test]
+async fn responses_compact_should_map_upstream_internal_error_to_bad_gateway() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": {"message": "upstream internal error"}
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"]["type"], "server_error");
+    assert_eq!(body["error"]["code"], "upstream_error");
+}
+
+#[tokio::test]
+async fn responses_compact_should_preserve_upstream_service_unavailable_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(json!({
+            "error": {"message": "upstream unavailable"}
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["type"], "server_error");
+    assert_eq!(body["error"]["code"], "upstream_error");
 }
 
 #[tokio::test]

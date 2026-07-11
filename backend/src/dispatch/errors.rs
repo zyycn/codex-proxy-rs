@@ -420,6 +420,13 @@ impl ResponseDispatchError {
         }
     }
 
+    pub fn client_http_status_code(&self) -> u16 {
+        match self {
+            Self::Upstream(_) => client_upstream_http_status_code(self.http_status_code()),
+            _ => self.http_status_code(),
+        }
+    }
+
     pub(crate) fn metadata(&self) -> DispatchErrorMetadata {
         match self {
             Self::NoActiveAccount => DispatchErrorMetadata::no_available_accounts(),
@@ -580,6 +587,13 @@ impl ResponseDispatchError {
             count,
             upstream_error,
         })
+    }
+}
+
+pub(crate) fn client_upstream_http_status_code(status: u16) -> u16 {
+    match status {
+        400..=499 | 503 => status,
+        _ => 502,
     }
 }
 
