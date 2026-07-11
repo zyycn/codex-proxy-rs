@@ -211,9 +211,8 @@ pub(crate) async fn dashboard_summary(
     let recent_events = state
         .services
         .usage_records
-        .list(None, DASHBOARD_USAGE_RECORD_LIMIT, today_filter)
+        .list_recent(DASHBOARD_USAGE_RECORD_LIMIT, today_filter)
         .await
-        .map(|page| page.items)
         .unwrap_or_default();
 
     let time_buckets = dashboard_time_buckets(&state, now).await;

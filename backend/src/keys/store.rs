@@ -3,22 +3,23 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::infra::{
     identity::generate_client_api_key,
-    json::{decode_cursor, encode_cursor, Page},
-    time::parse_rfc3339_utc,
+    json::{page_offset, NumberedPage},
 };
+
+const CLIENT_KEY_SELECT_SQL: &str = r"select
+  id, name, label, prefix, key, enabled, created_at, last_used_at
+from client_api_keys";
 
 #[derive(Debug, Error)]
 pub enum PgClientKeyStoreError {
     #[error("PostgreSQL client key operation failed: {0}")]
     Database(#[from] sqlx::Error),
-    #[error("invalid client key pagination cursor")]
-    InvalidCursor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,53 +91,39 @@ values ($1, $2, null, $3, $4, true, $5, null)",
         Ok(stored)
     }
 
-    pub async fn list(
+    pub async fn list_page(
         &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> Result<Page<StoredClientApiKey>, PgClientKeyStoreError> {
-        let fetch_limit = i64::from(limit) + 1;
-        let rows = if let Some(cursor) = cursor {
-            let (created_at, id) =
-                decode_cursor(&cursor).ok_or(PgClientKeyStoreError::InvalidCursor)?;
-            let created_at =
-                parse_rfc3339_utc(&created_at).map_err(|_| PgClientKeyStoreError::InvalidCursor)?;
-            sqlx::query(
-                r"
-select id, name, label, prefix, key, enabled, created_at, last_used_at
-from client_api_keys
-where created_at < $1 or (created_at = $1 and id < $2)
-order by created_at desc, id desc
-limit $3",
-            )
-            .bind(created_at)
-            .bind(id)
-            .bind(fetch_limit)
-            .fetch_all(&self.pool)
+        page: u32,
+        page_size: u32,
+        search: Option<&str>,
+    ) -> Result<NumberedPage<StoredClientApiKey>, PgClientKeyStoreError> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 200);
+        let search = search.map(str::trim).filter(|value| !value.is_empty());
+
+        let mut count_builder =
+            QueryBuilder::<Postgres>::new("select count(*) from client_api_keys");
+        push_search(&mut count_builder, search);
+        let total = count_builder
+            .build_query_scalar::<i64>()
+            .fetch_one(&self.pool)
             .await?
-        } else {
-            sqlx::query(
-                r"
-select id, name, label, prefix, key, enabled, created_at, last_used_at
-from client_api_keys
-order by created_at desc, id desc
-limit $1",
-            )
-            .bind(fetch_limit)
-            .fetch_all(&self.pool)
-            .await?
-        };
-        let has_next = rows.len() > limit as usize;
-        let items = rows
-            .into_iter()
-            .take(limit as usize)
-            .map(|row| Self::key_from_row(&row))
-            .collect::<Vec<_>>();
-        let next_cursor = has_next.then(|| {
-            let key = items.last().expect("next page requires at least one key");
-            encode_cursor(&key.created_at.to_rfc3339(), &key.id)
-        });
-        Ok(Page { items, next_cursor })
+            .max(0) as u64;
+
+        let mut builder = QueryBuilder::<Postgres>::new(CLIENT_KEY_SELECT_SQL);
+        push_search(&mut builder, search);
+        builder.push(" order by created_at desc, id desc limit ");
+        builder.push_bind(i64::from(page_size));
+        builder.push(" offset ");
+        builder.push_bind(page_offset(page, page_size).min(i64::MAX as u64) as i64);
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        let items = rows.iter().map(Self::key_from_row).collect::<Vec<_>>();
+        Ok(NumberedPage {
+            items,
+            total,
+            page,
+            page_size,
+        })
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<StoredClientApiKey>, PgClientKeyStoreError> {
@@ -224,4 +211,18 @@ where keys.id = touched.id",
             last_used_at: row.get("last_used_at"),
         }
     }
+}
+
+fn push_search(builder: &mut QueryBuilder<Postgres>, search: Option<&str>) {
+    let Some(search) = search else {
+        return;
+    };
+    let pattern = format!("%{search}%");
+    builder.push(" where (name ilike ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or label ilike ");
+    builder.push_bind(pattern.clone());
+    builder.push(" or id ilike ");
+    builder.push_bind(pattern);
+    builder.push(")");
 }

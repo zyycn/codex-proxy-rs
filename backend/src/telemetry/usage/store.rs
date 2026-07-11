@@ -14,10 +14,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 use thiserror::Error;
 
 use crate::{
-    infra::{
-        json::{decode_cursor, encode_cursor, page_offset, NumberedPage, Page},
-        time::parse_rfc3339_utc,
-    },
+    infra::json::{page_offset, NumberedPage},
     telemetry::{buckets::store::PgRequestBucketStore, usage::types::UsageRecord},
 };
 
@@ -36,8 +33,6 @@ from usage_records";
 pub enum PgUsageRecordStoreError {
     #[error("PostgreSQL usage record operation failed: {0}")]
     Database(#[from] sqlx::Error),
-    #[error("invalid usage record pagination cursor")]
-    InvalidCursor,
     #[error("invalid usage retention days: {0}")]
     InvalidRetention(i64),
 }
@@ -144,29 +139,18 @@ insert into usage_records (
         Ok(result.rows_affected())
     }
 
-    pub async fn list(
+    pub async fn list_recent(
         &self,
         filter: UsageRecordFilter,
-        cursor: Option<String>,
         limit: u32,
-    ) -> PgUsageRecordStoreResult<Page<UsageRecord>> {
+    ) -> PgUsageRecordStoreResult<Vec<UsageRecord>> {
         let limit = limit.clamp(1, 200);
         let mut builder = QueryBuilder::<Postgres>::new(USAGE_RECORD_SELECT_SQL);
-        push_filter(&mut builder, &filter, cursor.as_deref())?;
+        push_filter(&mut builder, &filter);
         builder.push(" order by created_at desc, id desc limit ");
-        builder.push_bind(i64::from(limit) + 1);
+        builder.push_bind(i64::from(limit));
         let rows = builder.build().fetch_all(&self.pool).await?;
-        let has_next = rows.len() > limit as usize;
-        let items = rows
-            .into_iter()
-            .take(limit as usize)
-            .map(|row| usage_record_from_row(&row))
-            .collect::<Vec<_>>();
-        let next_cursor = has_next.then(|| {
-            let item = items.last().expect("next page requires a usage record");
-            encode_cursor(&item.created_at.to_rfc3339(), &item.id)
-        });
-        Ok(Page { items, next_cursor })
+        Ok(rows.iter().map(usage_record_from_row).collect())
     }
 
     pub async fn list_page(
@@ -178,7 +162,7 @@ insert into usage_records (
         let page_size = page_size.clamp(1, 200);
         let total = count_usage_records(&self.pool, &filter).await?;
         let mut builder = QueryBuilder::<Postgres>::new(USAGE_RECORD_SELECT_SQL);
-        push_filter(&mut builder, &filter, None)?;
+        push_filter(&mut builder, &filter);
         builder.push(" order by created_at desc, id desc limit ");
         builder.push_bind(i64::from(page_size));
         builder.push(" offset ");
@@ -281,11 +265,7 @@ insert into usage_records (
     }
 }
 
-pub(super) fn push_filter(
-    builder: &mut QueryBuilder<Postgres>,
-    filter: &UsageRecordFilter,
-    cursor: Option<&str>,
-) -> PgUsageRecordStoreResult<()> {
+pub(super) fn push_filter(builder: &mut QueryBuilder<Postgres>, filter: &UsageRecordFilter) {
     builder.push(" where true");
     push_optional_text(builder, "kind", filter.kind.as_deref());
     push_optional_text(
@@ -329,20 +309,6 @@ pub(super) fn push_filter(
         builder.push(" and created_at <= ");
         builder.push_bind(end_time);
     }
-    if let Some(cursor) = cursor {
-        let (created_at, id) =
-            decode_cursor(cursor).ok_or(PgUsageRecordStoreError::InvalidCursor)?;
-        let created_at =
-            parse_rfc3339_utc(&created_at).map_err(|_| PgUsageRecordStoreError::InvalidCursor)?;
-        builder.push(" and (created_at < ");
-        builder.push_bind(created_at);
-        builder.push(" or (created_at = ");
-        builder.push_bind(created_at);
-        builder.push(" and id < ");
-        builder.push_bind(id);
-        builder.push("))");
-    }
-    Ok(())
 }
 
 fn push_optional_text(builder: &mut QueryBuilder<Postgres>, column: &str, value: Option<&str>) {

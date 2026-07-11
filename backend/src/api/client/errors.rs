@@ -21,27 +21,21 @@ const UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE: &str = "Upstream Codex response fa
 const HISTORY_UNAVAILABLE_MESSAGE: &str = "Previous response context is unavailable. Start a new conversation or resend the complete input without previous_response_id.";
 
 #[derive(Clone, Copy)]
-pub enum ResponseDispatchMessageStyle {
+enum ResponseDispatchMessageStyle {
     Standard,
     ResponsesStream,
 }
 
-#[derive(Clone, Copy)]
-pub enum ResponseDispatchStatusMode {
-    UpstreamFailureStatus,
-    Client,
+struct DispatchHttpError {
+    status: StatusCode,
+    message: String,
 }
 
-pub struct DispatchHttpError {
-    pub status: StatusCode,
-    pub message: String,
-}
-
-pub struct OpenAiErrorDetails {
-    pub status: StatusCode,
-    pub message: String,
-    pub error_type: &'static str,
-    pub code: &'static str,
+struct OpenAiErrorDetails {
+    status: StatusCode,
+    message: String,
+    error_type: &'static str,
+    code: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,9 +44,9 @@ struct OpenAiErrorKind {
     code: &'static str,
 }
 
-const UPSTREAM_UNAVAILABLE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+const NO_AVAILABLE_ACCOUNTS_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",
-    code: "upstream_unavailable",
+    code: "no_available_accounts",
 };
 const UPSTREAM_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",
@@ -86,6 +80,10 @@ const CODEX_API_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",
     code: "codex_api_error",
 };
+const CODEX_CLIENT_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "invalid_request_error",
+    code: "codex_client_error",
+};
 
 /// OpenAI 兼容错误响应。
 pub fn openai_error_response(
@@ -115,54 +113,22 @@ pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Respon
     }
 }
 
-pub fn responses_compact_dispatch_error_response(error: ResponseDispatchError) -> Response {
-    match error {
-        ResponseDispatchError::NoActiveAccount => {
-            responses_no_available_accounts_response().into_response()
-        }
-        error => {
-            let error = response_dispatch_http_error(
-                &error,
-                ResponseDispatchStatusMode::Client,
-                ResponseDispatchMessageStyle::Standard,
-            );
-            responses_error_response(error.status, &error.message).into_response()
-        }
-    }
-}
-
 pub fn responses_stream_dispatch_failed_sse_event(error: &ResponseDispatchError) -> String {
-    let http_error = response_dispatch_http_error(
-        error,
-        ResponseDispatchStatusMode::UpstreamFailureStatus,
-        ResponseDispatchMessageStyle::ResponsesStream,
-    );
+    let http_error =
+        response_dispatch_http_error(error, ResponseDispatchMessageStyle::ResponsesStream);
     let kind = response_dispatch_error_kind(error);
     responses_failed_sse_event(kind, &http_error.message)
 }
 
 fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
+    let kind = NO_AVAILABLE_ACCOUNTS_ERROR;
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({
             "error": {
-                "type": "server_error",
-                "code": "no_available_accounts",
-                "message": NO_AVAILABLE_RESPONSES_ACCOUNTS_MESSAGE,
-            }
-        })),
-    )
-}
-
-fn responses_error_response(status: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
-    let kind = responses_error_kind_for_status(status);
-    (
-        status,
-        Json(json!({
-            "error": {
                 "type": kind.error_type,
                 "code": kind.code,
-                "message": message,
+                "message": NO_AVAILABLE_RESPONSES_ACCOUNTS_MESSAGE,
             }
         })),
     )
@@ -213,11 +179,8 @@ fn invalid_openai_request_response(message: &str) -> (StatusCode, Json<Value>) {
 }
 
 fn response_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorDetails {
-    let DispatchHttpError { status, message } = response_dispatch_http_error(
-        error,
-        ResponseDispatchStatusMode::UpstreamFailureStatus,
-        ResponseDispatchMessageStyle::Standard,
-    );
+    let DispatchHttpError { status, message } =
+        response_dispatch_http_error(error, ResponseDispatchMessageStyle::Standard);
     let kind = response_dispatch_error_kind(error);
 
     OpenAiErrorDetails {
@@ -231,17 +194,16 @@ fn response_dispatch_openai_error(error: &ResponseDispatchError) -> OpenAiErrorD
 fn response_dispatch_error_kind(error: &ResponseDispatchError) -> OpenAiErrorKind {
     dispatch_failure_openai_error_kind(
         error.metadata().failure_class,
-        status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
+        status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY),
     )
 }
 
-pub fn response_dispatch_http_error(
+fn response_dispatch_http_error(
     error: &ResponseDispatchError,
-    status_mode: ResponseDispatchStatusMode,
     message_style: ResponseDispatchMessageStyle,
 ) -> DispatchHttpError {
     DispatchHttpError {
-        status: response_dispatch_status(error, status_mode),
+        status: status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY),
         message: response_dispatch_message(error, message_style),
     }
 }
@@ -254,24 +216,9 @@ fn responses_error_kind_for_status(status: StatusCode) -> OpenAiErrorKind {
     } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
         AUTHENTICATION_ERROR
     } else if status.is_client_error() {
-        OpenAiErrorKind {
-            error_type: "invalid_request_error",
-            code: "codex_api_error",
-        }
+        CODEX_CLIENT_ERROR
     } else {
         CODEX_API_ERROR
-    }
-}
-
-fn response_dispatch_status(
-    error: &ResponseDispatchError,
-    mode: ResponseDispatchStatusMode,
-) -> StatusCode {
-    match (mode, error) {
-        (ResponseDispatchStatusMode::UpstreamFailureStatus, ResponseDispatchError::Upstream(_)) => {
-            StatusCode::BAD_GATEWAY
-        }
-        _ => status_from_u16(error.http_status_code(), StatusCode::BAD_GATEWAY),
     }
 }
 
@@ -335,7 +282,7 @@ fn dispatch_failure_openai_error_kind(
     status: StatusCode,
 ) -> OpenAiErrorKind {
     match failure_class {
-        DispatchFailureClass::NoAvailableAccounts => UPSTREAM_UNAVAILABLE_ERROR,
+        DispatchFailureClass::NoAvailableAccounts => NO_AVAILABLE_ACCOUNTS_ERROR,
         DispatchFailureClass::QuotaExhausted => INSUFFICIENT_QUOTA_ERROR,
         DispatchFailureClass::RateLimited => RATE_LIMIT_ERROR,
         DispatchFailureClass::Expired
@@ -347,9 +294,13 @@ fn dispatch_failure_openai_error_kind(
         | DispatchFailureClass::MissingCompleted
         | DispatchFailureClass::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,
         DispatchFailureClass::ResponseFailed => responses_error_kind_for_status(status),
-        DispatchFailureClass::Upstream
-        | DispatchFailureClass::CloudflareChallenge
-        | DispatchFailureClass::CloudflarePathBlocked => UPSTREAM_ERROR,
+        DispatchFailureClass::Upstream if status.is_client_error() => {
+            responses_error_kind_for_status(status)
+        }
+        DispatchFailureClass::Upstream => UPSTREAM_ERROR,
+        DispatchFailureClass::CloudflareChallenge | DispatchFailureClass::CloudflarePathBlocked => {
+            UPSTREAM_ERROR
+        }
     }
 }
 

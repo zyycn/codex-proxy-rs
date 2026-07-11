@@ -23,8 +23,8 @@ use crate::{
 use super::{
     errors::{
         invalid_responses_request_response, missing_client_api_key_response,
-        model_not_found_response, responses_compact_dispatch_error_response,
-        responses_dispatch_error_response, responses_stream_dispatch_failed_sse_event,
+        model_not_found_response, responses_dispatch_error_response,
+        responses_stream_dispatch_failed_sse_event,
     },
     models::model_catalog_for_state,
     sse::{done_sse_frame, event_stream_response as sse_event_stream_response, SseResponseOptions},
@@ -353,7 +353,7 @@ async fn handle_compact_responses(
         .await
     {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
-        Err(error) => responses_compact_dispatch_error_response(error),
+        Err(error) => responses_dispatch_error_response(error),
     }
 }
 

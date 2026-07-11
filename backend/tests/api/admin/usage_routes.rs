@@ -48,7 +48,7 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/admin/usage/records?page=1&pageSize=20&clientApiKeyId=key_42")
+                .uri("/api/admin/usage/records?clientApiKeyId=key_42")
                 .header("cookie", "cpr_admin_session=session_1")
                 .body(Body::empty())
                 .unwrap(),
@@ -57,6 +57,10 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
+    assert_eq!(body["data"]["page"]["page"], 1);
+    assert_eq!(body["data"]["page"]["pageSize"], 50);
+    assert_eq!(body["data"]["page"]["total"], 1);
+    assert!(body["data"]["page"].get("nextCursor").is_none());
     let item = &body["data"]["items"][0];
     assert_eq!(item["id"], "usage_route_success");
     assert_eq!(item["clientApiKeyId"], "key_42");
@@ -102,10 +106,12 @@ async fn ops_errors_route_filters_failure_facts_independently() {
 
     let body = admin_get(
         &app,
-        "/api/admin/ops/errors?page=1&pageSize=20&failureClass=rate_limited&search=req_ops",
+        "/api/admin/ops/errors?failureClass=rate_limited&search=req_ops",
     )
     .await;
     assert_eq!(body["data"]["page"]["total"], 1);
+    assert_eq!(body["data"]["page"]["page"], 1);
+    assert_eq!(body["data"]["page"]["pageSize"], 50);
     assert_eq!(body["data"]["items"][0]["id"], "ops_route_error");
     assert_eq!(body["data"]["items"][0]["upstreamStatusCode"], 429);
 

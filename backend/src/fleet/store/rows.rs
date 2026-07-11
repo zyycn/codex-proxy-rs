@@ -9,7 +9,7 @@ use crate::{
         account::{Account, AccountStatus},
         quota::{quota_snapshot_limit_window_seconds, quota_snapshot_reset_at},
     },
-    infra::{format::nonnegative_i64_to_u64, json::Page},
+    infra::format::nonnegative_i64_to_u64,
 };
 
 use super::{
@@ -217,37 +217,4 @@ pub(super) fn push_account_metadata_search(
     builder.push_bind(pattern.clone());
     builder.push(" or chatgpt_user_id ilike ");
     builder.push_bind(pattern);
-}
-
-pub(super) fn to_page<T>(
-    rows: &[PgRow],
-    limit: u32,
-    mapper: impl Fn(&PgRow) -> PgAccountStoreResult<T>,
-    cursor_fields: (&str, &str),
-) -> Page<T> {
-    let has_more = rows.len() > limit as usize;
-    let mut items: Vec<T> = Vec::with_capacity(limit as usize);
-    let mut last_row: Option<&PgRow> = None;
-    for (i, row) in rows.iter().enumerate() {
-        if i >= limit as usize {
-            break;
-        }
-        if let Ok(item) = mapper(row) {
-            items.push(item);
-            last_row = Some(row);
-        }
-    }
-    let next_cursor = if has_more {
-        last_row.map(|row| {
-            use sqlx::Row;
-            let ts = row
-                .get::<chrono::DateTime<chrono::Utc>, _>(cursor_fields.0)
-                .to_rfc3339();
-            let id: String = row.get(cursor_fields.1);
-            crate::infra::json::encode_cursor(&ts, &id)
-        })
-    } else {
-        None
-    };
-    Page { items, next_cursor }
 }

@@ -20,7 +20,7 @@ use crate::{
             format_compact_number, format_cost, format_duration_ms, format_duration_ms_f64,
             format_multiplier, format_number, format_percent, format_token_price, format_tokens,
         },
-        json::{clamp_limit, clamp_page, NumberedPage, Page},
+        json::{clamp_limit, clamp_page, NumberedPage},
         time::china_datetime,
     },
     telemetry::{
@@ -36,8 +36,6 @@ use crate::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UsageRecordsQuery {
-    cursor: Option<String>,
-    limit: Option<u32>,
     page: Option<u32>,
     page_size: Option<u32>,
     kind: Option<String>,
@@ -192,45 +190,14 @@ pub(crate) async fn usage_records(
     _auth: AdminAuth,
     Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
-    let page = query.page;
-    let use_numbered_page = page.is_some() || query.page_size.is_some();
-    let cursor = query.cursor.clone();
+    let page = clamp_page(query.page.unwrap_or(1));
+    let page_size = clamp_limit(query.page_size.unwrap_or(50));
     let filter = filter_from_query(query)?;
-
-    if use_numbered_page {
-        return match state
-            .services
-            .usage_records
-            .list_page(clamp_page(page.unwrap_or(1)), limit, filter)
-            .await
-        {
-            Ok(page) => {
-                let account_emails = state
-                    .services
-                    .usage_records
-                    .account_email_map(&page.items)
-                    .await
-                    .map_err(|error| log_error(&error))?;
-                let page = NumberedPage {
-                    items: usage_record_items(page.items, &account_emails),
-                    total: page.total,
-                    page: page.page,
-                    page_size: page.page_size,
-                };
-                Ok(AdminResponse::new(
-                    StatusCode::OK,
-                    AdminPageEnvelope::numbered(page),
-                ))
-            }
-            Err(error) => Err(log_error(&error)),
-        };
-    }
 
     match state
         .services
         .usage_records
-        .list(cursor, limit, filter)
+        .list_page(page, page_size, filter)
         .await
     {
         Ok(page) => {
@@ -240,13 +207,15 @@ pub(crate) async fn usage_records(
                 .account_email_map(&page.items)
                 .await
                 .map_err(|error| log_error(&error))?;
-            let page = Page {
+            let page = NumberedPage {
                 items: usage_record_items(page.items, &account_emails),
-                next_cursor: page.next_cursor,
+                total: page.total,
+                page: page.page,
+                page_size: page.page_size,
             };
             Ok(AdminResponse::new(
                 StatusCode::OK,
-                AdminPageEnvelope::ok(page, limit),
+                AdminPageEnvelope::ok(page),
             ))
         }
         Err(error) => Err(log_error(&error)),

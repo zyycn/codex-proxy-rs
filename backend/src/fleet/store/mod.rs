@@ -8,10 +8,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::fleet::account::{Account, AccountStatus};
-use crate::infra::{
-    json::{decode_cursor, page_offset, NumberedPage, Page},
-    time::parse_rfc3339_utc,
-};
+use crate::infra::json::{page_offset, NumberedPage};
 
 mod queries;
 mod rows;
@@ -20,7 +17,7 @@ use queries::*;
 use rows::{
     count_account_metadata, get_pool_account, list_pool_accounts, map_account_store_error,
     metadata_from_row, optional_update_value, push_account_metadata_search, quota_plan_type,
-    quota_snapshot_from_row, status_to_db, stored_account_from_row, to_page,
+    quota_snapshot_from_row, status_to_db, stored_account_from_row,
 };
 
 // ============================================================================
@@ -33,17 +30,11 @@ pub enum PgAccountStoreError {
     /// 数据库错误。
     #[error("PostgreSQL account store database error: {0}")]
     Database(#[from] sqlx::Error),
-    /// 时间格式错误。
-    #[error("account store timestamp error: {0}")]
-    Timestamp(#[from] chrono::ParseError),
     #[error("account store JSON error: {0}")]
     Json(#[from] serde_json::Error),
     /// 账号状态非法。
     #[error("PostgreSQL account store status error: {0}")]
     InvalidStatus(String),
-    /// 分页游标非法。
-    #[error("invalid account pagination cursor")]
-    InvalidCursor,
 }
 
 /// PostgreSQL 账号仓储结果。

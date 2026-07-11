@@ -1530,19 +1530,17 @@ async fn latest_response_ops_error_log(pool: &PgPool) -> ResponseUsageRecordSnap
 }
 
 async fn latest_usage_record(pool: &PgPool, kind: &str) -> ResponseUsageRecordSnapshot {
-    let page = PgUsageRecordStore::new(pool.clone())
-        .list(
+    let events = PgUsageRecordStore::new(pool.clone())
+        .list_recent(
             UsageRecordFilter {
                 kind: Some(kind.to_string()),
                 ..UsageRecordFilter::default()
             },
-            None,
             1,
         )
         .await
         .unwrap();
-    let event = page
-        .items
+    let event = events
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("expected a {kind} usage record"));

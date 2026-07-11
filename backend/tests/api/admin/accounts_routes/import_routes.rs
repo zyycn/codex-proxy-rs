@@ -898,7 +898,7 @@ async fn admin_accounts_import_should_store_plain_tokens_and_list_sanitized_acco
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts?limit=10")
+                .uri("/api/admin/accounts?page=1&pageSize=10")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts_import_list")
                 .body(Body::empty())

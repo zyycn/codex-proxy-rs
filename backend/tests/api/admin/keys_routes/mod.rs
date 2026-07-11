@@ -4,6 +4,7 @@ use axum::{
 };
 use codex_proxy_rs::{api::AppState, bootstrap::services::Services};
 use serde_json::json;
+use sqlx::PgPool;
 use tower::util::ServiceExt;
 
 use crate::support::{
@@ -19,7 +20,11 @@ mod lifecycle;
 
 async fn admin_client_key_test_app(
     db_name: &str,
-) -> (axum::Router, crate::support::storage::TestDatabaseGuard) {
+) -> (
+    axum::Router,
+    PgPool,
+    crate::support::storage::TestDatabaseGuard,
+) {
     let (pool, dir) = init_test_db(db_name).await;
     let redis = create_test_redis(db_name).await;
     seed_admin_session(&pool, &redis, "session_1").await;
@@ -32,7 +37,11 @@ async fn admin_client_key_test_app(
         runtime_fingerprint(fingerprint),
     ));
     let state = AppState::from(services.as_ref());
-    (codex_proxy_rs::api::router::router().with_state(state), dir)
+    (
+        codex_proxy_rs::api::router::router().with_state(state),
+        pool,
+        dir,
+    )
 }
 
 async fn create_admin_client_key(app: &axum::Router, name: &str) -> (String, String) {

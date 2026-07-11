@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn admin_client_keys_label_should_update_clear_and_validate_label() {
-    let (app, _dir) = admin_client_key_test_app("admin-client-key-label").await;
+    let (app, _pool, _dir) = admin_client_key_test_app("admin-client-key-label").await;
     let (key_id, _key) = create_admin_client_key(&app, "label-key").await;
 
     let renamed = app
@@ -59,7 +59,7 @@ async fn admin_client_keys_label_should_update_clear_and_validate_label() {
 
 #[tokio::test]
 async fn admin_client_keys_batch_delete_should_remove_found_keys_and_report_missing_ids() {
-    let (app, _dir) = admin_client_key_test_app("admin-client-key-delete").await;
+    let (app, _pool, _dir) = admin_client_key_test_app("admin-client-key-delete").await;
     let (key_a, api_key_a) = create_admin_client_key(&app, "batch-a").await;
     let (key_b, api_key_b) = create_admin_client_key(&app, "batch-b").await;
 

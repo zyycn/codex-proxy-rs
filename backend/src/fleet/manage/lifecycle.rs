@@ -11,10 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     fleet::{account::AccountStatus, store::AccountStore},
-    infra::{
-        json::{NumberedPage, Page},
-        time::elapsed_millis_i64,
-    },
+    infra::{json::NumberedPage, time::elapsed_millis_i64},
     upstream::openai::token_client::RefreshFailure,
 };
 
@@ -30,22 +27,6 @@ use super::{
 const ADMIN_REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
 
 impl AccountManageService {
-    pub async fn list(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> Result<Page<ManagedAccount>, AccountManageError> {
-        let page = self
-            .store
-            .list_metadata(cursor, limit)
-            .await
-            .map_err(|_| AccountManageError::List)?;
-        Ok(Page {
-            items: page.items.into_iter().map(ManagedAccount::from).collect(),
-            next_cursor: page.next_cursor,
-        })
-    }
-
     pub async fn list_page(
         &self,
         page: u32,

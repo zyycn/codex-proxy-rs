@@ -14,7 +14,7 @@ use crate::{
     },
     api::AppState,
     infra::{
-        json::{clamp_limit, clamp_page, NumberedPage, Page},
+        json::{clamp_limit, clamp_page, NumberedPage},
         time::china_datetime,
     },
     telemetry::{ops::query::OpsQueryError, ops::store::OpsErrorFilter, ops::types::OpsErrorLog},
@@ -23,8 +23,6 @@ use crate::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OpsErrorsQuery {
-    cursor: Option<String>,
-    limit: Option<u32>,
     page: Option<u32>,
     page_size: Option<u32>,
     kind: Option<String>,
@@ -61,41 +59,23 @@ pub(crate) async fn ops_errors(
     _auth: AdminAuth,
     Query(query): Query<OpsErrorsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let limit = clamp_limit(query.page_size.or(query.limit).unwrap_or(50));
-    let page = query.page;
-    let numbered = page.is_some() || query.page_size.is_some();
-    let cursor = query.cursor.clone();
+    let page = clamp_page(query.page.unwrap_or(1));
+    let page_size = clamp_limit(query.page_size.unwrap_or(50));
     let filter = filter_from_query(query)?;
-
-    if numbered {
-        return state
-            .services
-            .ops_errors
-            .list_page(clamp_page(page.unwrap_or(1)), limit, filter)
-            .await
-            .map(|page| {
-                let page = NumberedPage {
-                    items: ops_error_items(page.items),
-                    total: page.total,
-                    page: page.page,
-                    page_size: page.page_size,
-                };
-                AdminResponse::new(StatusCode::OK, AdminPageEnvelope::numbered(page))
-            })
-            .map_err(log_error);
-    }
 
     state
         .services
         .ops_errors
-        .list(cursor, limit, filter)
+        .list_page(page, page_size, filter)
         .await
         .map(|page| {
-            let page = Page {
+            let page = NumberedPage {
                 items: ops_error_items(page.items),
-                next_cursor: page.next_cursor,
+                total: page.total,
+                page: page.page,
+                page_size: page.page_size,
             };
-            AdminResponse::new(StatusCode::OK, AdminPageEnvelope::ok(page, limit))
+            AdminResponse::new(StatusCode::OK, AdminPageEnvelope::ok(page))
         })
         .map_err(log_error)
 }

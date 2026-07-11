@@ -1,23 +1,31 @@
 // @env browser
 import { useClipboard } from '@vueuse/core'
+import { clamp } from 'es-toolkit'
 import { onMounted, ref, type Ref } from 'vue'
 
 import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
+import type { ClientApiKey } from '@/api/modules/api-keys'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 
-export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
+export function useApiKeyMutations(options: {
+  page: Ref<number>
+  pageSize: Ref<number>
+  searchQuery: Ref<string>
+  selectedIds: Ref<Set<string>>
+  totalApiKeys: Ref<number>
+}) {
   const { copy } = useClipboard()
   const loading = ref(true)
-  const apiKeys = ref<any[]>([])
+  const apiKeys = ref<ClientApiKey[]>([])
   const showCreateModal = ref(false)
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const showKeyModal = ref(false)
   const createdKey = ref('')
   const createdKeyName = ref('')
-  const pendingDeleteKey = ref<any | null>(null)
+  const pendingDeleteKey = ref<ClientApiKey | null>(null)
   const creatingKeyAction = useAsyncAction()
   const deletingKeyAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
@@ -35,8 +43,20 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   async function loadApiKeys() {
     try {
       loading.value = true
-      const data = await getApiKeys()
-      apiKeys.value = data.items
+      const result = await getApiKeys({
+        page: options.page.value,
+        pageSize: options.pageSize.value,
+        search: options.searchQuery.value.trim() || undefined,
+      })
+      apiKeys.value = result.items
+      options.page.value = result.page.page
+      options.pageSize.value = result.page.pageSize
+      options.totalApiKeys.value = result.page.total
+
+      if (apiKeys.value.length === 0 && result.page.total > 0 && result.page.page > 1) {
+        options.page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
+        await loadApiKeys()
+      }
     } catch (error: any) {
       toast.error(error.message || '加载失败')
     } finally {
@@ -71,7 +91,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     )
   }
 
-  function requestDeleteKey(key: any) {
+  function requestDeleteKey(key: ClientApiKey) {
     pendingDeleteKey.value = key
     showSingleDeleteModal.value = true
   }
@@ -96,13 +116,13 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
 
   async function handleBatchDelete() {
     if (batchDeleting.value) return
-    if (selectedIds.value.size === 0) return
+    if (options.selectedIds.value.size === 0) return
 
     await batchDeletingAction.run(
       async () => {
-        const deleteCount = selectedIds.value.size
-        await deleteApiKeys({ ids: [...selectedIds.value] })
-        selectedIds.value = new Set()
+        const deleteCount = options.selectedIds.value.size
+        await deleteApiKeys({ ids: [...options.selectedIds.value] })
+        options.selectedIds.value = new Set()
         showDeleteModal.value = false
         await loadApiKeys()
         toast.success(`已删除 ${deleteCount} 个 API Key`)
@@ -111,7 +131,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     )
   }
 
-  async function handleToggleStatus(key: any) {
+  async function handleToggleStatus(key: ClientApiKey) {
     await updatingStatusKeys.run(key.id, async () => {
       try {
         await updateApiKey({ id: key.id, status: key.enabled ? 'disabled' : 'active' })
@@ -138,7 +158,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
   }
 
   onMounted(() => {
-    loadApiKeys()
+    void loadApiKeys()
   })
 
   return {
@@ -156,6 +176,7 @@ export function useApiKeyMutations(selectedIds: Ref<Set<string>>) {
     batchDeleting,
     updatingStatusKeyIds,
     createForm,
+    loadApiKeys,
     handleCreate,
     requestDeleteKey,
     handleDelete,

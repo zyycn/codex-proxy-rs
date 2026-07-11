@@ -27,18 +27,6 @@ impl OpsQueryService {
         Self { store }
     }
 
-    pub async fn list(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-        filter: OpsErrorFilter,
-    ) -> Result<crate::infra::json::Page<OpsErrorLog>, OpsQueryError> {
-        self.store
-            .list(filter, cursor, limit)
-            .await
-            .map_err(|_| OpsQueryError::List)
-    }
-
     pub async fn list_page(
         &self,
         page: u32,

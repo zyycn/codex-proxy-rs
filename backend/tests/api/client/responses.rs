@@ -97,6 +97,7 @@ async fn responses_route_should_terminate_generated_stream_errors_with_done_mark
     let body = String::from_utf8(bytes.to_vec()).unwrap();
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("event: response.failed"));
+    assert!(body.contains(r#""code":"no_available_accounts""#));
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 

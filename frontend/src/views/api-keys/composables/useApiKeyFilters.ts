@@ -1,64 +1,56 @@
-import { clamp } from 'es-toolkit'
-import { computed, ref, watch, type Ref } from 'vue'
+// @env browser
+import { watchDebounced } from '@vueuse/core'
+import { computed, shallowRef, type Ref } from 'vue'
 
-export function useApiKeyFilters(apiKeys: Ref<any[]>) {
-  const page = ref(1)
-  const pageSize = ref(20)
-  const searchQuery = ref('')
-
-  const filteredKeys = computed(() => {
-    if (!searchQuery.value) return apiKeys.value
-    const query = searchQuery.value.toLowerCase()
-    return apiKeys.value.filter(
-      (key) =>
-        key.name.toLowerCase().includes(query) ||
-        key.label?.toLowerCase().includes(query) ||
-        key.id.toLowerCase().includes(query),
-    )
-  })
-
-  const pagedKeys = computed(() => {
-    const start = (page.value - 1) * pageSize.value
-    return filteredKeys.value.slice(start, start + pageSize.value)
-  })
+export function useApiKeyFilters(totalApiKeys: Ref<number>) {
+  const page = shallowRef(1)
+  const pageSize = shallowRef(20)
+  const searchQuery = shallowRef('')
+  let loadApiKeys: (() => Promise<void> | void) | undefined
 
   const apiKeyPagination = computed(() => ({
     page: page.value,
     pageSize: pageSize.value,
-    total: filteredKeys.value.length,
+    total: totalApiKeys.value,
     pageSizes: [10, 20, 50, 100],
   }))
 
+  function bindApiKeyLoader(loader: () => Promise<void> | void) {
+    loadApiKeys = loader
+  }
+
+  function requestLoad() {
+    if (loadApiKeys) {
+      void loadApiKeys()
+    }
+  }
+
   function handlePageChange(nextPage: number) {
     page.value = nextPage
+    requestLoad()
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     pageSize.value = nextPageSize
     page.value = 1
+    requestLoad()
   }
 
-  watch(searchQuery, () => {
-    page.value = 1
-  })
-
-  watch(filteredKeys, () => {
-    const totalPages = clamp(
-      Math.ceil(filteredKeys.value.length / pageSize.value),
-      1,
-      Number.POSITIVE_INFINITY,
-    )
-    if (page.value > totalPages) {
-      page.value = totalPages
-    }
-  })
+  watchDebounced(
+    searchQuery,
+    () => {
+      page.value = 1
+      requestLoad()
+    },
+    { debounce: 250 },
+  )
 
   return {
     page,
     pageSize,
     searchQuery,
-    pagedKeys,
     apiKeyPagination,
+    bindApiKeyLoader,
     handlePageChange,
     handlePageSizeChange,
   }

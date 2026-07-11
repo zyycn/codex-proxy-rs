@@ -7,11 +7,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
-use crate::infra::{
-    format::nonnegative_i64_to_u64,
-    json::{decode_cursor, encode_cursor, Page},
-    time::parse_rfc3339_utc as parse_rfc3339,
-};
+use crate::infra::format::nonnegative_i64_to_u64;
 
 use super::should_reset_usage_window;
 
@@ -135,8 +131,7 @@ select
   au.window_started_at,
   au.window_reset_at,
   au.limit_window_seconds,
-  au.last_used_at,
-  coalesce(au.last_used_at, 'epoch'::timestamptz) as sort_last_used_at
+  au.last_used_at
 from account_usage au
 left join accounts a on a.id = au.account_id";
 
@@ -162,12 +157,6 @@ pub enum PgAccountUsageStoreError {
     /// 数据库错误。
     #[error("PostgreSQL usage store database error: {0}")]
     Database(#[from] sqlx::Error),
-    /// 时间格式错误。
-    #[error("PostgreSQL usage store timestamp error: {0}")]
-    Timestamp(#[from] chrono::ParseError),
-    /// 分页游标非法。
-    #[error("invalid usage pagination cursor")]
-    InvalidCursor,
 }
 
 /// PostgreSQL 用量存储结果。
@@ -582,37 +571,6 @@ where account_id in (",
         Ok(())
     }
 
-    /// 分页列出账号用量。
-    pub async fn list_usage(
-        &self,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> PgAccountUsageStoreResult<Page<UsageListRecord>> {
-        let limit = limit.clamp(1, 200);
-        let fetch_limit = i64::from(limit) + 1;
-        let mut builder = QueryBuilder::<Postgres>::new(LIST_USAGE_SELECT_SQL);
-        if let Some(cursor) = cursor {
-            let (last_used_at, account_id) =
-                decode_cursor(&cursor).ok_or(PgAccountUsageStoreError::InvalidCursor)?;
-            let last_used_at = parse_rfc3339(&last_used_at)
-                .map_err(|_| PgAccountUsageStoreError::InvalidCursor)?;
-            builder.push("\nwhere coalesce(au.last_used_at, 'epoch'::timestamptz) < ");
-            builder.push_bind(last_used_at);
-            builder.push("\n   or (coalesce(au.last_used_at, 'epoch'::timestamptz) = ");
-            builder.push_bind(last_used_at);
-            builder.push(" and au.account_id < ");
-            builder.push_bind(account_id);
-            builder.push(")");
-        }
-        builder.push(
-            "\norder by coalesce(au.last_used_at, 'epoch'::timestamptz) desc, au.account_id desc\nlimit ",
-        );
-        builder.push_bind(fetch_limit);
-
-        let rows = builder.build().fetch_all(&self.pool).await?;
-        Ok(to_page(&rows, limit))
-    }
-
     /// 按账号 ID 批量读取账号用量。
     pub async fn list_usage_by_account_ids(
         &self,
@@ -769,31 +727,4 @@ fn optional_positive_i64_to_u64(value: Option<i64>) -> Option<u64> {
     value
         .and_then(|value| u64::try_from(value).ok())
         .filter(|value| *value > 0)
-}
-
-fn to_page(rows: &[PgRow], limit: u32) -> Page<UsageListRecord> {
-    let has_more = rows.len() > limit as usize;
-    let mut items = Vec::with_capacity(limit as usize);
-    let mut last_row: Option<&PgRow> = None;
-    for (i, row) in rows.iter().enumerate() {
-        if i >= limit as usize {
-            break;
-        }
-        if let Ok(item) = usage_list_from_row(row) {
-            items.push(item);
-            last_row = Some(row);
-        }
-    }
-    let next_cursor = if has_more {
-        last_row.map(|row| {
-            let ts = row
-                .get::<DateTime<Utc>, _>("sort_last_used_at")
-                .to_rfc3339();
-            let id: String = row.get("account_id");
-            encode_cursor(&ts, &id)
-        })
-    } else {
-        None
-    };
-    Page { items, next_cursor }
 }

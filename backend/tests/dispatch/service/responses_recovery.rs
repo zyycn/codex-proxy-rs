@@ -87,7 +87,51 @@ async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "codex_api_error");
+    assert_eq!(body["error"]["code"], "codex_client_error");
+}
+
+#[tokio::test]
+async fn responses_should_preserve_upstream_client_error_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "invalid_input",
+                "message": "A required parameter is invalid."
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _dir) = test_app_with_account(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "hello"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "codex_client_error");
 }
 
 #[tokio::test]
