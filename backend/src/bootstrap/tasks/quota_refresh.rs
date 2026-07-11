@@ -12,6 +12,7 @@ use crate::{
         quota::{QuotaRefreshService, QuotaRefreshSummary},
         store::PgAccountStore,
     },
+    infra::identity::AccountPseudonymizer,
     telemetry::account_usage::store::PgAccountUsageStore,
     upstream::openai::transport::CodexBackendClient,
 };
@@ -34,6 +35,7 @@ impl QuotaRefreshTask {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pseudonymizer: Arc<AccountPseudonymizer>,
         interval_secs: u64,
         min_refresh_interval_secs: u64,
     ) -> Self {
@@ -42,17 +44,12 @@ impl QuotaRefreshTask {
                 store,
                 usage_store,
                 codex,
+                account_pseudonymizer,
                 min_refresh_interval_secs,
             ),
             interval_secs,
             last_refreshed: HashMap::new(),
         }
-    }
-
-    /// 设置 Codex installation id。
-    pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
-        self.service = self.service.with_installation_id(installation_id);
-        self
     }
 
     /// 设置 usage 请求可复用的账号 Cookie 存储。

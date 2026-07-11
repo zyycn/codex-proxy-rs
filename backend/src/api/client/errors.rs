@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::{
     dispatch::errors::{DispatchFailureClass, ResponseDispatchError},
     upstream::openai::protocol::sse::response_failed_sse_event as encode_response_failed_sse_event,
+    upstream::openai::transport::CodexClientError,
 };
 
 const NO_ACTIVE_UPSTREAM_ACCOUNT_MESSAGE: &str = "No active upstream account is available";
@@ -19,6 +20,8 @@ const UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE: &str = "Upstream Codex request fail
 const INVALID_UPSTREAM_CODEX_RESPONSE_MESSAGE: &str = "Invalid upstream Codex response";
 const UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE: &str = "Upstream Codex response failed";
 const HISTORY_UNAVAILABLE_MESSAGE: &str = "Previous response context is unavailable. Start a new conversation or resend the complete input without previous_response_id.";
+const CONTINUATION_BUSY_MESSAGE: &str =
+    "The previous response connection is busy. Retry the request.";
 
 #[derive(Clone, Copy)]
 enum ResponseDispatchMessageStyle {
@@ -72,6 +75,10 @@ const HISTORY_UNAVAILABLE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "invalid_request_error",
     code: "previous_response_unavailable",
 };
+const CONTINUATION_BUSY_ERROR: OpenAiErrorKind = OpenAiErrorKind {
+    error_type: "server_error",
+    code: "continuation_connection_busy",
+};
 const INVALID_UPSTREAM_RESPONSE_ERROR: OpenAiErrorKind = OpenAiErrorKind {
     error_type: "server_error",
     code: "invalid_upstream_response",
@@ -105,11 +112,24 @@ pub fn openai_error_response(
 }
 
 pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Response {
+    responses_dispatch_error_response_ref(&error)
+}
+
+pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> Response {
+    if let ResponseDispatchError::Upstream(CodexClientError::Upstream { status, body, .. }) = error
+    {
+        if status.is_client_error() {
+            if let Ok(body) = serde_json::from_str::<Value>(body) {
+                return (*status, Json(body)).into_response();
+            }
+        }
+    }
+
     match error {
         ResponseDispatchError::NoActiveAccount => {
             responses_no_available_accounts_response().into_response()
         }
-        error => response_dispatch_openai_error_response(&error),
+        error => response_dispatch_openai_error_response(error),
     }
 }
 
@@ -273,6 +293,7 @@ fn dispatch_failure_message(
         }
         DispatchFailureClass::ResponseFailed => UPSTREAM_CODEX_RESPONSE_FAILED_MESSAGE.to_owned(),
         DispatchFailureClass::HistoryUnavailable => HISTORY_UNAVAILABLE_MESSAGE.to_owned(),
+        DispatchFailureClass::ContinuationBusy => CONTINUATION_BUSY_MESSAGE.to_owned(),
         _ => UPSTREAM_CODEX_REQUEST_FAILED_MESSAGE.to_owned(),
     }
 }
@@ -290,6 +311,7 @@ fn dispatch_failure_openai_error_kind(
         | DispatchFailureClass::Banned => AUTHENTICATION_ERROR,
         DispatchFailureClass::ModelUnsupported => MODEL_NOT_FOUND_ERROR,
         DispatchFailureClass::HistoryUnavailable => HISTORY_UNAVAILABLE_ERROR,
+        DispatchFailureClass::ContinuationBusy => CONTINUATION_BUSY_ERROR,
         DispatchFailureClass::InvalidSse
         | DispatchFailureClass::MissingCompleted
         | DispatchFailureClass::EmptyUpstreamResponse => INVALID_UPSTREAM_RESPONSE_ERROR,
@@ -297,7 +319,9 @@ fn dispatch_failure_openai_error_kind(
         DispatchFailureClass::Upstream if status.is_client_error() => {
             responses_error_kind_for_status(status)
         }
-        DispatchFailureClass::Upstream => UPSTREAM_ERROR,
+        DispatchFailureClass::Upstream | DispatchFailureClass::UpstreamUnavailable => {
+            UPSTREAM_ERROR
+        }
         DispatchFailureClass::CloudflareChallenge | DispatchFailureClass::CloudflarePathBlocked => {
             UPSTREAM_ERROR
         }

@@ -8,6 +8,7 @@ use codex_proxy_rs::fleet::quota::{
     quota_snapshot_reset_at, QuotaRefreshService,
 };
 use codex_proxy_rs::fleet::store::{NewAccount, PgAccountStore};
+use codex_proxy_rs::infra::identity::AccountPseudonymizer;
 use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 use codex_proxy_rs::upstream::openai::transport::CodexBackendClient;
 use secrecy::SecretString;
@@ -18,6 +19,10 @@ use wiremock::{
 };
 
 use crate::support::storage::init_test_db;
+
+fn test_account_pseudonymizer() -> Arc<AccountPseudonymizer> {
+    Arc::new(AccountPseudonymizer::new([7; 32]))
+}
 
 #[test]
 fn quota_from_usage_should_preserve_spend_control_individual_limit() {
@@ -316,6 +321,7 @@ async fn quota_refresh_service_should_send_usage_cookie_when_cookie_store_is_con
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
     )
     .with_cookie_store(cookies);
 
@@ -397,6 +403,7 @@ async fn quota_refresh_service_should_fetch_usage_for_quota_locked_accounts_and_
         store.clone(),
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
     );
 
     let mut last_refreshed = HashMap::new();
@@ -472,6 +479,7 @@ async fn quota_refresh_service_should_refresh_quota_exhausted_accounts() {
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
     );
 
     let mut last_refreshed = HashMap::new();
@@ -507,6 +515,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_before_cooldown
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
         1_800,
     );
 
@@ -546,6 +555,7 @@ async fn quota_refresh_service_should_skip_recent_locked_account_inside_cooldown
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
         1_800,
     );
 
@@ -602,6 +612,7 @@ async fn quota_refresh_service_should_bypass_recent_skip_after_cooldown_grace() 
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
         1_800,
     );
 
@@ -656,6 +667,7 @@ async fn quota_refresh_service_should_stagger_multiple_locked_account_requests()
         store,
         PgAccountUsageStore::new(pool.clone()),
         Arc::new(codex),
+        test_account_pseudonymizer(),
     )
     .with_request_spacing(StdDuration::from_millis(200));
 

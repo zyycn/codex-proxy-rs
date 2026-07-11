@@ -35,6 +35,8 @@ pub(crate) enum DispatchFailureClass {
     CloudflareChallenge,
     CloudflarePathBlocked,
     ModelUnsupported,
+    UpstreamUnavailable,
+    ContinuationBusy,
     HistoryUnavailable,
     Upstream,
     InvalidSse,
@@ -55,6 +57,8 @@ impl DispatchFailureClass {
             Self::CloudflareChallenge => "cloudflare_challenge",
             Self::CloudflarePathBlocked => "cloudflare_path_blocked",
             Self::ModelUnsupported => "model_unsupported",
+            Self::UpstreamUnavailable => "upstream_unavailable",
+            Self::ContinuationBusy => "continuation_busy",
             Self::HistoryUnavailable => "history_unavailable",
             Self::Upstream => "upstream",
             Self::InvalidSse => "invalid_sse",
@@ -121,6 +125,7 @@ impl From<ExhaustedAccountKind> for DispatchFailureClass {
             ExhaustedAccountKind::CloudflareChallenge => Self::CloudflareChallenge,
             ExhaustedAccountKind::CloudflarePathBlocked => Self::CloudflarePathBlocked,
             ExhaustedAccountKind::ModelUnsupported => Self::ModelUnsupported,
+            ExhaustedAccountKind::UpstreamUnavailable => Self::UpstreamUnavailable,
         }
     }
 }
@@ -193,10 +198,23 @@ pub(crate) fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
 pub(crate) fn is_retryable_upstream_5xx_error(error: &CodexClientError) -> bool {
     matches!(
         error,
-        CodexClientError::Upstream { status, body, .. }
+        CodexClientError::Upstream { status, .. }
             if status_code_is_transient_upstream(status.as_u16())
-                && !is_history_recovery_signal(body)
     )
+}
+
+pub(crate) fn is_retryable_account_transport_error(error: &CodexClientError) -> bool {
+    match error {
+        CodexClientError::Http(error) => error.is_connect() || error.is_timeout(),
+        CodexClientError::WebSocket(
+            crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::Transport(_)
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ClosedBeforeTerminal
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput { .. }
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::InitialEventTimeout { .. },
+        ) => true,
+        _ => is_retryable_upstream_5xx_error(error),
+    }
 }
 
 pub(crate) fn is_quota_exhausted_upstream_error(error: &CodexClientError) -> bool {
@@ -217,9 +235,26 @@ pub(crate) fn is_model_unsupported_upstream_error(error: &CodexClientError) -> b
 }
 
 pub(crate) fn is_history_recovery_upstream_error(error: &CodexClientError) -> bool {
+    upstream_error_code(error).is_some_and(|code| is_history_recovery_code(&code))
+        || matches!(
+            error,
+            CodexClientError::WebSocket(
+                crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ContinuationUnavailable { reason }
+            ) if !matches!(
+                reason,
+                crate::upstream::openai::transport::websocket::PreviousResponseUnavailableReason::ConnectionBusy
+            )
+        )
+}
+
+pub(crate) fn is_continuation_busy_error(error: &CodexClientError) -> bool {
     matches!(
         error,
-        CodexClientError::Upstream { body, .. } if is_history_recovery_signal(body)
+        CodexClientError::WebSocket(
+            crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ContinuationUnavailable {
+                reason: crate::upstream::openai::transport::websocket::PreviousResponseUnavailableReason::ConnectionBusy,
+            }
+        )
     )
 }
 
@@ -250,18 +285,27 @@ pub(crate) fn is_model_unsupported_signal(value: &str) -> bool {
                 || value.contains("not_available")))
 }
 
-pub(crate) fn is_history_recovery_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("previous_response_not_found")
-        || (value.contains("previous response") && value.contains("not found"))
-        || value.contains("no tool output found for function call")
-        || is_invalid_encrypted_content_signal(&value)
+pub(crate) fn is_history_recovery_code(code: &str) -> bool {
+    matches!(
+        code,
+        "previous_response_not_found"
+            | "invalid_encrypted_content"
+            | "missing_tool_output"
+            | "no_tool_output"
+    )
 }
 
-pub(crate) fn is_invalid_encrypted_content_signal(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("invalid_encrypted_content")
-        || (value.contains("invalid") && value.contains("encrypted") && value.contains("content"))
+pub(crate) fn upstream_error_code(error: &CodexClientError) -> Option<String> {
+    let CodexClientError::Upstream { body, .. } = error else {
+        return None;
+    };
+    let value = serde_json::from_str::<Value>(body).ok()?;
+    value
+        .pointer("/response/error/code")
+        .or_else(|| value.pointer("/error/code"))
+        .or_else(|| value.get("code"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 pub(crate) fn rate_limit_cooldown_until(
@@ -349,6 +393,13 @@ pub enum ResponseDispatchError {
         count: usize,
         upstream_error: String,
     },
+    #[error("all account candidates failed with transient upstream errors")]
+    UpstreamUnavailable {
+        count: usize,
+        upstream_error: String,
+    },
+    #[error("the previous response connection is busy; retry the request")]
+    ContinuationBusy,
     #[error("previous response context is unavailable: {upstream_error}")]
     HistoryUnavailable { upstream_error: String },
     #[error("upstream request failed: {0}")]
@@ -399,6 +450,10 @@ impl ResponseDispatchError {
                 count: exhausted.count,
                 upstream_error: exhausted.upstream_error,
             },
+            ExhaustedAccountKind::UpstreamUnavailable => Self::UpstreamUnavailable {
+                count: exhausted.count,
+                upstream_error: exhausted.upstream_error,
+            },
         }
     }
 
@@ -414,6 +469,8 @@ impl ResponseDispatchError {
             | Self::InvalidSse(_)
             | Self::MissingCompleted
             | Self::EmptyUpstreamResponse => 502,
+            Self::UpstreamUnavailable { .. } => 503,
+            Self::ContinuationBusy => 503,
             Self::Failed(failure) => stream_failure_http_status(failure),
             Self::ModelUnsupported { .. } | Self::HistoryUnavailable { .. } => 400,
             Self::Upstream(error) => upstream_error_http_status(error),
@@ -481,6 +538,17 @@ impl ResponseDispatchError {
                 *count,
                 upstream_error,
             ),
+            Self::UpstreamUnavailable {
+                count,
+                upstream_error,
+            } => Self::exhausted_metadata(
+                ExhaustedAccountKind::UpstreamUnavailable,
+                *count,
+                upstream_error,
+            ),
+            Self::ContinuationBusy => {
+                DispatchErrorMetadata::simple(DispatchFailureClass::ContinuationBusy)
+            }
             Self::HistoryUnavailable { upstream_error } => DispatchErrorMetadata {
                 failure_class: DispatchFailureClass::HistoryUnavailable,
                 exhausted_count: None,
@@ -570,6 +638,14 @@ impl ResponseDispatchError {
                 upstream_error,
             } => Some(ExhaustedAccountRef {
                 kind: ExhaustedAccountKind::ModelUnsupported,
+                count: *count,
+                upstream_error,
+            }),
+            Self::UpstreamUnavailable {
+                count,
+                upstream_error,
+            } => Some(ExhaustedAccountRef {
+                kind: ExhaustedAccountKind::UpstreamUnavailable,
                 count: *count,
                 upstream_error,
             }),

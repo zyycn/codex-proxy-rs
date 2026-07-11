@@ -166,9 +166,13 @@ pub struct RateLimitWindow {
     pub reset_at: Option<i64>,
 }
 
-/// 复合限流信息，通常用于 code review 配额。
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// 单个计量项的限流信息。
+#[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitDetails {
+    /// 稳定的计量项 ID。
+    pub limit_id: String,
+    /// 上游提供的可读名称。
+    pub limit_name: Option<String>,
     /// 当前请求是否被允许。
     pub allowed: Option<bool>,
     /// 当前窗口是否已经触顶。
@@ -179,15 +183,23 @@ pub struct RateLimitDetails {
     pub secondary: Option<RateLimitWindow>,
 }
 
+/// 上游账户的 credits 快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
 /// 从 header 或内部事件中解析出的完整限流状态。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedRateLimits {
-    /// 主限流窗口。
-    pub primary: Option<RateLimitWindow>,
-    /// 次级限流窗口。
-    pub secondary: Option<RateLimitWindow>,
-    /// code review 限流窗口。
-    pub code_review: Option<RateLimitDetails>,
+    /// 以标准化 limit ID 为键的全部计量项。
+    pub limits: BTreeMap<String, RateLimitDetails>,
+    pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<String>,
+    pub promo_message: Option<String>,
+    pub rate_limit_reached_type: Option<String>,
 }
 
 /// 从响应头对中解析限流信息。
@@ -197,21 +209,58 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
         normalized.insert(name.to_ascii_lowercase(), value.trim());
     }
 
-    let primary = parse_window_from_lookup(&normalized, "x-codex-primary");
-    let secondary = parse_window_from_lookup(&normalized, "x-codex-secondary");
-    let code_review = parse_details_from_lookup(&normalized, "x-codex-code-review")
-        .or_else(|| parse_details_from_lookup(&normalized, "x-codex-review"))
-        .or_else(|| parse_details_from_lookup(&normalized, "x-code-review"));
+    let mut limit_ids = normalized
+        .keys()
+        .filter_map(|name| rate_limit_id_from_header_name(name))
+        .collect::<std::collections::BTreeSet<_>>();
+    limit_ids.insert("codex".to_string());
+    let limits = limit_ids
+        .into_iter()
+        .filter_map(|limit_id| {
+            let prefix = format!("x-{}", limit_id.replace('_', "-"));
+            parse_details_from_lookup(&normalized, &prefix, &limit_id)
+                .map(|details| (limit_id, details))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let credits = parse_credits_from_lookup(&normalized);
+    let plan_type = lookup_non_empty(&normalized, "x-codex-plan-type");
+    let promo_message = lookup_non_empty(&normalized, "x-codex-promo-message");
+    let rate_limit_reached_type = lookup_non_empty(&normalized, "x-codex-rate-limit-reached-type");
 
-    if primary.is_none() && secondary.is_none() && code_review.is_none() {
+    if limits.is_empty()
+        && credits.is_none()
+        && plan_type.is_none()
+        && promo_message.is_none()
+        && rate_limit_reached_type.is_none()
+    {
         return None;
     }
 
     Some(ParsedRateLimits {
-        primary,
-        secondary,
-        code_review,
+        limits,
+        credits,
+        plan_type,
+        promo_message,
+        rate_limit_reached_type,
     })
+}
+
+/// 判断响应头是否属于可被动同步的限流领域。
+pub(crate) fn is_rate_limit_header_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    normalized == "retry-after"
+        || normalized.contains("ratelimit")
+        || normalized.contains("rate-limit")
+        || matches!(
+            normalized.as_str(),
+            "x-codex-credits-has-credits"
+                | "x-codex-credits-unlimited"
+                | "x-codex-credits-balance"
+                | "x-codex-plan-type"
+                | "x-codex-promo-message"
+                | "x-codex-rate-limit-reached-type"
+        )
+        || rate_limit_id_from_header_name(&normalized).is_some()
 }
 
 /// 从内部 `codex.rate_limits` 事件中解析限流信息。
@@ -224,33 +273,52 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
         return None;
     }
 
-    let details = value.get("rate_limits").and_then(parse_details_from_object);
-    let explicit_code_review = value
-        .get("code_review_rate_limits")
-        .and_then(parse_details_from_object)
-        .or_else(|| {
-            value
-                .get("code_review_rate_limit")
-                .and_then(parse_details_from_object)
-        });
+    let limit_id = rate_limit_name(value)
+        .map(normalize_limit_id)
+        .unwrap_or_else(|| "codex".to_string());
+    let limit_name = value
+        .get("metered_limit_name")
+        .and_then(Value::as_str)
+        .and_then(|_| value.get("limit_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string);
+    let details = value
+        .get("rate_limits")
+        .and_then(|details| parse_details_from_object(details, &limit_id, limit_name));
+    let credits = value.get("credits").and_then(parse_credits_from_object);
+    let plan_type = value
+        .get("plan_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        .map(ToString::to_string);
 
-    let mut primary = details.and_then(|details| details.primary);
-    let mut secondary = details.and_then(|details| details.secondary);
-    let mut code_review = explicit_code_review;
-    if details.is_some() && is_review_limit_name(rate_limit_name(value)) {
-        code_review = code_review.or(details);
-        primary = None;
-        secondary = None;
-    }
-
-    if primary.is_none() && secondary.is_none() && code_review.is_none() {
+    if details.is_none() && credits.is_none() && plan_type.is_none() {
         return None;
     }
 
+    let mut limits = BTreeMap::new();
+    if let Some(details) = details {
+        limits.insert(limit_id, details);
+    }
     Some(ParsedRateLimits {
-        primary,
-        secondary,
-        code_review,
+        limits,
+        credits,
+        plan_type,
+        promo_message: value
+            .get("promo_message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(ToString::to_string),
+        rate_limit_reached_type: value
+            .get("rate_limit_reached_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|kind| !kind.is_empty())
+            .map(ToString::to_string),
     })
 }
 
@@ -267,41 +335,35 @@ pub fn rate_limit_quota(
     plan_type: Option<&str>,
     existing_quota: Option<&Value>,
 ) -> Value {
-    let mut snapshots = Vec::new();
-    if let Some(snapshot) = quota_snapshot_from_windows(
-        "core",
-        None,
-        None,
-        rate_limits.primary,
-        rate_limits.secondary,
-        None,
-        None,
-    ) {
-        snapshots.push(snapshot);
-    }
-
-    let has_code_review_update = rate_limits.code_review.is_some();
-    if let Some(details) = rate_limits.code_review {
-        if let Some(snapshot) = quota_snapshot_from_windows(
-            "code_review",
-            Some("code_review"),
-            None,
-            details.primary,
-            details.secondary,
-            details.allowed,
-            details.limit_reached,
-        ) {
-            snapshots.push(snapshot);
-        }
-    }
+    let mut snapshots = rate_limits
+        .limits
+        .values()
+        .filter_map(|details| {
+            let (source, metered_feature) = quota_identity(&details.limit_id);
+            let limit_name = details
+                .limit_name
+                .as_deref()
+                .or_else(|| (source != "core").then_some(details.limit_id.as_str()));
+            quota_snapshot_from_windows(
+                source,
+                limit_name,
+                metered_feature,
+                details.primary,
+                details.secondary,
+                details.allowed,
+                details.limit_reached,
+            )
+        })
+        .collect::<Vec<_>>();
 
     if let Some(existing_quota) = existing_quota {
         if let Some(existing_snapshots) = existing_quota.get("snapshots").and_then(Value::as_array)
         {
             for snapshot in existing_snapshots {
-                let source = snapshot.get("source").and_then(Value::as_str);
-                if source == Some("additional")
-                    || (!has_code_review_update && source == Some("code_review"))
+                if !rate_limits
+                    .limits
+                    .keys()
+                    .any(|limit_id| quota_snapshot_matches_limit(snapshot, limit_id))
                 {
                     snapshots.push(snapshot.clone());
                 }
@@ -312,40 +374,94 @@ pub fn rate_limit_quota(
     let monthly_limit = monthly_limit_from_snapshots(&snapshots)
         .or_else(|| existing_quota.and_then(|quota| quota.get("monthly_limit").cloned()))
         .unwrap_or(Value::Null);
-    let credits = existing_quota
-        .and_then(|quota| quota.get("credits").cloned())
+    let credits = rate_limits
+        .credits
+        .as_ref()
+        .map(|credits| {
+            json!({
+                "has_credits": credits.has_credits,
+                "unlimited": credits.unlimited,
+                "balance": credits.balance,
+            })
+        })
+        .or_else(|| existing_quota.and_then(|quota| quota.get("credits").cloned()))
         .unwrap_or(Value::Null);
     let spend_control = existing_quota
         .and_then(|quota| quota.get("spend_control").cloned())
         .unwrap_or(Value::Null);
 
     json!({
-        "plan_type": plan_type.unwrap_or("unknown"),
+        "plan_type": rate_limits.plan_type.as_deref().or(plan_type).unwrap_or("unknown"),
         "snapshots": snapshots,
         "monthly_limit": monthly_limit,
         "credits": credits,
         "spend_control": spend_control,
+        "promo_message": rate_limits.promo_message,
+        "rate_limit_reached_type": rate_limits.rate_limit_reached_type,
     })
 }
 
-/// 将限流状态转换回 HTTP 头键值对。
+/// 将限流状态转换回内部传输头键值对。
 pub fn rate_limits_to_header_pairs(rate_limits: &ParsedRateLimits) -> Vec<(String, String)> {
     let mut headers = Vec::new();
-    push_window_headers(&mut headers, "x-codex-primary", rate_limits.primary);
-    push_window_headers(&mut headers, "x-codex-secondary", rate_limits.secondary);
-    if let Some(code_review) = rate_limits.code_review {
+    for details in rate_limits.limits.values() {
+        let prefix = format!("x-{}", details.limit_id.replace('_', "-"));
+        push_window_headers(&mut headers, &format!("{prefix}-primary"), details.primary);
         push_window_headers(
             &mut headers,
-            "x-codex-code-review-primary",
-            code_review.primary,
+            &format!("{prefix}-secondary"),
+            details.secondary,
         );
-        push_window_headers(
-            &mut headers,
-            "x-codex-code-review-secondary",
-            code_review.secondary,
-        );
+        if let Some(limit_name) = &details.limit_name {
+            headers.push((format!("{prefix}-limit-name"), limit_name.clone()));
+        }
+    }
+    if let Some(credits) = &rate_limits.credits {
+        headers.push((
+            "x-codex-credits-has-credits".to_string(),
+            credits.has_credits.to_string(),
+        ));
+        headers.push((
+            "x-codex-credits-unlimited".to_string(),
+            credits.unlimited.to_string(),
+        ));
+        if let Some(balance) = &credits.balance {
+            headers.push(("x-codex-credits-balance".to_string(), balance.clone()));
+        }
+    }
+    if let Some(plan_type) = &rate_limits.plan_type {
+        headers.push(("x-codex-plan-type".to_string(), plan_type.clone()));
+    }
+    if let Some(promo_message) = &rate_limits.promo_message {
+        headers.push(("x-codex-promo-message".to_string(), promo_message.clone()));
+    }
+    if let Some(reached_type) = &rate_limits.rate_limit_reached_type {
+        headers.push((
+            "x-codex-rate-limit-reached-type".to_string(),
+            reached_type.clone(),
+        ));
     }
     headers
+}
+
+fn quota_identity(limit_id: &str) -> (&'static str, Option<&str>) {
+    if limit_id == "codex" {
+        ("core", None)
+    } else if is_review_limit_name(Some(limit_id)) {
+        ("code_review", Some(limit_id))
+    } else {
+        ("additional", Some(limit_id))
+    }
+}
+
+fn quota_snapshot_matches_limit(snapshot: &Value, limit_id: &str) -> bool {
+    let (source, metered_feature) = quota_identity(limit_id);
+    if snapshot.get("source").and_then(Value::as_str) != Some(source) {
+        return false;
+    }
+    source == "core"
+        || snapshot.get("metered_feature").and_then(Value::as_str) == metered_feature
+        || snapshot.get("limit_name").and_then(Value::as_str) == Some(limit_id)
 }
 
 fn number_field(value: &Value, field: &str) -> Option<u64> {
@@ -464,18 +580,86 @@ fn push_window_headers(
 fn parse_details_from_lookup(
     headers: &BTreeMap<String, &str>,
     prefix: &str,
+    limit_id: &str,
 ) -> Option<RateLimitDetails> {
     let primary = parse_window_from_lookup(headers, &format!("{prefix}-primary"));
     let secondary = parse_window_from_lookup(headers, &format!("{prefix}-secondary"));
-    if primary.is_none() && secondary.is_none() {
+    let limit_name = lookup_non_empty(headers, &format!("{prefix}-limit-name"));
+    let allowed = lookup_bool(headers, &format!("{prefix}-allowed"));
+    let limit_reached = lookup_bool(headers, &format!("{prefix}-limit-reached"));
+    if primary.is_none()
+        && secondary.is_none()
+        && limit_name.is_none()
+        && allowed.is_none()
+        && limit_reached.is_none()
+    {
         return None;
     }
     Some(RateLimitDetails {
-        allowed: None,
-        limit_reached: None,
+        limit_id: limit_id.to_string(),
+        limit_name,
+        allowed,
+        limit_reached,
         primary,
         secondary,
     })
+}
+
+fn rate_limit_id_from_header_name(name: &str) -> Option<String> {
+    const SUFFIXES: [&str; 9] = [
+        "-primary-used-percent",
+        "-primary-window-minutes",
+        "-primary-reset-at",
+        "-secondary-used-percent",
+        "-secondary-window-minutes",
+        "-secondary-reset-at",
+        "-limit-name",
+        "-allowed",
+        "-limit-reached",
+    ];
+    let name = name.strip_prefix("x-")?;
+    let raw_id = SUFFIXES
+        .iter()
+        .find_map(|suffix| name.strip_suffix(suffix))?;
+    (!raw_id.is_empty()).then(|| normalize_limit_id(raw_id))
+}
+
+fn parse_credits_from_lookup(headers: &BTreeMap<String, &str>) -> Option<CreditsSnapshot> {
+    Some(CreditsSnapshot {
+        has_credits: lookup_bool(headers, "x-codex-credits-has-credits")?,
+        unlimited: lookup_bool(headers, "x-codex-credits-unlimited")?,
+        balance: lookup_non_empty(headers, "x-codex-credits-balance"),
+    })
+}
+
+fn parse_credits_from_object(value: &Value) -> Option<CreditsSnapshot> {
+    Some(CreditsSnapshot {
+        has_credits: value.get("has_credits")?.as_bool()?,
+        unlimited: value.get("unlimited")?.as_bool()?,
+        balance: value.get("balance").and_then(|balance| match balance {
+            Value::String(balance) => Some(balance.clone()),
+            Value::Number(balance) => Some(balance.to_string()),
+            _ => None,
+        }),
+    })
+}
+
+fn lookup_non_empty(headers: &BTreeMap<String, &str>, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn lookup_bool(headers: &BTreeMap<String, &str>, name: &str) -> Option<bool> {
+    match headers.get(name)?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        value if value.eq_ignore_ascii_case("true") => Some(true),
+        value if value.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    }
 }
 
 fn parse_window_from_lookup(
@@ -499,15 +683,23 @@ fn parse_window_from_lookup(
     })
 }
 
-fn parse_details_from_object(value: &Value) -> Option<RateLimitDetails> {
+fn parse_details_from_object(
+    value: &Value,
+    limit_id: &str,
+    limit_name: Option<String>,
+) -> Option<RateLimitDetails> {
     let primary = value.get("primary").and_then(parse_window_from_object);
     let secondary = value.get("secondary").and_then(parse_window_from_object);
-    if primary.is_none() && secondary.is_none() {
+    let allowed = value.get("allowed").and_then(Value::as_bool);
+    let limit_reached = value.get("limit_reached").and_then(Value::as_bool);
+    if primary.is_none() && secondary.is_none() && allowed.is_none() && limit_reached.is_none() {
         return None;
     }
     Some(RateLimitDetails {
-        allowed: value.get("allowed").and_then(Value::as_bool),
-        limit_reached: value.get("limit_reached").and_then(Value::as_bool),
+        limit_id: limit_id.to_string(),
+        limit_name,
+        allowed,
+        limit_reached,
         primary,
         secondary,
     })
@@ -643,6 +835,10 @@ fn rate_limit_name(value: &Value) -> Option<&str> {
         .get("metered_limit_name")
         .or_else(|| value.get("limit_name"))
         .and_then(Value::as_str)
+}
+
+fn normalize_limit_id(value: impl AsRef<str>) -> String {
+    value.as_ref().trim().to_ascii_lowercase().replace('-', "_")
 }
 
 fn is_review_limit_name(value: Option<&str>) -> bool {

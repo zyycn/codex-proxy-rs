@@ -41,7 +41,7 @@ async fn responses_should_dispatch_to_codex_and_return_completed_response() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], "resp_response_1");
-    assert_eq!(body["output_text"], "response hello");
+    assert!(body.get("output_text").is_none());
     assert_eq!(body["usage"]["input_tokens"], 5);
     assert_eq!(body["usage"]["output_tokens"], 2);
 }
@@ -130,8 +130,9 @@ async fn responses_should_preserve_upstream_client_error_status() {
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "codex_client_error");
+    assert_eq!(body["error"]["code"], "invalid_input");
+    assert_eq!(body["error"]["message"], "A required parameter is invalid.");
+    assert!(body["error"].get("type").is_none());
 }
 
 #[tokio::test]
@@ -1074,9 +1075,8 @@ async fn responses_stream_should_return_model_unsupported_error_when_fallback_is
         .await
         .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains("event: response.failed"));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(content_type.starts_with("application/json"));
     assert!(body.contains("\"code\":\"model_not_found\""));
     assert!(body.contains("All accounts exhausted (1 model-unsupported)"));
     assert!(body.contains("model_not_available"));
@@ -1130,6 +1130,156 @@ async fn responses_explicit_previous_response_should_fail_without_transparent_re
 }
 
 #[tokio::test]
+async fn responses_external_previous_response_not_found_should_return_exact_upstream_400_once() {
+    let server = MockServer::start().await;
+    let upstream_error = json!({
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "previous_response_not_found",
+            "message": "Previous response with id 'resp_external' not found.",
+            "param": "previous_response_id"
+        },
+        "status": 400
+    });
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(upstream_error.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, _pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "previous_response_id": "resp_external",
+                        "input": [{"role": "user", "content": "Continue"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body, upstream_error);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn responses_managed_history_should_rebuild_full_replay_for_next_configured_candidate() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "token_revoked", "message": "token revoked"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_SUCCESS_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, state, api_key, _pool, _dir) =
+        test_app_with_two_accounts_and_state(server.uri()).await;
+    state
+        .services
+        .session_affinity
+        .record(
+            "resp_managed".to_string(),
+            SessionAffinityEntry {
+                account_id: "acct_primary".to_string(),
+                conversation_id: "conversation-managed".to_string(),
+                turn_state: Some("account-bound-turn-state".to_string()),
+                instructions_hash: None,
+                input_tokens: Some(11),
+                function_call_ids: Vec::new(),
+                variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
+                replay: Some(ResponseReplaySnapshot {
+                    full_input: vec![
+                        json!({"role": "user", "content": "Earlier question"}),
+                        json!({
+                            "type": "reasoning",
+                            "id": "reasoning-old",
+                            "encrypted_content": "account-bound-secret",
+                            "summary": []
+                        }),
+                    ],
+                }),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "previous_response_id": "resp_managed",
+                        "turnState": "client-turn-state",
+                        "input": [{"role": "user", "content": "Current question"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let requests = server.received_requests().await.unwrap();
+    let secondary = requests
+        .iter()
+        .find(|request| {
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                == Some("Bearer access-secondary")
+        })
+        .expect("secondary request");
+    let body: Value = serde_json::from_slice(&secondary.body).unwrap();
+    assert!(body.get("previous_response_id").is_none());
+    assert_eq!(body["input"][0]["content"], "Earlier question");
+    assert_eq!(body["input"][1]["id"], "reasoning-old");
+    assert!(body["input"][1].get("encrypted_content").is_none());
+    assert_eq!(body["input"][2]["content"], "Current question");
+    assert!(secondary.headers.get("x-codex-turn-state").is_none());
+}
+
+#[tokio::test]
 async fn responses_explicit_unanswered_function_call_should_not_retry_without_full_context() {
     let (base_url, upstream) =
         spawn_single_websocket_sequence_upstream(vec![response_failed_websocket_message(
@@ -1166,7 +1316,8 @@ async fn responses_explicit_unanswered_function_call_should_not_retry_without_fu
     let captured = upstream.await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "previous_response_unavailable");
+    assert_eq!(body["error"]["code"], "codex_client_error");
+    assert_eq!(body["error"]["message"], "Upstream Codex response failed");
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
     assert!(!captured.retry_attempted);
 }
@@ -1270,7 +1421,7 @@ async fn responses_stream_structural_events_should_not_commit_before_history_fai
     let body = response_text(response).await;
     let captured = upstream.await.unwrap();
 
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("previous_response_unavailable"));
     assert!(!body.contains("response.created"));
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
@@ -1555,9 +1706,8 @@ async fn responses_stream_should_return_auth_error_when_401_fallback_is_exhauste
         .await
         .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains("event: response.failed"));
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(content_type.starts_with("application/json"));
     assert!(body.contains("\"code\":\"invalid_api_key\""));
     assert!(body.contains("All accounts exhausted (1 expired)"));
     assert!(body.contains("token_revoked"));
@@ -1851,6 +2001,62 @@ async fn responses_should_retry_same_account_after_5xx_before_fallback() {
     assert_eq!(body["id"], "resp_after_5xx_retry");
     assert_eq!(primary_requests, 3, "requests: {authorizations:?}");
     assert_eq!(secondary_requests, 0, "requests: {authorizations:?}");
+}
+
+#[tokio::test]
+async fn responses_should_traverse_all_configured_strategy_candidates_without_fixed_cap() {
+    let server = MockServer::start().await;
+    for index in 0..6 {
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .and(header("authorization", format!("Bearer access-{index}")))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "token_invalidated",
+                    "message": "token is no longer valid"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-6"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_SUCCESS_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, _dir) = test_app_with_ranked_accounts(server.uri(), 7).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "Say hello"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(server.received_requests().await.unwrap().len(), 7);
 }
 
 #[tokio::test]
@@ -2240,9 +2446,8 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
     .await
     .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains("event: response.failed"));
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(content_type.starts_with("application/json"));
     assert!(body.contains("rate_limit_exceeded"));
     assert!(body.contains("All accounts exhausted (1 rate-limited)"));
     assert!(body.contains("rate limited"));
@@ -2316,9 +2521,8 @@ async fn responses_stream_should_return_quota_error_when_402_fallback_is_exhaust
         .await
         .unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(content_type.starts_with("text/event-stream"));
-    assert!(body.contains("event: response.failed"));
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(content_type.starts_with("application/json"));
     assert!(body.contains("\"code\":\"insufficient_quota\""));
     assert!(body.contains("All accounts exhausted (1 quota-exhausted)"));
     assert!(body.contains("quota reached"));

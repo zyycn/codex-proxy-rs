@@ -181,14 +181,15 @@ impl RedisSessionAffinityStore {
     }
 
     fn response_key(&self, response_id: &str) -> String {
-        self.redis.key(&format!("affinity:resp:{response_id}"))
+        self.redis.key(&format!("affinity:v2:resp:{response_id}"))
     }
 
     fn conversation_key(&self, conversation_id: &str) -> String {
-        self.redis.key(&format!("affinity:conv:{conversation_id}"))
+        self.redis
+            .key(&format!("affinity:v2:conv:{conversation_id}"))
     }
 
     fn account_key(&self, account_id: &str) -> String {
-        self.redis.key(&format!("affinity:account:{account_id}"))
+        self.redis.key(&format!("affinity:v2:account:{account_id}"))
     }
 }

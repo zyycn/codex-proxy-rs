@@ -11,11 +11,18 @@
 use std::cmp::Ordering;
 
 use crate::fleet::account::Account;
-use crate::fleet::scheduler::{compare_last_used, compare_window_reset, select_by, SelectionInput};
+use crate::fleet::scheduler::{
+    compare_last_used, compare_window_reset, order_by, select_by, SelectionInput,
+};
 
 /// QuotaResetPriority 策略选择。
 pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account> {
     select_by(input.candidates, cursor, compare_quota_reset_priority)
+}
+
+/// 按额度窗口重置优先级为完整候选集排序。
+pub fn order(input: &SelectionInput<'_>, cursor: &mut usize) -> Vec<Account> {
+    order_by(input.candidates, cursor, compare_quota_reset_priority)
 }
 
 /// 配额重置优先级比较：升序，最优（最应先用）排在最前。

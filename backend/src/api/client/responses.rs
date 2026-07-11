@@ -24,7 +24,7 @@ use super::{
     errors::{
         invalid_responses_request_response, missing_client_api_key_response,
         model_not_found_response, responses_dispatch_error_response,
-        responses_stream_dispatch_failed_sse_event,
+        responses_dispatch_error_response_ref, responses_stream_dispatch_failed_sse_event,
     },
     models::model_catalog_for_state,
     sse::{done_sse_frame, event_stream_response as sse_event_stream_response, SseResponseOptions},
@@ -101,8 +101,41 @@ pub fn build_codex_request(
         None => {}
     }
     apply_context_header_fields(&mut request, headers);
+    apply_identity_fields(&mut request, headers);
     request.client_user_agent = user_agent_from_headers(headers);
     request
+}
+
+fn apply_identity_fields(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
+    request.client_conversation_id = request.prompt_cache_key().map(ToString::to_string);
+    request.client_session_id = identity_context_string(request.body(), "session_id")
+        .or_else(|| header_string(headers, "session-id"));
+    request.client_thread_id = identity_context_string(request.body(), "thread_id")
+        .or_else(|| header_string(headers, "thread-id"));
+    request.client_request_id = identity_context_string(request.body(), "x-client-request-id")
+        .or_else(|| header_string(headers, "x-client-request-id"));
+    request.client_turn_id = identity_context_string(request.body(), "turn_id")
+        .or_else(|| header_string(headers, "x-codex-turn-id"));
+    request.codex_window_id = request.codex_window_id.take().or_else(|| {
+        identity_context_string(request.body(), "x-codex-window-id")
+            .or_else(|| header_string(headers, "x-codex-window-id"))
+    });
+    request.parent_thread_id = request.parent_thread_id.take().or_else(|| {
+        identity_context_string(request.body(), "x-codex-parent-thread-id")
+            .or_else(|| header_string(headers, "x-codex-parent-thread-id"))
+    });
+}
+
+fn identity_context_string(body: &Map<String, Value>, key: &str) -> Option<String> {
+    body_context_string(body, key).or_else(|| {
+        body.get("client_metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 /// 从客户端原始 Responses JSON body 构造 Codex compact 请求。
@@ -115,6 +148,18 @@ pub fn build_compact_request(
     mut body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> CodexCompactRequest {
+    let client_session_id = identity_context_string(&body, "session_id")
+        .or_else(|| header_string(headers, "session-id"));
+    let client_thread_id =
+        identity_context_string(&body, "thread_id").or_else(|| header_string(headers, "thread-id"));
+    let client_request_id = identity_context_string(&body, "x-client-request-id")
+        .or_else(|| header_string(headers, "x-client-request-id"));
+    let client_turn_id = identity_context_string(&body, "turn_id")
+        .or_else(|| header_string(headers, "x-codex-turn-id"));
+    let client_window_id = identity_context_string(&body, "x-codex-window-id")
+        .or_else(|| header_string(headers, "x-codex-window-id"));
+    let client_parent_thread_id = identity_context_string(&body, "x-codex-parent-thread-id")
+        .or_else(|| header_string(headers, "x-codex-parent-thread-id"));
     body.remove(COMPACT_STREAM_KEY);
     for key in TRANSPORT_ONLY_KEYS {
         body.remove(key);
@@ -124,6 +169,12 @@ pub fn build_compact_request(
         client_ip: None,
         client_user_agent: user_agent_from_headers(headers),
         client_api_key_id: None,
+        client_session_id,
+        client_thread_id,
+        client_request_id,
+        client_turn_id,
+        client_window_id,
+        client_parent_thread_id,
     }
 }
 
@@ -312,7 +363,10 @@ async fn handle_responses(
         .complete(request_id.as_str(), route, codex_request, &model)
         .await
     {
-        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Ok(result) => apply_safe_response_headers(
+            (StatusCode::OK, Json(result.body)).into_response(),
+            result.response_headers,
+        ),
         Err(error) => responses_dispatch_error_response(error),
     }
 }
@@ -352,7 +406,10 @@ async fn handle_compact_responses(
         .compact(request_id.as_str(), compact_request, &model)
         .await
     {
-        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Ok(result) => apply_safe_response_headers(
+            (StatusCode::OK, Json(result.body)).into_response(),
+            result.response_headers,
+        ),
         Err(error) => responses_dispatch_error_response(error),
     }
 }
@@ -424,10 +481,37 @@ fn event_stream_response(mut body: String) -> Response {
 }
 
 fn live_event_stream_response(stream: ResponseDispatchStream) -> Response {
-    sse_event_stream_response(Body::from_stream(stream.body), SseResponseOptions::BASIC)
+    let response =
+        sse_event_stream_response(Body::from_stream(stream.body), SseResponseOptions::BASIC);
+    apply_safe_response_headers(response, stream.response_headers)
+}
+
+fn apply_safe_response_headers(mut response: Response, headers: Vec<(String, String)>) -> Response {
+    for (name, value) in headers {
+        let name = match name.as_str() {
+            "x-request-id" => axum::http::header::HeaderName::from_static("x-request-id"),
+            "openai-model" => axum::http::header::HeaderName::from_static("openai-model"),
+            "x-models-etag" => axum::http::header::HeaderName::from_static("x-models-etag"),
+            "x-reasoning-included" => {
+                axum::http::header::HeaderName::from_static("x-reasoning-included")
+            }
+            "openai-processing-ms" => {
+                axum::http::header::HeaderName::from_static("openai-processing-ms")
+            }
+            _ => continue,
+        };
+        let Ok(value) = axum::http::HeaderValue::from_str(&value) else {
+            continue;
+        };
+        response.headers_mut().insert(name, value);
+    }
+    response
 }
 
 fn response_dispatch_stream_error_response(error: &ResponseDispatchError) -> Response {
+    if (400..=499).contains(&error.client_http_status_code()) {
+        return responses_dispatch_error_response_ref(error);
+    }
     event_stream_response(responses_stream_dispatch_failed_sse_event(error))
 }
 

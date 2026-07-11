@@ -203,10 +203,12 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
         json!([{"type": "function", "name": "lookup"}])
     );
     assert_eq!(upstream_body["text"]["format"]["type"], "json_schema");
-    // compact 只剥离 stream（端点不支持流式）；store/prompt_cache_key 等业务字段原样透传。
+    // compact 只剥离 stream；prompt_cache_key 按账号作用域伪名化。
     assert!(upstream_body.get("stream").is_none());
     assert_eq!(upstream_body["store"], true);
-    assert_eq!(upstream_body["prompt_cache_key"], "session-seed");
+    assert!(upstream_body["prompt_cache_key"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("wi_") && value != "session-seed"));
     assert_eq!(upstream_body["input"].as_array().unwrap().len(), 4);
     assert_eq!(upstream_body["input"][1]["ignored"], "drop");
     assert_eq!(
@@ -333,8 +335,11 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     let body = response_json(response).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "codex_client_error");
+    assert_eq!(body["error"]["code"], "invalid_encrypted_content");
+    assert_eq!(
+        body["error"]["message"],
+        "The encrypted content could not be verified."
+    );
     let event = latest_response_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(
@@ -354,7 +359,7 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
 }
 
 #[tokio::test]
-async fn responses_compact_should_map_upstream_internal_error_to_bad_gateway() {
+async fn responses_compact_should_report_upstream_unavailable_after_all_5xx_retries() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses/compact"))
@@ -387,7 +392,7 @@ async fn responses_compact_should_map_upstream_internal_error_to_bad_gateway() {
     let status = response.status();
     let body = response_json(response).await;
 
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["type"], "server_error");
     assert_eq!(body["error"]["code"], "upstream_error");
 }

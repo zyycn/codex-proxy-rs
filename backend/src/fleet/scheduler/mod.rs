@@ -129,6 +129,32 @@ impl AccountScheduler {
         select_with_strategy(strategy, &input, &mut cursor)
     }
 
+    /// 按当前策略为完整候选集排序，供单个请求依次执行账号 failover。
+    pub fn order(
+        &self,
+        strategy: RotationStrategy,
+        candidates: &[&Account],
+        slot_count: &dyn Fn(&str) -> usize,
+        now: DateTime<Utc>,
+    ) -> Vec<Account> {
+        let input = SelectionInput {
+            candidates,
+            slot_count,
+            feedback: &self.feedback,
+            weights: &self.weights,
+            now,
+        };
+        let mut cursor = self.lock_cursor();
+        match strategy {
+            RotationStrategy::Smart => strategy::smart::order(&input, &mut cursor),
+            RotationStrategy::QuotaResetPriority => {
+                strategy::quota_reset::order(&input, &mut cursor)
+            }
+            RotationStrategy::RoundRobin => strategy::round_robin::order(&input, &mut cursor),
+            RotationStrategy::Sticky => strategy::sticky::order(&input),
+        }
+    }
+
     /// 回灌一次请求结果到运行时 EWMA 反馈（错误率 / TTFT），供 Smart 打分。
     pub fn report_feedback(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
         self.feedback.report(account_id, success, first_token_ms);
@@ -179,6 +205,28 @@ pub(crate) fn select_by(
     let index = *cursor % tied_count;
     *cursor = cursor.wrapping_add(1);
     Some((*sorted[index]).clone())
+}
+
+pub(crate) fn order_by(
+    candidates: &[&Account],
+    cursor: &mut usize,
+    compare: impl Fn(&Account, &Account) -> Ordering,
+) -> Vec<Account> {
+    let mut sorted = candidates.to_vec();
+    sorted.sort_by(|a, b| compare(a, b));
+    let rotation = *cursor;
+    *cursor = cursor.wrapping_add(1);
+
+    let mut start = 0;
+    while start < sorted.len() {
+        let mut end = start + 1;
+        while end < sorted.len() && compare(sorted[start], sorted[end]) == Ordering::Equal {
+            end += 1;
+        }
+        sorted[start..end].rotate_left(rotation % (end - start));
+        start = end;
+    }
+    sorted.into_iter().cloned().collect()
 }
 
 pub(crate) fn account_window_token_count(account: &Account) -> u64 {

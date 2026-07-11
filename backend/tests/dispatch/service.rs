@@ -16,18 +16,10 @@ use codex_proxy_rs::{
     api::AppState,
     bootstrap::config::AppConfig,
     bootstrap::services::{Services, UsageRecordOptions},
-    dispatch::affinity::{
-        build_conversation_identity, compute_variant_hash, prepare_variant_identity,
-        SessionAffinityEntry,
-    },
-    fleet::{
-        account::AccountStatus,
-        cookies::PgCookieStore,
-        pool::{AccountAcquireRequest, AccountLease},
-    },
+    dispatch::affinity::{ResponseReplaySnapshot, SessionAffinityEntry},
+    fleet::{account::AccountStatus, cookies::PgCookieStore},
     infra::identity::hash_credential,
     telemetry::usage::store::{PgUsageRecordStore, UsageRecordFilter},
-    upstream::openai::protocol::responses::CodexResponsesRequest,
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -62,8 +54,6 @@ use crate::support::{
     http::response_json,
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
 };
-
-const TEST_INSTALLATION_ID: &str = "b4f9d503-07b1-457b-a0da-87e6836b1c43";
 
 fn websocket_accept_config() -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();
@@ -210,8 +200,6 @@ const RESPONSES_FAILED_MODEL_UNSUPPORTED_SSE: &str = concat!(
     "\n"
 );
 
-const WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY: &str =
-    include_str!("../fixtures/responses/websocket/completed_with_reasoning_replay.json");
 const WEBSOCKET_HISTORY_RATE_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/history_rate_limited.json");
 const WEBSOCKET_RATE_LIMITED: &str =
@@ -222,57 +210,42 @@ const WEBSOCKET_FIRST_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/first_account_limited.json");
 const WEBSOCKET_SECOND_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/second_account_limited.json");
-const WEBSOCKET_INVALID_ENCRYPTED_CONTENT: &str =
-    include_str!("../fixtures/responses/websocket/invalid_encrypted_content.json");
-const WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND: &str =
-    include_str!("../fixtures/responses/websocket/previous_response_not_found.json");
-const REASONING_REPLAY_REQUEST_GOLDEN: &str =
-    include_str!("../fixtures/responses/golden/reasoning_replay_request.json");
-
 mod compact_routes;
 mod responses_http;
 mod responses_recovery;
 mod responses_websocket;
 mod usage_logging;
 
-async fn test_app_state_with_pool_and_installation_id(
-    config: &AppConfig,
-    pool: PgPool,
-    installation_id: String,
-) -> AppState {
-    test_app_state_with_pool_installation_id_and_usage_record_options(
+async fn test_app_state_with_pool(config: &AppConfig, pool: PgPool) -> AppState {
+    test_app_state_with_pool_and_usage_record_options(
         config.clone(),
         pool,
-        installation_id,
         UsageRecordOptions::from_config(config),
     )
     .await
 }
 
-async fn test_app_state_with_pool_installation_id_and_usage_record_options(
+async fn test_app_state_with_pool_and_usage_record_options(
     config: AppConfig,
     pool: PgPool,
-    installation_id: String,
     usage_record_options: UsageRecordOptions,
 ) -> AppState {
     let redis = create_test_redis("chat-upstream").await;
-    test_app_state_with_storage(config, pool, redis, installation_id, usage_record_options).await
+    test_app_state_with_storage(config, pool, redis, usage_record_options).await
 }
 
 async fn test_app_state_with_storage(
     config: AppConfig,
     pool: PgPool,
     redis: codex_proxy_rs::infra::redis::RedisConnection,
-    installation_id: String,
     usage_record_options: UsageRecordOptions,
 ) -> AppState {
     insert_model_snapshot(&redis).await;
     let stores = background_task_stores(pool, redis);
-    let services = Services::try_with_installation_id_and_usage_record_options(
+    let services = Services::try_with_usage_record_options(
         &config,
         stores,
         crate::support::fingerprint::runtime_test_fingerprint(),
-        Some(installation_id),
         usage_record_options,
     )
     .expect("failed to build runtime services with configured TLS transport");
@@ -290,26 +263,10 @@ async fn test_app_with_account(
     String,
     crate::support::storage::TestDatabaseGuard,
 ) {
-    test_app_with_account_and_installation_id(base_url, TEST_INSTALLATION_ID.to_string()).await
-}
-
-async fn test_app_with_account_and_installation_id(
-    base_url: String,
-    installation_id: String,
-) -> (
-    axum::Router,
-    String,
-    crate::support::storage::TestDatabaseGuard,
-) {
     let (pool, dir) = init_test_db("openai-chat-upstream").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(test_database_url(), base_url),
-        pool,
-        installation_id,
-    )
-    .await;
+    let state = test_app_state_with_pool(&test_config(test_database_url(), base_url), pool).await;
     state
         .services
         .account_pool
@@ -352,12 +309,8 @@ async fn test_app_without_accounts(
 ) {
     let (pool, dir) = init_test_db("openai-responses-no-accounts").await;
     let api_key = insert_client_api_key(&pool).await;
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(test_database_url(), base_url),
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state =
+        test_app_state_with_pool(&test_config(test_database_url(), base_url), pool.clone()).await;
     state
         .services
         .account_pool
@@ -392,12 +345,8 @@ async fn test_app_with_account_pool_and_disabled_telemetry(
     let (pool, dir) = init_test_db("openai-record-disabled-logging").await;
     let api_key = insert_client_api_key(&pool).await;
     insert_account(&pool).await;
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(test_database_url(), base_url),
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state =
+        test_app_state_with_pool(&test_config(test_database_url(), base_url), pool.clone()).await;
     state
         .services
         .account_pool
@@ -424,10 +373,9 @@ async fn test_app_with_account_pool_and_telemetry_capture_body(
         enabled: true,
         capture_body: true,
     };
-    let state = test_app_state_with_pool_installation_id_and_usage_record_options(
+    let state = test_app_state_with_pool_and_usage_record_options(
         config,
         pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
         usage_record_options,
     )
     .await;
@@ -467,12 +415,7 @@ async fn test_app_with_account_pool_config_and_affinity(
     insert_account(&pool).await;
     let mut config = test_config(test_database_url(), base_url);
     configure(&mut config);
-    let state = test_app_state_with_pool_and_installation_id(
-        &config,
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state = test_app_state_with_pool(&config, pool.clone()).await;
     if let Some(response_id) = affinity_response_id {
         insert_session_affinity(&state.services.session_affinity, response_id, "acct_chat").await;
     }
@@ -497,12 +440,7 @@ async fn test_app_with_two_accounts_and_affinity(
     insert_named_account(&pool, "acct_a", "access-default", "chatgpt-default").await;
     insert_named_account(&pool, "acct_z", "access-affinity", "chatgpt-affinity").await;
     let now = Utc::now();
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(test_database_url(), base_url),
-        pool,
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state = test_app_state_with_pool(&test_config(test_database_url(), base_url), pool).await;
     state
         .services
         .session_affinity
@@ -516,6 +454,13 @@ async fn test_app_with_two_accounts_and_affinity(
                 input_tokens: None,
                 function_call_ids: Vec::new(),
                 variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
+                replay: Some(ResponseReplaySnapshot {
+                    full_input: vec![json!({
+                        "role": "user",
+                        "content": "Original managed history"
+                    })],
+                }),
                 created_at: now,
             },
         )
@@ -560,12 +505,8 @@ async fn test_app_with_two_accounts_and_affinity_status(
         .await
         .unwrap();
     let now = Utc::now();
-    let state = test_app_state_with_pool_and_installation_id(
-        &test_config(test_database_url(), base_url),
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state =
+        test_app_state_with_pool(&test_config(test_database_url(), base_url), pool.clone()).await;
     state
         .services
         .session_affinity
@@ -579,6 +520,13 @@ async fn test_app_with_two_accounts_and_affinity_status(
                 input_tokens: None,
                 function_call_ids: Vec::new(),
                 variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
+                replay: Some(ResponseReplaySnapshot {
+                    full_input: vec![json!({
+                        "role": "user",
+                        "content": "Original affinity history"
+                    })],
+                }),
                 created_at: now,
             },
         )
@@ -661,12 +609,7 @@ async fn test_app_with_two_accounts_and_state_config(
     .await;
     let mut config = test_config(test_database_url(), base_url);
     configure(&mut config);
-    let state = test_app_state_with_pool_and_installation_id(
-        &config,
-        pool.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-    )
-    .await;
+    let state = test_app_state_with_pool(&config, pool.clone()).await;
     state
         .services
         .account_pool
@@ -680,6 +623,46 @@ async fn test_app_with_two_accounts_and_state_config(
         pool,
         dir,
     )
+}
+
+async fn test_app_with_ranked_accounts(
+    base_url: String,
+    account_count: usize,
+) -> (
+    axum::Router,
+    String,
+    crate::support::storage::TestDatabaseGuard,
+) {
+    let (pool, dir) = init_test_db("openai-responses-full-candidate-ledger").await;
+    let api_key = insert_client_api_key(&pool).await;
+    for index in 0..account_count {
+        let account_id = format!("acct-{index}");
+        insert_named_account(
+            &pool,
+            &account_id,
+            &format!("access-{index}"),
+            &format!("chatgpt-{index}"),
+        )
+        .await;
+        sqlx::query(
+            "insert into account_usage (account_id, request_count, window_request_count) values ($1, $2, $2)",
+        )
+        .bind(&account_id)
+        .bind(i64::try_from(index).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let mut config = test_config(test_database_url(), base_url);
+    config.auth.rotation_strategy = "quota_reset_priority".to_string();
+    let state = test_app_state_with_pool(&config, pool).await;
+    state
+        .services
+        .account_pool
+        .restore_from_store()
+        .await
+        .expect("account pool should restore");
+    (router::router().with_state(state), api_key, dir)
 }
 
 async fn seed_openai_admin_key(pool: &PgPool, key: &str) {
@@ -784,6 +767,8 @@ async fn insert_session_affinity(
                 input_tokens: None,
                 function_call_ids: Vec::new(),
                 variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
+                replay: None,
                 created_at: Utc::now(),
             },
         )
@@ -1145,66 +1130,6 @@ async fn accept_websocket_response_with_message(
     payload
 }
 
-async fn accept_followup_websocket_response(
-    listener: &TcpListener,
-    websocket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
-    response_message: String,
-) -> Value {
-    tokio::select! {
-        message = websocket.next() => {
-            match message {
-                Some(Ok(message)) if message.is_text() => {
-                    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
-                        .expect("websocket payload should be json");
-                    websocket
-                        .send(Message::Text(response_message.into()))
-                        .await
-                        .unwrap();
-                    payload
-                }
-                _ => accept_websocket_response_with_message(listener, response_message).await,
-            }
-        }
-        accepted = listener.accept() => {
-            let (stream, _) = accepted.unwrap();
-            let mut followup = accept_async(stream).await.unwrap();
-            let payload =
-                send_websocket_response_and_capture_payload(&mut followup, response_message).await;
-            followup.close(None).await.unwrap();
-            payload
-        }
-    }
-}
-
-async fn accept_followup_websocket_response_sequence(
-    listener: &TcpListener,
-    websocket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
-    response_messages: Vec<String>,
-) -> Value {
-    let followup = tokio::select! {
-        message = websocket.next() => {
-            match message {
-                Some(Ok(message)) if message.is_text() => {
-                    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
-                        .expect("websocket payload should be json");
-                    send_websocket_messages(websocket, &response_messages).await;
-                    return payload;
-                }
-                _ => None,
-            }
-        }
-        accepted = listener.accept() => Some(accepted.unwrap().0),
-    };
-
-    let stream = followup.expect("follow-up websocket connection should be available");
-    let mut followup = accept_async(stream).await.unwrap();
-    let message = followup.next().await.unwrap().unwrap();
-    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
-        .expect("websocket payload should be json");
-    send_websocket_messages(&mut followup, &response_messages).await;
-    payload
-}
-
 async fn send_websocket_messages(
     websocket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
     messages: &[String],
@@ -1270,13 +1195,12 @@ async fn read_http_upgrade_request(stream: &mut TcpStream) -> String {
     String::from_utf8(request).unwrap()
 }
 
-fn assert_response_failed_stream(
+fn assert_openai_error_body(
     body: &str,
     expected_error_type: &str,
     expected_code: &str,
     expected_fragments: &[&str],
 ) {
-    assert!(body.contains("event: response.failed"));
     assert!(
         body.contains(&format!("\"type\":\"{expected_error_type}\""))
             || body.contains(&format!("\"type\": \"{expected_error_type}\"")),
@@ -1374,30 +1298,6 @@ fn websocket_completed_response(
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens
-            }
-        }
-    })
-    .to_string()
-}
-
-fn websocket_completed_function_call_response(response_id: &str, call_id: &str) -> String {
-    json!({
-        "type": "response.completed",
-        "response": {
-            "id": response_id,
-            "object": "response",
-            "status": "completed",
-            "output": [{
-                "type": "function_call",
-                "id": format!("fc_{call_id}"),
-                "call_id": call_id,
-                "name": "lookup",
-                "arguments": "{}"
-            }],
-            "usage": {
-                "input_tokens": 6,
-                "output_tokens": 2,
-                "total_tokens": 8
             }
         }
     })
@@ -1516,16 +1416,29 @@ async fn latest_response_usage_record(pool: &PgPool) -> ResponseUsageRecordSnaps
 }
 
 async fn latest_response_ops_error_log(pool: &PgPool) -> ResponseUsageRecordSnapshot {
+    latest_response_ops_error_log_with_message(pool, None).await
+}
+
+async fn latest_response_upstream_ops_error_log(pool: &PgPool) -> ResponseUsageRecordSnapshot {
+    latest_response_ops_error_log_with_message(pool, Some("v1 responses upstream request failed"))
+        .await
+}
+
+async fn latest_response_ops_error_log_with_message(
+    pool: &PgPool,
+    message: Option<&str>,
+) -> ResponseUsageRecordSnapshot {
     let row = sqlx::query_as::<_, OpsErrorLogSnapshot>(
         "select request_id, account_id, route, model, transport, status_code,
                 client_status_code, upstream_status_code, failure_class, attempt_index, response_id,
                 metadata_json::text as metadata_json
          from ops_error_logs
-         where kind = $1
+         where kind = $1 and ($2::text is null or message = $2)
          order by created_at desc, id desc
          limit 1",
     )
     .bind("v1.response")
+    .bind(message)
     .fetch_optional(pool)
     .await
     .unwrap();

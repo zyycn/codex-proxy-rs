@@ -80,6 +80,8 @@ pub struct ModelRefreshPlanAccount {
     pub access_token: String,
     /// 上游账号标识。
     pub account_id: Option<String>,
+    /// 按账号作用域派生的 installation ID。
+    pub installation_id: String,
 }
 
 /// 模型目录服务。
@@ -90,6 +92,9 @@ pub struct ModelService {
     catalog: Arc<RwLock<ModelCatalog>>,
     store: Option<Arc<dyn ModelSnapshotStore>>,
     upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
+    models_etag: Arc<RwLock<Option<String>>>,
+    etag_change_tx: watch::Sender<u64>,
+    refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ModelService {
@@ -100,13 +105,42 @@ impl ModelService {
         upstream_client: Option<Arc<dyn CodexModelCatalogClient>>,
     ) -> Self {
         let catalog = ModelCatalog::from_config(&config);
+        let (etag_change_tx, _) = watch::channel(0);
         Self {
             config: Arc::new(RwLock::new(config)),
             snapshots: Arc::new(RwLock::new(Vec::new())),
             catalog: Arc::new(RwLock::new(catalog)),
             store,
             upstream_client,
+            models_etag: Arc::new(RwLock::new(None)),
+            etag_change_tx,
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// 记录 Responses 响应中观察到的模型目录 ETag。
+    ///
+    /// 仅在值真正变化时通知后台刷新任务。
+    pub fn observe_models_etag(&self, etag: Option<&str>) -> bool {
+        let Some(etag) = etag.map(str::trim).filter(|etag| !etag.is_empty()) else {
+            return false;
+        };
+        let mut current = self
+            .models_etag
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.as_deref() == Some(etag) {
+            return false;
+        }
+        *current = Some(etag.to_string());
+        drop(current);
+        self.etag_change_tx.send_modify(|revision| *revision += 1);
+        true
+    }
+
+    /// 订阅模型目录 ETag 变化。
+    pub fn subscribe_models_etag_changes(&self) -> watch::Receiver<u64> {
+        self.etag_change_tx.subscribe()
     }
 
     /// 更新模型服务配置。
@@ -150,13 +184,13 @@ impl ModelService {
         self.cached_catalog()
     }
 
-    /// 使用运行时 installation id 刷新活跃账号对应的后端模型目录。
-    pub async fn refresh_backend_models_with_installation_id(
+    /// 刷新活跃账号对应的后端模型目录。
+    pub async fn refresh_backend_models(
         &self,
         plan_accounts: &[ModelRefreshPlanAccount],
         request_id: &str,
-        installation_id: Option<&str>,
     ) -> Result<ModelRefreshResult, ModelServiceError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let store = self
             .store
             .as_ref()
@@ -181,7 +215,7 @@ impl ModelService {
                 access_token: &plan_account.access_token,
                 account_id: plan_account.account_id.as_deref(),
                 request_id,
-                installation_id,
+                installation_id: Some(&plan_account.installation_id),
                 plan_type: &plan_account.plan_type,
             };
 

@@ -68,14 +68,40 @@ pub fn filter<'a>(
     candidates
 }
 
+/// 冻结一次客户端请求可遍历的完整候选集。
+///
+/// 与 [`filter`] 不同，这里不按最高订阅层级收窄，也不因瞬时 slot 已满而删除账号。
+/// 层级和 slot 只影响后续顺序与租用时机，不能缩小请求级 failover 边界。
+pub fn snapshot<'a>(
+    accounts: impl Iterator<Item = &'a Account>,
+    filter: &CandidateFilter<'_>,
+    request: &CandidateRequest<'_>,
+) -> Vec<&'a Account> {
+    let mut candidates = accounts
+        .filter(|account| is_snapshot_eligible(account, filter, request))
+        .collect::<Vec<_>>();
+    if let Some(required_account_id) = request.required_account_id {
+        candidates.retain(|account| account.id == required_account_id);
+    }
+    candidates
+}
+
 /// 判断账号是否满足全部基础可用条件。
 fn is_base_available(
     account: &Account,
     filter: &CandidateFilter<'_>,
     request: &CandidateRequest<'_>,
 ) -> bool {
-    account.status == AccountStatus::Active
+    is_snapshot_eligible(account, filter, request)
         && (filter.slot_count)(&account.id) < filter.max_concurrent_per_account
+}
+
+fn is_snapshot_eligible(
+    account: &Account,
+    filter: &CandidateFilter<'_>,
+    request: &CandidateRequest<'_>,
+) -> bool {
+    account.status == AccountStatus::Active
         && quota_available_at(account, request.now, filter.skip_quota_limited)
         && is_model_allowed(
             account,
@@ -88,6 +114,12 @@ fn is_base_available(
             .iter()
             .any(|account_id| account_id == &account.id)
         && cloudflare_available_at(account, request.now)
+}
+
+pub(crate) fn tier_rank(plan_type: Option<&str>, tier_priority: &[String]) -> usize {
+    plan_type
+        .and_then(|plan_type| tier_priority.iter().position(|tier| tier == plan_type))
+        .unwrap_or(tier_priority.len())
 }
 
 /// 判断模型是否允许该账号的订阅计划使用。

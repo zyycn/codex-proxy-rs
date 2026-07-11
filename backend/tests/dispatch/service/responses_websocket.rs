@@ -14,8 +14,11 @@ async fn responses_websocket_should_stream_first_frame_before_terminal_event() {
         websocket
             .send(Message::Text(
                 json!({
-                    "type": "response.output_text.delta",
-                    "delta": "first websocket frame"
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_ws_streaming",
+                        "status": "in_progress"
+                    }
                 })
                 .to_string()
                 .into(),
@@ -72,7 +75,7 @@ async fn responses_websocket_should_stream_first_frame_before_terminal_event() {
     terminal_tx.send(()).unwrap();
     let payload = upstream.await.unwrap();
 
-    assert!(first_chunk.contains("event: response.output_text.delta"));
+    assert!(first_chunk.contains("event: response.created"));
     assert_eq!(payload["type"], "response.create");
 }
 
@@ -348,8 +351,8 @@ async fn responses_websocket_should_reuse_connection_for_recorded_conversation()
 }
 
 #[tokio::test]
-async fn responses_websocket_should_retry_fresh_connection_when_reused_connection_dies_before_first_output(
-) {
+async fn responses_websocket_should_replay_history_when_reused_connection_dies_before_first_output()
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -419,14 +422,13 @@ async fn responses_websocket_should_retry_fresh_connection_when_reused_connectio
         stale_payload["previous_response_id"],
         "resp_stale_reuse_first"
     );
+    assert!(fresh_payload.get("previous_response_id").is_none());
     assert_eq!(
-        fresh_payload["previous_response_id"],
-        "resp_stale_reuse_first"
+        fresh_payload["input"][0]["content"],
+        "prime stale websocket reuse"
     );
-    assert_eq!(
-        fresh_payload["prompt_cache_key"], first_payload["prompt_cache_key"],
-        "fresh retry should keep the recorded conversation identity"
-    );
+    assert!(first_payload.get("prompt_cache_key").is_none());
+    assert!(fresh_payload.get("prompt_cache_key").is_none());
 }
 
 #[tokio::test]
@@ -560,18 +562,17 @@ async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled()
         !reused_connection,
         "disabled pool reused the upstream websocket"
     );
+    assert!(first_payload.get("prompt_cache_key").is_none());
+    assert!(second_payload.get("prompt_cache_key").is_none());
+    assert!(second_payload.get("previous_response_id").is_none());
     assert_eq!(
-        second_payload["prompt_cache_key"], first_payload["prompt_cache_key"],
-        "disabling the pool must not change the recorded conversation key"
-    );
-    assert_eq!(
-        second_payload["previous_response_id"],
-        "resp_disabled_pool_first"
+        second_payload["input"][0]["content"],
+        "do not reuse this upstream websocket"
     );
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_should_record_metadata_turn_state_for_continuation() {
+async fn responses_websocket_stream_should_strip_turn_state_when_replaying_on_new_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -678,397 +679,8 @@ async fn responses_websocket_stream_should_record_metadata_turn_state_for_contin
     let (first_payload, second_payload, second_headers) = upstream.await.unwrap();
 
     assert!(first_payload.get("previous_response_id").is_none());
-    assert_eq!(
-        second_payload["previous_response_id"],
-        "resp_metadata_turn_state"
-    );
-    assert_eq!(
-        captured_header(&second_headers, "x-codex-turn-state"),
-        Some("turn-from-metadata")
-    );
-}
-
-#[tokio::test]
-async fn responses_websocket_should_implicitly_resume_full_history_with_reasoning_replay() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_followup_websocket_response(
-            &listener,
-            &mut websocket,
-            websocket_completed_response("resp_implicit_resume_second", 4, 1),
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        (first_payload, second_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, mut second_payload) = upstream.await.unwrap();
-    assert!(first_payload["prompt_cache_key"].as_str().is_some());
-    assert_eq!(
-        second_payload["previous_response_id"],
-        "resp_implicit_resume_first"
-    );
-    assert_eq!(
-        second_payload["prompt_cache_key"],
-        first_payload["prompt_cache_key"]
-    );
-    assert_eq!(
-        second_payload["input"][0]["encrypted_content"],
-        "enc_reasoning_replay"
-    );
-    assert!(second_payload["input"][0].get("content").is_none());
-    assert_eq!(second_payload["input"][1]["content"], "continue");
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 2);
-
-    second_payload
-        .as_object_mut()
-        .unwrap()
-        .remove("prompt_cache_key");
-    second_payload
-        .as_object_mut()
-        .unwrap()
-        .remove("client_metadata");
-    let expected: Value = serde_json::from_str(REASONING_REPLAY_REQUEST_GOLDEN).unwrap();
-    assert_eq!(second_payload, expected);
-}
-
-#[tokio::test]
-async fn responses_websocket_should_strip_implicit_disabled_affinity_when_switching_accounts() {
-    responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
-        AccountStatus::Disabled,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn responses_websocket_should_strip_implicit_banned_affinity_when_switching_accounts() {
-    responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
-        AccountStatus::Banned,
-    )
-    .await;
-}
-
-async fn responses_websocket_should_strip_implicit_affinity_when_switching_accounts(
-    status: AccountStatus,
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let status_name = status.as_str();
-    let first_response_id = format!("resp_implicit_{status_name}_first");
-    let second_response_id = format!("resp_implicit_{status_name}_second");
-    let upstream_first_response_id = first_response_id.clone();
-    let upstream_second_response_id = second_response_id.clone();
-    let upstream = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
-        let mut first_websocket =
-            accept_websocket_with_authorization(first_stream, "Bearer access-primary").await;
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut first_websocket,
-            websocket_completed_response(&upstream_first_response_id, 4, 1),
-        )
-        .await;
-        first_websocket.close(None).await.unwrap();
-
-        let (second_stream, _) = listener.accept().await.unwrap();
-        let second_headers = Arc::new(Mutex::new(Vec::new()));
-        let second_headers_for_callback = Arc::clone(&second_headers);
-        let mut second_websocket = accept_hdr_async(second_stream, move |request, _response| {
-            *second_headers_for_callback.lock().unwrap() = request_headers(request);
-        })
-        .await
-        .unwrap();
-        let second_payload = send_websocket_response_and_capture_payload(
-            &mut second_websocket,
-            websocket_completed_response(&upstream_second_response_id, 3, 1),
-        )
-        .await;
-        second_websocket.close(None).await.unwrap();
-        let captured_second_headers = second_headers.lock().unwrap().clone();
-
-        (first_payload, second_payload, captured_second_headers)
-    });
-    let (app, state, api_key, _pool, _dir) = test_app_with_two_accounts_and_state(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains(&format!("\"id\":\"{first_response_id}\"")));
-
-    assert!(
-        state
-            .services
-            .account_pool
-            .set_status("acct_primary", status)
-            .await
-    );
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-    assert!(response_text(second_response)
-        .await
-        .contains(&format!("\"id\":\"{second_response_id}\"")));
-    let (first_payload, second_payload, second_headers) = upstream.await.unwrap();
-    let affinity = state
-        .services
-        .session_affinity
-        .lookup(&first_response_id, Utc::now())
-        .await;
-
-    assert!(first_payload["prompt_cache_key"].as_str().is_some());
-    assert_eq!(
-        captured_header(&second_headers, "authorization"),
-        Some("Bearer access-secondary")
-    );
+    assert!(second_payload.get("previous_response_id").is_none());
     assert!(captured_header(&second_headers, "x-codex-turn-state").is_none());
-    assert!(second_payload.get("previous_response_id").is_none());
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 3);
-    assert!(affinity.is_none());
-}
-
-#[tokio::test]
-async fn responses_websocket_should_not_implicitly_resume_unmatched_function_call_output() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            websocket_completed_function_call_response("resp_call_first", "call_expected"),
-        )
-        .await;
-        let second_payload = accept_followup_websocket_response(
-            &listener,
-            &mut websocket,
-            websocket_completed_response("resp_call_mismatch_second", 4, 1),
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        (first_payload, second_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "use the lookup tool",
-                "stream": false,
-                "input": [{"role": "user", "content": "call the lookup tool"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "use the lookup tool",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "call the lookup tool"},
-                    {
-                        "type": "function_call",
-                        "call_id": "call_expected",
-                        "name": "lookup",
-                        "arguments": "{}"
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": "call_missing",
-                        "output": "tool output"
-                    }
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, second_payload) = upstream.await.unwrap();
-    assert!(first_payload["prompt_cache_key"].as_str().is_some());
-    assert!(second_payload.get("previous_response_id").is_none());
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 3);
-    assert_eq!(second_payload["input"][2]["call_id"], "call_missing");
-}
-
-#[tokio::test]
-async fn responses_websocket_should_implicitly_resume_after_redis_affinity_restore() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let server_base_url = base_url.clone();
-    let upstream = tokio::spawn(async move {
-        let first_payload = accept_websocket_response_with_message(
-            &listener,
-            WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_websocket_response_with_message(
-            &listener,
-            websocket_completed_response("resp_restored_implicit_resume", 4, 1),
-        )
-        .await;
-        (first_payload, second_payload)
-    });
-    let (pool, _guard) = init_test_db("websocket-affinity-restart").await;
-    let redis = create_test_redis("websocket-affinity-restart").await;
-    let api_key = insert_client_api_key(&pool).await;
-    insert_account(&pool).await;
-    let config = test_config(test_database_url(), base_url);
-    let initial_state = test_app_state_with_storage(
-        config.clone(),
-        pool.clone(),
-        redis.clone(),
-        TEST_INSTALLATION_ID.to_string(),
-        UsageRecordOptions::from_config(&config),
-    )
-    .await;
-    initial_state
-        .services
-        .account_pool
-        .restore_from_store()
-        .await
-        .unwrap();
-    let app = router::router().with_state(initial_state);
-
-    let first_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let restored_config = test_config(test_database_url(), server_base_url);
-    let restored_state = test_app_state_with_storage(
-        restored_config.clone(),
-        pool.clone(),
-        redis,
-        TEST_INSTALLATION_ID.to_string(),
-        UsageRecordOptions::from_config(&restored_config),
-    )
-    .await;
-    assert_eq!(
-        restored_state
-            .services
-            .account_pool
-            .restore_from_store()
-            .await
-            .unwrap(),
-        1
-    );
-    let restored_app = router::router().with_state(restored_state);
-
-    let second_response = restored_app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, second_payload) = upstream.await.unwrap();
-    assert_eq!(
-        second_payload["prompt_cache_key"],
-        first_payload["prompt_cache_key"]
-    );
-    assert_eq!(
-        second_payload["previous_response_id"],
-        "resp_implicit_resume_first"
-    );
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 1);
-    assert_eq!(second_payload["input"][0]["content"], "continue");
 }
 
 #[tokio::test]
@@ -1168,324 +780,6 @@ async fn responses_websocket_pool_should_be_evicted_after_admin_account_status_c
 }
 
 #[tokio::test]
-async fn responses_websocket_should_not_implicitly_resume_self_contained_function_call_replay() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            websocket_completed_function_call_response("resp_self_contained_first", "call_self"),
-        )
-        .await;
-        let second_payload = accept_followup_websocket_response(
-            &listener,
-            &mut websocket,
-            websocket_completed_response("resp_self_contained_second", 4, 1),
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        (first_payload, second_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "use the lookup tool",
-                "stream": false,
-                "input": [{"role": "user", "content": "call the lookup tool"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "use the lookup tool",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "call the lookup tool"},
-                    {
-                        "type": "function_call",
-                        "call_id": "call_self",
-                        "name": "lookup",
-                        "arguments": "{}"
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": "call_self",
-                        "output": "tool output"
-                    }
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, second_payload) = upstream.await.unwrap();
-    assert!(first_payload["prompt_cache_key"].as_str().is_some());
-    assert!(second_payload.get("previous_response_id").is_none());
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 3);
-    assert_eq!(second_payload["input"][2]["call_id"], "call_self");
-}
-
-#[tokio::test]
-async fn responses_websocket_should_not_implicitly_resume_across_codex_windows() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
-        )
-        .await;
-        let second_payload = accept_followup_websocket_response(
-            &listener,
-            &mut websocket,
-            websocket_completed_response("resp_window_b", 8, 2),
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        (first_payload, second_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "prompt_cache_key": "shared-variant-session",
-                "codexWindowId": "window-a",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "prompt_cache_key": "shared-variant-session",
-                "codexWindowId": "window-b",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue in another window"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, second_payload) = upstream.await.unwrap();
-    assert_eq!(
-        second_payload["prompt_cache_key"],
-        first_payload["prompt_cache_key"]
-    );
-    assert!(second_payload.get("previous_response_id").is_none());
-    assert_eq!(second_payload["input"].as_array().unwrap().len(), 3);
-}
-
-#[tokio::test]
-async fn responses_websocket_should_evict_reasoning_replay_after_invalid_encrypted_content() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
-        )
-        .await;
-        let invalid_payload = accept_followup_websocket_response(
-            &listener,
-            &mut websocket,
-            WEBSOCKET_INVALID_ENCRYPTED_CONTENT.trim().to_string(),
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        let retried_payload = accept_websocket_response_with_message(
-            &listener,
-            websocket_completed_response("resp_after_replay_eviction", 4, 1),
-        )
-        .await;
-        (first_payload, invalid_payload, retried_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    let (first_payload, invalid_payload, retried_payload) = upstream.await.unwrap();
-    assert_eq!(
-        invalid_payload["previous_response_id"],
-        "resp_implicit_resume_first"
-    );
-    assert_eq!(
-        invalid_payload["input"][0]["encrypted_content"],
-        "enc_reasoning_replay"
-    );
-    assert_eq!(
-        retried_payload["prompt_cache_key"],
-        first_payload["prompt_cache_key"]
-    );
-    assert!(retried_payload.get("previous_response_id").is_none());
-    let retried_input = retried_payload["input"].as_array().unwrap();
-    assert!(retried_input
-        .iter()
-        .all(|item| item.get("encrypted_content").is_none()));
-    assert_eq!(retried_input.last().unwrap()["content"], "continue");
-}
-
-#[tokio::test]
-async fn responses_websocket_should_restore_full_history_when_implicit_resume_previous_response_is_missing(
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_async(stream).await.unwrap();
-        let first_payload = send_websocket_response_and_capture_payload(
-            &mut websocket,
-            WEBSOCKET_COMPLETED_WITH_REASONING_REPLAY.trim().to_string(),
-        )
-        .await;
-        let implicit_payload = accept_followup_websocket_response_sequence(
-            &listener,
-            &mut websocket,
-            vec![
-                json!({
-                    "type": "response.created",
-                    "response": {
-                        "id": "resp_implicit_resume_failed",
-                        "object": "response",
-                        "status": "in_progress"
-                    }
-                })
-                .to_string(),
-                json!({
-                    "type": "response.content_part.added",
-                    "response_id": "resp_implicit_resume_failed",
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {"type": "output_text", "text": "", "annotations": []}
-                })
-                .to_string(),
-                WEBSOCKET_PREVIOUS_RESPONSE_NOT_FOUND.trim().to_string(),
-            ],
-        )
-        .await;
-        let _ = websocket.close(None).await;
-        let restored_payload = accept_websocket_response_with_message(
-            &listener,
-            websocket_completed_response("resp_implicit_resume_restored", 10, 2),
-        )
-        .await;
-        (first_payload, implicit_payload, restored_payload)
-    });
-    let (app, api_key, _dir) = test_app_with_account(base_url).await;
-
-    let first_response = app
-        .clone()
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": false,
-                "input": [{"role": "user", "content": "remember this"}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-
-    let second_response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "instructions": "answer briefly",
-                "stream": true,
-                "input": [
-                    {"role": "user", "content": "remember this"},
-                    {"role": "assistant", "content": "cached answer"},
-                    {"role": "user", "content": "continue"}
-                ]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-    let body = response_text(second_response).await;
-    let (_first_payload, implicit_payload, restored_payload) = upstream.await.unwrap();
-    assert!(body.contains("resp_implicit_resume_restored"));
-    assert_eq!(
-        implicit_payload["previous_response_id"],
-        "resp_implicit_resume_first"
-    );
-    assert_eq!(implicit_payload["input"].as_array().unwrap().len(), 2);
-    assert!(restored_payload.get("previous_response_id").is_none());
-    assert_eq!(restored_payload["input"].as_array().unwrap().len(), 3);
-    assert_eq!(restored_payload["input"][0]["role"], "user");
-    assert_eq!(restored_payload["input"][1]["role"], "assistant");
-    assert_eq!(restored_payload["input"][2]["content"], "continue");
-}
-
-#[tokio::test]
 async fn responses_websocket_should_route_previous_response_id_to_recorded_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -1551,15 +845,12 @@ async fn responses_websocket_should_route_previous_response_id_to_recorded_accou
     );
     let (first_payload, second_payload) = upstream.await.unwrap();
 
-    assert_ne!(first_payload["prompt_cache_key"], Value::Null);
+    assert!(first_payload.get("prompt_cache_key").is_none());
     assert_eq!(
         second_payload["previous_response_id"],
         "resp_affinity_first"
     );
-    assert_eq!(
-        second_payload["prompt_cache_key"], first_payload["prompt_cache_key"],
-        "previous_response_id should inherit the recorded conversation identity"
-    );
+    assert!(second_payload.get("prompt_cache_key").is_none());
 }
 
 #[tokio::test]
@@ -1567,14 +858,19 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
-        accept_successful_websocket_response_with_authorization(
+        accept_two_successful_websocket_responses_with_authorization(
             &listener,
             "Bearer access-secondary",
+            "resp_conversation_seed",
             "resp_conversation_affinity",
         )
         .await
     });
-    let (app, state, api_key, _pool, _dir) = test_app_with_two_accounts_and_state(base_url).await;
+    let (app, state, api_key, _pool, _dir) =
+        test_app_with_two_accounts_and_state_config(base_url, |config| {
+            config.auth.rotation_strategy = "round_robin".to_string();
+        })
+        .await;
     let request_body = json!({
         "model": "gpt-5.5",
         "prompt_cache_key": "conv_conversation_affinity",
@@ -1582,43 +878,46 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
         "stream": false,
         "use_websocket": true
     });
-    let mut affinity_body = request_body.as_object().unwrap().clone();
-    affinity_body.remove("use_websocket");
-    let mut affinity_request = CodexResponsesRequest::from_body(affinity_body);
-    affinity_request.explicit_prompt_cache_key = true;
-    prepare_variant_identity(&mut affinity_request);
-    let variant_hash = compute_variant_hash(&affinity_request);
-    state
-        .services
-        .session_affinity
-        .record(
-            "resp_conversation_latest".to_string(),
-            SessionAffinityEntry {
-                account_id: "acct_secondary".to_string(),
-                conversation_id: "conv_conversation_affinity".to_string(),
-                turn_state: None,
-                instructions_hash: None,
-                input_tokens: None,
-                function_call_ids: Vec::new(),
-                variant_hash: Some(variant_hash),
-                created_at: Utc::now(),
-            },
-        )
-        .await
-        .unwrap();
-
-    let response = app
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_primary", AccountStatus::Disabled)
+            .await
+    );
+    let first_response = app
+        .clone()
         .oneshot(responses_json_request(&api_key, &request_body))
         .await
         .unwrap();
-    let body = response_text(response).await;
-    let payload = upstream.await.unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    assert!(response_text(first_response)
+        .await
+        .contains("\"id\":\"resp_conversation_seed\""));
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_primary", AccountStatus::Active)
+            .await
+    );
+
+    let second_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let body = response_text(second_response).await;
+    let (_reused, first_payload, second_payload) = upstream.await.unwrap();
 
     assert!(body.contains("\"id\":\"resp_conversation_affinity\""));
-    assert!(payload["prompt_cache_key"]
+    assert!(first_payload["prompt_cache_key"]
         .as_str()
-        .is_some_and(|value| value.starts_with("cp_")));
-    assert!(payload.get("previous_response_id").is_none());
+        .is_some_and(|value| value.starts_with("wi_")));
+    assert_eq!(
+        second_payload["prompt_cache_key"],
+        first_payload["prompt_cache_key"]
+    );
+    assert!(second_payload.get("previous_response_id").is_none());
 }
 
 #[tokio::test]
@@ -1655,82 +954,6 @@ async fn responses_websocket_non_stream_should_forward_unknown_previous_response
 }
 
 #[tokio::test]
-async fn responses_websocket_should_preserve_known_history_on_fallback_account() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secondary",
-            websocket_completed_response("resp_history_forwarded_to_fallback", 3, 1),
-        )
-        .await
-    });
-    let (app, state, api_key, _pool, _dir) =
-        test_app_with_two_accounts_and_state_config(base_url, |config| {
-            config.auth.max_concurrent_per_account = 1;
-        })
-        .await;
-    let _held_primary_slot = seed_primary_affinity_and_hold_primary_slot(&state).await;
-
-    let response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "input": [],
-                "stream": false,
-                "previous_response_id": "resp_owned_by_primary"
-            }),
-        ))
-        .await
-        .unwrap();
-    let body = response_json(response).await;
-    let payload = upstream.await.unwrap();
-
-    assert_eq!(body["id"], "resp_history_forwarded_to_fallback");
-    assert_eq!(payload["previous_response_id"], "resp_owned_by_primary");
-}
-
-#[tokio::test]
-async fn responses_websocket_stream_should_preserve_known_history_on_fallback_account() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream = tokio::spawn(async move {
-        accept_websocket_response_with_authorization_and_message(
-            &listener,
-            "Bearer access-secondary",
-            websocket_completed_response("resp_stream_history_forwarded_to_fallback", 3, 1),
-        )
-        .await
-    });
-    let (app, state, api_key, _pool, _dir) =
-        test_app_with_two_accounts_and_state_config(base_url, |config| {
-            config.auth.max_concurrent_per_account = 1;
-        })
-        .await;
-    let _held_primary_slot = seed_primary_affinity_and_hold_primary_slot(&state).await;
-
-    let response = app
-        .oneshot(responses_json_request(
-            &api_key,
-            &json!({
-                "model": "gpt-5.5",
-                "input": [],
-                "stream": true,
-                "previous_response_id": "resp_owned_by_primary"
-            }),
-        ))
-        .await
-        .unwrap();
-    let body = response_text(response).await;
-    let payload = upstream.await.unwrap();
-
-    assert!(body.contains("resp_stream_history_forwarded_to_fallback"));
-    assert_eq!(payload["previous_response_id"], "resp_owned_by_primary");
-}
-
-#[tokio::test]
 async fn responses_websocket_stream_should_forward_unknown_previous_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -1764,7 +987,7 @@ async fn responses_websocket_stream_should_forward_unknown_previous_response() {
 }
 
 #[tokio::test]
-async fn responses_websocket_previous_response_id_should_retry_fallback_account_after_429() {
+async fn responses_websocket_stream_should_not_fan_out_external_previous_after_429() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -1777,43 +1000,34 @@ async fn responses_websocket_previous_response_id_should_retry_fallback_account_
             WEBSOCKET_HISTORY_RATE_LIMITED,
         )
         .await;
-        accept_successful_websocket_response_with_authorization(
-            &listener,
-            "Bearer access-secondary",
-            "resp_history_fallback",
-        )
-        .await
     });
-    let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
+    let (app, api_key, _pool, _dir) = test_app_with_two_accounts(base_url).await;
 
-    let response = app
-        .oneshot(responses_json_request(
+    let response = timeout(
+        StdDuration::from_secs(2),
+        app.oneshot(responses_json_request(
             &api_key,
             &json!({
                 "model": "gpt-5.5",
                 "input": [],
+                "stream": true,
                 "previous_response_id": "resp_prev"
             }),
-        ))
-        .await
-        .unwrap();
+        )),
+    )
+    .await
+    .expect("external previous should stop after the selected account")
+    .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
-    let fallback_payload = upstream.await.unwrap();
-    let secondary_usage: (i64,) =
-        sqlx::query_as("select request_count from account_usage where account_id = $1")
-            .bind("acct_secondary")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    upstream.await.unwrap();
 
-    assert!(body.contains("\"id\":\"resp_history_fallback\""));
-    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
-    assert_eq!(secondary_usage.0, 1);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body.contains("history account rate limited"));
 }
 
 #[tokio::test]
-async fn responses_websocket_non_stream_previous_response_id_should_retry_fallback_account_after_429(
-) {
+async fn responses_websocket_non_stream_should_not_fan_out_external_previous_after_429() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -1826,17 +1040,12 @@ async fn responses_websocket_non_stream_previous_response_id_should_retry_fallba
             WEBSOCKET_HISTORY_RATE_LIMITED,
         )
         .await;
-        accept_successful_websocket_response_with_authorization(
-            &listener,
-            "Bearer access-secondary",
-            "resp_history_fallback_non_stream",
-        )
-        .await
     });
-    let (app, api_key, pool, _dir) = test_app_with_two_accounts(base_url).await;
+    let (app, api_key, _pool, _dir) = test_app_with_two_accounts(base_url).await;
 
-    let response = app
-        .oneshot(responses_json_request(
+    let response = timeout(
+        StdDuration::from_secs(2),
+        app.oneshot(responses_json_request(
             &api_key,
             &json!({
                 "model": "gpt-5.5",
@@ -1844,21 +1053,17 @@ async fn responses_websocket_non_stream_previous_response_id_should_retry_fallba
                 "stream": false,
                 "previous_response_id": "resp_prev"
             }),
-        ))
-        .await
-        .unwrap();
+        )),
+    )
+    .await
+    .expect("external previous should stop after the selected account")
+    .unwrap();
+    let status = response.status();
     let body = response_json(response).await;
-    let fallback_payload = upstream.await.unwrap();
-    let secondary_usage: (i64,) =
-        sqlx::query_as("select request_count from account_usage where account_id = $1")
-            .bind("acct_secondary")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    upstream.await.unwrap();
 
-    assert_eq!(body["id"], "resp_history_fallback_non_stream");
-    assert_eq!(fallback_payload["previous_response_id"], "resp_prev");
-    assert_eq!(secondary_usage.0, 1);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"]["message"], "history account rate limited");
 }
 
 #[tokio::test]
@@ -1899,6 +1104,7 @@ async fn responses_websocket_without_history_should_mark_expired_after_fallback_
         ))
         .await
         .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
     upstream.await.unwrap();
     let secondary_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
@@ -1914,7 +1120,7 @@ async fn responses_websocket_without_history_should_mark_expired_after_fallback_
     .await
     .unwrap();
 
-    assert!(body.contains("event: response.failed"));
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(body.contains("\"type\":\"invalid_request_error\""));
     assert!(body.contains("\"code\":\"invalid_api_key\""));
     assert!(body.contains("All accounts exhausted"));
@@ -1962,6 +1168,7 @@ async fn responses_websocket_without_history_should_return_rate_limit_stream_err
         ))
         .await
         .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
     upstream.await.unwrap();
     let primary_usage: (i64,) =
@@ -1977,7 +1184,8 @@ async fn responses_websocket_without_history_should_return_rate_limit_stream_err
             .await
             .unwrap();
 
-    assert_response_failed_stream(
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_openai_error_body(
         &body,
         "rate_limit_error",
         "rate_limit_exceeded",
@@ -2080,6 +1288,7 @@ async fn responses_websocket_without_history_should_return_quota_stream_error_wh
         ))
         .await
         .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
     upstream.await.unwrap();
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
@@ -2088,7 +1297,8 @@ async fn responses_websocket_without_history_should_return_quota_stream_error_wh
         .await
         .unwrap();
 
-    assert_response_failed_stream(
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_openai_error_body(
         &body,
         "insufficient_quota",
         "insufficient_quota",
@@ -2130,6 +1340,7 @@ async fn responses_websocket_without_history_should_return_model_unsupported_str
         ))
         .await
         .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
     upstream.await.unwrap();
     let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
@@ -2138,12 +1349,13 @@ async fn responses_websocket_without_history_should_return_model_unsupported_str
         .await
         .unwrap();
 
-    assert_response_failed_stream(
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_openai_error_body(
         &body,
         "invalid_request_error",
         "model_not_found",
         &[
-            "No accounts available",
+            "All accounts exhausted",
             "model_not_available",
             "not available",
         ],
@@ -2180,14 +1392,16 @@ async fn responses_websocket_with_history_should_return_path_block_stream_error_
         ))
         .await
         .unwrap();
+    let status = response.status();
     let body = response_text(response).await;
     upstream.await.unwrap();
 
-    assert_response_failed_stream(
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_openai_error_body(
         &body,
-        "server_error",
-        "upstream_error",
-        &["No accounts available", "Cloudflare path-block"],
+        "invalid_request_error",
+        "codex_client_error",
+        &["Upstream Codex request failed"],
     );
 }
 
@@ -2345,7 +1559,7 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
     assert_eq!(event.output_tokens, Some(1));
     assert!(
         event.first_token_ms.is_some_and(|value| value > 0),
-        "websocket stream usage metadata should include first token latency: {metadata:?}",
+        "websocket stream usage metadata should include initial event latency: {metadata:?}",
     );
     assert_rate_limit_header(&metadata, "x-codex-primary-used-percent", "44");
     assert_rate_limit_header(&metadata, "x-codex-primary-window-minutes", "5");
@@ -2360,36 +1574,4 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
         quota["snapshots"][0]["primary"]["used_percent"].as_f64(),
         Some(44.0)
     );
-}
-
-async fn seed_primary_affinity_and_hold_primary_slot(state: &AppState) -> AccountLease {
-    state
-        .services
-        .session_affinity
-        .record(
-            "resp_owned_by_primary".to_string(),
-            SessionAffinityEntry {
-                account_id: "acct_primary".to_string(),
-                conversation_id: "conv_primary".to_string(),
-                turn_state: Some("turn-primary".to_string()),
-                instructions_hash: None,
-                input_tokens: None,
-                function_call_ids: Vec::new(),
-                variant_hash: None,
-                created_at: Utc::now(),
-            },
-        )
-        .await
-        .unwrap();
-    let held_primary_slot = state
-        .services
-        .account_pool
-        .acquire_with(
-            &AccountAcquireRequest::new("gpt-5.5", Utc::now())
-                .with_required_account_id("acct_primary"),
-        )
-        .await
-        .unwrap();
-    assert_eq!(held_primary_slot.account.id, "acct_primary");
-    held_primary_slot
 }

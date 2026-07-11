@@ -17,3 +17,19 @@ pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account>
     *cursor = cursor.wrapping_add(1);
     Some((*candidates[index]).clone())
 }
+
+/// 从当前轮转位置开始返回完整候选顺序。
+pub fn order(input: &SelectionInput<'_>, cursor: &mut usize) -> Vec<Account> {
+    let mut ordered = input
+        .candidates
+        .iter()
+        .map(|account| (**account).clone())
+        .collect::<Vec<_>>();
+    if ordered.is_empty() {
+        return ordered;
+    }
+    let candidate_count = ordered.len();
+    ordered.rotate_left(*cursor % candidate_count);
+    *cursor = cursor.wrapping_add(1);
+    ordered
+}

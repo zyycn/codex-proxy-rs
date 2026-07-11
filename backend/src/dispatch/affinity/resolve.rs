@@ -1,89 +1,33 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
-use uuid::Uuid;
 
 use crate::{
     dispatch::{
-        affinity::{types::ConversationIdentity, SessionAffinityEntry, SessionAffinityService},
-        recovery::{
-            implicit_resume::{restore_full_request_without_history, ImplicitResumeSnapshot},
-            reasoning_replay::ReasoningReplayCache,
-        },
+        affinity::{SessionAffinityEntry, SessionAffinityService},
+        recovery::history::HistoryRecoveryPlan,
         service::ResponseDispatchService,
     },
-    fleet::account::AccountStatus,
     upstream::openai::protocol::{
         events::TokenUsage,
         responses::{completed_response_metadata, CodexResponsesRequest},
     },
 };
 
-#[derive(Debug, Clone, Default)]
-pub(in crate::dispatch) struct AccountAffinityDecision {
-    preferred_account_id: Option<String>,
-    request_history_owner: RequestHistoryOwner,
-}
-
-#[derive(Debug, Clone, Default)]
-enum RequestHistoryOwner {
-    #[default]
-    Absent,
-    Known(String),
-    Unknown,
-}
-
-impl AccountAffinityDecision {
-    pub(in crate::dispatch) fn preferred_account_id(&self) -> Option<&str> {
-        self.preferred_account_id.as_deref()
-    }
-
-    fn should_strip_request_history_for(&self, account_id: &str) -> bool {
-        match &self.request_history_owner {
-            RequestHistoryOwner::Absent => false,
-            RequestHistoryOwner::Known(history_account_id) => history_account_id != account_id,
-            RequestHistoryOwner::Unknown => true,
-        }
-    }
-}
-
 impl ResponseDispatchService {
-    pub(in crate::dispatch) async fn account_affinity_for_request(
+    pub(in crate::dispatch) async fn preferred_account_id_for_request(
         &self,
         request: &CodexResponsesRequest,
-        now: DateTime<Utc>,
-    ) -> AccountAffinityDecision {
-        let has_previous_response_id = request.previous_response_id().is_some();
-        if let Some(account_id) = self.previous_response_account_id(request, now).await {
-            return AccountAffinityDecision {
-                preferred_account_id: Some(account_id.clone()),
-                request_history_owner: RequestHistoryOwner::Known(account_id),
-            };
-        }
-
-        let conversation_account_id = self.conversation_account_id(request, now).await;
-        AccountAffinityDecision {
-            preferred_account_id: conversation_account_id,
-            request_history_owner: if has_previous_response_id {
-                RequestHistoryOwner::Unknown
-            } else {
-                RequestHistoryOwner::Absent
-            },
-        }
-    }
-
-    async fn previous_response_account_id(
-        &self,
-        request: &CodexResponsesRequest,
+        history: &HistoryRecoveryPlan,
         now: DateTime<Utc>,
     ) -> Option<String> {
-        let previous_response_id = request.previous_response_id()?;
-        self.session_affinity
-            .lookup_account(previous_response_id, now)
-            .await
+        if let Some(account_id) = history.preferred_account_id() {
+            return Some(account_id.to_string());
+        }
+        if request.previous_response_id().is_some() {
+            return None;
+        }
+        self.conversation_account_id(request, now).await
     }
 
     async fn conversation_account_id(
@@ -92,7 +36,8 @@ impl ResponseDispatchService {
         now: DateTime<Utc>,
     ) -> Option<String> {
         let conversation_id = request
-            .prompt_cache_key()
+            .local_conversation_id
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())?;
         let variant_hash = compute_variant_hash(request);
@@ -100,89 +45,17 @@ impl ResponseDispatchService {
             .lookup_latest_account_by_conversation(conversation_id, None, Some(&variant_hash), now)
             .await
     }
-
-    pub(in crate::dispatch) fn strip_history_if_account_changed(
-        request: &mut CodexResponsesRequest,
-        implicit_resume: &mut Option<ImplicitResumeSnapshot>,
-        account_affinity: &AccountAffinityDecision,
-        acquired_account_id: &str,
-    ) {
-        if request.previous_response_id().is_none()
-            || !account_affinity.should_strip_request_history_for(acquired_account_id)
-        {
-            return;
-        }
-
-        let Some(snapshot) = implicit_resume.take() else {
-            return;
-        };
-        restore_full_request_without_history(request, snapshot);
-    }
-
-    pub(in crate::dispatch) async fn apply_cascading_ban_defense(
-        &self,
-        request: &mut CodexResponsesRequest,
-        implicit_resume: &mut Option<ImplicitResumeSnapshot>,
-        preferred_account_id: Option<&str>,
-        acquired_account_id: &str,
-    ) -> bool {
-        let Some(preferred_account_id) =
-            preferred_account_id.filter(|account_id| *account_id != acquired_account_id)
-        else {
-            return false;
-        };
-        let has_history = request.previous_response_id().is_some()
-            || request
-                .turn_state
-                .as_deref()
-                .is_some_and(|value| !value.is_empty());
-        if !has_history {
-            return false;
-        }
-        let Some(preferred_account) = self
-            .account_pool
-            .account_snapshot(preferred_account_id)
-            .await
-        else {
-            return false;
-        };
-        if !matches!(
-            preferred_account.status,
-            AccountStatus::Banned | AccountStatus::Disabled
-        ) {
-            return false;
-        }
-
-        let response_id_to_forget = request.previous_response_id().map(str::to_string);
-        let restored_full_request = if let Some(snapshot) = implicit_resume.take() {
-            restore_full_request_without_history(request, snapshot);
-            true
-        } else {
-            false
-        };
-        if let Some(response_id) = response_id_to_forget {
-            self.session_affinity.forget(&response_id).await;
-        }
-        restored_full_request
-    }
 }
 
-pub(crate) async fn record_response_affinity(
-    session_affinity: &Arc<SessionAffinityService>,
-    reasoning_replay: &Arc<Mutex<ReasoningReplayCache>>,
-    request: &CodexResponsesRequest,
+pub(in crate::dispatch) async fn record_response_affinity(
+    session_affinity: &SessionAffinityService,
+    history: &HistoryRecoveryPlan,
+    original_request: &CodexResponsesRequest,
     account_id: &str,
     body: &str,
     turn_state: Option<String>,
     usage: Option<TokenUsage>,
 ) {
-    let Some(conversation_id) = request
-        .prompt_cache_key()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
     let metadata = match completed_response_metadata(body) {
         Ok(Some(metadata)) => metadata,
         Ok(None) => return,
@@ -195,17 +68,27 @@ pub(crate) async fn record_response_affinity(
         }
     };
 
-    let variant_hash = compute_variant_hash(request);
+    let conversation_id = history
+        .conversation_id(original_request)
+        .unwrap_or(&metadata.response_id)
+        .to_string();
+    let variant_hash = compute_variant_hash(original_request);
     let entry = SessionAffinityEntry {
         account_id: account_id.to_string(),
-        conversation_id: conversation_id.to_string(),
+        conversation_id,
         turn_state: turn_state
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| request.turn_state.clone()),
-        instructions_hash: Some(hash_instructions(Some(request.instructions()))),
+            .or_else(|| original_request.turn_state.clone()),
+        instructions_hash: Some(hash_instructions(Some(original_request.instructions()))),
         input_tokens: usage.map(|usage| usage.input_tokens),
         function_call_ids: metadata.function_call_ids,
-        variant_hash: Some(variant_hash.clone()),
+        variant_hash: Some(variant_hash),
+        continuation_scope: if original_request.store() {
+            crate::upstream::openai::protocol::responses::PreviousResponseScope::Persisted
+        } else {
+            crate::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal
+        },
+        replay: history.completed_replay(original_request, &metadata.output),
         created_at: Utc::now(),
     };
     if let Err(error) = session_affinity
@@ -219,30 +102,6 @@ pub(crate) async fn record_response_affinity(
             "failed to record session affinity"
         );
     }
-
-    reasoning_replay.lock().await.record(
-        metadata.response_id,
-        account_id,
-        conversation_id,
-        &variant_hash,
-        &metadata.replay_items,
-        Utc::now(),
-    );
-}
-
-pub(crate) async fn evict_reasoning_replay(
-    reasoning_replay: &Arc<Mutex<ReasoningReplayCache>>,
-    request: &CodexResponsesRequest,
-    account_id: &str,
-) {
-    let variant_hash = compute_variant_hash(request);
-    let conversation_id = request.prompt_cache_key().unwrap_or("").to_string();
-    reasoning_replay.lock().await.evict_by_identity(
-        account_id,
-        &conversation_id,
-        &variant_hash,
-        Utc::now(),
-    );
 }
 
 // ====================================================================
@@ -309,57 +168,8 @@ pub fn hash_instructions(instructions: Option<&str>) -> String {
     hex::encode(hasher.finalize())
 }
 
-// ====================================================================
-// Conversation identity 构建器
-// ====================================================================
-
 const LEADING_SYSTEM_REMINDER_OPEN: &str = "<system-reminder>";
 const LEADING_SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
-
-/// 从 prompt_cache_key 和可选的 window_id 构建 conversation identity
-pub fn build_conversation_identity(
-    prompt_cache_key: Option<&str>,
-    client_window_id: Option<&str>,
-    account_scope: &str,
-) -> ConversationIdentity {
-    let conversation_id = prompt_cache_key
-        .filter(|s| !s.trim().is_empty())
-        .map(|key| build_account_scoped_identity("conversation", account_scope, key));
-
-    let window_id = if let Some(client_win) = client_window_id.filter(|s| !s.trim().is_empty()) {
-        Some(build_account_scoped_identity(
-            "window",
-            account_scope,
-            client_win,
-        ))
-    } else {
-        conversation_id
-            .as_ref()
-            .map(|conv_id| format!("{}:0", conv_id))
-    };
-
-    ConversationIdentity {
-        conversation_id,
-        window_id,
-    }
-}
-
-/// 确保请求拥有上游可复用的 prompt cache key。
-pub fn ensure_prompt_cache_key(request: &mut CodexResponsesRequest) {
-    if let Some(existing) = request
-        .prompt_cache_key()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let existing = existing.to_string();
-        request.set_prompt_cache_key(Some(existing));
-        return;
-    }
-
-    request.set_prompt_cache_key(Some(
-        derive_stable_conversation_key(request).unwrap_or_else(|| Uuid::new_v4().to_string()),
-    ));
-}
 
 /// 按原版 `stable-conversation-key.ts` 的规则派生稳定 conversation key。
 pub fn derive_stable_conversation_key(request: &CodexResponsesRequest) -> Option<String> {
@@ -435,26 +245,4 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
         rest = rest[close_end..].trim_start();
     }
     rest.to_string()
-}
-
-/// 构建账号作用域的身份哈希。
-fn build_account_scoped_identity(kind: &str, account_scope: &str, client_value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(kind.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(account_scope.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(client_value.as_bytes());
-
-    let digest = hasher.finalize();
-    let hex = hex::encode(digest);
-    let truncated = &hex[..32];
-
-    let prefix = match kind {
-        "conversation" => "cp",
-        "window" => "cw",
-        _ => "cx",
-    };
-
-    format!("{}_{}", prefix, truncated)
 }

@@ -25,8 +25,9 @@ use crate::{
     },
     infra::{
         database::connect,
+        identity::AccountPseudonymizer,
         logging::{init_tracing, LogError, LogGuard, RotationConfig, TracingConfig},
-        paths::{ensure_data_dir, load_or_create_installation_id},
+        paths::{ensure_data_dir, load_or_create_identity_secret},
         redis::RedisConnection,
     },
     keys::{manage::KeyManageService, service::KeyVerifier, store::PgClientKeyStore},
@@ -115,7 +116,7 @@ pub struct Services {
     pub codex: Arc<CodexBackendClient>,
     pub websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub fingerprint: RuntimeFingerprint,
-    pub installation_id: Option<String>,
+    pub account_pseudonymizer: Arc<AccountPseudonymizer>,
     pub background_tasks: BackgroundTaskStores,
     pub(crate) account_pool_static: AccountPoolStaticSettings,
 }
@@ -151,32 +152,42 @@ impl Services {
         stores: BackgroundTaskStores,
         fingerprint: RuntimeFingerprint,
     ) -> Result<Self, CustomCaError> {
-        Self::try_with_installation_id(config, stores, fingerprint, None)
-    }
-
-    pub(crate) fn try_with_installation_id(
-        config: &AppConfig,
-        stores: BackgroundTaskStores,
-        fingerprint: RuntimeFingerprint,
-        installation_id: Option<String>,
-    ) -> Result<Self, CustomCaError> {
-        Self::try_with_installation_id_and_usage_record_options(
+        Self::try_with_usage_record_options(
             config,
             stores,
             fingerprint,
-            installation_id,
             UsageRecordOptions::from_config(config),
         )
     }
 
-    pub fn try_with_installation_id_and_usage_record_options(
+    pub fn try_with_usage_record_options(
         config: &AppConfig,
         stores: BackgroundTaskStores,
         fingerprint: RuntimeFingerprint,
-        installation_id: Option<String>,
         usage_record_options: UsageRecordOptions,
     ) -> Result<Self, CustomCaError> {
-        let installation_id = installation_id.filter(|id| !id.trim().is_empty());
+        let mut identity_secret = [0u8; 32];
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut identity_secret);
+        Self::try_with_identity_secret_and_usage_record_options(
+            config,
+            stores,
+            fingerprint,
+            identity_secret,
+            usage_record_options,
+        )
+    }
+
+    fn try_with_identity_secret_and_usage_record_options(
+        config: &AppConfig,
+        stores: BackgroundTaskStores,
+        fingerprint: RuntimeFingerprint,
+        identity_secret: [u8; 32],
+        usage_record_options: UsageRecordOptions,
+    ) -> Result<Self, CustomCaError> {
+        let account_pseudonymizer = Arc::new(AccountPseudonymizer::new(identity_secret));
+        let account_identity = Arc::new(crate::dispatch::affinity::AccountIdentityService::new(
+            (*account_pseudonymizer).clone(),
+        ));
         let database = stores.accounts.pool().clone();
         let redis = stores.redis.clone();
         let account_store = Arc::new(stores.accounts.clone()) as Arc<dyn AccountStore>;
@@ -187,21 +198,21 @@ impl Services {
                 enabled: true,
                 max_age: std::time::Duration::from_millis(config.ws_pool.max_age_ms),
                 max_per_account: config.ws_pool.max_per_account,
-                first_token_timeout: (config.ws_pool.first_token_timeout_ms > 0).then(|| {
-                    std::time::Duration::from_millis(config.ws_pool.first_token_timeout_ms)
+                initial_event_timeout: (config.ws_pool.initial_event_timeout_ms > 0).then(|| {
+                    std::time::Duration::from_millis(config.ws_pool.initial_event_timeout_ms)
                 }),
                 ..CodexWebSocketPoolConfig::default()
             }))
         });
         let codex = {
-            let websocket_first_token_timeout = (config.ws_pool.first_token_timeout_ms > 0)
-                .then(|| std::time::Duration::from_millis(config.ws_pool.first_token_timeout_ms));
+            let websocket_initial_event_timeout = (config.ws_pool.initial_event_timeout_ms > 0)
+                .then(|| std::time::Duration::from_millis(config.ws_pool.initial_event_timeout_ms));
             let client = CodexBackendClient::new(
                 build_reqwest_client(config.tls.force_http11)?,
                 config.api.base_url.clone(),
                 fingerprint.clone(),
             )
-            .with_websocket_first_token_timeout(websocket_first_token_timeout);
+            .with_websocket_initial_event_timeout(websocket_initial_event_timeout);
             if let Some(pool) = &websocket_pool {
                 Arc::new(client.with_websocket_pool(pool.clone()))
             } else {
@@ -275,7 +286,7 @@ impl Services {
                 config.auth.oauth_token_endpoint.clone(),
             ),
             refresh_policy: refresh_policy.clone(),
-            installation_id: installation_id.clone(),
+            account_pseudonymizer: account_pseudonymizer.clone(),
         }));
         let usage = Arc::new(AccountUsageQueryService::new(stores.account_usage.clone()));
         let session_affinity =
@@ -289,7 +300,7 @@ impl Services {
             codex: codex.clone(),
             session_affinity: session_affinity.clone(),
             recorder,
-            installation_id: installation_id.clone(),
+            account_identity,
             cloudflare: cloudflare_recovery,
         }));
 
@@ -314,7 +325,7 @@ impl Services {
             codex,
             websocket_pool,
             fingerprint,
-            installation_id,
+            account_pseudonymizer,
             background_tasks: stores,
             account_pool_static,
         })
@@ -520,18 +531,19 @@ async fn build_router(
     config.admin.validate_default_password()?;
     let default_admin_password = config.admin.default_password.clone();
     let data_dir = ensure_data_dir()?;
-    let installation_id = load_or_create_installation_id(Some(&data_dir))?;
+    let identity_secret = load_or_create_identity_secret(&data_dir)?;
     let default_fingerprint = fingerprint_from_config(&config.fingerprint);
     let runtime_fingerprint = fingerprint_store
         .ensure_current_seed(&default_fingerprint)
         .await?;
     let runtime_fingerprint = RuntimeFingerprint::new(runtime_fingerprint);
     let runtime_config = crate::bootstrap::state::RuntimeConfig::from(config.clone());
-    let services = Services::try_with_installation_id(
+    let services = Services::try_with_identity_secret_and_usage_record_options(
         &config,
         stores,
         runtime_fingerprint,
-        Some(installation_id),
+        identity_secret,
+        UsageRecordOptions::from_config(&config),
     )?;
     services.initialize_hot_path_state().await?;
 

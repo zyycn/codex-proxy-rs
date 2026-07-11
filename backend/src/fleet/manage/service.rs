@@ -14,6 +14,7 @@ use crate::{
         refresh::{RedisRefreshLeaseStore, RuntimeRefreshPolicy},
         store::PgAccountStore,
     },
+    infra::identity::AccountPseudonymizer,
     models::service::ModelService,
     upstream::openai::{token_client::TokenRefresher, transport::CodexBackendClient},
 };
@@ -32,7 +33,7 @@ pub struct AccountManageService {
     pub(crate) refresh_lease_owner_prefix: String,
     pub(crate) oauth: oauth::AccountOAuthService,
     pub(crate) refresh_policy: RuntimeRefreshPolicy,
-    pub(crate) installation_id: Option<String>,
+    pub(crate) account_pseudonymizer: Arc<AccountPseudonymizer>,
 }
 
 pub struct AccountManageServiceParts {
@@ -45,7 +46,7 @@ pub struct AccountManageServiceParts {
     pub refresh_leases: RedisRefreshLeaseStore,
     pub oauth: oauth::AccountOAuthService,
     pub refresh_policy: RuntimeRefreshPolicy,
-    pub installation_id: Option<String>,
+    pub account_pseudonymizer: Arc<AccountPseudonymizer>,
 }
 
 impl AccountManageService {
@@ -64,7 +65,7 @@ impl AccountManageService {
             ),
             oauth: parts.oauth,
             refresh_policy: parts.refresh_policy,
-            installation_id: parts.installation_id,
+            account_pseudonymizer: parts.account_pseudonymizer,
         }
     }
 

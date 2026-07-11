@@ -149,13 +149,12 @@ async fn model_service_should_refresh_plan_accounts_and_build_routing() {
     );
 
     let result = service
-        .refresh_backend_models_with_installation_id(
+        .refresh_backend_models(
             &[
                 refresh_plan_account("plus", active_account("acct-plus-1", "plus")),
                 refresh_plan_account("team", active_account("acct-team", "team")),
             ],
             "req-model-refresh",
-            None,
         )
         .await
         .expect("refresh should succeed");
@@ -198,11 +197,27 @@ async fn model_service_should_return_no_accounts_when_no_plan_accounts_exist() {
     let service = ModelService::new(test_model_config(), Some(store), Some(upstream));
 
     let error = service
-        .refresh_backend_models_with_installation_id(&[], "req-model-refresh", None)
+        .refresh_backend_models(&[], "req-model-refresh")
         .await
         .expect_err("refresh should fail");
 
     assert!(matches!(error, ModelServiceError::NoAccounts));
+}
+
+#[tokio::test]
+async fn model_service_should_notify_only_when_models_etag_changes() {
+    let service = ModelService::new(test_model_config(), None, None);
+    let mut changes = service.subscribe_models_etag_changes();
+
+    assert!(!service.observe_models_etag(None));
+    assert!(service.observe_models_etag(Some("etag-1")));
+    changes.changed().await.expect("first etag notification");
+    assert_eq!(*changes.borrow_and_update(), 1);
+
+    assert!(!service.observe_models_etag(Some("etag-1")));
+    assert!(service.observe_models_etag(Some("etag-2")));
+    changes.changed().await.expect("second etag notification");
+    assert_eq!(*changes.borrow_and_update(), 2);
 }
 
 fn test_model_config() -> ModelConfig {
@@ -237,6 +252,7 @@ fn refresh_plan_account(plan_type: &str, account: Account) -> ModelRefreshPlanAc
         plan_type: plan_type.to_string(),
         access_token: account.access_token,
         account_id: account.account_id,
+        installation_id: "test-installation-id".to_string(),
     }
 }
 

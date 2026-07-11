@@ -140,6 +140,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
 
     let response = backend
         .create_response(
@@ -189,7 +190,8 @@ fn websocket_connection_should_prepare_response_create_payload_text() {
     assert_eq!(payload["model"], "gpt-5.5");
     assert_eq!(payload["instructions"], "be brief");
     assert_eq!(payload["input"][0]["content"], "hello");
-    assert_eq!(payload["stream"], true);
+    assert!(payload.get("stream").is_none());
+    assert!(payload.get("store").is_none());
 }
 
 #[test]
@@ -227,8 +229,6 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"stream\":true",
-            "\"store\":false",
             "\"prompt_cache_key\":\"session-1\"",
             "\"client_metadata\":",
         ],
@@ -755,7 +755,7 @@ async fn codex_backend_client_should_not_reuse_websocket_rate_limit_headers() {
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_incomplete_response() {
+async fn websocket_execute_response_create_request_should_forward_incomplete_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -797,15 +797,13 @@ async fn websocket_execute_response_create_request_should_surface_incomplete_res
     )
     .expect("payload should serialize");
 
-    let error = execute_response_create_request(&prepared)
+    let exchange = execute_response_create_request(&prepared)
         .await
-        .expect_err("response.incomplete should be surfaced as websocket error");
+        .expect("response.incomplete should remain a terminal Responses event");
     server.await.unwrap();
 
-    let CodexWebSocketExchangeError::IncompleteResponse { reason } = error else {
-        panic!("expected incomplete websocket response");
-    };
-    assert_eq!(reason, "max_output_tokens");
+    assert!(exchange.body.contains("event: response.incomplete"));
+    assert!(exchange.body.contains("max_output_tokens"));
 }
 
 #[tokio::test]
@@ -866,8 +864,7 @@ async fn websocket_execute_response_create_request_should_reject_invalid_complet
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_forward_completed_without_response_as_terminal(
-) {
+async fn websocket_execute_response_create_request_should_reject_completed_without_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -903,14 +900,15 @@ async fn websocket_execute_response_create_request_should_forward_completed_with
     )
     .expect("payload should serialize");
 
-    // 透明代理：WS 输出侧不再按 schema 丢弃事件，缺 `response` 的 `response.completed`
-    // 也被原样转发，并作为终止事件结束交换（信任上游终止信号）。
-    let response = execute_response_create_request(&prepared)
+    let error = execute_response_create_request(&prepared)
         .await
-        .expect("completed frame should terminate the exchange");
+        .expect_err("completed frame without response must be rejected");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.completed"));
+    assert!(matches!(
+        error,
+        CodexWebSocketExchangeError::InvalidCompletedResponse { .. }
+    ));
 }
 
 #[tokio::test]
@@ -966,37 +964,96 @@ async fn websocket_execute_response_create_request_should_pass_through_unclassif
     assert!(response.body.contains("No tool output found"));
 }
 
-#[tokio::test(start_paused = true)]
-async fn websocket_execute_response_create_request_should_timeout_when_upstream_is_silent() {
+#[tokio::test]
+async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut websockets = Vec::new();
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _message = websocket.next().await.unwrap().unwrap();
+            websockets.push(websocket);
+        }
+        futures::future::pending::<()>().await;
+    });
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    )
+    .with_websocket_initial_event_timeout(Some(Duration::from_millis(30)));
+    let mut request =
+        codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "be brief",
+            Vec::new(),
+        );
+    request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
+
+    let error = backend
+        .create_response(
+            &request,
+            request_context("req_silent_websocket", Some("chatgpt-account")),
+        )
+        .await
+        .expect_err("silent upstream should time out");
+    server.abort();
+
+    assert!(matches!(
+        error,
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::InitialEventTimeout { timeout })
+            if timeout == Duration::from_millis(30)
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn websocket_response_created_should_switch_to_active_stream_idle_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (created_tx, created_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _message = websocket.next().await.unwrap().unwrap();
-        request_seen_tx.send(()).unwrap();
-        futures::future::pending::<()>().await;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {"id": "resp_structural", "status": "in_progress"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        created_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_structural", 3, 1).into(),
+            ))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
     });
     let prepared = prepared_websocket_request(&format!("http://{addr}"));
-
     let response_task =
         tokio::spawn(async move { execute_response_create_request(&prepared).await });
-    request_seen_rx.await.unwrap();
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(20)).await;
-    tokio::task::yield_now().await;
 
-    let error = response_task
+    created_rx.await.unwrap();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    let response = response_task
         .await
         .expect("websocket task should finish")
-        .expect_err("silent upstream should time out");
-    server.abort();
+        .expect("structural activity should disable the initial timeout");
+    server.await.unwrap();
 
-    let CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout } = error else {
-        panic!("expected receive idle timeout");
-    };
-    assert_eq!(timeout, Duration::from_secs(20));
+    assert!(response.body.contains("event: response.created"));
+    assert!(response.body.contains("resp_structural"));
 }
 
 #[tokio::test]
@@ -1087,6 +1144,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1094,15 +1152,19 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
         crate::support::fingerprint::runtime_test_fingerprint(),
     );
 
-    let Err(error) = backend
+    let mut response = backend
         .create_response_stream(
             &request,
             request_context("req_stream_binary", Some("chatgpt-account")),
         )
         .await
-    else {
-        panic!("binary event before first output should reject stream open");
-    };
+        .expect("stream should open before consuming websocket frames");
+    let error = response
+        .body
+        .next()
+        .await
+        .expect("binary frame should produce a stream item")
+        .expect_err("binary frame should fail the stream");
     server.await.unwrap();
 
     assert!(matches!(
@@ -1112,7 +1174,7 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_retry_without_pool_when_first_output_times_out() {
+async fn codex_backend_client_stream_should_keep_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -1137,59 +1199,55 @@ async fn codex_backend_client_stream_should_retry_without_pool_when_first_output
             .await
             .unwrap();
 
-        let (second_stream, _) = listener.accept().await.unwrap();
-        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut second_websocket = accept_codex_test_websocket(second_stream).await;
-        let _second_message = second_websocket.next().await.unwrap().unwrap();
-        second_websocket
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        first_websocket
             .send(Message::Text(
                 json!({
                     "type": "response.output_text.delta",
-                    "delta": "no-pool retry recovered"
+                    "delta": "delayed output"
                 })
                 .to_string()
                 .into(),
             ))
             .await
             .unwrap();
-        second_websocket
+        first_websocket
             .send(Message::Text(
-                completed_websocket_response("resp_no_pool_retry_recovered", 3, 1).into(),
+                completed_websocket_response("resp_no_pool_delayed", 3, 1).into(),
             ))
             .await
             .unwrap();
-        second_websocket.close(None).await.unwrap();
-        drop(first_websocket);
+        first_websocket.close(None).await.unwrap();
     });
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
         crate::support::fingerprint::runtime_test_fingerprint(),
     )
-    .with_websocket_first_token_timeout(Some(Duration::from_millis(30)));
-    let request = pooled_websocket_request("conversation-first-token-no-pool-timeout");
+    .with_websocket_initial_event_timeout(Some(Duration::from_millis(30)));
+    let request = pooled_websocket_request("conversation-structural-no-pool");
 
     let response = backend
         .create_response_stream(
             &request,
-            request_context("req_first_token_no_pool_timeout", Some("chatgpt-account")),
+            request_context("req_structural_no_pool", Some("chatgpt-account")),
         )
         .await
-        .expect("no-pool first-token timeout should retry before returning stream");
+        .expect("structural activity should keep the websocket stream open");
     let decision = response.websocket_pool_decision;
     let mut stream = response.body;
     let mut body = String::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.expect("retried no-pool stream chunk should be valid");
+        let chunk = chunk.expect("delayed websocket stream chunk should be valid");
         body.push_str(std::str::from_utf8(&chunk).unwrap());
     }
     server.await.unwrap();
 
-    assert!(body.contains("no-pool retry recovered"));
-    assert!(body.contains("resp_no_pool_retry_recovered"));
-    assert!(!body.contains("resp_no_pool_first_token_stalled"));
+    assert!(body.contains("resp_no_pool_first_token_stalled"));
+    assert!(body.contains("delayed output"));
+    assert!(body.contains("resp_no_pool_delayed"));
     assert!(decision.is_none());
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1220,6 +1278,7 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1290,6 +1349,7 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1354,6 +1414,7 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.force_http_sse = false;
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1450,6 +1511,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1475,6 +1537,10 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
                 cookie_header: None,
                 installation_id: None,
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await

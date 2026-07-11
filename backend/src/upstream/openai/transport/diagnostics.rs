@@ -40,6 +40,21 @@ impl CodexUpstreamDiagnostics {
         }
     }
 
+    pub fn from_pairs(status_code: Option<u16>, headers: &[(String, String)]) -> Self {
+        let request_id = UPSTREAM_REQUEST_ID_HEADERS
+            .iter()
+            .find_map(|name| pair_value(headers, name));
+        let trace_headers = UPSTREAM_TRACE_HEADERS
+            .iter()
+            .filter_map(|name| pair_value(headers, name).map(|value| ((*name).to_string(), value)))
+            .collect();
+        Self {
+            status_code,
+            request_id,
+            trace_headers,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.status_code.is_none() && self.request_id.is_none() && self.trace_headers.is_empty()
     }
@@ -50,6 +65,15 @@ impl CodexUpstreamDiagnostics {
             .find(|(name, _)| name.eq_ignore_ascii_case("cf-ray"))
             .map(|(_, value)| value.as_str())
     }
+}
+
+fn pair_value(headers: &[(String, String)], name: &str) -> Option<String> {
+    headers
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn first_header(headers: &HeaderMap, names: &[&str]) -> Option<String> {

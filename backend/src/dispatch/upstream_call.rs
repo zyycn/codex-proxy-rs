@@ -7,12 +7,13 @@ use serde_json::{json, Value};
 
 use crate::{
     dispatch::{
-        affinity::build_conversation_identity,
+        affinity::{AccountIdentityService, AccountScopedIdentity},
+        attempts::AccountAttemptLedger,
         errors::{
             is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, is_retryable_upstream_5xx_error,
-            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
-            upstream_error_set_cookie_headers, ResponseDispatchError,
+            is_rate_limit_upstream_error, is_retryable_account_transport_error,
+            is_retryable_upstream_5xx_error, rate_limit_cooldown_until, upstream_error_body,
+            upstream_error_http_status, upstream_error_set_cookie_headers, ResponseDispatchError,
         },
         recording::{
             insert_response_status_metadata, insert_response_trace_metadata,
@@ -28,7 +29,7 @@ use crate::{
             },
             exhaustion::AccountExhaustionTracker,
         },
-        service::ResponseDispatchService,
+        service::{ResponseDispatchResponse, ResponseDispatchService},
         stream::trace::ResponseDispatchTrace,
     },
     fleet::{
@@ -56,27 +57,29 @@ use crate::{
     },
 };
 
-const MAX_QUOTA_VERIFY_ATTEMPTS: usize = 5;
-
 pub(crate) const QUOTA_VERIFY_LIMIT_REACHED_MESSAGE: &str =
     "Upstream usage quota still reports limit_reached";
 
 pub(crate) enum QuotaVerificationDecision {
     Ready(Box<AccountLease>),
     RetryWithAnotherAccount,
-    RequiredAccountUnavailable,
-    MaxAttemptsReached,
 }
 
 pub(crate) struct QuotaVerificationContext<'a> {
     pub account_pool: &'a AccountPoolService,
     pub codex: &'a CodexBackendClient,
     pub cloudflare: &'a CloudflareRecovery,
-    pub installation_id: Option<&'a str>,
+    pub account_identity: &'a AccountIdentityService,
     pub request_id: &'a str,
-    pub excluded_account_ids: &'a mut Vec<String>,
-    pub verify_attempts: &'a mut usize,
-    pub allow_retry_with_another_account: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AccountUpstreamContext<'a> {
+    pub codex: &'a CodexBackendClient,
+    pub account_identity: &'a AccountIdentityService,
+    pub cloudflare: &'a CloudflareRecovery,
+    pub request_id: &'a str,
+    pub account: &'a Account,
 }
 
 pub(crate) async fn verify_acquired_quota_if_required(
@@ -88,6 +91,9 @@ pub(crate) async fn verify_acquired_quota_if_required(
     }
 
     let account_id = acquired.account.id.clone();
+    let identity = context
+        .account_identity
+        .scope_auxiliary(&account_id, context.request_id);
     let cookie_header = context
         .cloudflare
         .cookie_header_for_request(&account_id, "/codex/usage")
@@ -106,8 +112,12 @@ pub(crate) async fn verify_acquired_quota_if_required(
             codex_window_id: None,
             parent_thread_id: None,
             cookie_header: cookie_header.as_deref(),
-            installation_id: context.installation_id,
+            installation_id: Some(&identity.installation_id),
             session_id: None,
+            thread_id: None,
+            prompt_cache_key: None,
+            client_request_id: Some(&identity.client_request_id),
+            turn_id: None,
         })
         .await;
 
@@ -134,24 +144,14 @@ pub(crate) async fn verify_acquired_quota_if_required(
         .await;
     if quota_snapshot_limit_reached(&quota) {
         acquired.release_without_usage().await;
-        context.excluded_account_ids.push(account_id.clone());
-        *context.verify_attempts += 1;
-        let max_attempts_reached = *context.verify_attempts >= MAX_QUOTA_VERIFY_ATTEMPTS;
         tracing::info!(
             request_id = %context.request_id,
             account_id = %account_id,
             quota_verify_required = true,
             quota_verify_result = "limit_reached",
-            verify_attempts = *context.verify_attempts,
-            retry_with_another_account = context.allow_retry_with_another_account && !max_attempts_reached,
+            retry_with_another_account = true,
             "quota verification reported exhausted account before upstream request"
         );
-        if !context.allow_retry_with_another_account {
-            return QuotaVerificationDecision::RequiredAccountUnavailable;
-        }
-        if max_attempts_reached {
-            return QuotaVerificationDecision::MaxAttemptsReached;
-        }
         return QuotaVerificationDecision::RetryWithAnotherAccount;
     }
 
@@ -175,116 +175,210 @@ fn acquired_with_verified_quota(mut acquired: AccountLease, quota: &Value) -> Ac
 }
 
 pub(crate) async fn create_response_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
     started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses")
+    let cookie_header = context
+        .cloudflare
+        .cookie_header_for_request(&context.account.id, "/codex/responses")
         .await;
-    let identity = build_conversation_identity(
-        request.prompt_cache_key(),
-        request.codex_window_id.as_deref(),
-        &account.id,
-    );
-    codex
+    let identity = context
+        .account_identity
+        .scope(request, &context.account.id, context.request_id);
+    context
+        .codex
         .create_response_with_pool_account_started_at(
             request,
             CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
+                access_token: &context.account.access_token,
+                account_id: context.account.account_id.as_deref(),
+                request_id: context.request_id,
                 turn_state: request.turn_state.as_deref(),
                 turn_metadata: request.turn_metadata.as_deref(),
                 beta_features: request.beta_features.as_deref(),
                 include_timing_metrics: request.include_timing_metrics.as_deref(),
                 version: request.version.as_deref(),
                 codex_window_id: identity.window_id.as_deref(),
-                parent_thread_id: request.parent_thread_id.as_deref(),
+                parent_thread_id: identity.parent_thread_id.as_deref(),
                 cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: identity.conversation_id.as_deref(),
+                installation_id: Some(&identity.installation_id),
+                session_id: identity.session_id.as_deref(),
+                thread_id: identity.thread_id.as_deref(),
+                prompt_cache_key: identity.prompt_cache_key.as_deref(),
+                client_request_id: Some(&identity.client_request_id),
+                turn_id: identity.turn_id.as_deref(),
             },
-            Some(&account.id),
+            Some(&context.account.id),
             started_at,
         )
         .await
 }
 
 async fn create_response_stream_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
 ) -> Result<CodexBackendStreamingResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses")
+    let cookie_header = context
+        .cloudflare
+        .cookie_header_for_request(&context.account.id, "/codex/responses")
         .await;
-    let identity = build_conversation_identity(
-        request.prompt_cache_key(),
-        request.codex_window_id.as_deref(),
-        &account.id,
-    );
-    codex
+    let identity = context
+        .account_identity
+        .scope(request, &context.account.id, context.request_id);
+    context
+        .codex
         .create_response_stream_with_pool_account(
             request,
             CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
+                access_token: &context.account.access_token,
+                account_id: context.account.account_id.as_deref(),
+                request_id: context.request_id,
                 turn_state: request.turn_state.as_deref(),
                 turn_metadata: request.turn_metadata.as_deref(),
                 beta_features: request.beta_features.as_deref(),
                 include_timing_metrics: request.include_timing_metrics.as_deref(),
                 version: request.version.as_deref(),
                 codex_window_id: identity.window_id.as_deref(),
-                parent_thread_id: request.parent_thread_id.as_deref(),
+                parent_thread_id: identity.parent_thread_id.as_deref(),
                 cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: identity.conversation_id.as_deref(),
+                installation_id: Some(&identity.installation_id),
+                session_id: identity.session_id.as_deref(),
+                thread_id: identity.thread_id.as_deref(),
+                prompt_cache_key: identity.prompt_cache_key.as_deref(),
+                client_request_id: Some(&identity.client_request_id),
+                turn_id: identity.turn_id.as_deref(),
             },
-            Some(&account.id),
+            Some(&context.account.id),
         )
         .await
 }
 
 async fn create_compact_response_with_account(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexCompactRequest,
-    request_id: &str,
-    account: &Account,
 ) -> Result<CodexCompactResponse, CodexClientError> {
-    let cookie_header = cloudflare
-        .cookie_header_for_request(&account.id, "/codex/responses/compact")
+    let cookie_header = context
+        .cloudflare
+        .cookie_header_for_request(&context.account.id, "/codex/responses/compact")
         .await;
-    codex
+    let identity =
+        context
+            .account_identity
+            .scope_compact(request, &context.account.id, context.request_id);
+    let upstream_request = compact_upstream_request(request, &identity);
+    context
+        .codex
         .create_compact_response(
-            request,
+            &upstream_request,
             CodexRequestContext {
-                access_token: &account.access_token,
-                account_id: account.account_id.as_deref(),
-                request_id,
+                access_token: &context.account.access_token,
+                account_id: context.account.account_id.as_deref(),
+                request_id: context.request_id,
                 turn_state: None,
                 turn_metadata: None,
                 beta_features: None,
                 include_timing_metrics: None,
                 version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
+                codex_window_id: identity.window_id.as_deref(),
+                parent_thread_id: identity.parent_thread_id.as_deref(),
                 cookie_header: cookie_header.as_deref(),
-                installation_id,
-                session_id: None,
+                installation_id: Some(&identity.installation_id),
+                session_id: identity.session_id.as_deref(),
+                thread_id: identity.thread_id.as_deref(),
+                prompt_cache_key: identity.prompt_cache_key.as_deref(),
+                client_request_id: Some(&identity.client_request_id),
+                turn_id: identity.turn_id.as_deref(),
             },
         )
         .await
+}
+
+fn compact_upstream_request(
+    request: &CodexCompactRequest,
+    identity: &AccountScopedIdentity,
+) -> CodexCompactRequest {
+    let mut upstream = request.clone();
+    for (key, value) in [
+        ("prompt_cache_key", identity.prompt_cache_key.as_deref()),
+        ("session_id", identity.session_id.as_deref()),
+        ("thread_id", identity.thread_id.as_deref()),
+        ("turn_id", identity.turn_id.as_deref()),
+        (
+            "x-client-request-id",
+            Some(identity.client_request_id.as_str()),
+        ),
+        ("x-codex-window-id", identity.window_id.as_deref()),
+        (
+            "x-codex-parent-thread-id",
+            identity.parent_thread_id.as_deref(),
+        ),
+        (
+            "x-codex-installation-id",
+            Some(identity.installation_id.as_str()),
+        ),
+    ] {
+        replace_existing_identity_field(&mut upstream.body, key, value);
+    }
+
+    let metadata = match upstream.body.get("client_metadata") {
+        Some(Value::Object(metadata)) => Some(metadata.clone()),
+        None => Some(serde_json::Map::new()),
+        Some(_) => None,
+    };
+    if let Some(mut metadata) = metadata {
+        for (key, value) in [
+            (
+                "x-codex-installation-id",
+                Some(identity.installation_id.as_str()),
+            ),
+            ("session_id", identity.session_id.as_deref()),
+            ("thread_id", identity.thread_id.as_deref()),
+            (
+                "x-client-request-id",
+                Some(identity.client_request_id.as_str()),
+            ),
+            ("turn_id", identity.turn_id.as_deref()),
+            ("x-codex-window-id", identity.window_id.as_deref()),
+            (
+                "x-codex-parent-thread-id",
+                identity.parent_thread_id.as_deref(),
+            ),
+        ] {
+            match value.filter(|value| !value.trim().is_empty()) {
+                Some(value) => {
+                    metadata.insert(key.to_string(), Value::String(value.to_string()));
+                }
+                None => {
+                    metadata.remove(key);
+                }
+            }
+        }
+        if !metadata.is_empty() {
+            upstream
+                .body
+                .insert("client_metadata".to_string(), Value::Object(metadata));
+        }
+    }
+    upstream
+}
+
+fn replace_existing_identity_field(
+    body: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&str>,
+) {
+    if !body.get(key).is_some_and(Value::is_string) {
+        return;
+    }
+    match value.filter(|value| !value.trim().is_empty()) {
+        Some(value) => {
+            body.insert(key.to_string(), Value::String(value.to_string()));
+        }
+        None => {
+            body.remove(key);
+        }
+    }
 }
 
 const MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT: usize = 2;
@@ -392,87 +486,47 @@ fn log_upstream_failure(
 }
 
 pub(crate) async fn create_response_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
     started_at: Instant,
 ) -> Result<CodexBackendResponse, CodexClientError> {
     retry_upstream_5xx(
-        request_id,
-        &account.id,
+        context.request_id,
+        &context.account.id,
         None,
         "upstream response request failed with retryable 5xx",
         "upstream response request failed",
-        || {
-            create_response_with_account(
-                codex,
-                installation_id,
-                cloudflare,
-                request,
-                request_id,
-                account,
-                started_at,
-            )
-        },
+        || create_response_with_account(context, request, started_at),
     )
     .await
 }
 
 pub(crate) async fn create_response_stream_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexResponsesRequest,
-    request_id: &str,
-    account: &Account,
 ) -> Result<CodexBackendStreamingResponse, CodexClientError> {
     retry_upstream_5xx(
-        request_id,
-        &account.id,
+        context.request_id,
+        &context.account.id,
         None,
         "upstream response stream request failed with retryable 5xx",
         "upstream response stream request failed",
-        || {
-            create_response_stream_with_account(
-                codex,
-                installation_id,
-                cloudflare,
-                request,
-                request_id,
-                account,
-            )
-        },
+        || create_response_stream_with_account(context, request),
     )
     .await
 }
 
 pub(crate) async fn create_compact_response_with_account_retrying_5xx(
-    codex: &CodexBackendClient,
-    installation_id: Option<&str>,
-    cloudflare: &CloudflareRecovery,
+    context: AccountUpstreamContext<'_>,
     request: &CodexCompactRequest,
-    request_id: &str,
-    account: &Account,
 ) -> Result<CodexCompactResponse, CodexClientError> {
     retry_upstream_5xx(
-        request_id,
-        &account.id,
+        context.request_id,
+        &context.account.id,
         Some("compact"),
         "upstream compact request failed with retryable 5xx",
         "upstream compact request failed",
-        || {
-            create_compact_response_with_account(
-                codex,
-                installation_id,
-                cloudflare,
-                request,
-                request_id,
-                account,
-            )
-        },
+        || create_compact_response_with_account(context, request),
     )
     .await
 }
@@ -484,23 +538,28 @@ impl ResponseDispatchService {
         request_id: &str,
         mut request: CodexCompactRequest,
         requested_model: &str,
-    ) -> Result<Value, ResponseDispatchError> {
+    ) -> Result<ResponseDispatchResponse, ResponseDispatchError> {
         let started_at = Instant::now();
         let client_api_key_id = request.client_api_key_id.clone();
         let catalog = self.models.catalog().await;
         let display_model = catalog.resolve_model_id(requested_model);
         request.set_model(display_model.clone());
-        let mut excluded_account_ids = Vec::new();
         let mut exhausted_accounts = AccountExhaustionTracker::default();
-        let mut quota_verify_attempts = 0usize;
         let mut trace = ResponseDispatchTrace::default();
+        let acquire_request = AccountAcquireRequest::new(request.model(), Utc::now());
+        let mut candidates =
+            AccountAttemptLedger::freeze(&self.account_pool, &acquire_request).await;
 
         loop {
-            let acquire_request = AccountAcquireRequest::new(request.model(), Utc::now())
-                .with_exclude_account_ids(excluded_account_ids.iter().cloned());
-            let acquired = match self.account_pool.acquire_with(&acquire_request).await {
+            let acquired = match candidates.acquire_next(&self.account_pool).await {
                 Some(acquired) => acquired,
                 None => {
+                    tracing::info!(
+                        candidate_count = candidates.candidate_count(),
+                        attempted = candidates.attempted_count(),
+                        state_excluded = candidates.state_excluded_count(),
+                        "Responses compact account candidate ledger exhausted"
+                    );
                     let error = exhausted_accounts
                         .last_exhausted()
                         .map(ResponseDispatchError::from_exhausted_account)
@@ -523,11 +582,8 @@ impl ResponseDispatchService {
                     account_pool: self.account_pool.as_ref(),
                     codex: self.codex.as_ref(),
                     cloudflare: &self.cloudflare,
-                    installation_id: self.installation_id.as_deref(),
+                    account_identity: &self.account_identity,
                     request_id,
-                    excluded_account_ids: &mut excluded_account_ids,
-                    verify_attempts: &mut quota_verify_attempts,
-                    allow_retry_with_another_account: true,
                 },
                 acquired,
             )
@@ -535,42 +591,25 @@ impl ResponseDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    exhausted_accounts
-                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
-                    continue;
-                }
-                QuotaVerificationDecision::MaxAttemptsReached
-                | QuotaVerificationDecision::RequiredAccountUnavailable => {
                     exhausted_accounts.record_rate_limited(
                         Some(&acquired_account_id),
                         QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
                     );
-                    let error = exhausted_accounts
-                        .last_exhausted()
-                        .map(ResponseDispatchError::from_exhausted_account)
-                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
-                    self.record_compact_dispatch_error(
-                        request_id,
-                        client_api_key_id.as_deref(),
-                        requested_model,
-                        started_at,
-                        Some(&acquired_account_id),
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
+                    continue;
                 }
             };
             let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_compact_response_with_account_retrying_5xx(
-                &self.codex,
-                self.installation_id.as_deref(),
-                &self.cloudflare,
+                AccountUpstreamContext {
+                    codex: &self.codex,
+                    account_identity: &self.account_identity,
+                    cloudflare: &self.cloudflare,
+                    request_id,
+                    account: &account,
+                },
                 &request,
-                request_id,
-                &account,
             )
             .await;
             acquired.complete().await;
@@ -605,6 +644,9 @@ impl ResponseDispatchService {
                         "stream": false,
                         "compact": true,
                         "usage": usage,
+                        "effectiveModel": response.response_metadata.effective_model.as_deref(),
+                        "modelsEtag": response.response_metadata.models_etag.as_deref(),
+                        "reasoningIncluded": response.response_metadata.reasoning_included,
                     });
                     insert_response_status_metadata(
                         &mut metadata,
@@ -620,7 +662,11 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: &account.id,
                         route: "/v1/responses/compact",
-                        model: &display_model,
+                        model: response
+                            .response_metadata
+                            .effective_model
+                            .as_deref()
+                            .unwrap_or(&display_model),
                         requested_model: Some(requested_model),
                         client_ip: request.client_ip.as_deref(),
                         client_user_agent: request.client_user_agent.as_deref(),
@@ -633,7 +679,12 @@ impl ResponseDispatchService {
                         rate_limit_headers: &response.rate_limit_headers,
                     })
                     .await;
-                    return Ok(response.body);
+                    self.models
+                        .observe_models_etag(response.response_metadata.models_etag.as_deref());
+                    return Ok(ResponseDispatchResponse {
+                        body: response.body,
+                        response_headers: response.response_metadata.client_headers,
+                    });
                 }
                 Err(error) if is_rate_limit_upstream_error(&error) => {
                     exhausted_accounts.record_rate_limited(
@@ -644,7 +695,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
                     exhausted_accounts.record_quota_exhausted(
@@ -654,7 +704,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
@@ -668,7 +717,6 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
                     exhausted_accounts.record_cloudflare_challenge(
@@ -678,7 +726,6 @@ impl ResponseDispatchService {
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
                     exhausted_accounts.record_cloudflare_path_blocked(
@@ -688,28 +735,11 @@ impl ResponseDispatchService {
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
-                    if let Some(exhausted) =
-                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
-                    {
-                        let error = ResponseDispatchError::from_exhausted_account(exhausted);
-                        self.record_compact_dispatch_error(
-                            request_id,
-                            client_api_key_id.as_deref(),
-                            requested_model,
-                            started_at,
-                            Some(&release_account_id),
-                            &error,
-                        )
-                        .await;
-                        return Err(error);
-                    }
                     exhausted_accounts
                         .record_model_unsupported(Some(&release_account_id), upstream_error);
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
                     exhausted_accounts.record_auth_failure(
@@ -721,9 +751,15 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;
-                    excluded_account_ids.push(release_account_id);
                 }
                 Err(error) => {
+                    if is_retryable_account_transport_error(&error) {
+                        exhausted_accounts.record_upstream_unavailable(
+                            Some(&release_account_id),
+                            upstream_error_body(&error),
+                        );
+                        continue;
+                    }
                     let error = ResponseDispatchError::Upstream(error);
                     self.record_compact_dispatch_error(
                         request_id,

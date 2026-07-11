@@ -51,16 +51,26 @@ pub struct WebSocketAuditArtifact {
 }
 
 /// 从 WebSocket 错误帧推导出的上游错误分类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifiedWebSocketError {
     /// 应映射给 HTTP 层的状态码。
     pub status_code: u16,
+    /// 上游错误类型。
+    pub error_type: Option<String>,
+    /// 上游错误码。
+    pub code: Option<String>,
+    /// 上游错误消息。
+    pub message: Option<String>,
+    /// 上游错误参数。
+    pub param: Option<String>,
+    /// 错误帧携带的安全响应头。
+    pub headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ResponseCompleted {
     #[serde(rename = "id")]
-    _id: String,
+    id: String,
     #[serde(default, rename = "usage")]
     _usage: Option<ResponseCompletedUsage>,
     #[serde(default, rename = "end_turn")]
@@ -148,26 +158,34 @@ fn is_internal_websocket_event(event: &str) -> bool {
 /// 会话状态，不下发客户端。业务事件一律原样转发，不做 schema 校验。
 /// （`codex.rate_limits` 内部事件由 `is_internal_websocket_event` 单独剥离。）
 fn websocket_event_should_skip(raw: &str) -> bool {
-    websocket_metadata_turn_state(raw).is_some()
+    websocket_event_type(raw).as_deref() == Some("response.metadata")
+}
+
+/// 提取 `response.metadata` 帧中的字符串响应头。
+pub fn websocket_metadata_headers(raw: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
+        return Vec::new();
+    }
+    value
+        .get("headers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|headers| headers.iter())
+        .filter_map(|(name, value)| json_value_as_string(value).map(|value| (name.clone(), value)))
+        .collect()
 }
 
 /// 从 `response.metadata` 帧中提取 `x-codex-turn-state`。
 pub fn websocket_metadata_turn_state(raw: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
-    if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
-        return None;
-    }
-    value
-        .get("headers")
-        .and_then(Value::as_object)
-        .and_then(|headers| {
-            headers.iter().find_map(|(name, value)| {
-                if name.eq_ignore_ascii_case("x-codex-turn-state") {
-                    json_value_as_string(value)
-                } else {
-                    None
-                }
-            })
+    websocket_metadata_headers(raw)
+        .into_iter()
+        .find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("x-codex-turn-state")
+                .then_some(value)
         })
         .or_else(|| {
             value
@@ -186,34 +204,22 @@ fn json_value_as_string(value: &Value) -> Option<String> {
     }
 }
 
-/// 校验 `response.completed` 的官方响应形状。
-pub fn websocket_response_completed_parse_error(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
+/// 校验 `response.completed` 的官方响应形状并提取 response ID。
+pub fn websocket_response_completed_id(raw: &str) -> Result<Option<String>, String> {
+    let value = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
     if value.get("type").and_then(Value::as_str) != Some("response.completed") {
-        return None;
+        return Ok(None);
     }
-    let response = value.get("response")?;
-    if response.is_null() {
-        return None;
+    let response = value
+        .get("response")
+        .filter(|response| !response.is_null())
+        .ok_or_else(|| "response.completed is missing response".to_string())?;
+    let completed = serde_json::from_value::<ResponseCompleted>(response.clone())
+        .map_err(|error| format!("failed to parse ResponseCompleted: {error}"))?;
+    if completed.id.trim().is_empty() {
+        return Err("response.completed contains an empty response id".to_string());
     }
-    match serde_json::from_value::<ResponseCompleted>(response.clone()) {
-        Ok(_) => None,
-        Err(error) => Some(format!("failed to parse ResponseCompleted: {error}")),
-    }
-}
-
-/// 从 `response.incomplete` 中提取 incomplete reason。
-pub fn websocket_incomplete_response_reason(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    if value.get("type").and_then(Value::as_str) != Some("response.incomplete") {
-        return None;
-    }
-    value
-        .pointer("/response/incomplete_details/reason")
-        .or_else(|| value.pointer("/incomplete_details/reason"))
-        .or_else(|| value.get("reason"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    Ok(Some(completed.id))
 }
 
 #[path = "websocket_errors.rs"]
@@ -222,10 +228,13 @@ pub use errors::*;
 
 /// 判断 WebSocket 事件是否会结束当前响应流。
 pub fn is_terminal_websocket_event(event: &str) -> bool {
-    matches!(event, "response.completed" | "response.failed" | "error")
+    matches!(
+        event,
+        "response.completed" | "response.incomplete" | "response.failed" | "error"
+    )
 }
 
-/// 将 WebSocket 错误帧映射为上游 HTTP 状态分类。
+/// 将 WebSocket 错误帧映射为结构化上游错误。
 pub fn classify_websocket_error_frame(raw: &str) -> Option<ClassifiedWebSocketError> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let event_type = value.get("type").and_then(Value::as_str)?;
@@ -233,37 +242,49 @@ pub fn classify_websocket_error_frame(raw: &str) -> Option<ClassifiedWebSocketEr
         return None;
     }
 
-    let code = websocket_error_code(&value);
-    if code.as_deref() == Some("websocket_connection_limit_reached") {
-        return Some(ClassifiedWebSocketError { status_code: 503 });
+    let error = websocket_error_value(&value);
+    let error_type = error
+        .and_then(|error| error.get("type"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let code = error
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let param = error
+        .and_then(|error| error.get("param"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let explicit_status =
+        explicit_error_status_code(&value).filter(|status_code| !(200..=299).contains(status_code));
+    if explicit_error_status_code(&value).is_some() && explicit_status.is_none() {
+        return None;
     }
+    let normalized_code = code.as_deref().map(str::to_ascii_lowercase);
+    let normalized_type = error_type.as_deref().map(str::to_ascii_lowercase);
+    let status_code = explicit_status
+        .or_else(|| normalized_code.as_deref().and_then(error_status_code))
+        .or_else(|| normalized_type.as_deref().and_then(error_type_status_code))?;
 
-    if event_type == "error" {
-        if let Some(status_code) = explicit_error_status_code(&value) {
-            if (200..=299).contains(&status_code) {
-                return None;
-            }
-            return Some(ClassifiedWebSocketError { status_code });
-        }
-    }
-
-    if let Some(code) = code {
-        if let Some(status_code) = rotatable_error_status_code(&code) {
-            return Some(ClassifiedWebSocketError { status_code });
-        }
-    }
-
-    None
+    Some(ClassifiedWebSocketError {
+        status_code,
+        error_type,
+        code,
+        message,
+        param,
+        headers: websocket_error_headers(&value),
+    })
 }
 
-fn websocket_error_code(value: &Value) -> Option<String> {
+fn websocket_error_value(value: &Value) -> Option<&Map<String, Value>> {
     value
-        .pointer("/response/error/code")
-        .or_else(|| value.pointer("/response/error/type"))
-        .or_else(|| value.pointer("/error/code"))
-        .or_else(|| value.pointer("/error/type"))
-        .and_then(Value::as_str)
-        .map(str::to_ascii_lowercase)
+        .pointer("/response/error")
+        .or_else(|| value.get("error"))
+        .and_then(Value::as_object)
 }
 
 fn explicit_error_status_code(value: &Value) -> Option<u16> {
@@ -274,15 +295,40 @@ fn explicit_error_status_code(value: &Value) -> Option<u16> {
         .and_then(|status| u16::try_from(status).ok())
 }
 
-fn rotatable_error_status_code(code: &str) -> Option<u16> {
+fn error_status_code(code: &str) -> Option<u16> {
     match code {
         "usage_limit_reached" | "rate_limit_exceeded" | "rate_limit_reached" => Some(429),
         "quota_exhausted" | "payment_required" => Some(402),
         "unauthorized" | "token_invalid" | "token_expired" | "account_deactivated" => Some(401),
         "forbidden" | "account_banned" | "banned" => Some(403),
-        "previous_response_not_found" => Some(400),
+        "previous_response_not_found"
+        | "invalid_encrypted_content"
+        | "missing_tool_output"
+        | "no_tool_output" => Some(400),
+        "websocket_connection_limit_reached" => Some(503),
         _ => None,
     }
+}
+
+fn error_type_status_code(error_type: &str) -> Option<u16> {
+    match error_type {
+        "invalid_request_error" => Some(400),
+        "authentication_error" => Some(401),
+        "permission_error" => Some(403),
+        "rate_limit_error" => Some(429),
+        "server_error" | "api_error" => Some(500),
+        _ => None,
+    }
+}
+
+fn websocket_error_headers(value: &Value) -> Vec<(String, String)> {
+    value
+        .get("headers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| json_value_as_string(value).map(|value| (name.clone(), value)))
+        .collect()
 }
 
 /// 从包裹在 WebSocket `error.headers` 中的 retry-after 值提取秒数。

@@ -2,6 +2,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::upstream::openai::protocol::responses::PreviousResponseScope;
 
 /// 会话亲和性条目。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,12 +17,14 @@ pub struct SessionAffinityEntry {
     pub input_tokens: Option<u64>,
     pub function_call_ids: Vec<String>,
     pub variant_hash: Option<String>,
+    pub continuation_scope: PreviousResponseScope,
+    pub replay: Option<ResponseReplaySnapshot>,
     pub created_at: DateTime<Utc>,
 }
 
-/// 从请求上下文派生的 conversation identity。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConversationIdentity {
-    pub conversation_id: Option<String>,
-    pub window_id: Option<String>,
+/// 截止某个 completed response 的完整、无凭据业务输入快照。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseReplaySnapshot {
+    pub full_input: Vec<Value>,
 }

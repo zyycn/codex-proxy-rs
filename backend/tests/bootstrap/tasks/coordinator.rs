@@ -21,7 +21,7 @@ async fn scheduler_handle_should_shutdown_websocket_pool() {
         max_per_account: 1,
         enabled: true,
         ping_timeout: Duration::ZERO,
-        first_token_timeout: None,
+        initial_event_timeout: None,
     }));
 
     SchedulerHandle::from_websocket_pool(pool.clone())

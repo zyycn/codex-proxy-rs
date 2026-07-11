@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, time::Instant};
 
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::{
     infra::time::elapsed_millis_i64,
@@ -16,8 +16,8 @@ use crate::{
 /// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、
 /// 含未知字段）透传上游，是上游请求体的唯一来源；`use_websocket`/`force_http_sse`
 /// 仅用于本地传输选择，不写入 body。常用字段通过访问器方法读写。
-/// 代理只做最小 patch（`stream`/`store` 由传输层控制，`input` 字符串做官方兼容转换，
-/// implicit resume 时替换 `input`，模型后缀路由时写 `model`/`reasoning`/`service_tier`）。
+/// 普通客户端请求不修改 body；仅在代理持有完整历史并换号重放时替换历史字段，
+/// 或在模型后缀路由时写入 `model`/`reasoning`/`service_tier`。
 ///
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Debug, Clone)]
@@ -30,6 +30,16 @@ pub struct CodexResponsesRequest {
     pub explicit_prompt_cache_key: bool,
     /// 客户端会话 ID。
     pub client_conversation_id: Option<String>,
+    /// 客户端 session ID，仅保留在受控本地上下文。
+    pub client_session_id: Option<String>,
+    /// 客户端 thread ID，仅保留在受控本地上下文。
+    pub client_thread_id: Option<String>,
+    /// 客户端 request ID，仅保留在受控本地上下文。
+    pub client_request_id: Option<String>,
+    /// 客户端 turn ID，仅保留在受控本地上下文。
+    pub client_turn_id: Option<String>,
+    /// 连接池和 affinity 使用的本地会话身份，不发送上游。
+    pub local_conversation_id: Option<String>,
     /// 变体身份键。
     pub variant_identity: Option<String>,
     /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
@@ -56,6 +66,26 @@ pub struct CodexResponsesRequest {
     pub codex_window_id: Option<String>,
     /// 父线程 ID。
     pub parent_thread_id: Option<String>,
+    /// 已知 previous response 的持久化范围，仅用于本地 transport 校验。
+    pub previous_response_scope: Option<PreviousResponseScope>,
+    /// 流式响应在交给下游前的本地提交策略。
+    pub stream_commit_policy: StreamCommitPolicy,
+}
+
+/// previous response 在上游的可续接范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviousResponseScope {
+    Persisted,
+    ConnectionLocal,
+    ExternalUnknown,
+}
+
+/// 流式请求的可逆提交边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamCommitPolicy {
+    FirstForwardableEvent,
+    UntilOutputOrTerminal,
 }
 
 impl Serialize for CodexResponsesRequest {
@@ -114,7 +144,7 @@ pub fn response_body_has_first_output(body_bytes: &[u8]) -> bool {
         .is_ok_and(|events| events.iter().any(response_sse_event_has_first_output))
 }
 
-/// 已收到首个有效 Responses SSE 输出事件时记录首 token 耗时。
+/// 已收到首个有效 Responses SSE 输出事件时记录耗时。
 pub fn update_first_response_output_ms(
     started_at: Instant,
     body_bytes: &[u8],
@@ -180,8 +210,10 @@ fn complete_sse_body_prefix(body: &str) -> Option<&str> {
 /// 从 Codex SSE 收集出的非流式 Responses 结果。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectedResponse {
-    /// 收集到 `response.completed` 或 `response.incomplete`。
+    /// 收集到 `response.completed`。
     Completed(Value),
+    /// 收集到 `response.incomplete`。
+    Incomplete(Value),
     /// 收集到 `response.failed` 或 `error`。
     Failed(ResponsesSseFailure),
     /// SSE 未包含成功终止响应。
@@ -218,8 +250,8 @@ pub struct CompletedResponseMetadata {
     pub response_id: String,
     /// 完成响应中的 function call ids。
     pub function_call_ids: Vec<String>,
-    /// 可用于 reasoning replay 的 output items。
-    pub replay_items: Vec<Value>,
+    /// 完成响应的完整 output items。
+    pub output: Vec<Value>,
 }
 
 /// 将 Codex Responses SSE 完成响应收集为非流式 Responses JSON。
@@ -231,6 +263,7 @@ pub fn response_from_codex_sse(
     let mut output_text = String::new();
     let mut output_items = Vec::new();
     let mut terminal_response = None;
+    let mut terminal_incomplete = false;
     let mut failed_response = None;
 
     for event in events {
@@ -248,8 +281,13 @@ pub fn response_from_codex_sse(
                     output_items.push(item.clone());
                 }
             }
-            Some("response.completed" | "response.incomplete") => {
+            Some("response.completed") => {
                 terminal_response = value.get("response").cloned();
+                terminal_incomplete = false;
+            }
+            Some("response.incomplete") => {
+                terminal_response = value.get("response").cloned();
+                terminal_incomplete = true;
             }
             Some(event_name @ ("error" | "response.failed")) if failed_response.is_none() => {
                 failed_response = Some(ResponsesSseFailure::from_event(event_name, &value));
@@ -264,13 +302,15 @@ pub fn response_from_codex_sse(
     let Some(mut response) = terminal_response else {
         return Ok(CollectedResponse::MissingCompleted);
     };
+    if terminal_incomplete {
+        reconvert_completed_response_tuple_values(&mut response, tuple_schema);
+        return Ok(CollectedResponse::Incomplete(response));
+    }
     if is_empty_response(&response, &output_text, &output_items) {
         return Ok(CollectedResponse::Empty);
     }
 
-    ensure_completed_response_output(&mut response, &output_items, &output_text);
     reconvert_completed_response_tuple_values(&mut response, tuple_schema);
-    sync_output_text_from_output(&mut response);
     Ok(CollectedResponse::Completed(response))
 }
 
@@ -281,7 +321,8 @@ pub fn completed_response_metadata(
     let events = parse_sse_events(body)?;
     let mut response_id = None;
     let mut function_call_ids = BTreeSet::new();
-    let mut replay_items = Vec::new();
+    let mut output = Vec::new();
+    let mut completed_items = Vec::new();
 
     for event in events {
         let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
@@ -290,22 +331,25 @@ pub fn completed_response_metadata(
         match event.event.as_deref() {
             Some("response.output_item.done") => {
                 if let Some(item) = value.get("item") {
-                    collect_response_replay_items(item, &mut replay_items);
+                    completed_items.push(item.clone());
                 }
                 if let Some(call_id) = value.pointer("/item/call_id").and_then(Value::as_str) {
                     function_call_ids.insert(call_id.to_string());
                 }
             }
-            Some("response.completed" | "response.incomplete") => {
+            Some("response.completed") => {
                 response_id = value
                     .pointer("/response/id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
                 collect_response_function_call_ids(&value, &mut function_call_ids);
-                if let Some(output) = value.pointer("/response/output").and_then(Value::as_array) {
-                    for item in output {
-                        collect_response_replay_items(item, &mut replay_items);
-                    }
+                if let Some(completed_output) =
+                    value.pointer("/response/output").and_then(Value::as_array)
+                {
+                    completed_output.clone_into(&mut output);
+                }
+                if output.is_empty() {
+                    output.clone_from(&completed_items);
                 }
             }
             _ => {}
@@ -315,7 +359,7 @@ pub fn completed_response_metadata(
     Ok(response_id.map(|response_id| CompletedResponseMetadata {
         response_id,
         function_call_ids: function_call_ids.into_iter().collect(),
-        replay_items,
+        output,
     }))
 }
 
@@ -337,7 +381,6 @@ pub fn reconvert_responses_sse_event_tuple_values(
         Some("response.completed" | "response.incomplete") => {
             if let Some(response) = data.get_mut("response") {
                 reconvert_completed_response_tuple_values(response, Some(tuple_schema));
-                sync_output_text_from_output(response);
             }
         }
         _ => {}
@@ -390,43 +433,6 @@ fn is_empty_response(response: &Value, output_text: &str, output_items: &[Value]
         == 0
 }
 
-fn ensure_completed_response_output(
-    response: &mut Value,
-    output_items: &[Value],
-    output_text: &str,
-) {
-    let output_is_empty = response
-        .get("output")
-        .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty);
-    if !output_is_empty {
-        return;
-    }
-
-    if !output_items.is_empty() {
-        response["output"] = Value::Array(output_items.to_vec());
-        return;
-    }
-    if output_text.is_empty() {
-        return;
-    }
-
-    let item_status = response
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("completed");
-    response["output"] = json!([{
-        "type": "message",
-        "status": item_status,
-        "role": "assistant",
-        "content": [{
-            "type": "output_text",
-            "text": output_text,
-            "annotations": []
-        }]
-    }]);
-}
-
 fn reconvert_completed_response_tuple_values(response: &mut Value, tuple_schema: Option<&Value>) {
     let Some(tuple_schema) = tuple_schema else {
         return;
@@ -459,20 +465,6 @@ fn reconvert_output_item_tuple_values(item: &mut Value, tuple_schema: &Value) {
     }
 }
 
-fn sync_output_text_from_output(response: &mut Value) {
-    let Some(items) = response.get("output").and_then(Value::as_array) else {
-        return;
-    };
-    let texts = items
-        .iter()
-        .filter_map(output_text_from_item)
-        .collect::<Vec<_>>();
-    if texts.is_empty() {
-        return;
-    }
-    response["output_text"] = Value::String(texts.join("\n\n"));
-}
-
 fn collect_response_function_call_ids(value: &Value, function_call_ids: &mut BTreeSet<String>) {
     let Some(output) = value.pointer("/response/output").and_then(Value::as_array) else {
         return;
@@ -482,30 +474,6 @@ fn collect_response_function_call_ids(value: &Value, function_call_ids: &mut BTr
             function_call_ids.insert(call_id.to_string());
         }
     }
-}
-
-fn collect_response_replay_items(item: &Value, replay_items: &mut Vec<Value>) {
-    if matches!(
-        item.get("type").and_then(Value::as_str),
-        Some("reasoning" | "function_call")
-    ) {
-        replay_items.push(item.clone());
-    }
-}
-
-fn output_text_from_item(item: &Value) -> Option<String> {
-    let content = item.get("content")?.as_array()?;
-    let text = content
-        .iter()
-        .filter_map(|part| {
-            let part_type = part.get("type")?.as_str()?;
-            if part_type != "output_text" && part_type != "text" {
-                return None;
-            }
-            part.get("text")?.as_str()
-        })
-        .collect::<String>();
-    (!text.is_empty()).then_some(text)
 }
 
 fn failure_message(value: &Value) -> Option<String> {
@@ -531,18 +499,19 @@ fn failure_code(value: &Value) -> Option<String> {
 impl CodexResponsesRequest {
     /// 从客户端原始 Responses JSON object 构造上游请求。
     ///
-    /// 只做最小规范化：`input` 缺省为 `[]`、`stream` 缺省 `true`、`store` 缺省 `false`。
-    /// 其余字段（含未知字段）原样保留在 `body` 中透传上游。
-    pub fn from_body(mut body: Map<String, Value>) -> Self {
-        body.entry("input")
-            .or_insert_with(|| Value::Array(Vec::new()));
-        body.entry("stream").or_insert(Value::Bool(true));
-        body.entry("store").or_insert(Value::Bool(false));
+    /// 客户端提供的字段（含未知字段）原样保留在 `body` 中透传上游。
+    /// 协议默认值仅由类型化访问器在本地解释，不写回上游正文。
+    pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
             body,
             tuple_schema: None,
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
+            client_session_id: None,
+            client_thread_id: None,
+            client_request_id: None,
+            client_turn_id: None,
+            local_conversation_id: None,
             variant_identity: None,
             client_ip: None,
             client_user_agent: None,
@@ -556,6 +525,8 @@ impl CodexResponsesRequest {
             include_timing_metrics: None,
             codex_window_id: None,
             parent_thread_id: None,
+            previous_response_scope: None,
+            stream_commit_policy: StreamCommitPolicy::FirstForwardableEvent,
         }
     }
 
@@ -612,7 +583,7 @@ impl CodexResponsesRequest {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// 替换输入条目（implicit resume / 字符串输入兼容）。
+    /// 替换输入条目（仅用于代理持有完整历史时的换号重放）。
     pub fn set_input(&mut self, input: Vec<Value>) {
         self.body.insert("input".to_string(), Value::Array(input));
     }
@@ -636,6 +607,11 @@ impl CodexResponsesRequest {
             .get("store")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+    }
+
+    /// 设置上游存储标志。
+    pub fn set_store(&mut self, store: bool) {
+        self.body.insert("store".to_string(), Value::Bool(store));
     }
 
     /// reasoning 配置（透传，不规整）。
@@ -691,6 +667,7 @@ impl CodexResponsesRequest {
             }
             None => {
                 self.body.remove("previous_response_id");
+                self.previous_response_scope = None;
             }
         }
     }
@@ -730,6 +707,22 @@ impl CodexResponsesRequest {
         }
     }
 
+    /// 仅在客户端原本提供字符串字段时替换其账号作用域 wire 值。
+    pub(crate) fn replace_existing_identity_field(&mut self, key: &str, value: Option<&str>) {
+        if !self.body.get(key).is_some_and(Value::is_string) {
+            return;
+        }
+        match value.filter(|value| !value.trim().is_empty()) {
+            Some(value) => {
+                self.body
+                    .insert(key.to_string(), Value::String(value.to_string()));
+            }
+            None => {
+                self.body.remove(key);
+            }
+        }
+    }
+
     /// 判断请求是否声明了图片生成工具。
     pub fn expects_image_generation(&self) -> bool {
         self.tools().is_some_and(|tools| {
@@ -755,6 +748,18 @@ pub struct CodexCompactRequest {
     pub client_user_agent: Option<String>,
     /// 已鉴权客户端 API key 的稳定 ID，仅用于事实归因。
     pub client_api_key_id: Option<String>,
+    /// 客户端 session ID，仅保留在本地身份上下文。
+    pub client_session_id: Option<String>,
+    /// 客户端 thread ID，仅保留在本地身份上下文。
+    pub client_thread_id: Option<String>,
+    /// 客户端 request ID，仅保留在本地身份上下文。
+    pub client_request_id: Option<String>,
+    /// 客户端 turn ID，仅保留在本地身份上下文。
+    pub client_turn_id: Option<String>,
+    /// 客户端 window ID，仅保留在本地身份上下文。
+    pub client_window_id: Option<String>,
+    /// 客户端 parent thread ID，仅保留在本地身份上下文。
+    pub client_parent_thread_id: Option<String>,
 }
 
 impl Serialize for CodexCompactRequest {
@@ -784,5 +789,9 @@ impl CodexCompactRequest {
     /// reasoning 配置（透传原值）。
     pub fn reasoning(&self) -> Option<&Value> {
         self.body.get("reasoning")
+    }
+
+    pub fn prompt_cache_key(&self) -> Option<&str> {
+        self.body.get("prompt_cache_key").and_then(Value::as_str)
     }
 }

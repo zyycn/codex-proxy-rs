@@ -20,7 +20,6 @@ use reqwest::{
 use serde_json::{map::Map, Value};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
-use uuid::Uuid;
 
 use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
@@ -47,7 +46,7 @@ use super::websocket::{
     CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketTurnStateUpdate,
 };
 use super::websocket_pool::{
-    CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision, DEFAULT_FIRST_TOKEN_TIMEOUT,
+    CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision, DEFAULT_INITIAL_EVENT_TIMEOUT,
 };
 
 // ---------------------------------------------------------------------------
@@ -238,6 +237,27 @@ pub struct CodexRequestContext<'a> {
     pub installation_id: Option<&'a str>,
     /// session_id。
     pub session_id: Option<&'a str>,
+    /// thread_id。
+    pub thread_id: Option<&'a str>,
+    /// 账号作用域 prompt cache key。
+    pub prompt_cache_key: Option<&'a str>,
+    /// 账号作用域 client request ID。
+    pub client_request_id: Option<&'a str>,
+    /// 账号作用域 turn ID。
+    pub turn_id: Option<&'a str>,
+}
+
+/// Codex Responses 上游响应。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexResponseMetadata {
+    /// 上游实际选用的模型。
+    pub effective_model: Option<String>,
+    /// 模型目录版本。
+    pub models_etag: Option<String>,
+    /// 上游是否声明响应包含 reasoning。
+    pub reasoning_included: bool,
+    /// 允许透传给客户端的安全响应头。
+    pub client_headers: Vec<(String, String)>,
 }
 
 /// Codex Responses 上游响应。
@@ -261,6 +281,8 @@ pub struct CodexBackendResponse {
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
+    /// 安全响应元数据。
+    pub response_metadata: CodexResponseMetadata,
 }
 
 /// Codex Responses 实际使用的上游传输。
@@ -310,6 +332,8 @@ pub struct CodexBackendStreamingResponse {
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
+    /// 安全响应元数据。
+    pub response_metadata: CodexResponseMetadata,
 }
 
 /// Codex compact 端点响应。
@@ -323,6 +347,8 @@ pub struct CodexCompactResponse {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
+    /// 安全响应元数据。
+    pub response_metadata: CodexResponseMetadata,
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +362,7 @@ pub struct CodexBackendClient {
     pub(super) base_url: String,
     fingerprint: RuntimeFingerprint,
     websocket_pool: Option<Arc<CodexWebSocketPool>>,
-    websocket_first_token_timeout: Option<Duration>,
+    websocket_initial_event_timeout: Option<Duration>,
 }
 
 #[path = "client_sse.rs"]
@@ -362,6 +388,10 @@ impl CodexModelCatalogClient for CodexBackendClient {
             cookie_header: None,
             installation_id: request.installation_id,
             session_id: None,
+            thread_id: None,
+            prompt_cache_key: None,
+            client_request_id: None,
+            turn_id: None,
         })
         .await
         .map_err(|error| CodexModelCatalogClientError::RequestFailed {
@@ -490,8 +520,19 @@ fn response_upstream_request(
     context: CodexRequestContext<'_>,
 ) -> CodexResponsesRequest {
     let mut upstream = request.clone();
-    if let Some(session_id) = context.session_id {
-        upstream.set_prompt_cache_key(Some(session_id.to_string()));
+    if request.prompt_cache_key().is_some() {
+        upstream.set_prompt_cache_key(context.prompt_cache_key.map(ToString::to_string));
+    }
+    for (key, value) in [
+        ("session_id", context.session_id),
+        ("thread_id", context.thread_id),
+        ("turn_id", context.turn_id),
+        ("x-client-request-id", context.client_request_id),
+        ("x-codex-window-id", context.codex_window_id),
+        ("x-codex-parent-thread-id", context.parent_thread_id),
+        ("x-codex-installation-id", context.installation_id),
+    ] {
+        upstream.replace_existing_identity_field(key, value);
     }
     upstream.set_client_metadata(response_client_metadata(request.client_metadata(), context));
     upstream
@@ -506,7 +547,8 @@ fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponses
 fn stamp_ws_stream_request_start_ms(request: &mut CodexResponsesRequest) {
     let mut metadata = match request.client_metadata() {
         Some(Value::Object(metadata)) => metadata.clone(),
-        _ => Map::new(),
+        None => Map::new(),
+        Some(_) => return,
     };
     metadata.insert(
         X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
@@ -528,25 +570,31 @@ fn response_client_metadata(
 ) -> Option<Value> {
     // 以客户端原始 client_metadata 为基础（保留 number/bool/object 等所有值类型），
     // 在其上追加代理自身的上下文字段。
-    let mut metadata = match client_metadata {
-        Some(Value::Object(input)) => input.clone(),
-        _ => Map::new(),
+    let mut metadata = match client_metadata? {
+        Value::Object(input) => input.clone(),
+        value => return Some(value.clone()),
     };
 
-    insert_metadata_string(
+    replace_metadata_string(
         &mut metadata,
         "x-codex-installation-id",
         context.installation_id,
     );
-    insert_metadata_string(&mut metadata, "session_id", context.session_id);
-    insert_metadata_string(&mut metadata, "thread_id", context.session_id);
-    insert_metadata_string(&mut metadata, "x-codex-window-id", context.codex_window_id);
+    replace_metadata_string(&mut metadata, "session_id", context.session_id);
+    replace_metadata_string(&mut metadata, "thread_id", context.thread_id);
+    replace_metadata_string(
+        &mut metadata,
+        "x-client-request-id",
+        context.client_request_id,
+    );
+    replace_metadata_string(&mut metadata, "turn_id", context.turn_id);
+    replace_metadata_string(&mut metadata, "x-codex-window-id", context.codex_window_id);
     insert_metadata_string(
         &mut metadata,
         "x-codex-turn-metadata",
         context.turn_metadata,
     );
-    insert_metadata_string(
+    replace_metadata_string(
         &mut metadata,
         "x-codex-parent-thread-id",
         context.parent_thread_id,
@@ -562,6 +610,17 @@ fn response_client_metadata(
 fn insert_metadata_string(metadata: &mut Map<String, Value>, key: &str, value: Option<&str>) {
     if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
         metadata.insert(key.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn replace_metadata_string(metadata: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    match value.filter(|value| !value.trim().is_empty()) {
+        Some(value) => {
+            metadata.insert(key.to_string(), Value::String(value.to_string()));
+        }
+        None => {
+            metadata.remove(key);
+        }
     }
 }
 

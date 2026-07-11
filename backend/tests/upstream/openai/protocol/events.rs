@@ -254,8 +254,9 @@ fn parse_rate_limit_headers_should_extract_primary_secondary_and_review_windows(
 
     let parsed = parse_rate_limit_headers(&headers).expect("rate limits should parse");
 
+    let core = parsed.limits.get("codex").expect("core rate limit");
     assert_eq!(
-        parsed.primary,
+        core.primary,
         Some(RateLimitWindow {
             used_percent: 100.0,
             window_minutes: Some(5),
@@ -263,12 +264,13 @@ fn parse_rate_limit_headers_should_extract_primary_secondary_and_review_windows(
         })
     );
     assert_eq!(
-        parsed.secondary.expect("secondary window").window_minutes,
+        core.secondary.expect("secondary window").window_minutes,
         Some(10080)
     );
     assert_eq!(
         parsed
-            .code_review
+            .limits
+            .get("codex_code_review")
             .expect("review window")
             .primary
             .expect("review primary")
@@ -297,11 +299,88 @@ fn parse_rate_limits_event_should_extract_internal_websocket_rate_limits() {
 
     let parsed = parse_rate_limits_event(&event).expect("event should parse");
 
-    let used_percent = parsed.primary.expect("primary window").used_percent;
+    let core = parsed.limits.get("codex").expect("core rate limit");
+    let used_percent = core.primary.expect("primary window").used_percent;
     assert!((used_percent - 99.5).abs() < f64::EPSILON);
     assert_eq!(
-        parsed.secondary.expect("secondary window").reset_at,
+        core.secondary.expect("secondary window").reset_at,
         Some(1_894_056_000)
+    );
+}
+
+#[test]
+fn parse_rate_limit_headers_should_extract_arbitrary_limits_and_account_metadata() {
+    let headers = vec![
+        (
+            "x-codex-other-primary-used-percent".to_string(),
+            "63.5".to_string(),
+        ),
+        (
+            "x-codex-other-primary-window-minutes".to_string(),
+            "1440".to_string(),
+        ),
+        (
+            "x-codex-other-limit-name".to_string(),
+            "Codex Other".to_string(),
+        ),
+        (
+            "x-codex-credits-has-credits".to_string(),
+            "true".to_string(),
+        ),
+        ("x-codex-credits-unlimited".to_string(), "false".to_string()),
+        ("x-codex-credits-balance".to_string(), "12.50".to_string()),
+        ("x-codex-plan-type".to_string(), "pro".to_string()),
+        ("x-codex-promo-message".to_string(), "bonus".to_string()),
+        (
+            "x-codex-rate-limit-reached-type".to_string(),
+            "weekly".to_string(),
+        ),
+    ];
+
+    let parsed = parse_rate_limit_headers(&headers).expect("rate limits should parse");
+    let other = parsed.limits.get("codex_other").expect("dynamic limit");
+    assert_eq!(other.limit_name.as_deref(), Some("Codex Other"));
+    assert_eq!(
+        other.primary.expect("primary window").window_minutes,
+        Some(1440)
+    );
+    let credits = parsed.credits.expect("credits");
+    assert!(credits.has_credits);
+    assert!(!credits.unlimited);
+    assert_eq!(credits.balance.as_deref(), Some("12.50"));
+    assert_eq!(parsed.plan_type.as_deref(), Some("pro"));
+    assert_eq!(parsed.promo_message.as_deref(), Some("bonus"));
+    assert_eq!(parsed.rate_limit_reached_type.as_deref(), Some("weekly"));
+}
+
+#[test]
+fn parse_rate_limits_event_should_keep_metered_limit_credits_and_plan() {
+    let event = json!({
+        "type": "codex.rate_limits",
+        "plan_type": "team",
+        "metered_limit_name": "codex-other",
+        "limit_name": "Other requests",
+        "rate_limits": {
+            "primary": {
+                "used_percent": 33,
+                "window_minutes": 60,
+                "reset_at": 1893456300
+            }
+        },
+        "credits": {
+            "has_credits": true,
+            "unlimited": false,
+            "balance": "9.25"
+        }
+    });
+
+    let parsed = parse_rate_limits_event(&event).expect("event should parse");
+    let other = parsed.limits.get("codex_other").expect("metered limit");
+    assert_eq!(other.limit_name.as_deref(), Some("Other requests"));
+    assert_eq!(parsed.plan_type.as_deref(), Some("team"));
+    assert_eq!(
+        parsed.credits.expect("credits").balance.as_deref(),
+        Some("9.25")
     );
 }
 

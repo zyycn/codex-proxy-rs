@@ -1,6 +1,6 @@
 //! 账号运行时反馈:错误率与 TTFT 的 EWMA 统计。
 //!
-//! 每个账号维护两个指数加权移动平均(EWMA):错误率与首 token 延迟(TTFT，
+//! 每个账号维护两个指数加权移动平均(EWMA):错误率与首个有效输出事件延迟(TTFT，
 //! 毫秒)。请求结束后经 [`FeedbackStats::report`] 回灌，直接进 [`super::score`]
 //! 打分并可驱动 sticky escape。统计以 `AtomicU64`(存 `f64` 位模式)+ CAS 无锁更新,
 //! 对齐 sub2api 的设计,避免选择热路径上的锁与 DB 往返。
@@ -127,7 +127,7 @@ impl FeedbackStats {
         }
     }
 
-    /// 回灌一次请求结果:成功/失败 + 首 token 延迟(毫秒)。
+    /// 回灌一次请求结果:成功/失败 + 首个有效输出事件延迟(毫秒)。
     pub fn report(&self, account_id: &str, success: bool, first_token_ms: Option<u64>) {
         // 快路径:账号已存在时只需读锁 + 原子更新。
         {

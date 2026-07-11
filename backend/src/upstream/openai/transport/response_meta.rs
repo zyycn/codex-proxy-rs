@@ -4,9 +4,19 @@ use std::time::Instant;
 
 use reqwest::header::{HeaderMap, SET_COOKIE};
 
-use crate::upstream::openai::protocol::responses::update_first_response_output_ms;
+use crate::upstream::openai::protocol::{
+    events::is_rate_limit_header_name, responses::update_first_response_output_ms,
+};
 
-use super::diagnostics::CodexUpstreamDiagnostics;
+use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics};
+
+const CLIENT_RESPONSE_HEADERS: [&str; 5] = [
+    "x-request-id",
+    "openai-model",
+    "x-models-etag",
+    "x-reasoning-included",
+    "openai-processing-ms",
+];
 
 pub(super) fn diagnostics(
     status_code: Option<u16>,
@@ -33,7 +43,7 @@ pub(super) fn set_cookie_headers(headers: &HeaderMap) -> Vec<String> {
 pub(super) fn rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
-        .filter(|(name, _)| is_rate_limit_header(name.as_str()))
+        .filter(|(name, _)| is_rate_limit_header_name(name.as_str()))
         .filter_map(|(name, value)| {
             value
                 .to_str()
@@ -43,22 +53,63 @@ pub(super) fn rate_limit_headers(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
+pub(super) fn response_metadata(headers: &HeaderMap) -> CodexResponseMetadata {
+    response_metadata_from_pairs(
+        headers
+            .iter()
+            .filter_map(|(name, value)| value.to_str().ok().map(|value| (name.as_str(), value))),
+    )
+}
+
+pub(super) fn merge_response_metadata(
+    metadata: &mut CodexResponseMetadata,
+    headers: impl IntoIterator<Item = (String, String)>,
+) {
+    for (name, value) in headers {
+        apply_response_header(metadata, &name, &value);
+    }
+}
+
+fn response_metadata_from_pairs<'a>(
+    headers: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> CodexResponseMetadata {
+    let mut metadata = CodexResponseMetadata::default();
+    for (name, value) in headers {
+        apply_response_header(&mut metadata, name, value);
+    }
+    metadata
+}
+
+fn apply_response_header(metadata: &mut CodexResponseMetadata, name: &str, value: &str) {
+    let name = name.to_ascii_lowercase();
+    let value = value.trim();
+    if value.is_empty() || !CLIENT_RESPONSE_HEADERS.contains(&name.as_str()) {
+        return;
+    }
+    match name.as_str() {
+        "openai-model" => metadata.effective_model = Some(value.to_string()),
+        "x-models-etag" => metadata.models_etag = Some(value.to_string()),
+        "x-reasoning-included" => metadata.reasoning_included = true,
+        _ => {}
+    }
+    upsert_client_header(&mut metadata.client_headers, (name, value.to_string()));
+}
+
+fn upsert_client_header(headers: &mut Vec<(String, String)>, header: (String, String)) {
+    if let Some(existing) = headers
+        .iter_mut()
+        .find(|(name, _)| name.eq_ignore_ascii_case(&header.0))
+    {
+        *existing = header;
+    } else {
+        headers.push(header);
+    }
+}
+
 pub(super) fn update_first_token_ms(
     started_at: Instant,
     body_bytes: &[u8],
     first_token_ms: &mut Option<i64>,
 ) {
     update_first_response_output_ms(started_at, body_bytes, first_token_ms);
-}
-
-fn is_rate_limit_header(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "retry-after"
-        || name.contains("ratelimit")
-        || name.contains("rate-limit")
-        || name.starts_with("x-codex-primary-")
-        || name.starts_with("x-codex-secondary-")
-        || name.starts_with("x-codex-code-review-")
-        || name.starts_with("x-codex-review-")
-        || name.starts_with("x-code-review-")
 }

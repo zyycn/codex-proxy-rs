@@ -8,6 +8,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::fleet::pool::AccountPoolService;
+use crate::infra::identity::AccountPseudonymizer;
 use crate::models::service::{
     ModelRefreshPlanAccount, ModelRefreshResult, ModelService, ModelServiceError,
 };
@@ -25,7 +26,7 @@ pub struct ModelRefreshTask {
     initial_delay_ms: u64,
     retry_delay_ms: u64,
     max_retries: u32,
-    installation_id: Option<String>,
+    account_pseudonymizer: Arc<AccountPseudonymizer>,
 }
 
 const DEFAULT_REFRESH_INTERVAL_SECS: u64 = 3600;
@@ -35,7 +36,11 @@ const MAX_RETRIES: u32 = 12;
 
 impl ModelRefreshTask {
     /// 构造默认任务。
-    pub fn new(model_service: Arc<ModelService>, account_pool: Arc<AccountPoolService>) -> Self {
+    pub fn new(
+        model_service: Arc<ModelService>,
+        account_pool: Arc<AccountPoolService>,
+        account_pseudonymizer: Arc<AccountPseudonymizer>,
+    ) -> Self {
         Self {
             model_service,
             account_pool,
@@ -43,14 +48,8 @@ impl ModelRefreshTask {
             initial_delay_ms: INITIAL_DELAY_MS,
             retry_delay_ms: RETRY_DELAY_MS,
             max_retries: MAX_RETRIES,
-            installation_id: None,
+            account_pseudonymizer,
         }
-    }
-
-    /// 设置 Codex installation id。
-    pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
-        self.installation_id = installation_id.filter(|id| !id.trim().is_empty());
-        self
     }
 
     /// 启动后台刷新任务。
@@ -64,6 +63,27 @@ impl ModelRefreshTask {
         spawn_periodic_task(self, config)
     }
 
+    /// 在 Responses 响应声明模型目录 ETag 变化时异步刷新。
+    pub async fn run_etag_refreshes(self) {
+        let mut etag_changes = self.model_service.subscribe_models_etag_changes();
+        while etag_changes.changed().await.is_ok() {
+            // 合并同一批并发响应产生的重复通知。
+            sleep(Duration::from_millis(250)).await;
+            etag_changes.borrow_and_update();
+            match self.refresh_once().await {
+                Ok(result) => info!(
+                    refreshed_plans = result.refreshed_plans,
+                    model_count = result.model_count,
+                    "模型 ETag 变化刷新完成"
+                ),
+                Err(ModelServiceError::NoAccounts) => {
+                    info!("模型 ETag 变化刷新跳过：没有可用账号");
+                }
+                Err(error) => warn!(error = ?error, "模型 ETag 变化刷新失败"),
+            }
+        }
+    }
+
     /// 执行一次模型刷新并同步账号池模型计划约束。
     pub async fn refresh_once(&self) -> Result<ModelRefreshResult, ModelServiceError> {
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -74,16 +94,15 @@ impl ModelRefreshTask {
                 plan_type: selected.plan_type.clone(),
                 access_token: selected.account.access_token.clone(),
                 account_id: selected.account.account_id.clone(),
+                installation_id: self
+                    .account_pseudonymizer
+                    .installation_id(&selected.account.id),
             })
             .collect::<Vec<_>>();
 
         let result = self
             .model_service
-            .refresh_backend_models_with_installation_id(
-                &plan_accounts,
-                &request_id,
-                self.installation_id.as_deref(),
-            )
+            .refresh_backend_models(&plan_accounts, &request_id)
             .await;
         for selected in selected_accounts {
             selected.release().await;

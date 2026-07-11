@@ -1,10 +1,7 @@
 use serde_json::Value;
 
 use crate::{
-    dispatch::errors::{
-        is_history_recovery_signal, is_invalid_encrypted_content_signal,
-        is_model_unsupported_signal,
-    },
+    dispatch::errors::{is_history_recovery_code, is_model_unsupported_signal},
     fleet::account::AccountStatus,
     upstream::openai::{
         protocol::{
@@ -12,7 +9,7 @@ use crate::{
             responses::{response_from_codex_sse, CollectedResponse, ResponsesSseFailure},
             sse::SseError,
         },
-        transport::{is_banned_auth_signal, CodexClientError},
+        transport::is_banned_auth_signal,
     },
 };
 
@@ -93,20 +90,10 @@ pub(in crate::dispatch) fn is_model_unsupported_sse_failure(failure: &ResponsesS
 }
 
 pub(in crate::dispatch) fn is_history_recovery_sse_failure(failure: &ResponsesSseFailure) -> bool {
-    sse_failure_matches(failure, is_history_recovery_signal)
-}
-
-pub(in crate::dispatch) fn sse_failure_invalid_reasoning_replay(
-    failure: &ResponsesSseFailure,
-) -> bool {
-    sse_failure_matches(failure, is_invalid_encrypted_content_signal)
-}
-
-pub(in crate::dispatch) fn client_error_invalid_reasoning_replay(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { body, .. } if is_invalid_encrypted_content_signal(body)
-    )
+    failure
+        .upstream_code
+        .as_deref()
+        .is_some_and(is_history_recovery_code)
 }
 
 pub(crate) fn auth_sse_failure_account_status(failure: &ResponsesSseFailure) -> AccountStatus {
@@ -124,6 +111,7 @@ pub(in crate::dispatch) fn first_sse_failure(
     match response_from_codex_sse(&body, None)? {
         CollectedResponse::Failed(failure) => Ok(Some(failure)),
         CollectedResponse::Completed(_)
+        | CollectedResponse::Incomplete(_)
         | CollectedResponse::MissingCompleted
         | CollectedResponse::Empty => Ok(None),
     }
