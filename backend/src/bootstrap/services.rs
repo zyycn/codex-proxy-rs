@@ -1,6 +1,6 @@
 //! 运行时服务集合。
 
-use std::{env, error::Error, sync::Arc, time::Duration};
+use std::{env, error::Error, future::IntoFuture, sync::Arc, time::Duration};
 
 use axum::Router;
 
@@ -434,12 +434,38 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let (router, task_coordinator) = build_router(config).await?;
 
-    let serve_result = axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(crate::bootstrap::shutdown::shutdown_signal())
-    .await;
+    let serve_result = {
+        let (graceful_shutdown_tx, graceful_shutdown_rx) = tokio::sync::oneshot::channel();
+        let serve = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = graceful_shutdown_rx.await;
+        })
+        .into_future();
+        tokio::pin!(serve);
+        tokio::select! {
+            result = &mut serve => result,
+            () = crate::bootstrap::shutdown::shutdown_signal() => {
+                let _ = graceful_shutdown_tx.send(());
+                tokio::select! {
+                    result = &mut serve => result,
+                    () = tokio::time::sleep(HTTP_DRAIN_TIMEOUT) => {
+                        tracing::warn!(
+                            timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
+                            "HTTP graceful shutdown timed out; cancelling remaining connections"
+                        );
+                        Ok(())
+                    }
+                    () = crate::bootstrap::shutdown::shutdown_signal() => {
+                        tracing::warn!("received a second shutdown signal; cancelling remaining connections");
+                        Ok(())
+                    }
+                }
+            }
+        }
+    };
 
     task_coordinator.shutdown().await;
     serve_result?;
@@ -455,6 +481,8 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     Ok(())
 }
+
+const HTTP_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 async fn build_router(
     mut config: AppConfig,

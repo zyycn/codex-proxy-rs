@@ -303,7 +303,7 @@ impl ResponseDispatchService {
                 &acquired.account.id,
             );
             self.account_pool.wait_for_request_interval(&acquired).await;
-            let account = acquired.account;
+            let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_response_with_account_retrying_5xx(
@@ -316,7 +316,7 @@ impl ResponseDispatchService {
                 started_at,
             )
             .await;
-            self.account_pool.release(&release_account_id).await;
+            acquired.complete().await;
             if let Err(error) = &response_result {
                 self.cloudflare
                     .capture_set_cookie_headers(

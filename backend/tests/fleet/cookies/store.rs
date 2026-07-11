@@ -59,6 +59,53 @@ async fn cookie_store_should_cleanup_expired_cookies() {
     assert_eq!(remaining.0, 1);
 }
 
+#[tokio::test]
+async fn cookie_store_should_persist_account_cleanup_deadline() {
+    let (pool, _dir) = cookie_store_parts("cookies-cleanup-deadline").await;
+    seed_account(&pool, "acct_deadline").await;
+    let store = PgCookieStore::new(pool.clone());
+    store
+        .capture_set_cookie(
+            "acct_deadline",
+            "cf_clearance=keep-until-deadline; Domain=.chatgpt.com; Path=/",
+        )
+        .await
+        .unwrap();
+    let deadline = Utc::now() + Duration::seconds(30);
+
+    let updated = store
+        .expire_account_cookies_at("acct_deadline", deadline)
+        .await
+        .unwrap();
+    let stored_deadline: (Option<chrono::DateTime<Utc>>,) =
+        sqlx::query_as("select expires_at from account_cookies where account_id = $1")
+            .bind("acct_deadline")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(updated, 1);
+    assert_eq!(
+        stored_deadline.0.map(|value| value.timestamp_micros()),
+        Some(deadline.timestamp_micros())
+    );
+    assert_eq!(
+        store
+            .cookie_header("acct_deadline", "chatgpt.com")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("cf_clearance=keep-until-deadline")
+    );
+    assert_eq!(
+        store
+            .cleanup_expired(deadline + Duration::seconds(1))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
 async fn cookie_store_parts(name: &str) -> (PgPool, crate::support::storage::TestDatabaseGuard) {
     init_test_db(name).await
 }

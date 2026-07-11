@@ -44,18 +44,18 @@ async fn token_refresh_task_should_keep_business_status_before_refresher_call() 
         refresher,
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("refresh should succeed");
-    let stored = store
-        .get("acct-status-marker")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-status-marker", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(summary.refreshed, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(observed_statuses, [AccountStatus::Active]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(
@@ -96,8 +96,8 @@ async fn token_refresh_task_should_skip_expired_account_after_restart() {
         refresher.clone(),
     );
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
         .expect("expired account should be skipped");
     let stored = store
@@ -106,7 +106,7 @@ async fn token_refresh_task_should_skip_expired_account_after_restart() {
         .expect("account should load")
         .expect("account should exist");
 
-    assert_eq!(summary.skipped, 1);
+    assert_eq!(timer_summary.skipped, 1);
     assert_eq!(refresher.calls.load(Ordering::SeqCst), 0);
     assert_eq!(stored.status, AccountStatus::Expired);
     assert!(stored.next_refresh_at.is_none());
@@ -151,18 +151,18 @@ async fn token_refresh_task_should_retry_transport_failure_before_recovery() {
     )
     .with_retry_delays(vec![StdDuration::ZERO; 4]);
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("transport failure should be summarized");
-    let stored = store
-        .get("acct-refresh-transport")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-transport", |account| {
+        account.next_refresh_at.is_some_and(|next| next > now)
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(summary.failed, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(observed_statuses, [AccountStatus::Active; 5]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert!(stored.next_refresh_at.is_some_and(|next| next > now));
@@ -221,36 +221,36 @@ async fn token_refresh_task_should_delay_recovery_after_retry_exhaustion() {
     .with_retry_delays(vec![StdDuration::ZERO; 4]);
 
     let failed = task
-        .refresh_due_accounts_once_at(now)
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("first scan should summarize retry exhaustion");
-    let recovery_at = store
-        .get("acct-refresh-delayed-recovery")
-        .await
-        .expect("account should load")
-        .expect("account should exist")
-        .next_refresh_at
-        .expect("retry exhaustion should persist recovery time");
+        .expect("first refresh timer should be scheduled");
+    let recovery_at = wait_for_account(&store, "acct-refresh-delayed-recovery", |account| {
+        account.next_refresh_at.is_some_and(|next| next > now)
+    })
+    .await
+    .next_refresh_at
+    .expect("retry exhaustion should persist recovery time");
     let delayed = task
-        .refresh_due_accounts_once_at(now + Duration::minutes(5))
+        .schedule_account_timers_once_at(now + Duration::minutes(5))
         .await
-        .expect("recovery window should skip refresh");
+        .expect("recovery timer should be scheduled");
     let refreshed = task
-        .refresh_due_accounts_once_at(recovery_at + Duration::seconds(1))
+        .schedule_account_timers_once_at(recovery_at + Duration::seconds(1))
         .await
-        .expect("recovery window should allow refresh");
-    let stored = store
-        .get("acct-refresh-delayed-recovery")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("due recovery timer should replace future timer");
+    let stored = wait_for_account(&store, "acct-refresh-delayed-recovery", |account| {
+        account.access_token.expose_secret() == new_access_token.as_str()
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(failed.failed, 1);
+    assert_eq!(failed.immediate, 1);
     assert!(recovery_at >= now + Duration::minutes(8));
     assert!(recovery_at <= now + Duration::minutes(12));
-    assert_eq!(delayed.skipped, 1);
-    assert_eq!(refreshed.refreshed, 1);
+    assert_eq!(delayed.scheduled, 1);
+    assert_eq!(refreshed.immediate, 1);
+    assert_eq!(refreshed.replaced, 1);
     assert_eq!(observed_statuses, [AccountStatus::Active; 6]);
     assert_eq!(stored.status, AccountStatus::Active);
     assert_eq!(
@@ -299,17 +299,20 @@ async fn token_refresh_task_should_not_reuse_stale_refresh_token_after_retryable
     )
     .with_retry_delays(vec![StdDuration::ZERO; 4]);
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("stale refresh token should skip retry");
-    let stored = store
-        .get("acct-refresh-stale-rt")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-stale-rt", |account| {
+        account
+            .refresh_token
+            .as_ref()
+            .is_some_and(|token| token.expose_secret() == "refresh-rotated")
+    })
+    .await;
+    task.shutdown().await;
 
-    assert_eq!(summary.skipped, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         stored.access_token.expose_secret(),
@@ -368,18 +371,18 @@ async fn token_refresh_task_should_confirm_invalid_grant_before_expiring_account
     )
     .with_retry_delays(vec![StdDuration::ZERO; 4]);
 
-    let summary = task
-        .refresh_due_accounts_once_at(now)
+    let timer_summary = task
+        .schedule_account_timers_once_at(now)
         .await
-        .expect("confirmed permanent failure should update status");
-    let stored = store
-        .get("acct-refresh-invalid-grant")
-        .await
-        .expect("account should load")
-        .expect("account should exist");
+        .expect("refresh timer should be scheduled");
+    let stored = wait_for_account(&store, "acct-refresh-invalid-grant", |account| {
+        account.status == AccountStatus::Expired
+    })
+    .await;
+    task.shutdown().await;
     let observed_statuses = observed_statuses.lock().await.clone();
 
-    assert_eq!(summary.status_updated, 1);
+    assert_eq!(timer_summary.immediate, 1);
     assert_eq!(observed_statuses, [AccountStatus::Active; 2]);
     assert_eq!(stored.status, AccountStatus::Expired);
     assert_eq!(

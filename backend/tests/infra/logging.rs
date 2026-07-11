@@ -2,9 +2,16 @@ use std::{fs, io::Write};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::{
-    logging::{build_file_appender, RotationConfig},
+    logging::{build_file_appender, init_tracing, RotationConfig, TracingConfig},
     time::china_date,
 };
+
+#[test]
+fn tracing_config_should_reject_disabled_outputs() {
+    let result = init_tracing(&TracingConfig::new("info", false, None));
+
+    assert!(result.is_err());
+}
 
 #[test]
 fn rolling_appender_should_write_daily_codex_log_file() {

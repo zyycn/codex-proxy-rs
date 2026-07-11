@@ -4,7 +4,10 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
     time::Duration,
 };
 
@@ -12,6 +15,7 @@ use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -29,13 +33,14 @@ use super::{
         default_refresh_retry_delays, duration_until, is_permanent_refresh_failure_status,
         jittered_refresh_at, jwt_expiration, same_refresh_time, scheduled_at_from_delay,
         stable_jittered_duration, token_refresh_status_eligible, RefreshError, RefreshPolicy,
-        RefreshScheduler, RuntimeRefreshPolicy, TokenRefreshSummary, TokenTimerSummary,
+        RefreshScheduler, RuntimeRefreshPolicy, TokenTimerSummary,
         PERMANENT_FAILURE_CONFIRMATION_THRESHOLD, RECOVERY_DELAY_JITTER, RECOVERY_DELAY_SECONDS,
         RETRY_DELAY_JITTER,
     },
 };
 
 const REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;
+const REFRESH_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// 运行时 token refresh 服务。
 pub struct TokenRefreshService<C>
@@ -48,11 +53,14 @@ where
     refresh_leases: Option<RedisRefreshLeaseStore>,
     lease_owner: String,
     retry_delays: Vec<Duration>,
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    in_flight: Arc<StdMutex<HashSet<String>>>,
     timers: Arc<Mutex<HashMap<String, ScheduledRefreshTimer>>>,
+    tasks: TaskTracker,
+    shutting_down: Arc<AtomicBool>,
 }
 
 struct ScheduledRefreshTimer {
+    id: Uuid,
     scheduled_at: DateTime<Utc>,
     handle: JoinHandle<()>,
 }
@@ -62,6 +70,90 @@ enum ScheduleTimerResult {
     Scheduled,
     Replaced,
     Unchanged,
+    ShuttingDown,
+}
+
+struct InFlightRefreshGuard {
+    in_flight: Arc<StdMutex<HashSet<String>>>,
+    account_id: String,
+}
+
+impl Drop for InFlightRefreshGuard {
+    fn drop(&mut self) {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.account_id);
+    }
+}
+
+struct RefreshLeaseGuard {
+    store: Option<RedisRefreshLeaseStore>,
+    tasks: Option<TaskTracker>,
+    account_id: String,
+    owner: String,
+    armed: bool,
+}
+
+impl RefreshLeaseGuard {
+    fn local(account_id: &str, owner: &str) -> Self {
+        Self {
+            store: None,
+            tasks: None,
+            account_id: account_id.to_string(),
+            owner: owner.to_string(),
+            armed: false,
+        }
+    }
+
+    fn distributed(
+        store: RedisRefreshLeaseStore,
+        tasks: TaskTracker,
+        account_id: &str,
+        owner: &str,
+    ) -> Self {
+        Self {
+            store: Some(store),
+            tasks: Some(tasks),
+            account_id: account_id.to_string(),
+            owner: owner.to_string(),
+            armed: true,
+        }
+    }
+
+    async fn release(mut self) -> Result<(), RedisRefreshLeaseStoreError> {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        store.release(&self.account_id, &self.owner).await?;
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for RefreshLeaseGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (Some(store), Some(tasks), Ok(runtime)) = (
+            self.store.clone(),
+            self.tasks.clone(),
+            tokio::runtime::Handle::try_current(),
+        ) else {
+            return;
+        };
+        let account_id = self.account_id.clone();
+        let owner = self.owner.clone();
+        drop(tasks.spawn_on(
+            async move {
+                if let Err(error) = store.release(&account_id, &owner).await {
+                    warn!(account_id, error = %error, "failed to release cancelled token refresh lease");
+                }
+            },
+            &runtime,
+        ));
+    }
 }
 
 enum TokenRefreshOutcome {
@@ -108,6 +200,8 @@ where
             retry_delays: self.retry_delays.clone(),
             in_flight: self.in_flight.clone(),
             timers: self.timers.clone(),
+            tasks: self.tasks.clone(),
+            shutting_down: self.shutting_down.clone(),
         }
     }
 }
@@ -126,8 +220,10 @@ where
             refresh_leases: None,
             lease_owner: refresh_lease_owner(),
             retry_delays: default_refresh_retry_delays(),
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            in_flight: Arc::new(StdMutex::new(HashSet::new())),
             timers: Arc::new(Mutex::new(HashMap::new())),
+            tasks: TaskTracker::new(),
+            shutting_down: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -168,7 +264,7 @@ where
         let mut refreshing = self
             .in_flight
             .lock()
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter(|account_id| requested_ids.contains(account_id.as_str()))
             .cloned()
@@ -198,6 +294,9 @@ where
         &self,
         now: DateTime<Utc>,
     ) -> TokenRefreshServiceResult<TokenTimerSummary> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Ok(TokenTimerSummary::default());
+        }
         let accounts = self
             .store
             .list_pool_accounts()
@@ -217,19 +316,6 @@ where
                 summary.skipped += 1;
                 continue;
             };
-            if delay.is_zero() {
-                if self.clear_scheduled_timer(&account.id).await {
-                    summary.replaced += 1;
-                }
-                let outcome = self.refresh_scheduled_account(&account.id, now).await?;
-                if matches!(outcome, TokenRefreshOutcome::Skipped) {
-                    summary.skipped += 1;
-                } else {
-                    summary.immediate += 1;
-                }
-                continue;
-            }
-
             let scheduled_at = scheduled_at_from_delay(now, delay);
             self.persist_next_refresh_at_if_changed(&account, Some(scheduled_at))
                 .await?;
@@ -243,6 +329,10 @@ where
                 }
                 ScheduleTimerResult::Replaced => summary.replaced += 1,
                 ScheduleTimerResult::Scheduled => {}
+                ScheduleTimerResult::ShuttingDown => {
+                    summary.skipped += 1;
+                    continue;
+                }
             }
 
             if delay.is_zero() {
@@ -258,77 +348,6 @@ where
     /// 返回当前账号级刷新定时器数量。
     pub async fn scheduled_timer_count(&self) -> usize {
         self.timers.lock().await.len()
-    }
-
-    /// 在指定时间点执行一次到期刷新扫描。
-    pub async fn refresh_due_accounts_once_at(
-        &self,
-        now: DateTime<Utc>,
-    ) -> TokenRefreshServiceResult<TokenRefreshSummary> {
-        let accounts = self
-            .store
-            .list_pool_accounts()
-            .await
-            .map_err(TokenRefreshServiceError::AccountStore)?;
-        let mut summary = TokenRefreshSummary {
-            scanned: accounts.len(),
-            ..TokenRefreshSummary::default()
-        };
-
-        for account in accounts {
-            if self.clear_refresh_schedule_if_ineligible(&account).await? {
-                summary.skipped += 1;
-                continue;
-            }
-
-            if account.next_refresh_at.is_some_and(|value| value > now) {
-                summary.skipped += 1;
-                continue;
-            }
-
-            if !self.scheduler.should_refresh_account_at(&account, now) {
-                summary.skipped += 1;
-                continue;
-            }
-
-            if !self.try_mark_in_flight(&account.id).await {
-                summary.skipped += 1;
-                continue;
-            }
-
-            let lease_acquired = match self.try_acquire_refresh_lease(&account.id, now).await {
-                Ok(acquired) => acquired,
-                Err(error) => {
-                    self.release_in_flight(&account.id).await;
-                    return Err(error);
-                }
-            };
-            if !lease_acquired {
-                self.release_in_flight(&account.id).await;
-                summary.skipped += 1;
-                continue;
-            }
-
-            let outcome = self
-                .refresh_account_with_status_transitions(&account, now)
-                .await;
-
-            self.release_in_flight(&account.id).await;
-            self.release_refresh_lease(&account.id).await?;
-
-            let outcome = outcome?;
-            self.schedule_next_refresh_after_outcome(&outcome, Utc::now())
-                .await;
-
-            match outcome {
-                TokenRefreshOutcome::Refreshed(_) => summary.refreshed += 1,
-                TokenRefreshOutcome::StatusUpdated => summary.status_updated += 1,
-                TokenRefreshOutcome::Skipped => summary.skipped += 1,
-                TokenRefreshOutcome::Failed => summary.failed += 1,
-            };
-        }
-
-        Ok(summary)
     }
 
     fn timer_delay_for_account(&self, account: &Account, now: DateTime<Utc>) -> Option<Duration> {
@@ -390,24 +409,42 @@ where
         scheduled_at: DateTime<Utc>,
     ) -> Pin<Box<dyn Future<Output = ScheduleTimerResult> + Send + '_>> {
         Box::pin(async move {
-            {
-                let timers = self.timers.lock().await;
-                if timers
-                    .get(&account_id)
-                    .is_some_and(|timer| timer.scheduled_at == scheduled_at)
-                {
-                    return ScheduleTimerResult::Unchanged;
-                }
+            let mut timers = self.timers.lock().await;
+            if self.shutting_down.load(Ordering::Acquire) {
+                return ScheduleTimerResult::ShuttingDown;
             }
-
-            let replaced = self.clear_scheduled_timer(&account_id).await;
+            if timers
+                .get(&account_id)
+                .is_some_and(|timer| timer.scheduled_at == scheduled_at)
+            {
+                return ScheduleTimerResult::Unchanged;
+            }
+            let replaced = timers.remove(&account_id).is_some_and(|timer| {
+                timer.handle.abort();
+                true
+            });
             let task = self.clone();
             let timer_account_id = account_id.clone();
-            let handle = tokio::spawn(async move {
+            let timer_id = Uuid::new_v4();
+            let handle = self.tasks.spawn(async move {
                 if !delay.is_zero() {
                     sleep(delay).await;
                 }
-                task.timers.lock().await.remove(&timer_account_id);
+                let owns_timer = {
+                    let mut timers = task.timers.lock().await;
+                    if timers
+                        .get(&timer_account_id)
+                        .is_some_and(|timer| timer.id == timer_id)
+                    {
+                        timers.remove(&timer_account_id);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !owns_timer || task.shutting_down.load(Ordering::Acquire) {
+                    return;
+                }
                 if let Err(error) = task
                     .refresh_scheduled_account(&timer_account_id, scheduled_at)
                     .await
@@ -420,9 +457,10 @@ where
                 }
             });
 
-            self.timers.lock().await.insert(
+            timers.insert(
                 account_id,
                 ScheduledRefreshTimer {
+                    id: timer_id,
                     scheduled_at,
                     handle,
                 },
@@ -452,6 +490,23 @@ where
         }
     }
 
+    /// 停止新调度，取消尚未触发的 timer，并等待已进入刷新流程的任务结束。
+    pub async fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+        self.clear_scheduled_timers().await;
+        self.tasks.close();
+        if tokio::time::timeout(REFRESH_TASK_SHUTDOWN_TIMEOUT, self.tasks.wait())
+            .await
+            .is_err()
+        {
+            warn!(
+                remaining_tasks = self.tasks.len(),
+                timeout_secs = REFRESH_TASK_SHUTDOWN_TIMEOUT.as_secs(),
+                "waiting for in-flight token refresh tasks timed out"
+            );
+        }
+    }
+
     async fn refresh_scheduled_account(
         &self,
         account_id: &str,
@@ -469,28 +524,19 @@ where
             return Ok(TokenRefreshOutcome::Skipped);
         }
 
-        if !self.try_mark_in_flight(&account.id).await {
+        let Some(_in_flight) = self.try_mark_in_flight(&account.id) else {
             return Ok(TokenRefreshOutcome::Skipped);
-        }
-
-        let lease_acquired = match self.try_acquire_refresh_lease(&account.id, now).await {
-            Ok(acquired) => acquired,
-            Err(error) => {
-                self.release_in_flight(&account.id).await;
-                return Err(error);
-            }
         };
-        if !lease_acquired {
-            self.release_in_flight(&account.id).await;
+
+        let Some(refresh_lease) = self.try_acquire_refresh_lease(&account.id, now).await? else {
             return Ok(TokenRefreshOutcome::Skipped);
-        }
+        };
 
         let outcome = self
             .refresh_account_with_status_transitions(&account, now)
             .await;
 
-        self.release_in_flight(&account.id).await;
-        self.release_refresh_lease(&account.id).await?;
+        refresh_lease.release().await?;
 
         let outcome = outcome?;
         self.schedule_next_refresh_after_outcome(&outcome, Utc::now())
@@ -638,23 +684,30 @@ where
         true
     }
 
-    async fn try_mark_in_flight(&self, account_id: &str) -> bool {
-        self.in_flight.lock().await.insert(account_id.to_string())
-    }
-
-    async fn release_in_flight(&self, account_id: &str) {
-        self.in_flight.lock().await.remove(account_id);
+    fn try_mark_in_flight(&self, account_id: &str) -> Option<InFlightRefreshGuard> {
+        let inserted = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(account_id.to_string());
+        inserted.then(|| InFlightRefreshGuard {
+            in_flight: self.in_flight.clone(),
+            account_id: account_id.to_string(),
+        })
     }
 
     async fn try_acquire_refresh_lease(
         &self,
         account_id: &str,
         now: DateTime<Utc>,
-    ) -> TokenRefreshServiceResult<bool> {
+    ) -> TokenRefreshServiceResult<Option<RefreshLeaseGuard>> {
         let Some(refresh_leases) = self.refresh_leases.as_ref() else {
-            return Ok(true);
+            return Ok(Some(RefreshLeaseGuard::local(
+                account_id,
+                &self.lease_owner,
+            )));
         };
-        refresh_leases
+        let acquired = refresh_leases
             .try_acquire(
                 account_id,
                 &self.lease_owner,
@@ -662,18 +715,15 @@ where
                 now,
             )
             .await
-            .map_err(TokenRefreshServiceError::Lease)
-    }
-
-    async fn release_refresh_lease(&self, account_id: &str) -> TokenRefreshServiceResult<()> {
-        let Some(refresh_leases) = self.refresh_leases.as_ref() else {
-            return Ok(());
-        };
-        refresh_leases
-            .release(account_id, &self.lease_owner)
-            .await
-            .map(|_| ())
-            .map_err(TokenRefreshServiceError::Lease)
+            .map_err(TokenRefreshServiceError::Lease)?;
+        Ok(acquired.then(|| {
+            RefreshLeaseGuard::distributed(
+                refresh_leases.clone(),
+                self.tasks.clone(),
+                account_id,
+                &self.lease_owner,
+            )
+        }))
     }
 }
 

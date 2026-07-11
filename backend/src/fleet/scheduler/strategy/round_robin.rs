@@ -15,5 +15,5 @@ pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account>
     *cursor %= candidates.len();
     let index = *cursor;
     *cursor = cursor.wrapping_add(1);
-    Some(candidates[index].clone())
+    Some((*candidates[index]).clone())
 }

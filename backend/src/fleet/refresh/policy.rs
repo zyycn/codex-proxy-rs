@@ -164,21 +164,6 @@ pub struct RefreshPolicy {
     pub refresh_concurrency: u32,
 }
 
-/// 单次刷新扫描摘要。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TokenRefreshSummary {
-    /// 扫描账号数。
-    pub scanned: usize,
-    /// 成功刷新 token 的账号数。
-    pub refreshed: usize,
-    /// 仅更新状态的账号数。
-    pub status_updated: usize,
-    /// 无需刷新的账号数。
-    pub skipped: usize,
-    /// 传输失败账号数。
-    pub failed: usize,
-}
-
 /// 账号级刷新定时器调度摘要。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenTimerSummary {
@@ -229,15 +214,22 @@ impl RuntimeRefreshPolicy {
 
     /// 更新当前策略。
     pub fn update(&self, policy: RefreshPolicy) {
-        *self
-            .policy
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
-        *self
-            .semaphore
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Arc::new(Semaphore::new(policy.refresh_concurrency.max(1) as usize));
+        let previous = {
+            let mut current = self
+                .policy
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previous = *current;
+            *current = policy;
+            previous
+        };
+        if previous.refresh_concurrency != policy.refresh_concurrency {
+            *self
+                .semaphore
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Arc::new(Semaphore::new(policy.refresh_concurrency.max(1) as usize));
+        }
     }
 
     /// 返回当前提前刷新秒数。

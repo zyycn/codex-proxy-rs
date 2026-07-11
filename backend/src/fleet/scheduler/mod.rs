@@ -55,7 +55,7 @@ impl RotationStrategy {
 /// 策略选择的运行时输入。
 pub struct SelectionInput<'a> {
     /// 已过滤的候选账号集合。
-    pub candidates: &'a [Account],
+    pub candidates: &'a [&'a Account],
     /// 按账号 ID 读取当前在途槽位数。
     pub slot_count: &'a dyn Fn(&str) -> usize,
     /// 账号 EWMA 反馈存储。
@@ -114,7 +114,7 @@ impl AccountScheduler {
     pub fn select(
         &self,
         strategy: RotationStrategy,
-        candidates: &[Account],
+        candidates: &[&Account],
         slot_count: &dyn Fn(&str) -> usize,
         now: DateTime<Utc>,
     ) -> Option<Account> {
@@ -165,11 +165,11 @@ fn select_with_strategy(
 }
 
 pub(crate) fn select_by(
-    candidates: &[Account],
+    candidates: &[&Account],
     cursor: &mut usize,
     compare: impl Fn(&Account, &Account) -> Ordering,
 ) -> Option<Account> {
-    let mut sorted = candidates.iter().collect::<Vec<_>>();
+    let mut sorted = candidates.to_vec();
     sorted.sort_by(|a, b| compare(a, b));
     let best = *sorted.first()?;
     let tied_count = sorted

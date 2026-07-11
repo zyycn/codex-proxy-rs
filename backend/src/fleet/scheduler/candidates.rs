@@ -52,10 +52,9 @@ pub fn filter<'a>(
     accounts: impl Iterator<Item = &'a Account>,
     filter: &CandidateFilter<'_>,
     request: &CandidateRequest<'_>,
-) -> Vec<Account> {
+) -> Vec<&'a Account> {
     let mut candidates = accounts
         .filter(|account| is_base_available(account, filter, request))
-        .cloned()
         .collect::<Vec<_>>();
 
     if let Some(required_account_id) = request.required_account_id {
@@ -64,7 +63,7 @@ pub fn filter<'a>(
     }
 
     if let Some(best_tier) = best_available_tier(&candidates, filter.tier_priority) {
-        candidates.retain(|account| account.plan_type.as_deref() == Some(best_tier.as_str()));
+        candidates.retain(|account| account.plan_type.as_deref() == Some(best_tier));
     }
     candidates
 }
@@ -109,13 +108,16 @@ fn is_model_allowed(
 }
 
 /// 在候选集合中找出订阅层级优先级最高的可用层级。
-fn best_available_tier(candidates: &[Account], tier_priority: &[String]) -> Option<String> {
+fn best_available_tier<'a>(
+    candidates: &[&Account],
+    tier_priority: &'a [String],
+) -> Option<&'a str> {
     for tier in tier_priority {
         let matched = candidates
             .iter()
             .any(|account| account.plan_type.as_deref() == Some(tier.as_str()));
         if matched {
-            return Some(tier.clone());
+            return Some(tier);
         }
     }
     None

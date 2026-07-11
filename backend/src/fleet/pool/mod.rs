@@ -2,6 +2,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    ops::{Deref, DerefMut},
     sync::Arc,
     time::Duration as StdDuration,
 };
@@ -69,6 +71,108 @@ pub struct AccountPoolService {
     store: Arc<dyn AccountStore>,
     usage_store: Arc<dyn AccountUsageStore>,
     request_interval: Arc<std::sync::RwLock<StdDuration>>,
+}
+
+/// 一次请求对账号池 slot 的唯一所有权凭据。
+pub struct AccountLease {
+    acquired: AcquiredAccount,
+    slot: AccountSlotLease,
+}
+
+impl AccountLease {
+    fn new(service: AccountPoolService, acquired: AcquiredAccount) -> Self {
+        let slot = AccountSlotLease::new(service, acquired.account.id.clone(), acquired.slot_id);
+        Self { acquired, slot }
+    }
+
+    /// 完成已经发往上游的请求并记录请求用量。
+    pub async fn complete(self) {
+        self.slot.release(true).await;
+    }
+
+    /// 释放尚未用于实际上游请求的 slot。
+    pub async fn release_without_usage(self) {
+        self.slot.release(false).await;
+    }
+}
+
+impl Deref for AccountLease {
+    type Target = AcquiredAccount;
+
+    fn deref(&self) -> &Self::Target {
+        &self.acquired
+    }
+}
+
+impl DerefMut for AccountLease {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.acquired
+    }
+}
+
+impl fmt::Debug for AccountLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountLease")
+            .field("acquired", &self.acquired)
+            .finish_non_exhaustive()
+    }
+}
+
+/// 模型目录刷新使用的订阅计划账号 lease。
+pub struct DistinctPlanAccountLease {
+    pub plan_type: String,
+    pub account: Account,
+    slot: AccountSlotLease,
+}
+
+impl DistinctPlanAccountLease {
+    /// 释放模型目录刷新占用的 slot，不计入客户端请求用量。
+    pub async fn release(self) {
+        self.slot.release(false).await;
+    }
+}
+
+struct AccountSlotLease {
+    service: AccountPoolService,
+    account_id: String,
+    slot_id: uuid::Uuid,
+    armed: bool,
+}
+
+impl AccountSlotLease {
+    fn new(service: AccountPoolService, account_id: String, slot_id: uuid::Uuid) -> Self {
+        Self {
+            service,
+            account_id,
+            slot_id,
+            armed: true,
+        }
+    }
+
+    async fn release(mut self, record_request_usage: bool) {
+        self.service
+            .release_slot(&self.account_id, self.slot_id, record_request_usage)
+            .await;
+        self.armed = false;
+    }
+}
+
+impl Drop for AccountSlotLease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let service = self.service.clone();
+        let account_id = self.account_id.clone();
+        let slot_id = self.slot_id;
+        runtime.spawn(async move {
+            service.release_slot(&account_id, slot_id, false).await;
+        });
+    }
 }
 
 impl AccountPoolService {
@@ -176,24 +280,22 @@ impl AccountPoolService {
         self.capacity_summary(Utc::now()).await
     }
 
-    /// 释放账号在途槽位。
-    pub async fn release(&self, account_id: &str) {
-        self.release_slot(account_id, true).await;
-    }
-
-    /// 释放账号在途槽位，不累计请求用量。
-    pub async fn release_without_request_usage(&self, account_id: &str) {
-        self.release_slot(account_id, false).await;
-    }
-
-    async fn release_slot(&self, account_id: &str, record_request_usage: bool) {
+    async fn release_slot(
+        &self,
+        account_id: &str,
+        slot_id: uuid::Uuid,
+        record_request_usage: bool,
+    ) {
         let released = if record_request_usage {
-            self.pool.lock().await.release(account_id)
+            self.pool
+                .lock()
+                .await
+                .release_slot(account_id, slot_id, true)
         } else {
             self.pool
                 .lock()
                 .await
-                .release_without_request_usage(account_id)
+                .release_slot(account_id, slot_id, false)
         };
         let Some(released) = released else {
             return;
@@ -275,23 +377,42 @@ impl AccountPoolService {
     }
 
     /// 按请求上下文获取可用账号。
-    pub async fn acquire_with(&self, request: &AccountAcquireRequest) -> Option<AcquiredAccount> {
+    pub async fn acquire_with(&self, request: &AccountAcquireRequest) -> Option<AccountLease> {
         let refresh = self.pool.lock().await.acquire_with_status_refresh(request);
+        let lease = refresh
+            .acquired
+            .map(|acquired| AccountLease::new(self.clone(), acquired));
         self.persist_runtime_account_states(refresh.refreshed_accounts)
             .await;
-        refresh.acquired
+        lease
     }
 
     /// 按订阅计划各选一个可用账号，用于刷新模型列表。
-    pub async fn distinct_plan_accounts(&self, now: DateTime<Utc>) -> Vec<DistinctPlanAccount> {
+    pub async fn distinct_plan_accounts(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Vec<DistinctPlanAccountLease> {
         let refresh = self
             .pool
             .lock()
             .await
             .distinct_plan_accounts_with_status_refresh(now);
+        let leases = refresh
+            .accounts
+            .into_iter()
+            .map(|selected| DistinctPlanAccountLease {
+                slot: AccountSlotLease::new(
+                    self.clone(),
+                    selected.account.id.clone(),
+                    selected.slot_id,
+                ),
+                plan_type: selected.plan_type,
+                account: selected.account,
+            })
+            .collect();
         self.persist_runtime_account_states(refresh.refreshed_accounts)
             .await;
-        refresh.accounts
+        leases
     }
 
     async fn persist_runtime_account_states(&self, refreshed_states: Vec<RefreshedAccountState>) {

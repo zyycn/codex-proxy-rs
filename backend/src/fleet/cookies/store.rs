@@ -118,6 +118,23 @@ impl PgCookieStore {
         Ok(result.rows_affected())
     }
 
+    /// 将账号现有 Cookie 的过期时间收紧到指定时间点。
+    pub async fn expire_account_cookies_at(
+        &self,
+        account_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> PgCookieStoreResult<u64> {
+        let result = sqlx::query(
+            "update account_cookies set expires_at = least(coalesce(expires_at, $1), $1), updated_at = $2 where account_id = $3",
+        )
+        .bind(expires_at)
+        .bind(Utc::now())
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// 删除指定时间之前过期的 Cookie。
     pub async fn cleanup_expired(&self, now: DateTime<Utc>) -> PgCookieStoreResult<u64> {
         let result = sqlx::query(

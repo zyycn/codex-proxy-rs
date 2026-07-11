@@ -1671,7 +1671,7 @@ async fn responses_websocket_should_preserve_known_history_on_fallback_account()
             config.auth.max_concurrent_per_account = 1;
         })
         .await;
-    seed_primary_affinity_and_hold_primary_slot(&state).await;
+    let _held_primary_slot = seed_primary_affinity_and_hold_primary_slot(&state).await;
 
     let response = app
         .oneshot(responses_json_request(
@@ -1709,7 +1709,7 @@ async fn responses_websocket_stream_should_preserve_known_history_on_fallback_ac
             config.auth.max_concurrent_per_account = 1;
         })
         .await;
-    seed_primary_affinity_and_hold_primary_slot(&state).await;
+    let _held_primary_slot = seed_primary_affinity_and_hold_primary_slot(&state).await;
 
     let response = app
         .oneshot(responses_json_request(
@@ -2362,7 +2362,7 @@ async fn responses_stream_with_previous_response_id_should_record_websocket_audi
     );
 }
 
-async fn seed_primary_affinity_and_hold_primary_slot(state: &AppState) {
+async fn seed_primary_affinity_and_hold_primary_slot(state: &AppState) -> AccountLease {
     state
         .services
         .session_affinity
@@ -2391,4 +2391,5 @@ async fn seed_primary_affinity_and_hold_primary_slot(state: &AppState) {
         .await
         .unwrap();
     assert_eq!(held_primary_slot.account.id, "acct_primary");
+    held_primary_slot
 }

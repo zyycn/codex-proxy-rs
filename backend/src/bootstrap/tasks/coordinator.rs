@@ -136,9 +136,21 @@ impl TaskCoordinator {
     /// 关闭所有后台任务。
     pub async fn shutdown(self) {
         tracing::info!("正在关闭后台任务");
-        for (name, handle) in self.handles {
+        let shutdown_tasks = self.handles.into_iter().map(|(name, handle)| async move {
             handle.shutdown().await;
             tracing::info!(task = name, "后台任务已停止");
+        });
+        if tokio::time::timeout(
+            COORDINATOR_SHUTDOWN_TIMEOUT,
+            futures::future::join_all(shutdown_tasks),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!(
+                timeout_secs = COORDINATOR_SHUTDOWN_TIMEOUT.as_secs(),
+                "后台任务并行关闭超时"
+            );
         }
         tracing::info!("所有后台任务已停止");
     }
@@ -200,6 +212,7 @@ impl SchedulerHandle {
 }
 
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const COORDINATOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 
 async fn wait_for_task_shutdown(handle: JoinHandle<()>) {
     let mut handle = handle;

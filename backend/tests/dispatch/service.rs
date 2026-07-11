@@ -20,7 +20,11 @@ use codex_proxy_rs::{
         build_conversation_identity, compute_variant_hash, prepare_variant_identity,
         SessionAffinityEntry,
     },
-    fleet::{account::AccountStatus, cookies::PgCookieStore, pool::AccountAcquireRequest},
+    fleet::{
+        account::AccountStatus,
+        cookies::PgCookieStore,
+        pool::{AccountAcquireRequest, AccountLease},
+    },
     infra::identity::hash_credential,
     telemetry::usage::store::{PgUsageRecordStore, UsageRecordFilter},
     upstream::openai::protocol::responses::CodexResponsesRequest,

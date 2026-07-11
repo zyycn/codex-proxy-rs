@@ -78,7 +78,7 @@ pub struct ScoreBreakdown {
 
 /// Smart 策略选择：按加权得分降序排序，在并列最高分之间用轮转游标破并列。
 pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account> {
-    let ranked = rank_candidates(
+    let ranked = rank_candidate_refs(
         input.candidates,
         input.weights,
         input.now.timestamp(),
@@ -94,7 +94,7 @@ pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account>
     let index = *cursor % tied_count;
     *cursor = cursor.wrapping_add(1);
     let account_index = ranked[index].0;
-    Some(input.candidates[account_index].clone())
+    Some((*input.candidates[account_index]).clone())
 }
 
 /// 对候选集合按加权得分排序（降序），返回 `(账号索引, 打分明细)` 列表。
@@ -102,6 +102,17 @@ pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account>
 /// 只做打分与排序，最终的并列破并列交给 [`select`]。公开供测试直接断言排序结果。
 pub fn rank_candidates(
     candidates: &[Account],
+    weights: &ScoreWeights,
+    now_secs: i64,
+    slot_count: &dyn Fn(&str) -> usize,
+    feedback: &FeedbackStats,
+) -> Vec<(usize, ScoreBreakdown)> {
+    let candidates = candidates.iter().collect::<Vec<_>>();
+    rank_candidate_refs(&candidates, weights, now_secs, slot_count, feedback)
+}
+
+fn rank_candidate_refs(
+    candidates: &[&Account],
     weights: &ScoreWeights,
     now_secs: i64,
     slot_count: &dyn Fn(&str) -> usize,
@@ -142,7 +153,7 @@ struct NormalizationContext {
 
 impl NormalizationContext {
     fn build(
-        candidates: &[Account],
+        candidates: &[&Account],
         samples: &[FeedbackSample],
         now_secs: i64,
         slot_count: &dyn Fn(&str) -> usize,

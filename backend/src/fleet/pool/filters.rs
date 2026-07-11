@@ -90,6 +90,15 @@ pub struct AcquiredAccount {
     pub account: Account,
     /// 同一账号上一个在途槽位的创建时间。
     pub previous_slot_at: Option<DateTime<Utc>>,
+    pub(super) slot_id: uuid::Uuid,
+}
+
+impl std::ops::Deref for AcquiredAccount {
+    type Target = Account;
+
+    fn deref(&self) -> &Self::Target {
+        &self.account
+    }
 }
 
 /// 模型刷新时每个订阅计划选中的账号。
@@ -99,4 +108,5 @@ pub struct DistinctPlanAccount {
     pub plan_type: String,
     /// 被选中的账号快照。
     pub account: Account,
+    pub(super) slot_id: uuid::Uuid,
 }

@@ -87,10 +87,13 @@ impl KeyVerifier {
         let updates = self.take_pending_last_used();
         if let Err(error) = self.store.touch_last_used_batch(&updates).await {
             tracing::error!(error = %error, "failed to flush client key last_used_at batch");
-            self.pending_last_used
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(updates);
+            merge_last_used_updates(
+                &mut self
+                    .pending_last_used
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                updates,
+            );
         }
         self.flush_scheduled.store(false, Ordering::Release);
         if !self
@@ -110,6 +113,22 @@ impl KeyVerifier {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )
+    }
+}
+
+fn merge_last_used_updates(
+    pending: &mut BTreeMap<String, DateTime<Utc>>,
+    updates: BTreeMap<String, DateTime<Utc>>,
+) {
+    for (id, updated_at) in updates {
+        pending
+            .entry(id)
+            .and_modify(|pending_at| {
+                if updated_at > *pending_at {
+                    *pending_at = updated_at;
+                }
+            })
+            .or_insert(updated_at);
     }
 }
 

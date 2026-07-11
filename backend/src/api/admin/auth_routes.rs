@@ -108,11 +108,14 @@ pub(crate) async fn logout(
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
     if let Some(session_id) = admin_session_cookie(&headers) {
-        let _ = state
+        if let Err(error) = state
             .services
             .admin_sessions
             .delete_session(&session_id)
-            .await;
+            .await
+        {
+            tracing::warn!(error = %error, "failed to revoke admin session during logout");
+        }
     }
 
     let mut response = AdminResponse::new(

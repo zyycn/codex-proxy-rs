@@ -65,11 +65,11 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError>
     let cache_key = (force_http11, custom_ca_env_cache_key());
     static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut clients = cache
+    if let Some(client) = cache
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    if let Some(client) = clients.get(&cache_key) {
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&cache_key)
+    {
         return Ok(client.clone());
     }
 
@@ -88,8 +88,10 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError>
         builder
     };
     let client = build_reqwest_client_with_custom_ca(builder)?;
-    clients.insert(cache_key, client.clone());
-    Ok(client)
+    let mut clients = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(clients.entry(cache_key).or_insert(client).clone())
 }
 
 // ---------------------------------------------------------------------------
