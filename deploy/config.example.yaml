@@ -84,7 +84,7 @@ fingerprint:
 admin:
   # 管理端登录会话有效期，单位分钟。
   session_ttl_minutes: 1440
-  # 首次启动创建的默认管理员账号。default_password 必须改成至少 12 位的非默认密码。
+  # 首次启动创建的默认管理员账号。Docker 部署通过 CPR_ADMIN_DEFAULT_PASSWORD 注入密码。
   default_username: admin@cpr.local
   default_password: ''
 

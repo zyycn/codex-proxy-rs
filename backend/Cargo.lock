@@ -365,6 +365,7 @@ dependencies = [
  "hex",
  "indexmap",
  "ipnet",
+ "percent-encoding",
  "rand 0.10.1",
  "rand_core 0.6.4",
  "redis",
@@ -391,6 +392,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tungstenite",
+ "url",
  "uuid",
  "wiremock",
 ]

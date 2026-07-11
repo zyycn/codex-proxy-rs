@@ -2,7 +2,7 @@ use codex_proxy_rs::bootstrap::config::LoggingConfig;
 use codex_proxy_rs::bootstrap::config::{AdminConfig, AdminConfigError, AppConfig};
 use codex_proxy_rs::bootstrap::services::account_pool_options_from_config;
 use serde::de::DeserializeOwned;
-use std::fs;
+use std::{fs, process::Command};
 
 const DEFAULT_CONFIG_YAML: &str = r#"
 server:
@@ -179,6 +179,14 @@ redis:
 
 #[test]
 fn config_loader_should_read_only_config_yaml() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_CONFIG_FILE_ONLY_CASE";
+    if std::env::var(CASE_ENV).as_deref() != Ok("child") {
+        run_isolated_config_test("config_loader_should_read_only_config_yaml", |command| {
+            command.env(CASE_ENV, "child");
+        });
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("config.yaml"),
@@ -315,6 +323,14 @@ fn server_config_should_reject_unknown_fields() {
 
 #[test]
 fn config_loader_should_read_explicit_config_file_from_env() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_EXPLICIT_CONFIG_FILE_CASE";
+    if std::env::var(CASE_ENV).as_deref() == Ok("child") {
+        let cfg = AppConfig::load().unwrap();
+        assert_eq!(cfg.server.host, "127.0.0.2");
+        assert_eq!(cfg.logging.file.directory, ".runtime/env-logs");
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let config_file = dir.path().join("custom-config.yaml");
     fs::write(
@@ -324,13 +340,120 @@ fn config_loader_should_read_explicit_config_file_from_env() {
             .replace("directory: .runtime/logs", "directory: .runtime/env-logs"),
     )
     .unwrap();
-    std::env::set_var("CPR_CONFIG_FILE", &config_file);
+    run_isolated_config_test(
+        "config_loader_should_read_explicit_config_file_from_env",
+        |command| {
+            command
+                .env(CASE_ENV, "child")
+                .env("CPR_CONFIG_FILE", &config_file);
+        },
+    );
+}
 
-    let cfg = AppConfig::load().unwrap();
+#[test]
+fn config_loader_should_override_runtime_passwords_from_env() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_CONFIG_PASSWORD_OVERRIDE_CASE";
+    if std::env::var(CASE_ENV).as_deref() != Ok("child") {
+        run_isolated_config_test(
+            "config_loader_should_override_runtime_passwords_from_env",
+            |command| {
+                command
+                    .env(CASE_ENV, "child")
+                    .env("CPR_ADMIN_DEFAULT_PASSWORD", "admin @:/?#% password")
+                    .env("CPR_POSTGRES_PASSWORD", "pg @:/?#%")
+                    .env("CPR_REDIS_PASSWORD", "redis @:/?#%");
+            },
+        );
+        return;
+    }
 
-    std::env::remove_var("CPR_CONFIG_FILE");
-    assert_eq!(cfg.server.host, "127.0.0.2");
-    assert_eq!(cfg.logging.file.directory, ".runtime/env-logs");
+    let dir = write_default_config();
+    let cfg = AppConfig::load_from_dir(dir.path()).unwrap();
+
+    assert_eq!(
+        cfg.database.url,
+        "postgres://codex_proxy:pg%20%40%3A%2F%3F%23%25@127.0.0.1:5432/codex_proxy"
+    );
+    assert_eq!(
+        cfg.redis.url,
+        "redis://:redis%20%40%3A%2F%3F%23%25@127.0.0.1:6379"
+    );
+    assert_eq!(cfg.admin.default_password, "admin @:/?#% password");
+}
+
+#[test]
+fn config_loader_should_reject_empty_password_env() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_EMPTY_CONFIG_PASSWORD_CASE";
+    if std::env::var(CASE_ENV).as_deref() != Ok("child") {
+        run_isolated_config_test(
+            "config_loader_should_reject_empty_password_env",
+            |command| {
+                command
+                    .env(CASE_ENV, "child")
+                    .env("CPR_POSTGRES_PASSWORD", "");
+            },
+        );
+        return;
+    }
+
+    let dir = write_default_config();
+    let error = AppConfig::load_from_dir(dir.path()).unwrap_err();
+
+    assert_eq!(error.to_string(), "CPR_POSTGRES_PASSWORD must not be empty");
+}
+
+#[test]
+fn config_loader_should_reject_empty_admin_password_env() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_EMPTY_ADMIN_PASSWORD_CASE";
+    if std::env::var(CASE_ENV).as_deref() != Ok("child") {
+        run_isolated_config_test(
+            "config_loader_should_reject_empty_admin_password_env",
+            |command| {
+                command
+                    .env(CASE_ENV, "child")
+                    .env("CPR_ADMIN_DEFAULT_PASSWORD", "");
+            },
+        );
+        return;
+    }
+
+    let dir = write_default_config();
+    let error = AppConfig::load_from_dir(dir.path()).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "CPR_ADMIN_DEFAULT_PASSWORD must not be empty"
+    );
+}
+
+#[test]
+fn config_loader_should_not_expose_password_when_url_is_invalid() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_INVALID_CONFIG_URL_CASE";
+    const SECRET: &str = "do-not-leak-this-password";
+    if std::env::var(CASE_ENV).as_deref() != Ok("child") {
+        run_isolated_config_test(
+            "config_loader_should_not_expose_password_when_url_is_invalid",
+            |command| {
+                command
+                    .env(CASE_ENV, "child")
+                    .env("CPR_REDIS_PASSWORD", SECRET);
+            },
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("config.yaml"),
+        DEFAULT_CONFIG_YAML.replace("redis://127.0.0.1:6379", "not a URL"),
+    )
+    .unwrap();
+    let error = AppConfig::load_from_dir(dir.path()).unwrap_err();
+    let message = error.to_string();
+
+    assert!(message.contains("redis.url"));
+    assert!(message.contains("CPR_REDIS_PASSWORD"));
+    assert!(!message.contains(SECRET));
 }
 
 #[test]
@@ -361,4 +484,32 @@ fn parse_yaml_config<T: DeserializeOwned>(yaml: &str) -> Result<T, config::Confi
         .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
         .build()?
         .try_deserialize()
+}
+
+fn write_default_config() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("config.yaml"), DEFAULT_CONFIG_YAML).unwrap();
+    dir
+}
+
+fn run_isolated_config_test(test_name: &str, configure: impl FnOnce(&mut Command)) {
+    let current_exe = std::env::current_exe().expect("current test binary path");
+    let mut command = Command::new(current_exe);
+    command
+        .arg("--exact")
+        .arg(format!("bootstrap::config::{test_name}"))
+        .arg("--nocapture")
+        .env_remove("CPR_CONFIG_FILE")
+        .env_remove("CPR_ADMIN_DEFAULT_PASSWORD")
+        .env_remove("CPR_POSTGRES_PASSWORD")
+        .env_remove("CPR_REDIS_PASSWORD");
+    configure(&mut command);
+
+    let output = command.output().expect("run isolated config test case");
+    assert!(
+        output.status.success(),
+        "isolated config test {test_name} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

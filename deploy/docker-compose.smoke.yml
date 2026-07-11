@@ -1,0 +1,11 @@
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  codex-proxy-rs:
+    container_name: ${COMPOSE_PROJECT_NAME}-app
+    ports: !override
+      - "127.0.0.1:${CPR_SMOKE_PORT:-18080}:8080"
