@@ -87,8 +87,18 @@ PostgreSQL 与 Redis 分别使用 `postgres-data`、`redis-data` 命名卷。
 ```bash
 mkdir -p .runtime/data .runtime/logs
 cp deploy/config.example.yaml .runtime/config.yaml
-# 编辑 .runtime/config.yaml，设置 admin.default_password
+sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
+chmod 0770 .runtime/data .runtime/logs
+sudo chown "$(id -u):10001" .runtime/config.yaml
+chmod 0640 .runtime/config.yaml
+cp deploy/.env.example deploy/.env
+chmod 0600 deploy/.env
+# 编辑 deploy/.env，设置管理员、PostgreSQL 与 Redis 密码
 ```
+
+`deploy/.env` 是 Docker 部署的密钥配置文件，已被 Git 忽略。Compose 要求其中三项密码均为非空；
+应用会用管理员密码覆盖 `admin.default_password`，并安全覆盖数据库 URL 的密码部分，不需要手工编码或
+同步连接串。编辑密码时保留示例中的单引号。
 
 Docker 配置文件里路径保持容器路径：
 
@@ -116,8 +126,8 @@ telemetry:
 构建并启动：
 
 ```bash
-docker compose -f deploy/docker-compose.yml build
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 默认只绑定宿主机 `127.0.0.1:8080`。如需覆盖路径：
@@ -126,7 +136,7 @@ docker compose -f deploy/docker-compose.yml up -d
 CPR_CONFIG_FILE=/path/to/config.yaml \
 CPR_DATA_DIR=/path/to/data \
 CPR_LOG_DIR=/path/to/logs \
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 ## API
@@ -228,7 +238,7 @@ cargo fmt --manifest-path backend/Cargo.toml --check
 cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
 cargo test --manifest-path backend/Cargo.toml --test main --locked
 pnpm --dir frontend build
-docker compose -f deploy/docker-compose.yml config
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
 ```
 
 ## License

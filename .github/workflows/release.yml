@@ -25,6 +25,7 @@ env:
 jobs:
   release-info:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -35,10 +36,11 @@ jobs:
       non_docker_matrix: ${{ steps.version.outputs.non_docker_matrix }}
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
@@ -151,62 +153,33 @@ jobs:
           puts "non_docker_matrix=#{non_docker_matrix}"
           puts "docker_platforms=#{docker_platforms.join(",")}"
           puts "previous_tag=#{previous_tag}"
+          puts "prerelease=#{version.split("+", 2).first.include?("-")}"
           RUBY
 
-  build-frontend:
+  quality:
     needs: [release-info]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.release-info.outputs.tag }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11.7.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: frontend
-
-      - name: Build frontend
-        run: pnpm build
-        working-directory: frontend
-
-      - name: Upload frontend artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: frontend-dist
-          path: frontend/dist
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/_quality.yml
+    with:
+      ref: ${{ needs.release-info.outputs.git_sha }}
+      upload_frontend: true
 
   build-docker-binary:
     name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [release-info]
+    needs: [release-info, quality]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ needs.release-info.outputs.tag }}
+          ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Cache Cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -232,9 +205,8 @@ jobs:
             -v "$HOME/.cargo:/cargo" \
             -v "$PWD/..:/workspace" \
             -w /workspace/backend \
-            rust:1.95-bookworm \
+            rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 \
             cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
-          mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
         working-directory: backend
         env:
@@ -244,7 +216,7 @@ jobs:
           CPR_BUILD_TYPE: release
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
@@ -253,20 +225,27 @@ jobs:
 
   build-binary:
     name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [release-info]
+    needs: [release-info, quality]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.non_docker_matrix) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ needs.release-info.outputs.tag }}
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95
+        with:
+          toolchain: '1.95'
+          targets: ${{ matrix.target }}
 
       - name: Cache Cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -275,10 +254,6 @@ jobs:
           key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-${{ matrix.target }}-
-
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
-        working-directory: backend
 
       - name: Build binary
         shell: bash
@@ -294,7 +269,7 @@ jobs:
           CPR_BUILD_TYPE: release
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
@@ -302,8 +277,9 @@ jobs:
           retention-days: 1
 
   package-assets:
-    needs: [release-info, build-frontend, build-docker-binary, build-binary]
+    needs: [release-info, quality, build-docker-binary, build-binary]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -311,18 +287,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ needs.release-info.outputs.tag }}
+          ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: frontend-dist
           path: dist/frontend
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: codex-proxy-rs-*
           path: dist/binaries
@@ -407,12 +383,12 @@ jobs:
           PY
 
       - name: Generate release asset provenance
-        uses: actions/attest@v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
           subject-path: dist/release/*
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-assets
           path: dist/release
@@ -421,30 +397,34 @@ jobs:
 
   build-docker-image:
     name: build-docker-image (${{ matrix.dockerPlatform }})
-    needs: [release-info, build-frontend, build-docker-binary]
+    needs: [release-info, quality, build-docker-binary]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
       id-token: write
+    env:
+      TRIVY_QUIET: 'true'
+      TRIVY_SKIP_VERSION_CHECK: 'true'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ needs.release-info.outputs.tag }}
+          ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: frontend-dist
           path: dist/docker/web/dist
 
       - name: Download Docker binary artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/docker-artifacts/codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
@@ -476,10 +456,10 @@ jobs:
           PY
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -487,7 +467,7 @@ jobs:
 
       - name: Build and push app image
         id: build-and-push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: deploy/Dockerfile
@@ -505,13 +485,24 @@ jobs:
             org.opencontainers.image.version=${{ needs.release-info.outputs.version }}
             org.opencontainers.image.revision=${{ needs.release-info.outputs.git_sha }}
             org.opencontainers.image.source=https://github.com/zyycn/codex-proxy-rs
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}-${{ matrix.arch }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}-${{ matrix.arch }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}-${{ matrix.arch }}
+
+      - name: Scan exact app image digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
+          version: v0.72.0
+          format: table
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+          scanners: vuln
+          ignore-unfixed: true
+          exit-code: '1'
 
   publish:
     needs: [release-info, package-assets, build-docker-image]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       packages: write
@@ -520,24 +511,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ needs.release-info.outputs.tag }}
+          ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Download release assets
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-assets
           path: dist/release
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4.1.2
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Login to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -550,6 +541,7 @@ jobs:
           VERSION: ${{ needs.release-info.outputs.version }}
           GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           DOCKER_PLATFORMS: ${{ needs.release-info.outputs.docker_platforms }}
+          PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
         run: |
           set -euo pipefail
 
@@ -560,7 +552,7 @@ jobs:
             platform="${platform//[[:space:]]/}"
             [ -n "${platform}" ] || continue
             arch="${platform##*/}"
-            sources+=("${image}:${VERSION}-${arch}")
+            sources+=("${image}:sha-${GIT_SHA}-${arch}")
           done
 
           if [ "${#sources[@]}" -eq 0 ]; then
@@ -568,11 +560,14 @@ jobs:
             exit 1
           fi
 
-          docker buildx imagetools create \
-            -t "${image}:${VERSION}" \
-            -t "${image}:latest" \
-            -t "${image}:sha-${GIT_SHA}" \
-            "${sources[@]}"
+          target_args=(
+            -t "${image}:${VERSION}"
+            -t "${image}:sha-${GIT_SHA}"
+          )
+          if [ "$PRERELEASE" != true ]; then
+            target_args+=(-t "${image}:latest")
+          fi
+          docker buildx imagetools create "${target_args[@]}" "${sources[@]}"
 
           inspect_output="$(docker buildx imagetools inspect "${image}:${VERSION}")"
           platform_list="$(awk '$1 == "Platform:" { print $2 }' <<< "${inspect_output}")"
@@ -592,7 +587,7 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Generate container provenance attestation
-        uses: actions/attest@v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
@@ -602,10 +597,9 @@ jobs:
         shell: bash
         env:
           DIGEST: ${{ steps.manifest.outputs.digest }}
-          IMAGE_TAGS: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}
+          VERSION: ${{ needs.release-info.outputs.version }}
+          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
         run: |
           set -euo pipefail
           if [ -z "${DIGEST}" ]; then
@@ -613,20 +607,26 @@ jobs:
             exit 1
           fi
 
+          image="${REGISTRY}/${IMAGE_NAME}"
+          tags=("${image}:${VERSION}" "${image}:sha-${GIT_SHA}")
+          if [ "$PRERELEASE" != true ]; then
+            tags+=("${image}:latest")
+          fi
           images=()
-          while IFS= read -r tag; do
-            [ -n "${tag}" ] || continue
+          for tag in "${tags[@]}"; do
             images+=("${tag}@${DIGEST}")
-          done <<< "${IMAGE_TAGS}"
+          done
 
           cosign sign --yes "${images[@]}"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
           previous_tag: ${{ needs.release-info.outputs.previous_tag }}
+          prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
           body: |
             ## 📥 Installation
 

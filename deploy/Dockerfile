@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM node:24-bookworm-slim AS frontend-builder
+FROM node:24-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5 AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
@@ -8,7 +8,7 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY frontend ./
 RUN pnpm build
 
-FROM rust:1.95-bookworm AS backend-builder
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS backend-builder
 
 WORKDIR /app/backend
 ARG TARGETARCH
@@ -38,7 +38,10 @@ ARG TARGETARCH
 
 WORKDIR /out
 COPY --from=frontend-builder /app/frontend/dist /tmp/release/codex-proxy-rs/web/dist
-RUN cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
+RUN test -n "${CPR_VERSION}" \
+    && test -n "${TARGETOS}" \
+    && test -n "${TARGETARCH}" \
+    && cp /tmp/codex-proxy-rs /tmp/release/codex-proxy-rs/ \
     && tar -czf "/out/codex-proxy-rs_${CPR_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
         -C /tmp/release codex-proxy-rs
 
@@ -46,7 +49,7 @@ FROM scratch AS release-asset
 
 COPY --from=release-asset-builder /out /
 
-FROM debian:bookworm-slim AS runtime-base
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \

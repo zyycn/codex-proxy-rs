@@ -170,16 +170,17 @@ push 与 pull request 使用和 CI 相同的 head repository、branch name concu
 
 ### 5.1 单一配置来源
 
-`AppConfig` 保持当前 YAML 结构，新增两个可选的运行时环境变量：
+`AppConfig` 保持当前 YAML 结构，新增三个可选的运行时环境变量：
 
+- `CPR_ADMIN_DEFAULT_PASSWORD`
 - `CPR_POSTGRES_PASSWORD`
 - `CPR_REDIS_PASSWORD`
 
 加载顺序固定为：
 
 1. 严格解析完整 YAML；
-2. 读取两个可选环境变量；
-3. 使用 `url::Url` 仅替换 `database.url`、`redis.url` 的 password 部分；
+2. 读取三个可选环境变量；
+3. 直接覆盖 `admin.default_password`，使用 `url::Url` 仅替换 `database.url`、`redis.url` 的 password 部分；
 4. 返回最终 `AppConfig`。
 
 禁止用字符串拼接或替换 URL。用户名、scheme、host、port、path、query 均保持 YAML 原值。密码按原始字节内容交给 URL API 编码，不 trim；空值视为无效配置。URL 解析失败、URL 不支持密码或环境变量为空时，返回明确但不包含密码内容的配置错误。
@@ -190,16 +191,17 @@ push 与 pull request 使用和 CI 相同的 head repository、branch name concu
 
 Compose 对数据库服务与应用服务使用完全相同的展开值：
 
-- PostgreSQL 的 `POSTGRES_PASSWORD` 与应用的 `CPR_POSTGRES_PASSWORD` 都来自 `${CPR_POSTGRES_PASSWORD:-codex_proxy}`。
-- Redis 的 `--requirepass`、healthcheck 与应用的 `CPR_REDIS_PASSWORD` 都来自 `${CPR_REDIS_PASSWORD:-codex_proxy}`。
+- 管理员初始密码来自必填的 `CPR_ADMIN_DEFAULT_PASSWORD`；
+- PostgreSQL 的 `POSTGRES_PASSWORD` 与应用的 `CPR_POSTGRES_PASSWORD` 都来自必填的 `CPR_POSTGRES_PASSWORD`；
+- Redis 的 `--requirepass`、healthcheck 与应用的 `CPR_REDIS_PASSWORD` 都来自必填的 `CPR_REDIS_PASSWORD`。
 
-因此默认配置无需修改 URL；生产环境只设置两个 Compose 变量，不再人工编辑 YAML 密码。`deploy/config.example.yaml` 保留可独立运行的默认 URL，环境变量在加载后安全覆盖其中的 password。
+`deploy/.env` 定义为 Docker 部署唯一的密钥配置文件，必须被 Git 忽略且 mode 为 `0600`。三项变量任一缺失或为空时，Compose 在创建容器前失败。仓库提供仅含空值的 `deploy/.env.example`，不再人工编辑 YAML 密码；环境变量在加载后覆盖管理员密码和两个 URL 的 password。
 
 ### 5.3 bind mount 权限
 
 部署文档必须给出 Linux 首次初始化命令，并明确以下权限：
 
-- `.runtime/data`、`.runtime/logs` 归 UID/GID `10001:10001` 所有且不可被其他用户写入；
+- `.runtime/data`、`.runtime/logs` 归宿主部署用户所有，group 为容器 GID 10001，mode 为 `0770`；宿主文件共享进程可访问，容器用户可通过组权限写入，其他用户无权限；
 - `.runtime/config.yaml` 对容器 GID 10001 可读，对其他用户不可读；
 - 修改配置后保持原 owner、group 和 mode。
 
@@ -207,11 +209,11 @@ Compose 对数据库服务与应用服务使用完全相同的展开值：
 
 ## 6. Compose 烟测
 
-烟测使用临时工作目录和专用 Compose project，不能复用开发机 `.runtime/` 数据。配置文件通过 Ruby YAML API 从模板生成，写入至少 32 个 URL-safe 随机字符的管理员密码；禁止用 `sed` 修改 YAML。
+烟测使用临时工作目录、专用 Compose project 和 `deploy/docker-compose.smoke.yml` override，不能复用开发机 `.runtime/` 数据。override 移除 PostgreSQL、Redis 的宿主端口，按 project name 隔离应用容器名，并把应用映射到专用烟测端口。配置文件直接复制模板，管理员密码和数据库密码均通过专用的 CI 环境变量注入。
 
 PostgreSQL 与 Redis 密码必须包含 `@`、`:`、`/`、`?`、`#`、`%` 中的多种字符，以证明 URL 覆盖正确编码。执行顺序如下：
 
-1. 创建 owner 为 `10001:10001`、mode 为 `0750` 的数据和日志目录；配置文件 mode 为 `0640`，owner 为 runner UID，group 为 10001；
+1. 创建 owner 为 runner UID、group 为 10001、mode 为 `0770` 的数据和日志目录；配置文件 mode 为 `0640`，owner 为 runner UID，group 为 10001；
 2. 只启动 PostgreSQL、Redis 并等待健康；
 3. 分别写入 PostgreSQL 表探针和 Redis key；
 4. 强制重建 PostgreSQL、Redis 服务容器；
@@ -220,7 +222,7 @@ PostgreSQL 与 Redis 密码必须包含 `@`、`:`、`/`、`?`、`#`、`%` 中的
 7. 验证 `/healthz` 返回 HTTP 204；
 8. 验证容器配置和进程实际 UID/GID 均为 `10001:10001`；
 9. 验证 `/app/data`、`/app/logs` 可写；
-10. 按日志级别或独立严重度单词扫描三个容器完整日志，不允许出现 WARN、WARNING、ERROR、FATAL、PANIC；字段名中的 `ops_error_logs` 等普通文本不构成失败；
+10. 按日志级别扫描三个容器完整日志，不允许出现 WARN、WARNING、ERROR、FATAL、PANIC；应用检查结构化 `level`，PostgreSQL 检查 severity 前缀，Redis 检查 `#` warning marker 与独立严重度前缀，字段名中的 `ops_error_logs`、`bf-error-rate` 等普通文本不构成失败；
 11. 向应用发送 SIGTERM，验证 30 秒内退出且退出码为 0。
 
 失败时必须上传 Compose config、`docker compose ps -a`、inspect 结果和三个容器日志。清理步骤使用 `if: always()`，不得因前序失败遗留容器或命名卷。
@@ -318,3 +320,16 @@ Cosign 只签名本次实际创建的 tag。预发布版本不得在 manifest、
 - 应用以非 root 身份健康启动并优雅退出；
 - Rust、前端、workflow、漏洞扫描和运行日志均达到本文定义的 0 错误、0 警告；
 - 所有测试代码位于 `backend/tests`，没有兼容路径和重复实现。
+
+## 11. 实施验证结果
+
+2026-07-11 本地验证结果：
+
+- `git diff --check`、Rust fmt、全目标全特性 clippy `-D warnings`、actionlint 与 YAML 解析通过；
+- 后端使用真实 PostgreSQL、Redis 完成 `634 passed, 0 failed`；前端格式、类型检查、构建与生产依赖审计通过；Cargo audit 无漏洞；
+- 空的 `deploy/.env.example` 会在 Compose 插值阶段失败，三项特殊字符密码能够完整传递；
+- `runtime` 镜像构建成功，镜像 ID 为 `sha256:bc6c2ae76be06e2ac7b64b7629413c6f3c8a214100175d3fcc416ff578b7af24`，Trivy HIGH/CRITICAL 为 0；
+- 独立 Compose 烟测得到 `health=204`、UID/GID `10001:10001`、PostgreSQL/Redis 持久化通过、退出码 0、日志无警告和错误；
+- 本机部署已迁移到 mode `0600` 的 `deploy/.env`，YAML 管理员密码为空；只替换应用容器，PostgreSQL、Redis 容器和数据未变。
+
+远端 reusable workflow 权限、SARIF、GHA cache、artifact 与 Release job 依赖仍须在本次提交推送后由 GitHub Actions 证明。

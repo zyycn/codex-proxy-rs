@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, env, path::Path};
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 const WEAK_ADMIN_PASSWORDS: &[&str] = &[
     "",
@@ -404,9 +406,12 @@ impl Default for TelemetryConfig {
 }
 
 const CONFIG_FILE_ENV: &str = "CPR_CONFIG_FILE";
+const ADMIN_DEFAULT_PASSWORD_ENV: &str = "CPR_ADMIN_DEFAULT_PASSWORD";
+const POSTGRES_PASSWORD_ENV: &str = "CPR_POSTGRES_PASSWORD";
+const REDIS_PASSWORD_ENV: &str = "CPR_REDIS_PASSWORD";
 
 impl AppConfig {
-    /// 从 `CPR_CONFIG_FILE` 或当前目录 `config.yaml` 加载配置文件。
+    /// 从 `CPR_CONFIG_FILE` 或当前目录 `config.yaml` 加载配置文件，并应用运行时密码。
     pub fn load() -> Result<Self, ::config::ConfigError> {
         let config_file = env::var(CONFIG_FILE_ENV)
             .ok()
@@ -417,15 +422,61 @@ impl AppConfig {
         }
     }
 
-    /// 从指定目录加载配置文件。
+    /// 从指定目录加载配置文件，并应用运行时密码。
     pub fn load_from_dir(config_dir: impl AsRef<Path>) -> Result<Self, ::config::ConfigError> {
         load_file(config_dir.as_ref().join("config.yaml"))
     }
 }
 
 fn load_file(config_file: impl AsRef<Path>) -> Result<AppConfig, ::config::ConfigError> {
-    ::config::Config::builder()
+    let mut app_config: AppConfig = ::config::Config::builder()
         .add_source(::config::File::from(config_file.as_ref()).required(true))
         .build()?
-        .try_deserialize()
+        .try_deserialize()?;
+    apply_password_override(
+        &mut app_config.database.url,
+        "database.url",
+        POSTGRES_PASSWORD_ENV,
+    )?;
+    apply_password_override(&mut app_config.redis.url, "redis.url", REDIS_PASSWORD_ENV)?;
+    if let Some(password) = password_override(ADMIN_DEFAULT_PASSWORD_ENV)? {
+        app_config.admin.default_password = password;
+    }
+    Ok(app_config)
+}
+
+fn apply_password_override(
+    raw_url: &mut String,
+    config_key: &str,
+    env_name: &str,
+) -> Result<(), ::config::ConfigError> {
+    let Some(password) = password_override(env_name)? else {
+        return Ok(());
+    };
+    let mut url = Url::parse(raw_url).map_err(|_| {
+        ::config::ConfigError::Message(format!(
+            "{config_key} must be a valid URL when {env_name} is set"
+        ))
+    })?;
+    let encoded_password = utf8_percent_encode(&password, NON_ALPHANUMERIC).to_string();
+    url.set_password(Some(&encoded_password)).map_err(|()| {
+        ::config::ConfigError::Message(format!(
+            "{config_key} does not support a password override from {env_name}"
+        ))
+    })?;
+    *raw_url = url.into();
+    Ok(())
+}
+
+fn password_override(env_name: &str) -> Result<Option<String>, ::config::ConfigError> {
+    match env::var(env_name) {
+        Ok(password) if password.is_empty() => Err(::config::ConfigError::Message(format!(
+            "{env_name} must not be empty"
+        ))),
+        Ok(password) => Ok(Some(password)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(::config::ConfigError::Message(format!(
+            "{env_name} must contain valid UTF-8"
+        ))),
+    }
 }

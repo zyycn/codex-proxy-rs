@@ -1,0 +1,237 @@
+name: Reusable Container
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: cpr-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      CPR_IMAGE: codex-proxy-rs:ci-${{ inputs.ref }}
+      CPR_ADMIN_DEFAULT_PASSWORD: 'admin @:/?#%2F ci password'
+      CPR_POSTGRES_PASSWORD: 'pg @:/?#%2F ci'
+      CPR_REDIS_PASSWORD: 'redis @:/?#%2F ci'
+      CPR_SMOKE_PORT: '18080'
+      TRIVY_QUIET: 'true'
+      TRIVY_SKIP_VERSION_CHECK: 'true'
+    steps:
+      - name: Define isolated runtime paths
+        shell: bash
+        run: |
+          {
+            echo "CPR_CONFIG_FILE=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/config.yaml"
+            echo "CPR_DATA_DIR=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/data"
+            echo "CPR_LOG_DIR=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/logs"
+            echo "DIAGNOSTICS_DIR=$RUNNER_TEMP/codex-proxy-rs-diagnostics"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build runtime image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: runtime
+          load: true
+          tags: ${{ env.CPR_IMAGE }}
+          cache-from: type=gha,scope=runtime-ci
+          cache-to: type=gha,mode=max,scope=runtime-ci
+
+      - name: Generate Trivy SARIF
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CPR_IMAGE }}
+          version: v0.72.0
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+          scanners: vuln
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF
+        if: >-
+          ${{ hashFiles('trivy-results.sarif') != '' &&
+              (github.event_name != 'pull_request' ||
+               github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: runtime-container
+
+      - name: Enforce Trivy vulnerability gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CPR_IMAGE }}
+          version: v0.72.0
+          format: table
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+          scanners: vuln
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Prepare isolated runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="$(dirname "$CPR_CONFIG_FILE")"
+          mkdir -p "$runtime_dir" "$DIAGNOSTICS_DIR"
+          sudo install -d -m 0770 -o "$(id -u)" -g 10001 "$CPR_DATA_DIR" "$CPR_LOG_DIR"
+          cp deploy/config.example.yaml "$CPR_CONFIG_FILE"
+          sudo chown "$(id -u):10001" "$CPR_CONFIG_FILE"
+          chmod 0640 "$CPR_CONFIG_FILE"
+
+      - name: Validate Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml config --quiet
+
+      - name: Verify PostgreSQL and Redis volume persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+          "${compose[@]}" up -d --no-build --wait postgres redis
+          "${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+            psql -v ON_ERROR_STOP=1 -U codex_proxy -d codex_proxy -c \
+            "CREATE TABLE cpr_ci_persistence_probe (value text PRIMARY KEY); INSERT INTO cpr_ci_persistence_probe VALUES ('persisted');"
+          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+            redis-cli SET cpr:ci:persistence-probe persisted
+          "${compose[@]}" up -d --no-build --wait --force-recreate postgres redis
+          test "$("${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+            psql -At -U codex_proxy -d codex_proxy -c \
+            "SELECT value FROM cpr_ci_persistence_probe;")" = persisted
+          test "$("${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+            redis-cli --raw GET cpr:ci:persistence-probe | tr -d '\r')" = persisted
+          "${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+            psql -v ON_ERROR_STOP=1 -U codex_proxy -d codex_proxy -c \
+            "DROP TABLE cpr_ci_persistence_probe;"
+          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+            redis-cli DEL cpr:ci:persistence-probe
+
+      - name: Start and verify application
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+          "${compose[@]}" up -d --no-build --wait codex-proxy-rs
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            "http://127.0.0.1:${CPR_SMOKE_PORT}/healthz")"
+          test "$status" = 204
+          test "$("${compose[@]}" exec -T codex-proxy-rs id -u | tr -d '\r')" = 10001
+          test "$("${compose[@]}" exec -T codex-proxy-rs id -g | tr -d '\r')" = 10001
+          "${compose[@]}" exec -T codex-proxy-rs sh -c \
+            'touch /app/data/.ci-write /app/logs/.ci-write && rm /app/data/.ci-write /app/logs/.ci-write'
+
+      - name: Verify clean logs and graceful shutdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+          "${compose[@]}" stop --timeout 30 codex-proxy-rs
+          container_id="$("${compose[@]}" ps -a -q codex-proxy-rs)"
+          test -n "$container_id"
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$container_id")" = 0
+          "${compose[@]}" logs --no-color --timestamps codex-proxy-rs \
+            > "$DIAGNOSTICS_DIR/application.log"
+          "${compose[@]}" logs --no-color --timestamps postgres \
+            > "$DIAGNOSTICS_DIR/postgres.log"
+          "${compose[@]}" logs --no-color --timestamps redis \
+            > "$DIAGNOSTICS_DIR/redis.log"
+          if grep --extended-regexp --ignore-case \
+            '"level"[[:space:]]*:[[:space:]]*"(warn|error|fatal|panic)"|(^|[^[:alnum:]_])panic([^[:alnum:]_]|$)' \
+            "$DIAGNOSTICS_DIR/application.log" \
+            || grep --extended-regexp --ignore-case \
+              '(^|[[:space:]])(warning|error|fatal|panic):' \
+              "$DIAGNOSTICS_DIR/postgres.log" \
+            || grep --extended-regexp --ignore-case \
+              '[0-9]+:[A-Z][[:space:]].*[[:space:]]#[[:space:]]|(^|[|[:space:]])(warning|error|fatal|panic)(:|[[:space:]])' \
+              "$DIAGNOSTICS_DIR/redis.log"; then
+            echo "container logs contain a warning or error severity" >&2
+            exit 1
+          fi
+
+      - name: Collect container diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$DIAGNOSTICS_DIR"
+          raw_dir="$(mktemp -d)"
+          compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+          "${compose[@]}" config > "$raw_dir/compose-config.yaml" 2>&1
+          "${compose[@]}" ps -a > "$raw_dir/compose-ps.txt" 2>&1
+          "${compose[@]}" logs --no-color --timestamps > "$raw_dir/compose.log" 2>&1
+          mapfile -t container_ids < <("${compose[@]}" ps -a -q)
+          if [ "${#container_ids[@]}" -gt 0 ]; then
+            docker inspect "${container_ids[@]}" > "$raw_dir/docker-inspect.json" 2>&1
+          fi
+          RAW_DIR="$raw_dir" OUTPUT_DIR="$DIAGNOSTICS_DIR" ruby <<'RUBY'
+          raw_dir = ENV.fetch("RAW_DIR")
+          output_dir = ENV.fetch("OUTPUT_DIR")
+          secrets = [
+            ENV.fetch("CPR_ADMIN_DEFAULT_PASSWORD"),
+            ENV.fetch("CPR_POSTGRES_PASSWORD"),
+            ENV.fetch("CPR_REDIS_PASSWORD"),
+          ]
+          encoded_secrets = secrets.map do |secret|
+            secret.encode("UTF-8").bytes.map do |byte|
+              character = byte.chr
+              character.match?(/[A-Za-z0-9]/) ? character : format("%%%02X", byte)
+            end.join
+          end
+
+          Dir.children(raw_dir).each do |name|
+            content = File.binread(File.join(raw_dir, name))
+            (secrets + encoded_secrets).each do |secret|
+              content = content.gsub(secret, "<redacted>")
+            end
+            File.binwrite(File.join(output_dir, name), content)
+          end
+          RUBY
+          rm -rf "$raw_dir"
+          cp trivy-results.sarif "$DIAGNOSTICS_DIR/" 2>/dev/null || true
+
+      - name: Upload container diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-proxy-rs-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove isolated runtime
+        if: always()
+        shell: bash
+        run: |
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" \
+            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml \
+            down --volumes --remove-orphans || true
+          sudo rm -rf "$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
