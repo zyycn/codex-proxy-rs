@@ -5,9 +5,63 @@ use argon2::{
     Argon2,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// 持久密钥驱动的账号作用域伪名原语。
+#[derive(Clone)]
+pub struct AccountPseudonymizer {
+    template: HmacSha256,
+}
+
+impl std::fmt::Debug for AccountPseudonymizer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AccountPseudonymizer")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AccountPseudonymizer {
+    /// 使用服务端持久密钥构造伪名器。
+    pub fn new(secret: [u8; 32]) -> Self {
+        let template =
+            HmacSha256::new_from_slice(&secret).expect("HMAC-SHA256 accepts every 32-byte key");
+        Self { template }
+    }
+
+    /// 按字段域和账号派生稳定伪名。
+    pub fn scoped(&self, domain: &str, account_id: Option<&str>, value: &str) -> String {
+        URL_SAFE_NO_PAD.encode(self.digest(domain, account_id, value))
+    }
+
+    /// 按账号派生 UUID 形态的 installation ID。
+    pub fn installation_id(&self, account_id: &str) -> String {
+        let digest = self.digest("installation-id", Some(account_id), "");
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        Uuid::from_bytes(bytes).to_string()
+    }
+
+    fn digest(&self, domain: &str, account_id: Option<&str>, value: &str) -> Vec<u8> {
+        let mut mac = self.template.clone();
+        mac.update(domain.as_bytes());
+        mac.update(b"\0");
+        if let Some(account_id) = account_id {
+            mac.update(account_id.as_bytes());
+        }
+        mac.update(b"\0");
+        mac.update(value.as_bytes());
+        mac.finalize().into_bytes().to_vec()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AuthError / AuthResult

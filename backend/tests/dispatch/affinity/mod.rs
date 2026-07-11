@@ -120,6 +120,8 @@ fn affinity(
         input_tokens: Some(7),
         function_call_ids: vec!["call_1".to_string()],
         variant_hash: variant_hash.map(ToString::to_string),
+        continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal,
+        replay: None,
         created_at,
     }
 }

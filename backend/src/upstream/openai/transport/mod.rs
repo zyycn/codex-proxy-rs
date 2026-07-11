@@ -18,7 +18,7 @@ pub use self::{
         CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
         CodexCompactResponse, CodexModelCatalogClient, CodexModelCatalogClientError,
         CodexModelCatalogRequest, CodexRateLimitHeaderUpdates, CodexRequestContext,
-        CodexTurnStateUpdate,
+        CodexResponseMetadata, CodexTurnStateUpdate,
     },
     diagnostics::CodexUpstreamDiagnostics,
     endpoints::{

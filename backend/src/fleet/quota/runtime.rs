@@ -35,7 +35,7 @@ pub struct QuotaRefreshService {
     codex: Arc<CodexBackendClient>,
     min_refresh_interval_secs: u64,
     request_spacing: Duration,
-    installation_id: Option<String>,
+    account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
     cookie_store: Option<PgCookieStore>,
     account_pool: Option<Arc<AccountPoolService>>,
 }
@@ -46,6 +46,7 @@ impl QuotaRefreshService {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
     ) -> Self {
         Self {
             store,
@@ -53,7 +54,7 @@ impl QuotaRefreshService {
             codex,
             min_refresh_interval_secs: MIN_REFRESH_INTERVAL_SECS,
             request_spacing: Self::default_request_spacing(),
-            installation_id: None,
+            account_pseudonymizer,
             cookie_store: None,
             account_pool: None,
         }
@@ -68,6 +69,7 @@ impl QuotaRefreshService {
         store: PgAccountStore,
         usage_store: PgAccountUsageStore,
         codex: Arc<CodexBackendClient>,
+        account_pseudonymizer: Arc<crate::infra::identity::AccountPseudonymizer>,
         min_refresh_interval_secs: u64,
     ) -> Self {
         Self {
@@ -76,7 +78,7 @@ impl QuotaRefreshService {
             codex,
             min_refresh_interval_secs,
             request_spacing: Self::default_request_spacing(),
-            installation_id: None,
+            account_pseudonymizer,
             cookie_store: None,
             account_pool: None,
         }
@@ -85,12 +87,6 @@ impl QuotaRefreshService {
     /// 设置连续 quota 请求之间的错峰间隔。
     pub fn with_request_spacing(mut self, request_spacing: Duration) -> Self {
         self.request_spacing = request_spacing;
-        self
-    }
-
-    /// 设置 Codex installation id。
-    pub fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
-        self.installation_id = installation_id.filter(|id| !id.trim().is_empty());
         self
     }
 
@@ -155,6 +151,7 @@ impl QuotaRefreshService {
 
             let request_id = uuid::Uuid::new_v4().to_string();
             let cookie_header = self.usage_cookie_header(&account.id).await;
+            let installation_id = self.account_pseudonymizer.installation_id(&account.id);
             match self
                 .codex
                 .fetch_usage(CodexRequestContext {
@@ -169,8 +166,12 @@ impl QuotaRefreshService {
                     codex_window_id: None,
                     parent_thread_id: None,
                     cookie_header: cookie_header.as_deref(),
-                    installation_id: self.installation_id.as_deref(),
+                    installation_id: Some(&installation_id),
                     session_id: None,
+                    thread_id: None,
+                    prompt_cache_key: None,
+                    client_request_id: None,
+                    turn_id: None,
                 })
                 .await
             {

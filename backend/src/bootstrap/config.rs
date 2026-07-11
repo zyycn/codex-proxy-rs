@@ -173,16 +173,16 @@ pub struct WebSocketPoolSettings {
     pub max_age_ms: u64,
     /// 单账号最大连接数。
     pub max_per_account: usize,
-    /// 首个真实输出（首 token）到达前的绝对超时；`0` 表示禁用。
+    /// 首个真实输出（首事件）到达前的绝对超时；`0` 表示禁用。
     ///
     /// 从发出 `response.create` 起算，覆盖建连/发送/上游排队/思考的全程，直到收到
     /// 首个真实内容帧（`response.created`/`response.in_progress` 等纯生命周期帧不计）。
     /// 超时判定为连接落到病态上游后端，丢弃并换新连接重试。
-    #[serde(default = "default_ws_first_token_timeout_ms")]
-    pub first_token_timeout_ms: u64,
+    #[serde(default = "default_ws_initial_event_timeout_ms")]
+    pub initial_event_timeout_ms: u64,
 }
 
-fn default_ws_first_token_timeout_ms() -> u64 {
+fn default_ws_initial_event_timeout_ms() -> u64 {
     20_000
 }
 
@@ -192,7 +192,7 @@ impl Default for WebSocketPoolSettings {
             enabled: true,
             max_age_ms: 3_300_000,
             max_per_account: 8,
-            first_token_timeout_ms: default_ws_first_token_timeout_ms(),
+            initial_event_timeout_ms: default_ws_initial_event_timeout_ms(),
         }
     }
 }

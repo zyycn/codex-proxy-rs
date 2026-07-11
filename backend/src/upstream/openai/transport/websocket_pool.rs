@@ -18,7 +18,7 @@ const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(25);
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const DEFAULT_FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const DEFAULT_INITIAL_EVENT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// WebSocket 连接池 key。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,8 +89,8 @@ pub struct CodexWebSocketPoolConfig {
     pub ping_timeout: Duration,
     /// idle socket 无活动多久后视为失活。
     pub liveness_timeout: Option<Duration>,
-    /// 首个真实输出到达前的绝对超时；`None` 表示禁用首 token 熔断。
-    pub first_token_timeout: Option<Duration>,
+    /// 首个上游事件到达前的超时；`None` 表示禁用首事件超时。
+    pub initial_event_timeout: Option<Duration>,
 }
 
 impl Default for CodexWebSocketPoolConfig {
@@ -105,7 +105,7 @@ impl Default for CodexWebSocketPoolConfig {
             // idle 连接不设失活截断：靠 ping/pong 保活，只在 max_age（55 分钟）
             // 或 ping 失败时关闭，最大化跨轮复用（对齐 Codex CLI 的长连接策略）。
             liveness_timeout: None,
-            first_token_timeout: Some(DEFAULT_FIRST_TOKEN_TIMEOUT),
+            initial_event_timeout: Some(DEFAULT_INITIAL_EVENT_TIMEOUT),
         }
     }
 }
@@ -148,9 +148,9 @@ impl CodexWebSocketPool {
         self.config.keepalive()
     }
 
-    /// 首个真实输出到达前的绝对超时；`None` 表示禁用首 token 熔断。
-    pub(crate) fn first_token_timeout(&self) -> Option<Duration> {
-        self.config.first_token_timeout
+    /// 首个上游事件到达前的超时；`None` 表示禁用首事件超时。
+    pub(crate) fn initial_event_timeout(&self) -> Option<Duration> {
+        self.config.initial_event_timeout
     }
 
     pub(crate) async fn acquire(&self, key: &CodexWebSocketPoolKey) -> WebSocketPoolAcquire {
@@ -376,13 +376,31 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
+    pub(crate) response_metadata: super::client::CodexResponseMetadata,
     pub(crate) diagnostics: super::diagnostics::CodexUpstreamDiagnostics,
 }
 
 pub(crate) struct PooledWebSocketConnection {
     pub(crate) websocket: PumpedWebSocket,
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
+    pub(crate) continuation: WebSocketContinuationState,
     pub(crate) created_at: Instant,
+}
+
+/// 只随具体 WebSocket 生命周期存在的续接状态。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WebSocketContinuationState {
+    latest_response_id: Option<String>,
+}
+
+impl WebSocketContinuationState {
+    pub(crate) fn latest_response_id(&self) -> Option<&str> {
+        self.latest_response_id.as_deref()
+    }
+
+    pub(crate) fn record_completed(&mut self, response_id: String) {
+        self.latest_response_id = Some(response_id);
+    }
 }
 
 enum WebSocketPoolSlot {

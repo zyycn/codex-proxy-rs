@@ -401,7 +401,7 @@ async fn responses_should_passively_cache_rate_limit_headers() {
 }
 
 #[tokio::test]
-async fn responses_should_record_empty_response_attempts() {
+async fn responses_should_record_empty_response_attempt() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -410,7 +410,7 @@ async fn responses_should_record_empty_response_attempts() {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(RESPONSES_EMPTY_COMPLETED_SSE),
         )
-        .expect(3)
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -436,7 +436,7 @@ async fn responses_should_record_empty_response_attempts() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let usage: (i64, i64, i64, i64) = sqlx::query_as(
         "select request_count, empty_response_count, input_tokens, output_tokens from account_usage where account_id = $1",
     )
@@ -444,7 +444,7 @@ async fn responses_should_record_empty_response_attempts() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(usage, (3, 3, 0, 0));
+    assert_eq!(usage, (1, 1, 0, 0));
 }
 
 #[tokio::test]
@@ -576,7 +576,7 @@ async fn responses_stream_should_record_usage_record_after_completed_stream() {
     assert_eq!(event.output_tokens, Some(5));
     assert!(
         event.first_token_ms.is_some_and(|value| value > 0),
-        "stream usage metadata should include first token latency: {metadata:?}",
+        "stream usage metadata should include first output event latency: {metadata:?}",
     );
     let first_token_bucket: (i64, i64) = sqlx::query_as(
         "select first_token_latency_sum, first_token_latency_count from request_time_buckets limit 1",
@@ -858,10 +858,10 @@ async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() 
             .await
             .unwrap();
 
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(authorizations.len(), 3, "requests: {authorizations:?}");
     assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
-    let event = latest_response_ops_error_log(&pool).await;
+    let event = latest_response_upstream_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(event.account_id.as_deref(), Some("acct_chat"));
     assert_eq!(metadata["accountEmail"], "user@example.com");
@@ -912,10 +912,10 @@ async fn responses_should_record_attempt_trace_after_retrying_another_account() 
         )
         .await
         .unwrap();
-    let event = latest_response_ops_error_log(&pool).await;
+    let event = latest_response_upstream_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(event.level, "error");
     assert_eq!(event.request_id.as_deref(), Some("req_attempt_trace_retry"));
     assert_eq!(event.account_id.as_deref(), Some("acct_secondary"));

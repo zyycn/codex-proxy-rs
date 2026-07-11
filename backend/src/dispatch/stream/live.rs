@@ -8,20 +8,17 @@ use std::{
 use bytes::Bytes;
 use futures::{stream::Stream, StreamExt};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     dispatch::{
-        affinity::{
-            resolve::{evict_reasoning_replay, record_response_affinity},
-            SessionAffinityService,
-        },
+        affinity::{resolve::record_response_affinity, SessionAffinityService},
         errors::{backend_transport_name, ResponseDispatchStreamError},
         recording::{
             insert_first_token_ms, live_response_rate_limit_headers, live_response_turn_state,
             record_live_response_stream_event,
         },
-        recovery::{cloudflare::CloudflareRecovery, reasoning_replay::ReasoningReplayCache},
+        recovery::{cloudflare::CloudflareRecovery, history::HistoryRecoveryPlan},
         service::ResponseDispatchStream,
     },
     fleet::pool::{AccountLease, AccountPoolService},
@@ -42,16 +39,17 @@ use crate::{
         },
         transport::{
             CodexBackendSseStream, CodexBackendTransport, CodexRateLimitHeaderUpdates,
-            CodexTurnStateUpdate, CodexUpstreamDiagnostics, WebSocketPoolDecision,
+            CodexResponseMetadata, CodexTurnStateUpdate, CodexUpstreamDiagnostics,
+            WebSocketPoolDecision,
         },
     },
 };
 
 use super::{
     sse_failure::{
-        sse_failure_invalid_reasoning_replay, status_code_for_stream_failure,
-        stream_failure_metadata, stream_failure_source, synthetic_stream_disconnected_detail,
-        STREAM_DISCONNECTED_CODE, STREAM_DISCONNECTED_MESSAGE,
+        status_code_for_stream_failure, stream_failure_metadata, stream_failure_source,
+        synthetic_stream_disconnected_detail, STREAM_DISCONNECTED_CODE,
+        STREAM_DISCONNECTED_MESSAGE,
     },
     trace::ResponseDispatchAttempt,
 };
@@ -82,6 +80,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
     prefetched: Bytes,
     mut body: CodexBackendSseStream,
 ) -> ResponseDispatchStream {
+    let response_headers = context.response_metadata.client_headers.clone();
     let (sender, receiver) = mpsc::channel(8);
     let (cancel_sender, mut cancel_receiver) = oneshot::channel();
     tokio::spawn(async move {
@@ -183,6 +182,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
             receiver,
             cancel: Some(cancel_sender),
         }),
+        response_headers,
     }
 }
 
@@ -342,7 +342,7 @@ pub(in crate::dispatch) struct LiveResponseStreamContext {
     pub(in crate::dispatch) account_pool: Arc<AccountPoolService>,
     pub(in crate::dispatch) account_lease: AccountLease,
     pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
-    pub(in crate::dispatch) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
+    pub(in crate::dispatch) history: HistoryRecoveryPlan,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
     pub(in crate::dispatch) cloudflare: CloudflareRecovery,
     pub(in crate::dispatch) account_id: String,
@@ -362,6 +362,7 @@ pub(in crate::dispatch) struct LiveResponseStreamContext {
     pub(in crate::dispatch) websocket_pool_decision: Option<WebSocketPoolDecision>,
     pub(in crate::dispatch) turn_state: Option<String>,
     pub(in crate::dispatch) diagnostics: CodexUpstreamDiagnostics,
+    pub(in crate::dispatch) response_metadata: CodexResponseMetadata,
     pub(in crate::dispatch) attempt: ResponseDispatchAttempt,
     pub(in crate::dispatch) attempts: Vec<ResponseDispatchAttempt>,
     pub(in crate::dispatch) started_at: Instant,
@@ -428,31 +429,40 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
         }
     };
 
-    match response_from_codex_sse(&body, context.tuple_schema.as_ref()) {
-        Ok(CollectedResponse::Completed(completed)) => {
+    let collected_response = response_from_codex_sse(&body, context.tuple_schema.as_ref());
+    let completed_terminal = matches!(&collected_response, Ok(CollectedResponse::Completed(_)));
+    match collected_response {
+        Ok(CollectedResponse::Completed(terminal) | CollectedResponse::Incomplete(terminal)) => {
             context
                 .cloudflare
                 .reset_account_recovery(&context.account_id)
                 .await;
-            let response_id = completed.get("id").and_then(Value::as_str);
-            record_response_affinity(
-                &context.session_affinity,
-                &context.reasoning_replay,
-                &context.request,
-                &context.account_id,
-                &body,
-                turn_state,
-                usage,
-            )
-            .await;
+            let response_id = terminal.get("id").and_then(Value::as_str);
+            if completed_terminal {
+                record_response_affinity(
+                    &context.session_affinity,
+                    &context.history,
+                    &context.request,
+                    &context.account_id,
+                    &body,
+                    turn_state,
+                    usage,
+                )
+                .await;
+            }
             record_live_response_stream_event(
                 &context,
                 200,
                 UsageRecordLevel::Info,
-                "v1 responses stream completed",
+                if completed_terminal {
+                    "v1 responses stream completed"
+                } else {
+                    "v1 responses stream incomplete"
+                },
                 serde_json::json!({
                     "stream": true,
-                    "completed": true,
+                    "completed": completed_terminal,
+                    "incomplete": !completed_terminal,
                     "responseId": response_id,
                     "firstTokenMs": first_token_ms,
                     "usage": usage,
@@ -463,14 +473,6 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
             .await;
         }
         Ok(CollectedResponse::Failed(failure)) => {
-            if sse_failure_invalid_reasoning_replay(&failure) {
-                evict_reasoning_replay(
-                    &context.reasoning_replay,
-                    &context.request,
-                    &context.account_id,
-                )
-                .await;
-            }
             let response_id = latest_response_id(&body);
             let latency_ms = elapsed_millis_i64(context.started_at);
             let failure_source = stream_failure_source(&failure);

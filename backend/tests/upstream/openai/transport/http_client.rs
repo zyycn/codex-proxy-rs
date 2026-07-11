@@ -134,6 +134,10 @@ async fn codex_backend_client_should_cap_non_success_error_body_at_one_mib() {
                 cookie_header: None,
                 installation_id: None,
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await;
@@ -188,6 +192,10 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
                 cookie_header: None,
                 installation_id: None,
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await;
@@ -202,6 +210,101 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
     };
     assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(retry_after_seconds, Some(12));
+}
+
+#[tokio::test]
+async fn codex_backend_client_should_capture_only_safe_response_metadata() {
+    let server = wiremock::MockServer::start().await;
+    let body = concat!(
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+    );
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/codex/responses"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .insert_header("x-request-id", "upstream-request")
+                .insert_header("openai-model", "gpt-5.5-2026-07-01")
+                .insert_header("x-models-etag", "models-v2")
+                .insert_header("x-reasoning-included", "true")
+                .insert_header("openai-processing-ms", "42")
+                .insert_header("set-cookie", "secret=value")
+                .insert_header("x-codex-primary-used-percent", "15")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    );
+    let mut request =
+        codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "",
+            Vec::new(),
+        );
+    request.force_http_sse = true;
+
+    let response = client
+        .create_response(
+            &request,
+            CodexRequestContext {
+                access_token: "access-token",
+                account_id: Some("chatgpt-account"),
+                request_id: "req_response_metadata",
+                turn_state: None,
+                turn_metadata: None,
+                beta_features: None,
+                include_timing_metrics: None,
+                version: None,
+                codex_window_id: None,
+                parent_thread_id: None,
+                cookie_header: None,
+                installation_id: None,
+                session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
+            },
+        )
+        .await
+        .expect("response should succeed");
+
+    assert_eq!(
+        response.response_metadata.effective_model.as_deref(),
+        Some("gpt-5.5-2026-07-01")
+    );
+    assert_eq!(
+        response.response_metadata.models_etag.as_deref(),
+        Some("models-v2")
+    );
+    assert!(response.response_metadata.reasoning_included);
+    let mut names = response
+        .response_metadata
+        .client_headers
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "openai-model",
+            "openai-processing-ms",
+            "x-models-etag",
+            "x-reasoning-included",
+            "x-request-id"
+        ]
+    );
+    assert_eq!(response.set_cookie_headers, vec!["secret=value"]);
+    assert_eq!(
+        response.rate_limit_headers,
+        vec![("x-codex-primary-used-percent".to_string(), "15".to_string())]
+    );
 }
 
 #[tokio::test]

@@ -57,7 +57,7 @@ pub struct UsageRecord {
     pub upstream_request_id: Option<String>,
     /// 请求耗时毫秒。
     pub latency_ms: Option<i64>,
-    /// 首 token 延迟毫秒。
+    /// 首个有效输出事件延迟毫秒。
     pub first_token_ms: Option<i64>,
     /// 输入 token。
     pub input_tokens: Option<i64>,

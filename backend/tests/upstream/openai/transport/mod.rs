@@ -8,6 +8,7 @@ use std::{
 };
 
 use codex_proxy_rs::upstream::openai::{
+    protocol::responses::{PreviousResponseScope, StreamCommitPolicy},
     transport::websocket::{
         execute_response_create_request, responses_websocket_endpoint, CodexWebSocketConnection,
         CodexWebSocketExchangeError, CodexWebSocketRequest,
@@ -176,6 +177,10 @@ pub(crate) fn request_context<'a>(
         cookie_header: None,
         installation_id: None,
         session_id: None,
+        thread_id: None,
+        prompt_cache_key: None,
+        client_request_id: None,
+        turn_id: None,
     }
 }
 
@@ -208,8 +213,9 @@ pub(crate) fn pooled_websocket_request(
             Vec::new(),
         );
     request.set_previous_response_id(Some("resp_previous".to_string()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
     request.set_prompt_cache_key(Some(conversation_id.to_string()));
-    request.client_conversation_id = Some(conversation_id.to_string());
+    request.local_conversation_id = Some(conversation_id.to_string());
     request
 }
 
@@ -247,7 +253,7 @@ pub(crate) fn websocket_pool_config_for_tests(
         ping_interval,
         ping_timeout: Duration::from_secs(1),
         liveness_timeout,
-        first_token_timeout: None,
+        initial_event_timeout: None,
     }
 }
 

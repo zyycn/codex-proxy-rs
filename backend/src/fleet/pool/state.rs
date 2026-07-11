@@ -9,6 +9,25 @@ pub(super) struct AccountAcquireWithStatusRefresh {
 }
 
 #[derive(Debug)]
+pub(super) struct AccountCandidateSnapshotWithStatusRefresh {
+    pub(super) account_ids: Vec<String>,
+    pub(super) refreshed_accounts: Vec<RefreshedAccountState>,
+}
+
+#[derive(Debug)]
+pub(super) struct AccountCandidateAcquireWithStatusRefresh {
+    pub(super) decision: AccountCandidateAcquireDecision,
+    pub(super) refreshed_accounts: Vec<RefreshedAccountState>,
+}
+
+#[derive(Debug)]
+pub(super) enum AccountCandidateAcquireDecision {
+    Acquired(Box<AcquiredAccount>),
+    Busy,
+    Unavailable,
+}
+
+#[derive(Debug)]
 pub(super) struct DistinctPlanAccountsWithStatusRefresh {
     pub(super) accounts: Vec<DistinctPlanAccount>,
     pub(super) refreshed_accounts: Vec<RefreshedAccountState>,
@@ -422,6 +441,65 @@ impl AccountPool {
         }
     }
 
+    pub(super) fn candidate_snapshot_with_status_refresh(
+        &mut self,
+        request: &AccountAcquireRequest,
+    ) -> AccountCandidateSnapshotWithStatusRefresh {
+        self.cleanup_stale_slots(request.now);
+        let refreshed_accounts = self.refresh_account_statuses(request.now);
+        let candidates = self.snapshot_candidates(request);
+        let mut ordered = self.scheduler.order(
+            self.options.rotation_strategy,
+            &candidates,
+            &|account_id| self.slot_count(account_id),
+            request.now,
+        );
+        ordered.sort_by_key(|account| {
+            candidates::tier_rank(account.plan_type.as_deref(), &self.options.tier_priority)
+        });
+
+        let mut account_ids = Vec::with_capacity(ordered.len());
+        if let Some(preferred_account_id) = request.preferred_account_id.as_deref() {
+            if let Some(index) = ordered
+                .iter()
+                .position(|account| account.id == preferred_account_id)
+            {
+                account_ids.push(ordered.remove(index).id);
+            }
+        }
+        account_ids.extend(ordered.into_iter().map(|account| account.id));
+        AccountCandidateSnapshotWithStatusRefresh {
+            account_ids,
+            refreshed_accounts,
+        }
+    }
+
+    pub(super) fn acquire_candidate_with_status_refresh(
+        &mut self,
+        model: &str,
+        account_id: &str,
+        now: DateTime<Utc>,
+    ) -> AccountCandidateAcquireWithStatusRefresh {
+        let request = AccountAcquireRequest::new(model, now).with_required_account_id(account_id);
+        self.cleanup_stale_slots(now);
+        let refreshed_accounts = self.refresh_account_statuses(now);
+        let snapshot_eligible = !self.snapshot_candidates(&request).is_empty();
+        let decision = if !snapshot_eligible {
+            AccountCandidateAcquireDecision::Unavailable
+        } else if self.slot_count(account_id) >= self.options.max_concurrent_per_account {
+            AccountCandidateAcquireDecision::Busy
+        } else {
+            match self.acquire_with_status_refresh(&request).acquired {
+                Some(acquired) => AccountCandidateAcquireDecision::Acquired(Box::new(acquired)),
+                None => AccountCandidateAcquireDecision::Unavailable,
+            }
+        };
+        AccountCandidateAcquireWithStatusRefresh {
+            decision,
+            refreshed_accounts,
+        }
+    }
+
     fn refresh_account_statuses(&mut self, now: DateTime<Utc>) -> Vec<RefreshedAccountState> {
         let mut refreshed_accounts = Vec::new();
         let mut expired_account_ids = Vec::new();
@@ -698,6 +776,27 @@ impl AccountPool {
                 fetched_model_plan_types: &self.options.fetched_model_plan_types,
                 slot_count: &slot_count,
             },
+            &CandidateRequest {
+                model: &request.model,
+                exclude_account_ids: &request.exclude_account_ids,
+                required_account_id: request.required_account_id.as_deref(),
+                now: request.now,
+            },
+        )
+    }
+
+    fn snapshot_candidates(&self, request: &AccountAcquireRequest) -> Vec<&Account> {
+        let filter = CandidateFilter {
+            max_concurrent_per_account: self.options.max_concurrent_per_account,
+            skip_quota_limited: self.options.skip_quota_limited,
+            tier_priority: &self.options.tier_priority,
+            model_plan_allowlist: &self.options.model_plan_allowlist,
+            fetched_model_plan_types: &self.options.fetched_model_plan_types,
+            slot_count: &|account_id| self.slot_count(account_id),
+        };
+        candidates::snapshot(
+            self.accounts.values(),
+            &filter,
             &CandidateRequest {
                 model: &request.model,
                 exclude_account_ids: &request.exclude_account_ids,

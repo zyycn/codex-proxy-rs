@@ -29,8 +29,6 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
             "model",
             "instructions",
             "input",
-            "stream",
-            "store",
             "previous_response_id",
             "service_tier",
             "prompt_cache_key",
@@ -39,7 +37,8 @@ fn codex_websocket_payload_audit_snapshot_should_redact_user_content() {
     );
     assert_eq!(snapshot.body["type"], "response.create");
     assert_eq!(snapshot.body["model"], "gpt-5.5");
-    assert_eq!(snapshot.body["stream"], true);
+    assert!(snapshot.body.get("stream").is_none());
+    assert!(snapshot.body.get("store").is_none());
     assert_eq!(snapshot.body["instructions"], "<redacted>");
     assert_eq!(snapshot.body["input"], "<redacted>");
     assert_eq!(snapshot.body["previous_response_id"], "<redacted>");
@@ -78,8 +77,6 @@ fn codex_websocket_response_create_payload_text_should_preserve_canonical_field_
             "\"model\":\"gpt-5.5\"",
             "\"instructions\":\"private capture instructions\"",
             "\"input\":",
-            "\"stream\":true",
-            "\"store\":false",
             "\"prompt_cache_key\":\"session-1\"",
             "\"client_metadata\":",
         ],
@@ -187,6 +184,7 @@ fn codex_websocket_metadata_turn_state_should_extract_case_insensitive_header() 
 #[test]
 fn codex_websocket_terminal_event_should_match_completed_failed_and_error() {
     assert!(is_terminal_websocket_event("response.completed"));
+    assert!(is_terminal_websocket_event("response.incomplete"));
     assert!(is_terminal_websocket_event("response.failed"));
     assert!(is_terminal_websocket_event("error"));
     assert!(!is_terminal_websocket_event("response.output_text.delta"));
@@ -223,6 +221,9 @@ fn codex_websocket_error_frame_should_classify_ts_aligned_upstream_error_codes()
         ("account_banned", 403),
         ("banned", 403),
         ("previous_response_not_found", 400),
+        ("invalid_encrypted_content", 400),
+        ("missing_tool_output", 400),
+        ("no_tool_output", 400),
     ];
 
     for (code, expected_status) in cases {
@@ -256,7 +257,6 @@ fn codex_websocket_error_frame_should_ignore_legacy_extension_codes() {
         "invalid_prompt",
         "cyber_policy",
         "invalid_request",
-        "invalid_encrypted_content",
         "no_tool_output_found_for_function_call",
         "server_is_overloaded",
         "slow_down",
@@ -376,7 +376,7 @@ fn codex_websocket_wrapped_error_headers_should_extract_retry_after() {
 }
 
 #[test]
-fn codex_websocket_response_completed_parse_error_should_validate_shape() {
+fn codex_websocket_response_completed_id_should_validate_shape() {
     let frame = json!({
         "type": "response.completed",
         "response": {
@@ -390,14 +390,14 @@ fn codex_websocket_response_completed_parse_error_should_validate_shape() {
     })
     .to_string();
 
-    let error = websocket_response_completed_parse_error(&frame)
-        .expect("invalid response.completed should report a parse error");
+    let error = websocket_response_completed_id(&frame)
+        .expect_err("invalid response.completed should report a parse error");
 
     assert!(error.contains("failed to parse ResponseCompleted"));
 }
 
 #[test]
-fn codex_websocket_response_completed_parse_error_should_reject_missing_id_and_incomplete_usage() {
+fn codex_websocket_response_completed_id_should_reject_missing_id_and_incomplete_usage() {
     let missing_id = json!({
         "type": "response.completed",
         "response": {
@@ -423,11 +423,11 @@ fn codex_websocket_response_completed_parse_error_should_reject_missing_id_and_i
     })
     .to_string();
 
-    assert!(websocket_response_completed_parse_error(&missing_id)
-        .expect("missing id should be rejected")
+    assert!(websocket_response_completed_id(&missing_id)
+        .expect_err("missing id should be rejected")
         .contains("missing field"));
-    assert!(websocket_response_completed_parse_error(&incomplete_usage)
-        .expect("incomplete usage should be rejected")
+    assert!(websocket_response_completed_id(&incomplete_usage)
+        .expect_err("incomplete usage should be rejected")
         .contains("missing field"));
 }
 
@@ -528,22 +528,12 @@ fn codex_websocket_optional_null_fields_should_match_missing_field_behavior() {
 }
 
 #[test]
-fn codex_websocket_response_control_events_should_detect_incomplete_and_missing_completed_response()
-{
-    let incomplete = json!({
-        "type": "response.incomplete",
-        "response": {
-            "incomplete_details": {
-                "reason": "max_output_tokens"
-            }
-        }
-    })
-    .to_string();
+fn codex_websocket_response_control_events_should_recognize_incomplete_as_terminal() {
+    assert!(is_terminal_websocket_event("response.incomplete"));
+}
 
-    assert_eq!(
-        websocket_incomplete_response_reason(&incomplete).as_deref(),
-        Some("max_output_tokens")
-    );
+#[test]
+fn codex_websocket_response_control_events_should_detect_missing_completed_response() {
     assert!(websocket_response_completed_missing_response(
         r#"{"type":"response.completed"}"#
     ));

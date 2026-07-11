@@ -25,3 +25,14 @@ pub fn select(input: &SelectionInput<'_>, _cursor: &mut usize) -> Option<Account
     }
     Some(selected.clone())
 }
+
+/// 按最近使用时间降序返回完整候选顺序。
+pub fn order(input: &SelectionInput<'_>) -> Vec<Account> {
+    let mut ordered = input
+        .candidates
+        .iter()
+        .map(|account| (**account).clone())
+        .collect::<Vec<_>>();
+    ordered.sort_by(|a, b| compare_last_used(b.last_used_at.as_deref(), a.last_used_at.as_deref()));
+    ordered
+}

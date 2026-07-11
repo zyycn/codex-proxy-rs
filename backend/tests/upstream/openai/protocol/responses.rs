@@ -83,18 +83,7 @@ fn response_from_codex_sse_should_collect_completed_response_with_deltas() {
             "usage": {
                 "input_tokens": 2,
                 "output_tokens": 3
-            },
-            "output": [{
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{
-                    "type": "output_text",
-                    "text": "hello",
-                    "annotations": []
-                }]
-            }],
-            "output_text": "hello"
+            }
         }))
     );
 }
@@ -107,7 +96,7 @@ fn response_from_codex_sse_should_collect_incomplete_response() {
 
     assert_eq!(
         response,
-        CollectedResponse::Completed(json!({
+        CollectedResponse::Incomplete(json!({
             "id": "resp_incomplete",
             "object": "response",
             "status": "incomplete",

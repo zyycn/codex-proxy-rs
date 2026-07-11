@@ -10,20 +10,21 @@
 use std::{pin::Pin, sync::Arc, time::Instant};
 
 use bytes::Bytes;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use futures::stream::Stream;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 
 use crate::{
     dispatch::{
-        affinity::resolve::{evict_reasoning_replay, record_response_affinity},
-        affinity::SessionAffinityService,
+        affinity::resolve::{prepare_variant_identity, record_response_affinity},
+        affinity::{AccountIdentityService, SessionAffinityService},
+        attempts::AccountAttemptLedger,
         errors::{
-            backend_transport_name, is_history_recovery_upstream_error,
+            backend_transport_name, is_continuation_busy_error, is_history_recovery_upstream_error,
             is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, rate_limit_cooldown_until, upstream_error_body,
-            upstream_error_http_status, upstream_error_set_cookie_headers,
+            is_rate_limit_upstream_error, is_retryable_account_transport_error,
+            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            upstream_error_set_cookie_headers,
         },
         recovery::{
             auth::{auth_failure_account_status, is_auth_upstream_error},
@@ -33,11 +34,11 @@ use crate::{
                 CloudflareRecovery,
             },
             exhaustion::AccountExhaustionTracker,
-            reasoning_replay::ReasoningReplayCache,
+            history::HistoryRecoveryPlan,
         },
         upstream_call::{
             create_response_with_account_retrying_5xx, verify_acquired_quota_if_required,
-            QuotaVerificationContext, QuotaVerificationDecision,
+            AccountUpstreamContext, QuotaVerificationContext, QuotaVerificationDecision,
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
@@ -73,10 +74,9 @@ use super::{
     },
     stream::{
         sse_failure::{
-            auth_sse_failure_account_status, client_error_invalid_reasoning_replay,
-            is_auth_sse_failure, is_history_recovery_sse_failure, is_model_unsupported_sse_failure,
-            is_quota_exhausted_sse_failure, sse_failure_error_body,
-            sse_failure_invalid_reasoning_replay, stream_failure_http_status,
+            auth_sse_failure_account_status, is_auth_sse_failure, is_history_recovery_sse_failure,
+            is_model_unsupported_sse_failure, is_quota_exhausted_sse_failure,
+            sse_failure_error_body, stream_failure_http_status,
         },
         trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },
@@ -89,9 +89,8 @@ pub struct ResponseDispatchService {
     pub(in crate::dispatch) models: Arc<ModelService>,
     pub(in crate::dispatch) codex: Arc<CodexBackendClient>,
     pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
-    pub(in crate::dispatch) reasoning_replay: Arc<Mutex<ReasoningReplayCache>>,
+    pub(in crate::dispatch) account_identity: Arc<AccountIdentityService>,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
-    pub(in crate::dispatch) installation_id: Option<String>,
     pub(in crate::dispatch) cloudflare: CloudflareRecovery,
 }
 
@@ -100,13 +99,11 @@ pub(crate) struct ResponseDispatchServiceParts {
     pub models: Arc<ModelService>,
     pub codex: Arc<CodexBackendClient>,
     pub session_affinity: Arc<SessionAffinityService>,
+    pub account_identity: Arc<AccountIdentityService>,
     pub recorder: Arc<Recorder>,
-    pub installation_id: Option<String>,
     pub cloudflare: CloudflareRecovery,
 }
 
-/// 默认 reasoning replay TTL 秒数。
-const DEFAULT_REASONING_REPLAY_TTL_SECS: i64 = 55 * 60;
 /// Responses live SSE 响应体流。
 pub type ResponseBodyStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, ResponseDispatchStreamError>> + Send + 'static>>;
@@ -114,6 +111,13 @@ pub type ResponseBodyStream =
 /// Responses live SSE 调度结果。
 pub struct ResponseDispatchStream {
     pub body: ResponseBodyStream,
+    pub response_headers: Vec<(String, String)>,
+}
+
+/// Responses 非流式调度结果。
+pub struct ResponseDispatchResponse {
+    pub body: Value,
+    pub response_headers: Vec<(String, String)>,
 }
 
 impl ResponseDispatchService {
@@ -123,26 +127,16 @@ impl ResponseDispatchService {
             models: parts.models,
             codex: parts.codex,
             session_affinity: parts.session_affinity,
-            reasoning_replay: Arc::new(Mutex::new(ReasoningReplayCache::new(Duration::seconds(
-                DEFAULT_REASONING_REPLAY_TTL_SECS,
-            )))),
+            account_identity: parts.account_identity,
             recorder: parts.recorder,
-            installation_id: parts.installation_id,
             cloudflare: parts.cloudflare,
         }
     }
 
-    pub(in crate::dispatch) async fn evict_reasoning_replay(
-        &self,
-        request: &CodexResponsesRequest,
-        account_id: &str,
-    ) {
-        evict_reasoning_replay(&self.reasoning_replay, request, account_id).await;
-    }
-
     async fn record_response_affinity(
         &self,
-        request: &CodexResponsesRequest,
+        history: &HistoryRecoveryPlan,
+        original_request: &CodexResponsesRequest,
         account_id: &str,
         body: &str,
         turn_state: Option<String>,
@@ -150,8 +144,8 @@ impl ResponseDispatchService {
     ) {
         record_response_affinity(
             &self.session_affinity,
-            &self.reasoning_replay,
-            request,
+            history,
+            original_request,
             account_id,
             body,
             turn_state,
@@ -169,7 +163,7 @@ impl ResponseDispatchService {
         route: &str,
         mut request: CodexResponsesRequest,
         requested_model: &str,
-    ) -> Result<Value, ResponseDispatchError> {
+    ) -> Result<ResponseDispatchResponse, ResponseDispatchError> {
         let started_at = Instant::now();
         let catalog = self.models.catalog().await;
         let display_model = catalog.resolve_model_id(requested_model);
@@ -177,40 +171,44 @@ impl ResponseDispatchService {
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
-        let mut implicit_resume = self.prepare_response_session(&mut request).await;
-        let account_affinity = self.account_affinity_for_request(&request, now).await;
+        prepare_variant_identity(&mut request);
+        self.account_identity.prepare_local_identity(&mut request);
+        let mut history = HistoryRecoveryPlan::load(&self.session_affinity, &request).await;
+        let preferred_account_id = self
+            .preferred_account_id_for_request(&request, &history, now)
+            .await;
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
-        if let Some(preferred_account_id) = account_affinity.preferred_account_id() {
+        if let Some(preferred_account_id) = preferred_account_id {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
-        let mut excluded_account_ids = Vec::new();
+        let mut candidates =
+            AccountAttemptLedger::freeze(&self.account_pool, &acquire_request).await;
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut next_required_account_id: Option<String> = None;
-        let mut empty_response_retries = 0u8;
-        let mut quota_verify_attempts = 0usize;
         let mut trace = ResponseDispatchTrace::default();
-        const MAX_EMPTY_RESPONSE_RETRIES: u8 = 2;
         let (account, response, collected_response, attempt): (
             Account,
             CodexBackendResponse,
             CollectedResponse,
             ResponseDispatchAttempt,
         ) = loop {
-            let mut attempt_acquire_request = acquire_request
-                .clone()
-                .with_exclude_account_ids(excluded_account_ids.iter().cloned());
-            if let Some(account_id) = next_required_account_id.take() {
-                attempt_acquire_request =
-                    attempt_acquire_request.with_required_account_id(account_id);
-            }
-            let allow_quota_verify_account_retry =
-                attempt_acquire_request.required_account_id.is_none();
-            attempt_acquire_request.now = Utc::now();
-            let Some(acquired) = self
-                .account_pool
-                .acquire_with(&attempt_acquire_request)
-                .await
-            else {
+            let acquired = if let Some(account_id) = next_required_account_id.take() {
+                self.account_pool
+                    .acquire_with(
+                        &AccountAcquireRequest::new(request.model(), Utc::now())
+                            .with_required_account_id(account_id),
+                    )
+                    .await
+            } else {
+                candidates.acquire_next(&self.account_pool).await
+            };
+            let Some(acquired) = acquired else {
+                tracing::info!(
+                    candidate_count = candidates.candidate_count(),
+                    attempted = candidates.attempted_count(),
+                    state_excluded = candidates.state_excluded_count(),
+                    "Responses account candidate ledger exhausted"
+                );
                 let error = exhausted_accounts
                     .last_exhausted()
                     .map(ResponseDispatchError::from_exhausted_account)
@@ -235,18 +233,14 @@ impl ResponseDispatchService {
                 return Err(error);
             };
             let acquired_account_id = acquired.account.id.clone();
-
             // 配额验证
             let acquired = match verify_acquired_quota_if_required(
                 QuotaVerificationContext {
                     account_pool: self.account_pool.as_ref(),
                     codex: self.codex.as_ref(),
                     cloudflare: &self.cloudflare,
-                    installation_id: self.installation_id.as_deref(),
+                    account_identity: &self.account_identity,
                     request_id,
-                    excluded_account_ids: &mut excluded_account_ids,
-                    verify_attempts: &mut quota_verify_attempts,
-                    allow_retry_with_another_account: allow_quota_verify_account_retry,
                 },
                 acquired,
             )
@@ -254,65 +248,35 @@ impl ResponseDispatchService {
             {
                 QuotaVerificationDecision::Ready(acquired) => *acquired,
                 QuotaVerificationDecision::RetryWithAnotherAccount => {
-                    exhausted_accounts
-                        .record_rate_limited(None, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE);
-                    continue;
-                }
-                QuotaVerificationDecision::MaxAttemptsReached
-                | QuotaVerificationDecision::RequiredAccountUnavailable => {
                     exhausted_accounts.record_rate_limited(
                         Some(&acquired_account_id),
                         QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
                     );
-                    let error = exhausted_accounts
-                        .last_exhausted()
-                        .map(ResponseDispatchError::from_exhausted_account)
-                        .unwrap_or(ResponseDispatchError::NoActiveAccount);
-                    self.record_response_dispatch_error(
-                        request_id,
-                        route,
-                        requested_model,
-                        started_at,
-                        ResponseDispatchErrorDetails {
-                            client_api_key_id: request.client_api_key_id.as_deref(),
-                            account_id: Some(&acquired_account_id),
-                            stream: false,
-                            compact: false,
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&request),
-                            )),
-                        },
-                        &error,
-                    )
-                    .await;
-                    return Err(error);
+                    continue;
                 }
             };
 
-            self.apply_cascading_ban_defense(
-                &mut request,
-                &mut implicit_resume,
-                account_affinity.preferred_account_id(),
-                &acquired.account.id,
-            )
-            .await;
-            Self::strip_history_if_account_changed(
-                &mut request,
-                &mut implicit_resume,
-                &account_affinity,
-                &acquired.account.id,
-            );
+            let Some(attempt_request) = history.prepare_attempt(&request, &acquired.account.id)
+            else {
+                acquired.release_without_usage().await;
+                return Err(ResponseDispatchError::HistoryUnavailable {
+                    upstream_error: "previous response history cannot be sent to another account"
+                        .to_string(),
+                });
+            };
             self.account_pool.wait_for_request_interval(&acquired).await;
             let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
             let response_result = create_response_with_account_retrying_5xx(
-                &self.codex,
-                self.installation_id.as_deref(),
-                &self.cloudflare,
-                &request,
-                request_id,
-                &account,
+                AccountUpstreamContext {
+                    codex: &self.codex,
+                    account_identity: &self.account_identity,
+                    cloudflare: &self.cloudflare,
+                    request_id,
+                    account: &account,
+                },
+                &attempt_request,
                 started_at,
             )
             .await;
@@ -368,54 +332,31 @@ impl ResponseDispatchService {
                                 image_generation_requested,
                             )
                             .await;
-                        empty_response_retries += 1;
-                        if empty_response_retries <= MAX_EMPTY_RESPONSE_RETRIES {
-                            continue;
+                        exhausted_accounts.record_upstream_unavailable(
+                            Some(&release_account_id),
+                            "upstream response did not include visible output",
+                        );
+                        if !history.can_failover() {
+                            break (account, response, collected_response, attempt);
                         }
+                        continue;
                     }
                     if let CollectedResponse::Failed(failure) = &collected_response {
                         if is_history_recovery_sse_failure(failure)
-                            && self
-                                .try_recover_implicit_resume(
-                                    &mut request,
-                                    &mut implicit_resume,
-                                    &release_account_id,
-                                    sse_failure_invalid_reasoning_replay(failure),
-                                )
-                                .await
+                            && history.recover_managed_history(&release_account_id)
                         {
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
                         if is_model_unsupported_sse_failure(failure) {
                             let upstream_error = sse_failure_error_body(failure);
-                            if let Some(exhausted) = exhausted_accounts
-                                .model_unsupported_retry_exhausted(upstream_error.clone())
-                            {
-                                let error =
-                                    ResponseDispatchError::from_exhausted_account(exhausted);
-                                self.record_response_dispatch_error(
-                                    request_id,
-                                    route,
-                                    requested_model,
-                                    started_at,
-                                    ResponseDispatchErrorDetails {
-                                        client_api_key_id: request.client_api_key_id.as_deref(),
-                                        account_id: Some(&release_account_id),
-                                        stream: false,
-                                        compact: false,
-                                        transport: Some(backend_transport_name(response.transport)),
-                                    },
-                                    &error,
-                                )
-                                .await;
-                                return Err(error);
-                            }
                             exhausted_accounts.record_model_unsupported(
                                 Some(&release_account_id),
                                 upstream_error,
                             );
-                            excluded_account_ids.push(release_account_id);
+                            if !history.can_failover() {
+                                break (account, response, collected_response, attempt);
+                            }
                             continue;
                         }
                         if is_quota_exhausted_sse_failure(failure) {
@@ -426,7 +367,9 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                                 .await;
-                            excluded_account_ids.push(release_account_id);
+                            if !history.can_failover() {
+                                break (account, response, collected_response, attempt);
+                            }
                             continue;
                         }
                         if is_auth_sse_failure(failure) {
@@ -441,7 +384,9 @@ impl ResponseDispatchService {
                             self.account_pool
                                 .set_status(&release_account_id, account_status)
                                 .await;
-                            excluded_account_ids.push(release_account_id);
+                            if !history.can_failover() {
+                                break (account, response, collected_response, attempt);
+                            }
                             continue;
                         }
                     }
@@ -456,7 +401,9 @@ impl ResponseDispatchService {
                     self.account_pool
                         .mark_quota_limited_until(&release_account_id, cooldown_until)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_quota_exhausted_upstream_error(&error) => {
                     exhausted_accounts.record_quota_exhausted(
@@ -466,7 +413,9 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::QuotaExhausted)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_auth_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
@@ -480,7 +429,9 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, account_status)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
                     exhausted_accounts.record_cloudflare_challenge(
@@ -490,7 +441,9 @@ impl ResponseDispatchService {
                     self.cloudflare
                         .apply_challenge(self.account_pool.as_ref(), &release_account_id)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
                     exhausted_accounts.record_cloudflare_path_blocked(
@@ -500,36 +453,17 @@ impl ResponseDispatchService {
                     self.cloudflare
                         .apply_path_block(self.account_pool.as_ref(), &release_account_id)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_model_unsupported_upstream_error(&error) => {
                     let upstream_error = upstream_error_body(&error);
-                    if let Some(exhausted) =
-                        exhausted_accounts.model_unsupported_retry_exhausted(upstream_error.clone())
-                    {
-                        let error = ResponseDispatchError::from_exhausted_account(exhausted);
-                        self.record_response_dispatch_error(
-                            request_id,
-                            route,
-                            requested_model,
-                            started_at,
-                            ResponseDispatchErrorDetails {
-                                client_api_key_id: request.client_api_key_id.as_deref(),
-                                account_id: Some(&release_account_id),
-                                stream: false,
-                                compact: false,
-                                transport: Some(backend_transport_name(
-                                    backend_transport_for_response_request(&request),
-                                )),
-                            },
-                            &error,
-                        )
-                        .await;
-                        return Err(error);
-                    }
                     exhausted_accounts
                         .record_model_unsupported(Some(&release_account_id), upstream_error);
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) if is_banned_upstream_error(&error) => {
                     exhausted_accounts.record_auth_failure(
@@ -541,20 +475,16 @@ impl ResponseDispatchService {
                     self.account_pool
                         .set_status(&release_account_id, AccountStatus::Banned)
                         .await;
-                    excluded_account_ids.push(release_account_id);
+                    if !history.can_failover() {
+                        return Err(ResponseDispatchError::Upstream(error));
+                    }
                 }
                 Err(error) => {
+                    if is_continuation_busy_error(&error) {
+                        return Err(ResponseDispatchError::ContinuationBusy);
+                    }
                     let history_unavailable = is_history_recovery_upstream_error(&error);
-                    if history_unavailable
-                        && self
-                            .try_recover_implicit_resume(
-                                &mut request,
-                                &mut implicit_resume,
-                                &release_account_id,
-                                client_error_invalid_reasoning_replay(&error),
-                            )
-                            .await
-                    {
+                    if history_unavailable && history.recover_managed_history(&release_account_id) {
                         next_required_account_id = Some(release_account_id);
                         continue;
                     }
@@ -567,14 +497,27 @@ impl ResponseDispatchService {
                         model: requested_model,
                         started_at,
                         stream: false,
-                        transport: backend_transport_for_response_request(&request),
-                        request: &request,
+                        transport: backend_transport_for_response_request(&attempt_request),
+                        request: &attempt_request,
                         error: &error,
                         trace: &trace,
                         attempt: Some(&attempt),
                     })
                     .await;
+                    if is_retryable_account_transport_error(&error) {
+                        if !history.can_failover() {
+                            return Err(ResponseDispatchError::Upstream(error));
+                        }
+                        exhausted_accounts.record_upstream_unavailable(
+                            Some(&release_account_id),
+                            upstream_error_body(&error),
+                        );
+                        continue;
+                    }
                     if history_unavailable {
+                        if history.is_external_unknown() {
+                            return Err(ResponseDispatchError::Upstream(error));
+                        }
                         return Err(ResponseDispatchError::HistoryUnavailable {
                             upstream_error: upstream_error_body(&error),
                         });
@@ -584,8 +527,9 @@ impl ResponseDispatchService {
             }
         };
 
+        let completed = matches!(&collected_response, CollectedResponse::Completed(_));
         match collected_response {
-            CollectedResponse::Completed(body) => {
+            CollectedResponse::Completed(body) | CollectedResponse::Incomplete(body) => {
                 let response_id = body.get("id").and_then(Value::as_str);
                 self.cloudflare.reset_account_recovery(&account.id).await;
                 if let Some(usage) = response.usage {
@@ -598,20 +542,33 @@ impl ResponseDispatchService {
                         )
                         .await;
                 }
-                self.record_response_affinity(
-                    &request,
-                    &account.id,
-                    &response.body,
-                    response.turn_state.clone(),
-                    response.usage,
-                )
-                .await;
+                if completed {
+                    self.record_response_affinity(
+                        &history,
+                        &request,
+                        &account.id,
+                        &response.body,
+                        response.turn_state.clone(),
+                        response.usage,
+                    )
+                    .await;
+                }
+                let effective_model = response
+                    .response_metadata
+                    .effective_model
+                    .as_deref()
+                    .unwrap_or(&display_model);
                 let mut metadata = json!({
                     "responseId": response_id,
                     "stream": false,
+                    "completed": completed,
+                    "incomplete": !completed,
                     "transport": backend_transport_name(response.transport),
                     "firstTokenMs": response.first_token_ms,
                     "usage": response.usage,
+                    "effectiveModel": effective_model,
+                    "modelsEtag": response.response_metadata.models_etag.as_deref(),
+                    "reasoningIncluded": response.response_metadata.reasoning_included,
                 });
                 insert_response_status_metadata(
                     &mut metadata,
@@ -628,7 +585,7 @@ impl ResponseDispatchService {
                     client_api_key_id: request.client_api_key_id.as_deref(),
                     account_id: &account.id,
                     route,
-                    model: &display_model,
+                    model: effective_model,
                     requested_model: Some(requested_model),
                     client_ip: request.client_ip.as_deref(),
                     client_user_agent: request.client_user_agent.as_deref(),
@@ -636,21 +593,24 @@ impl ResponseDispatchService {
                     service_tier: request.service_tier(),
                     started_at,
                     status_code: 200,
-                    message: "v1 responses completed",
+                    message: if completed {
+                        "v1 responses completed"
+                    } else {
+                        "v1 responses incomplete"
+                    },
                     metadata,
                     rate_limit_headers: &response.rate_limit_headers,
                 })
                 .await;
-                Ok(body)
+                self.models
+                    .observe_models_etag(response.response_metadata.models_etag.as_deref());
+                Ok(ResponseDispatchResponse {
+                    body,
+                    response_headers: response.response_metadata.client_headers,
+                })
             }
             CollectedResponse::Failed(failure) => {
-                let error = if is_history_recovery_sse_failure(&failure) {
-                    ResponseDispatchError::HistoryUnavailable {
-                        upstream_error: sse_failure_error_body(&failure),
-                    }
-                } else {
-                    ResponseDispatchError::Failed(failure)
-                };
+                let error = ResponseDispatchError::Failed(failure);
                 self.record_response_dispatch_error(
                     request_id,
                     route,

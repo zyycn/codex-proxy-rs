@@ -12,12 +12,12 @@ impl CodexBackendClient {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             fingerprint,
             websocket_pool: None,
-            websocket_first_token_timeout: Some(DEFAULT_FIRST_TOKEN_TIMEOUT),
+            websocket_initial_event_timeout: Some(DEFAULT_INITIAL_EVENT_TIMEOUT),
         }
     }
 
-    pub fn with_websocket_first_token_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.websocket_first_token_timeout = timeout.filter(|timeout| !timeout.is_zero());
+    pub fn with_websocket_initial_event_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.websocket_initial_event_timeout = timeout.filter(|timeout| !timeout.is_zero());
         self
     }
 
@@ -55,6 +55,7 @@ impl CodexBackendClient {
         let turn_state = response_meta::turn_state(response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
         if !status.is_success() {
@@ -88,6 +89,7 @@ impl CodexBackendClient {
             first_token_ms,
             websocket_pool_decision: None,
             diagnostics,
+            response_metadata,
         })
     }
 
@@ -110,6 +112,7 @@ impl CodexBackendClient {
         let turn_state = response_meta::turn_state(response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
         if !status.is_success() {
@@ -134,6 +137,7 @@ impl CodexBackendClient {
             turn_state_update: None,
             websocket_pool_decision: None,
             diagnostics,
+            response_metadata,
         })
     }
 
@@ -284,7 +288,7 @@ impl CodexBackendClient {
                     &prepared,
                     Some((pool, key)),
                     started_at,
-                    self.websocket_first_token_timeout,
+                    self.websocket_initial_event_timeout,
                 )
                 .await
             }
@@ -293,7 +297,7 @@ impl CodexBackendClient {
                     &prepared,
                     None,
                     started_at,
-                    self.websocket_first_token_timeout,
+                    self.websocket_initial_event_timeout,
                 )
                 .await
             }
@@ -316,6 +320,7 @@ impl CodexBackendClient {
             first_token_ms: exchange.first_token_ms,
             websocket_pool_decision: exchange.pool_decision,
             diagnostics: exchange.diagnostics,
+            response_metadata: exchange.response_metadata,
         })
     }
 
@@ -349,7 +354,7 @@ impl CodexBackendClient {
                 execute_response_create_request_stream_with_pool(
                     &prepared,
                     Some((pool, key)),
-                    self.websocket_first_token_timeout,
+                    self.websocket_initial_event_timeout,
                 )
                 .await
             }
@@ -357,7 +362,7 @@ impl CodexBackendClient {
                 execute_response_create_request_stream_with_pool(
                     &prepared,
                     None,
-                    self.websocket_first_token_timeout,
+                    self.websocket_initial_event_timeout,
                 )
                 .await
             }
@@ -384,6 +389,7 @@ impl CodexBackendClient {
             turn_state_update: Some(exchange.turn_state_update),
             websocket_pool_decision: exchange.pool_decision,
             diagnostics: exchange.diagnostics,
+            response_metadata: exchange.response_metadata,
         })
     }
 
@@ -395,8 +401,8 @@ impl CodexBackendClient {
     ) -> Option<CodexWebSocketPoolKey> {
         let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request
-            .prompt_cache_key()
-            .or(request.client_conversation_id.as_deref())
+            .local_conversation_id
+            .as_deref()
             .or(request.previous_response_id())?;
         Some(CodexWebSocketPoolKey::new(
             &self.base_url,
@@ -424,6 +430,7 @@ impl CodexBackendClient {
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let body = response.text().await?;
 
@@ -456,6 +463,7 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
             diagnostics,
+            response_metadata,
         })
     }
 
@@ -513,7 +521,7 @@ impl CodexBackendClient {
 
     fn request_headers(&self, context: CodexRequestContext<'_>) -> CodexClientResult<HeaderMap> {
         let fingerprint = self.fingerprint.current();
-        let request_id = context.session_id.unwrap_or(context.request_id);
+        let request_id = context.client_request_id.unwrap_or(context.request_id);
         let ordered_headers = build_ordered_codex_base_headers(
             &fingerprint,
             context.access_token,
@@ -543,7 +551,8 @@ impl CodexBackendClient {
             context.installation_id,
         )?;
         insert_optional_header(&mut headers, "session-id", context.session_id)?;
-        insert_optional_header(&mut headers, "thread-id", context.session_id)?;
+        insert_optional_header(&mut headers, "thread-id", context.thread_id)?;
+        insert_optional_header(&mut headers, "x-codex-turn-id", context.turn_id)?;
         insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
         insert_optional_header(&mut headers, "x-codex-turn-state", context.turn_state)?;
         insert_optional_header(&mut headers, "x-codex-turn-metadata", context.turn_metadata)?;
@@ -635,12 +644,21 @@ impl CodexBackendClient {
         );
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
-            HeaderValue::from_str(&Uuid::new_v4().to_string())?,
+            HeaderValue::from_str(context.client_request_id.unwrap_or(context.request_id))?,
         );
         insert_optional_header(
             &mut headers,
             "x-codex-installation-id",
             context.installation_id,
+        )?;
+        insert_optional_header(&mut headers, "session-id", context.session_id)?;
+        insert_optional_header(&mut headers, "thread-id", context.thread_id)?;
+        insert_optional_header(&mut headers, "x-codex-turn-id", context.turn_id)?;
+        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
+        insert_optional_header(
+            &mut headers,
+            "x-codex-parent-thread-id",
+            context.parent_thread_id,
         )?;
 
         Ok(headers)

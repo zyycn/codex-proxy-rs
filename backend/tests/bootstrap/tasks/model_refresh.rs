@@ -7,6 +7,7 @@ use std::{
 
 use codex_proxy_rs::{
     fleet::pool::{AccountAcquireRequest, AccountPoolOptions, AccountPoolService},
+    infra::identity::AccountPseudonymizer,
     models::{
         store::{ModelSnapshotStore, ModelSnapshotStoreResult},
         types::{BackendModelEntry, ModelPlanSnapshot},
@@ -30,6 +31,7 @@ async fn model_refresh_task_should_start_and_shutdown() {
     let handle = codex_proxy_rs::bootstrap::tasks::model_refresh::ModelRefreshTask::new(
         model_service,
         account_pool,
+        Arc::new(AccountPseudonymizer::new([7; 32])),
     )
     .start();
 
@@ -78,6 +80,7 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
     codex_proxy_rs::bootstrap::tasks::model_refresh::ModelRefreshTask::new(
         model_service,
         account_pool.clone(),
+        Arc::new(AccountPseudonymizer::new([7; 32])),
     )
     .refresh_once()
     .await

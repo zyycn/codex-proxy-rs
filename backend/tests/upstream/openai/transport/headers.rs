@@ -301,6 +301,10 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
                 cookie_header: None,
                 installation_id: Some("install-123"),
                 session_id: Some("cp_derived"),
+                thread_id: None,
+                prompt_cache_key: Some("cp_derived"),
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await
@@ -332,7 +336,6 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
             "ignored_non_string": 42,
             "x-codex-installation-id": "install-123",
             "session_id": "cp_derived",
-            "thread_id": "cp_derived",
             "x-codex-window-id": "cw_derived",
             "x-codex-turn-metadata": "{\"thread_source\":\"subagent\"}",
             "x-codex-parent-thread-id": "parent-456"
@@ -342,7 +345,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     let headers = received_headers.lock().unwrap().clone();
     assert!(headers
         .iter()
-        .any(|(name, value)| name == "x-client-request-id" && value == "cp_derived"));
+        .any(|(name, value)| name == "x-client-request-id" && value == "req_ws_security"));
     assert!(headers
         .iter()
         .any(|(name, value)| name == "x-codex-installation-id" && value == "install-123"));
@@ -373,9 +376,7 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     assert!(headers
         .iter()
         .any(|(name, value)| name == "session-id" && value == "cp_derived"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "thread-id" && value == "cp_derived"));
+    assert!(headers.iter().all(|(name, _)| name != "thread-id"));
     assert!(headers.iter().all(|(name, _)| name != "content-type"));
     assert!(headers.iter().all(|(name, _)| name != "accept"));
     assert!(headers.iter().all(|(name, _)| name != "session_id"));
@@ -402,9 +403,7 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
         .and(wiremock::matchers::body_json(json!({
             "model": "gpt-5.5",
             "instructions": "",
-            "input": [],
-            "stream": true,
-            "store": false
+            "input": []
         })))
         .respond_with(
             wiremock::ResponseTemplate::new(200)
@@ -448,6 +447,10 @@ async fn codex_backend_client_should_send_desktop_headers_and_capture_response_m
                 cookie_header: Some("cf_clearance=old"),
                 installation_id: None,
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await
@@ -517,6 +520,10 @@ async fn codex_backend_client_should_use_latest_runtime_fingerprint_for_new_requ
         cookie_header: None,
         installation_id: None,
         session_id: None,
+        thread_id: None,
+        prompt_cache_key: None,
+        client_request_id: None,
+        turn_id: None,
     };
 
     client
@@ -592,6 +599,10 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
             cookie_header: Some("cf_clearance=old"),
             installation_id: Some("install-1"),
             session_id: Some("session-1"),
+            thread_id: None,
+            prompt_cache_key: None,
+            client_request_id: None,
+            turn_id: None,
         })
         .await
         .unwrap();
@@ -748,6 +759,10 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
                 cookie_header: Some("cf_clearance=old"),
                 installation_id: Some("install-1"),
                 session_id: Some("session-1"),
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await
@@ -778,7 +793,6 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
             "x-client-request-id",
             "x-codex-installation-id",
             "session-id",
-            "thread-id",
             "x-codex-window-id",
             "x-codex-turn-state",
             "x-codex-turn-metadata",
@@ -820,6 +834,12 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
                 client_ip: None,
                 client_user_agent: None,
                 client_api_key_id: None,
+                client_session_id: None,
+                client_thread_id: None,
+                client_request_id: None,
+                client_turn_id: None,
+                client_window_id: None,
+                client_parent_thread_id: None,
             },
             CodexRequestContext {
                 access_token: "access-token",
@@ -835,6 +855,10 @@ async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order()
                 cookie_header: Some("cf_clearance=old"),
                 installation_id: Some("install-1"),
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             },
         )
         .await

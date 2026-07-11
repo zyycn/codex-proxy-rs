@@ -1,13 +1,14 @@
-//! 数据目录、installation ID 等路径辅助。
+//! 数据目录与持久身份密钥路径辅助。
 
 use std::{
     fs, io,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use uuid::Uuid;
+use rand::Rng;
 
-const INSTALLATION_ID_FILE_NAME: &str = "installation_id";
+const IDENTITY_SECRET_FILE_NAME: &str = "identity_hmac_secret";
 
 fn data_dir() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".runtime/data"))
@@ -20,73 +21,49 @@ pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-fn codex_desktop_installation_id_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".codex").join(INSTALLATION_ID_FILE_NAME))
-}
+/// 读取或创建账号身份隔离使用的 256-bit HMAC 密钥。
+pub fn load_or_create_identity_secret(data_dir: &Path) -> io::Result<[u8; 32]> {
+    let path = data_dir.join(IDENTITY_SECRET_FILE_NAME);
+    match read_identity_secret(&path) {
+        Ok(Some(secret)) => return Ok(secret),
+        Ok(None) => {}
+        Err(error) => return Err(error),
+    }
 
-fn data_installation_id_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(INSTALLATION_ID_FILE_NAME)
-}
-
-/// 按读取优先级读取或生成 installation ID。
-///
-/// 顺序为本应用数据目录文件、真实 Codex Desktop 文件、生成并写入本应用数据目录。
-/// 当 `data_dir` 为 `None` 且没有可读文件时，返回一个不会持久化的新 UUID。
-pub fn load_or_create_installation_id(data_dir: Option<&Path>) -> io::Result<String> {
-    let codex_path = codex_desktop_installation_id_path();
-    let data_path = data_dir.map(data_installation_id_path);
-    load_or_create_installation_id_from_paths(codex_path.as_deref(), data_path.as_deref())
-}
-
-fn load_or_create_installation_id_from_paths(
-    codex_desktop_path: Option<&Path>,
-    data_path: Option<&Path>,
-) -> io::Result<String> {
-    if let Some(path) = data_path {
-        if let Some(id) = read_installation_id(path)? {
-            return Ok(id);
+    let mut secret = [0u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(hex::encode(secret).as_bytes())?;
+            file.sync_all()?;
+            Ok(secret)
         }
-    }
-
-    if let Some(path) = codex_desktop_path {
-        if let Some(id) = read_installation_id(path)? {
-            if let Some(data_path) = data_path {
-                persist_installation_id(data_path, &id)?;
-            }
-            return Ok(id);
-        }
-    }
-
-    if let Some(path) = data_path {
-        let generated = generate_installation_id();
-        persist_installation_id(path, &generated)?;
-        return Ok(generated);
-    }
-
-    Ok(generate_installation_id())
-}
-
-fn read_installation_id(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(parse_installation_id(&content)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => read_identity_secret(&path)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid identity secret")),
         Err(error) => Err(error),
     }
 }
 
-fn persist_installation_id(path: &Path, installation_id: &str) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, installation_id)
-}
-
-fn parse_installation_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    Uuid::parse_str(trimmed).ok()?;
-    Some(trimmed.to_string())
-}
-
-fn generate_installation_id() -> String {
-    Uuid::new_v4().to_string()
+fn read_identity_secret(path: &Path) -> io::Result<Option<[u8; 32]>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let decoded = hex::decode(raw.trim())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let secret = decoded.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "identity secret must be 32 bytes",
+        )
+    })?;
+    Ok(Some(secret))
 }

@@ -12,6 +12,7 @@ pub(crate) enum ExhaustedAccountKind {
     CloudflareChallenge,
     CloudflarePathBlocked,
     ModelUnsupported,
+    UpstreamUnavailable,
 }
 
 impl ExhaustedAccountKind {
@@ -25,6 +26,7 @@ impl ExhaustedAccountKind {
             Self::CloudflareChallenge => "cloudflare-challenge",
             Self::CloudflarePathBlocked => "cloudflare-path-block",
             Self::ModelUnsupported => "model-unsupported",
+            Self::UpstreamUnavailable => "upstream-unavailable",
         }
     }
 }
@@ -56,7 +58,7 @@ pub(crate) struct AccountExhaustionTracker {
     cloudflare_challenge: ExhaustedCounter,
     cloudflare_path_blocked: ExhaustedCounter,
     model_unsupported: ExhaustedCounter,
-    model_unsupported_retry_used: bool,
+    upstream_unavailable: ExhaustedCounter,
 }
 
 #[derive(Default)]
@@ -143,7 +145,6 @@ impl AccountExhaustionTracker {
         account_id: Option<&str>,
         upstream_error: impl Into<String>,
     ) {
-        self.model_unsupported_retry_used = true;
         self.record(
             account_id,
             ExhaustedAccountKind::ModelUnsupported,
@@ -152,16 +153,17 @@ impl AccountExhaustionTracker {
         );
     }
 
-    pub(crate) fn model_unsupported_retry_exhausted(
-        &self,
+    pub(crate) fn record_upstream_unavailable(
+        &mut self,
+        account_id: Option<&str>,
         upstream_error: impl Into<String>,
-    ) -> Option<ExhaustedAccount> {
-        self.model_unsupported_retry_used.then(|| ExhaustedAccount {
-            kind: ExhaustedAccountKind::ModelUnsupported,
-            count: self.model_unsupported.count + 1,
-            upstream_error: upstream_error.into(),
-            status_code: None,
-        })
+    ) {
+        self.record(
+            account_id,
+            ExhaustedAccountKind::UpstreamUnavailable,
+            upstream_error,
+            None,
+        );
     }
 
     pub(crate) fn last_exhausted(&self) -> Option<ExhaustedAccount> {
@@ -204,6 +206,7 @@ impl AccountExhaustionTracker {
             ExhaustedAccountKind::CloudflareChallenge => &self.cloudflare_challenge,
             ExhaustedAccountKind::CloudflarePathBlocked => &self.cloudflare_path_blocked,
             ExhaustedAccountKind::ModelUnsupported => &self.model_unsupported,
+            ExhaustedAccountKind::UpstreamUnavailable => &self.upstream_unavailable,
         }
     }
 
@@ -217,6 +220,7 @@ impl AccountExhaustionTracker {
             ExhaustedAccountKind::CloudflareChallenge => &mut self.cloudflare_challenge,
             ExhaustedAccountKind::CloudflarePathBlocked => &mut self.cloudflare_path_blocked,
             ExhaustedAccountKind::ModelUnsupported => &mut self.model_unsupported,
+            ExhaustedAccountKind::UpstreamUnavailable => &mut self.upstream_unavailable,
         }
     }
 }

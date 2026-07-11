@@ -71,12 +71,21 @@ pub struct AccountPoolService {
     store: Arc<dyn AccountStore>,
     usage_store: Arc<dyn AccountUsageStore>,
     request_interval: Arc<std::sync::RwLock<StdDuration>>,
+    candidate_changed: Arc<tokio::sync::Notify>,
 }
 
 /// 一次请求对账号池 slot 的唯一所有权凭据。
 pub struct AccountLease {
     acquired: AcquiredAccount,
     slot: AccountSlotLease,
+}
+
+/// 冻结候选后的单账号实时租用结果。
+#[derive(Debug)]
+pub enum AccountCandidateLease {
+    Acquired(Box<AccountLease>),
+    Busy,
+    Unavailable,
 }
 
 impl AccountLease {
@@ -190,6 +199,7 @@ impl AccountPoolService {
             request_interval: Arc::new(std::sync::RwLock::new(StdDuration::from_millis(
                 request_interval_ms,
             ))),
+            candidate_changed: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -300,6 +310,7 @@ impl AccountPoolService {
         let Some(released) = released else {
             return;
         };
+        self.candidate_changed.notify_one();
         if !record_request_usage {
             return;
         }
@@ -385,6 +396,47 @@ impl AccountPoolService {
         self.persist_runtime_account_states(refresh.refreshed_accounts)
             .await;
         lease
+    }
+
+    /// 冻结请求开始时跨全部订阅层级的有序候选账号 ID。
+    pub async fn candidate_snapshot(&self, request: &AccountAcquireRequest) -> Vec<String> {
+        let refresh = self
+            .pool
+            .lock()
+            .await
+            .candidate_snapshot_with_status_refresh(request);
+        self.persist_runtime_account_states(refresh.refreshed_accounts)
+            .await;
+        refresh.account_ids
+    }
+
+    /// 按候选 ID 重新读取实时状态并租用账号。
+    pub async fn acquire_candidate(
+        &self,
+        model: &str,
+        account_id: &str,
+        now: DateTime<Utc>,
+    ) -> AccountCandidateLease {
+        let refresh = self
+            .pool
+            .lock()
+            .await
+            .acquire_candidate_with_status_refresh(model, account_id, now);
+        let decision = match refresh.decision {
+            AccountCandidateAcquireDecision::Acquired(acquired) => AccountCandidateLease::Acquired(
+                Box::new(AccountLease::new(self.clone(), *acquired)),
+            ),
+            AccountCandidateAcquireDecision::Busy => AccountCandidateLease::Busy,
+            AccountCandidateAcquireDecision::Unavailable => AccountCandidateLease::Unavailable,
+        };
+        self.persist_runtime_account_states(refresh.refreshed_accounts)
+            .await;
+        decision
+    }
+
+    /// 等待任一账号 slot 或运行状态发生变化后重试 Busy 候选。
+    pub async fn wait_for_candidate_change(&self) {
+        self.candidate_changed.notified().await;
     }
 
     /// 按订阅计划各选一个可用账号，用于刷新模型列表。

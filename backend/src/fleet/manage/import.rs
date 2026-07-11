@@ -226,6 +226,8 @@ impl AccountManageService {
         }
 
         let request_id = uuid::Uuid::new_v4().to_string();
+        let installation_id =
+            account_id.map(|account_id| self.account_pseudonymizer.installation_id(account_id));
         let context = crate::upstream::openai::transport::CodexRequestContext {
             access_token,
             account_id,
@@ -238,8 +240,12 @@ impl AccountManageService {
             codex_window_id: None,
             parent_thread_id: None,
             cookie_header: None,
-            installation_id: self.installation_id.as_deref(),
+            installation_id: installation_id.as_deref(),
             session_id: None,
+            thread_id: None,
+            prompt_cache_key: None,
+            client_request_id: None,
+            turn_id: None,
         };
 
         match self.codex.fetch_usage(context).await {

@@ -1,8 +1,8 @@
 use std::{ffi::OsString, fs, sync::Mutex};
 
-use codex_proxy_rs::infra::paths::{ensure_data_dir, load_or_create_installation_id};
+use codex_proxy_rs::infra::paths::{ensure_data_dir, load_or_create_identity_secret};
 
-const INSTALLATION_ID_FILE_NAME: &str = "installation_id";
+const IDENTITY_SECRET_FILE_NAME: &str = "identity_hmac_secret";
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -18,37 +18,33 @@ fn data_dir_should_use_xdg_data_home_directly() {
 }
 
 #[test]
-fn load_or_create_installation_id_should_persist_under_data_dir_root() {
+fn identity_secret_should_be_stable_and_owner_only() {
     let dir = tempfile::tempdir().unwrap();
 
-    let installation_id =
-        load_or_create_installation_id(Some(dir.path())).expect("installation id should generate");
+    let first = load_or_create_identity_secret(dir.path()).expect("secret should generate");
+    let second = load_or_create_identity_secret(dir.path()).expect("secret should reload");
 
-    assert_eq!(
-        fs::read_to_string(dir.path().join(INSTALLATION_ID_FILE_NAME)).unwrap(),
-        installation_id
-    );
+    assert_eq!(first, second);
+    let path = dir.path().join(IDENTITY_SECRET_FILE_NAME);
+    assert_eq!(fs::read_to_string(&path).unwrap(), hex::encode(first));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }
 
 #[test]
-fn load_or_create_installation_id_should_seed_data_dir_from_codex_desktop_id() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let data = tempfile::tempdir().unwrap();
-    let codex_path = home.path().join(".codex").join(INSTALLATION_ID_FILE_NAME);
-    let desktop_id = "018f8f6b-1d7b-7b7c-b9c8-8c9f4c6d0e1a";
-    fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
-    fs::write(&codex_path, desktop_id).unwrap();
-    let _home = EnvVarGuard::set("HOME", home.path().as_os_str().to_owned());
+fn identity_secret_should_fail_closed_when_existing_file_is_invalid() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(IDENTITY_SECRET_FILE_NAME), "not-a-secret").unwrap();
 
-    let installation_id =
-        load_or_create_installation_id(Some(data.path())).expect("installation id should seed");
+    let error = load_or_create_identity_secret(dir.path()).expect_err("invalid secret must fail");
 
-    assert_eq!(installation_id, desktop_id);
-    assert_eq!(
-        fs::read_to_string(data.path().join(INSTALLATION_ID_FILE_NAME)).unwrap(),
-        desktop_id
-    );
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 
 struct EnvVarGuard {

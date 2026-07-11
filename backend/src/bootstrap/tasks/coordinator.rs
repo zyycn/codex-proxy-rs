@@ -53,9 +53,23 @@ impl TaskCoordinator {
         );
         coordinator.push(
             "model_refresh",
-            ModelRefreshTask::new(services.models.clone(), services.account_pool.clone())
-                .with_installation_id(services.installation_id.clone())
-                .start(),
+            ModelRefreshTask::new(
+                services.models.clone(),
+                services.account_pool.clone(),
+                services.account_pseudonymizer.clone(),
+            )
+            .start(),
+        );
+        coordinator.push(
+            "model_etag_refresh",
+            SchedulerHandle::spawn(
+                ModelRefreshTask::new(
+                    services.models.clone(),
+                    services.account_pool.clone(),
+                    services.account_pseudonymizer.clone(),
+                )
+                .run_etag_refreshes(),
+            ),
         );
         if config.auth.refresh_enabled {
             coordinator.push(
@@ -69,6 +83,7 @@ impl TaskCoordinator {
                 stores.accounts.clone(),
                 stores.account_usage.clone(),
                 services.codex.clone(),
+                services.account_pseudonymizer.clone(),
                 config
                     .quota
                     .refresh_interval_minutes
@@ -76,7 +91,6 @@ impl TaskCoordinator {
                     .max(1),
                 30 * 60,
             )
-            .with_installation_id(services.installation_id.clone())
             .with_cookie_store(stores.cookies.clone())
             .with_account_pool(services.account_pool.clone())
             .start(),

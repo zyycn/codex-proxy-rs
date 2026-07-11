@@ -82,14 +82,11 @@ impl AccountManageService {
             plan_type: plan_type.to_string(),
             access_token: account.access_token.expose_secret().to_string(),
             account_id: account.account_id.clone(),
+            installation_id: self.account_pseudonymizer.installation_id(&account.id),
         };
         if let Err(error) = self
             .models
-            .refresh_backend_models_with_installation_id(
-                &[plan_account],
-                &request_id,
-                self.installation_id.as_deref(),
-            )
+            .refresh_backend_models(&[plan_account], &request_id)
             .await
         {
             tracing::warn!(
@@ -121,7 +118,7 @@ impl AccountManageService {
             .await
             .ok()
             .flatten();
-        let installation_id = self.installation_id.clone();
+        let installation_id = self.account_pseudonymizer.installation_id(&account.id);
         let codex = self.codex.clone();
         let service = self.clone();
         let stored_account_id = account.id.clone();
@@ -161,8 +158,12 @@ impl AccountManageService {
                 codex_window_id: None,
                 parent_thread_id: None,
                 cookie_header: cookie_header.as_deref(),
-                installation_id: installation_id.as_deref(),
+                installation_id: Some(&installation_id),
                 session_id: None,
+                thread_id: None,
+                prompt_cache_key: None,
+                client_request_id: None,
+                turn_id: None,
             };
 
             let outcome = match codex.create_response_stream(&request, context).await {
@@ -265,6 +266,8 @@ fn test_responses_request(model: String) -> CodexResponsesRequest {
             ]
         })],
     );
+    request.set_stream(true);
+    request.set_store(false);
     request.force_http_sse = true;
     request
 }

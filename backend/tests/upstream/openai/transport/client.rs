@@ -64,8 +64,9 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
     .with_websocket_pool(Arc::new(pool));
     let mut request = CodexResponsesRequest::new_http_sse("gpt-5.5", "be brief", Vec::new());
     request.force_http_sse = false;
-    request.set_previous_response_id(Some("resp_runtime_pool_previous".to_string()));
+    request.use_websocket = true;
     request.set_prompt_cache_key(Some("conversation-runtime-pool".to_string()));
+    request.local_conversation_id = Some("conversation-runtime-pool".to_string());
 
     let first = backend
         .create_response(
@@ -74,6 +75,7 @@ async fn codex_backend_client_should_apply_configured_websocket_pool() {
         )
         .await
         .expect("first runtime websocket response should succeed");
+    request.set_previous_response_id(Some("resp_runtime_pool_first".to_string()));
     let second = backend
         .create_response(
             &request,

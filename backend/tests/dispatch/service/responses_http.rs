@@ -60,6 +60,11 @@ async fn responses_should_honor_explicit_http_sse_transport() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
+                .insert_header("openai-model", "gpt-5.5-effective")
+                .insert_header("x-models-etag", "models-etag-2")
+                .insert_header("x-reasoning-included", "true")
+                .insert_header("set-cookie", "account-secret=value")
+                .insert_header("x-codex-primary-used-percent", "12")
                 .set_body_string(RESPONSES_STREAM_USAGE_SSE),
         )
         .expect(1)
@@ -87,6 +92,26 @@ async fn responses_should_honor_explicit_http_sse_transport() {
         .await
         .unwrap();
     let status = response.status();
+    let effective_model = response
+        .headers()
+        .get("openai-model")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let models_etag = response
+        .headers()
+        .get("x-models-etag")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let reasoning_included = response
+        .headers()
+        .get("x-reasoning-included")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    assert!(response.headers().get("set-cookie").is_none());
+    assert!(response
+        .headers()
+        .get("x-codex-primary-used-percent")
+        .is_none());
     let body = response_text(response).await;
     let requests = server.received_requests().await.unwrap();
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
@@ -96,6 +121,9 @@ async fn responses_should_honor_explicit_http_sse_transport() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method.as_str(), "POST");
     assert_eq!(upstream_body["model"], "gpt-5.5");
+    assert_eq!(effective_model.as_deref(), Some("gpt-5.5-effective"));
+    assert_eq!(models_etag.as_deref(), Some("models-etag-2"));
+    assert_eq!(reasoning_included.as_deref(), Some("true"));
     assert!(upstream_body.get("use_websocket").is_none());
 }
 
@@ -254,13 +282,14 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
     // 透明代理：`generate` 原样透传上游，不再被剥离。
     assert_eq!(captured.payload["generate"], false);
     assert!(captured.payload.get("previous_response_id").is_none());
-    assert!(captured.payload["prompt_cache_key"]
+    assert!(captured.payload.get("prompt_cache_key").is_none());
+    let metadata = captured.payload["client_metadata"]
+        .as_object()
+        .expect("official websocket timing metadata should be present");
+    assert_eq!(metadata.len(), 1);
+    assert!(metadata["x-codex-ws-stream-request-start-ms"]
         .as_str()
-        .is_some_and(|value| value.starts_with("cp_")));
-    assert!(captured.payload["client_metadata"]["x-codex-installation-id"].is_string());
-    assert!(captured.payload["client_metadata"]["x-codex-window-id"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("cp_") && value.ends_with(":0")));
+        .is_some_and(|value| value.parse::<u128>().is_ok()));
 }
 
 #[tokio::test]
@@ -299,7 +328,7 @@ async fn responses_non_stream_should_record_websocket_transport_metadata() {
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
     assert_eq!(metadata["stream"], false);
     assert_eq!(event.transport.as_deref(), Some("websocket"));
-    assert_eq!(metadata["websocketPool"]["kind"], "new");
+    assert!(metadata.get("websocketPool").is_none());
 }
 
 #[tokio::test]
@@ -388,8 +417,7 @@ async fn responses_should_forward_text_schema_verbatim_to_upstream() {
 
 #[tokio::test]
 async fn responses_should_pass_through_tuple_schema_output_verbatim() {
-    // 透明代理：不再重写请求 schema，因此也不再对响应做 tuple 回转换——
-    // 上游返回的 object 形态 `{"point":{"0":1,"1":2}}` 原样透传给客户端。
+    // 透明代理：completed 事件中 output_text 和 output 的原始值都不用 delta 覆盖。
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -420,7 +448,7 @@ async fn responses_should_pass_through_tuple_schema_output_verbatim() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], "resp_tuple");
-    assert_eq!(body["output_text"], "{\"point\":{\"0\":1,\"1\":2}}");
+    assert_eq!(body["output_text"], "{\"point\":{\"0\":0,\"1\":0}}");
     assert_eq!(
         body["output"][0]["content"][0]["text"],
         "{\"point\":{\"0\":1,\"1\":2}}"
@@ -531,17 +559,6 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         .find(|request| request.url.path() == "/codex/responses")
         .expect("responses upstream request should be sent");
     let upstream_body: Value = serde_json::from_slice(&upstream.body).unwrap();
-    // 透明代理：window-id 不再从 client_metadata 回退读取，客户端未通过 body
-    // `codexWindowId` 或 `x-codex-window-id` 请求头提供时，window-id 由会话派生（`:0` 后缀）。
-    let identity = build_conversation_identity(Some("pcache"), None, "acct_chat");
-    let conversation_id = identity
-        .conversation_id
-        .as_deref()
-        .expect("conversation identity should be scoped");
-    let window_id = identity
-        .window_id
-        .as_deref()
-        .expect("window identity should be scoped");
     let upstream_header = |name: &str| {
         upstream
             .headers
@@ -554,38 +571,36 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
     assert_eq!(upstream_body["service_tier"], "priority");
     assert_eq!(upstream_body["reasoning"], json!({"effort": "high"}));
     assert!(upstream_body.get("include").is_none());
-    assert_eq!(upstream_body["prompt_cache_key"], conversation_id);
+    let prompt_cache_key = upstream_body["prompt_cache_key"]
+        .as_str()
+        .expect("prompt cache key should be account scoped");
+    assert_ne!(prompt_cache_key, "pcache");
     assert_eq!(upstream_body["client_metadata"]["safe"], "yes");
+    assert_eq!(upstream_body["client_metadata"]["drop"], 42);
     assert_eq!(
         upstream_body["client_metadata"]["x-openai-subagent"],
         "review"
     );
-    assert_eq!(
-        upstream_body["client_metadata"]["x-codex-installation-id"],
-        TEST_INSTALLATION_ID
-    );
-    assert_eq!(
-        upstream_body["client_metadata"]["session_id"],
-        conversation_id
-    );
-    assert_eq!(
-        upstream_body["client_metadata"]["thread_id"],
-        conversation_id
-    );
-    assert_eq!(
-        upstream_body["client_metadata"]["x-codex-window-id"],
-        window_id
-    );
+    let installation_id = upstream_body["client_metadata"]["x-codex-installation-id"]
+        .as_str()
+        .expect("installation id should be account scoped");
+    assert!(uuid::Uuid::parse_str(installation_id).is_ok());
+    assert!(upstream_body["client_metadata"].get("session_id").is_none());
+    assert!(upstream_body["client_metadata"].get("thread_id").is_none());
+    let window_id = upstream_body["client_metadata"]["x-codex-window-id"]
+        .as_str()
+        .expect("window id should be account scoped");
+    assert_ne!(window_id, "window-metadata");
     assert_eq!(
         upstream_body["client_metadata"]["x-codex-turn-metadata"],
         "meta-metadata"
     );
-    assert_eq!(
-        upstream_body["client_metadata"]["x-codex-parent-thread-id"],
-        "parent-metadata"
-    );
-    assert_eq!(upstream_header("session-id"), Some(conversation_id));
-    assert_eq!(upstream_header("thread-id"), Some(conversation_id));
+    let parent_thread_id = upstream_body["client_metadata"]["x-codex-parent-thread-id"]
+        .as_str()
+        .expect("parent thread id should be account scoped");
+    assert_ne!(parent_thread_id, "parent-metadata");
+    assert_eq!(upstream_header("session-id"), None);
+    assert_eq!(upstream_header("thread-id"), None);
     assert_eq!(upstream_header("session_id"), None);
     assert_eq!(upstream_header("x-codex-window-id"), Some(window_id));
     assert_eq!(upstream_header("x-codex-turn-state"), Some("turn-body"));
@@ -598,7 +613,10 @@ async fn responses_should_forward_parity_fields_context_headers_and_account_scop
         Some("true")
     );
     assert_eq!(upstream_header("version"), Some("2026-06-12"));
-    assert_eq!(upstream_header("x-codex-parent-thread-id"), None);
+    assert_eq!(
+        upstream_header("x-codex-parent-thread-id"),
+        Some(parent_thread_id)
+    );
     assert_eq!(upstream_header("x-openai-subagent"), Some("review"));
     // 透明代理：上下文透传字段提取到代理控制状态用于加请求头，body 中同时原样保留。
     for context_field in [
@@ -766,7 +784,7 @@ async fn responses_should_preserve_input_items_before_upstream() {
 }
 
 #[tokio::test]
-async fn responses_should_reconstruct_non_stream_output_text_from_sse_deltas() {
+async fn responses_should_not_synthesize_non_stream_output_from_sse_deltas() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -803,13 +821,12 @@ async fn responses_should_reconstruct_non_stream_output_text_from_sse_deltas() {
     let body = response_json(response).await;
 
     assert_eq!(body["id"], "resp_text");
-    assert_eq!(body["output"][0]["role"], "assistant");
-    assert_eq!(body["output"][0]["content"][0]["text"], "hello from deltas");
-    assert_eq!(body["output_text"], "hello from deltas");
+    assert_eq!(body["output"], json!([]));
+    assert!(body.get("output_text").is_none());
 }
 
 #[tokio::test]
-async fn responses_should_use_done_output_items_when_completed_output_is_empty() {
+async fn responses_should_not_inject_done_items_when_completed_output_is_empty() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -846,8 +863,8 @@ async fn responses_should_use_done_output_items_when_completed_output_is_empty()
     let body = response_json(response).await;
 
     assert_eq!(body["id"], "resp_item");
-    assert_eq!(body["output"][0]["content"][0]["text"], "from done item");
-    assert_eq!(body["output_text"], "from done item");
+    assert_eq!(body["output"], json!([]));
+    assert!(body.get("output_text").is_none());
 }
 
 #[tokio::test]
@@ -1201,7 +1218,7 @@ async fn responses_should_prefer_session_affinity_account_for_previous_response(
 }
 
 #[tokio::test]
-async fn responses_should_preserve_explicit_history_when_banned_affinity_switches_account() {
+async fn responses_should_replay_full_history_when_banned_affinity_switches_account() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_after_banned_affinity").await;
     let (app, state, api_key, _pool, _dir) =
@@ -1242,19 +1259,21 @@ async fn responses_should_preserve_explicit_history_when_banned_affinity_switche
         captured_header(&captured.headers, "chatgpt-account-id"),
         Some("chatgpt-primary")
     );
+    assert!(captured_header(&captured.headers, "x-codex-turn-state").is_none());
+    assert!(captured.payload.get("previous_response_id").is_none());
     assert_eq!(
-        captured_header(&captured.headers, "x-codex-turn-state"),
-        Some("turn_affinity_risk")
+        captured.payload["input"][0]["content"],
+        "Original affinity history"
     );
     assert_eq!(
-        captured.payload["previous_response_id"],
-        "resp_affinity_risk"
+        captured.payload["input"][1]["content"],
+        "Continue after ban"
     );
-    assert!(affinity.is_none());
+    assert!(affinity.is_some());
 }
 
 #[tokio::test]
-async fn responses_should_preserve_explicit_history_when_quota_affinity_switches_account() {
+async fn responses_should_replay_full_history_when_quota_affinity_switches_account() {
     let (base_url, upstream) =
         spawn_single_websocket_completed_upstream("resp_after_quota_affinity").await;
     let (app, state, api_key, _pool, _dir) =
@@ -1291,13 +1310,15 @@ async fn responses_should_preserve_explicit_history_when_quota_affinity_switches
         captured_header(&captured.headers, "authorization"),
         Some("Bearer access-primary")
     );
+    assert!(captured_header(&captured.headers, "x-codex-turn-state").is_none());
+    assert!(captured.payload.get("previous_response_id").is_none());
     assert_eq!(
-        captured_header(&captured.headers, "x-codex-turn-state"),
-        Some("turn_affinity_risk")
+        captured.payload["input"][0]["content"],
+        "Original affinity history"
     );
     assert_eq!(
-        captured.payload["previous_response_id"],
-        "resp_affinity_risk"
+        captured.payload["input"][1]["content"],
+        "Continue after quota"
     );
     assert!(affinity.is_some());
 }

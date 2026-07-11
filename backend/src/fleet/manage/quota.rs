@@ -34,6 +34,7 @@ impl AccountManageService {
         let request_id = uuid::Uuid::new_v4().to_string();
         let token = stored.access_token.expose_secret().to_string();
         let cookie_header = self.usage_cookie_header(account_id).await;
+        let installation_id = self.account_pseudonymizer.installation_id(account_id);
         let context = crate::upstream::openai::transport::CodexRequestContext {
             access_token: &token,
             account_id: stored.account_id.as_deref(),
@@ -46,8 +47,12 @@ impl AccountManageService {
             codex_window_id: None,
             parent_thread_id: None,
             cookie_header: cookie_header.as_deref(),
-            installation_id: self.installation_id.as_deref(),
+            installation_id: Some(&installation_id),
             session_id: None,
+            thread_id: None,
+            prompt_cache_key: None,
+            client_request_id: None,
+            turn_id: None,
         };
         let raw = self
             .codex

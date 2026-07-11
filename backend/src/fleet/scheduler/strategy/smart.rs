@@ -30,7 +30,7 @@ pub struct ScoreWeights {
     pub window_requests: f64,
     /// 错误率 EWMA（越健康越优先）。
     pub error_rate: f64,
-    /// 首 token 延迟 EWMA（越快越优先）。
+    /// 首个有效输出事件延迟 EWMA（越快越优先）。
     pub ttft: f64,
     /// 窗口重置临近度（越快重置越优先，use-it-or-lose-it，默认关闭）。
     pub reset: f64,
@@ -95,6 +95,35 @@ pub fn select(input: &SelectionInput<'_>, cursor: &mut usize) -> Option<Account>
     *cursor = cursor.wrapping_add(1);
     let account_index = ranked[index].0;
     Some((*input.candidates[account_index]).clone())
+}
+
+/// 按 Smart 得分为完整候选集排序；同分账号沿用调度器轮转游标破并列。
+pub fn order(input: &SelectionInput<'_>, cursor: &mut usize) -> Vec<Account> {
+    let mut ranked = rank_candidate_refs(
+        input.candidates,
+        input.weights,
+        input.now.timestamp(),
+        input.slot_count,
+        input.feedback,
+    );
+    let rotation = *cursor;
+    *cursor = cursor.wrapping_add(1);
+
+    let mut start = 0;
+    while start < ranked.len() {
+        let score = ranked[start].1.total.to_bits();
+        let mut end = start + 1;
+        while end < ranked.len() && ranked[end].1.total.to_bits() == score {
+            end += 1;
+        }
+        ranked[start..end].rotate_left(rotation % (end - start));
+        start = end;
+    }
+
+    ranked
+        .into_iter()
+        .map(|(index, _)| (*input.candidates[index]).clone())
+        .collect()
 }
 
 /// 对候选集合按加权得分排序（降序），返回 `(账号索引, 打分明细)` 列表。

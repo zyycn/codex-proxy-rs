@@ -31,6 +31,8 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
                 input_tokens: None,
                 function_call_ids: Vec::new(),
                 variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal,
+                replay: None,
                 created_at: chrono::Utc::now(),
             },
             chrono::Duration::hours(1),

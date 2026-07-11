@@ -479,7 +479,30 @@ pub(super) async fn record_live_response_stream_event(
     rate_limit_headers: &[(String, String)],
     body: &str,
 ) {
+    let effective_model = context
+        .response_metadata
+        .effective_model
+        .as_deref()
+        .unwrap_or(&context.display_model);
     ensure_stream_metadata_flag(&mut metadata);
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "effectiveModel".to_string(),
+            Value::String(effective_model.to_string()),
+        );
+        object.insert(
+            "modelsEtag".to_string(),
+            context
+                .response_metadata
+                .models_etag
+                .as_ref()
+                .map_or(Value::Null, |etag| Value::String(etag.clone())),
+        );
+        object.insert(
+            "reasoningIncluded".to_string(),
+            Value::Bool(context.response_metadata.reasoning_included),
+        );
+    }
     enrich_event_route_metadata(&mut metadata, &context.route);
     enrich_live_response_stream_metadata(
         context,
@@ -492,7 +515,7 @@ pub(super) async fn record_live_response_stream_event(
     enrich_usage_record_identity(
         &mut metadata,
         Some(&context.requested_model),
-        &context.display_model,
+        effective_model,
         context.client_ip.as_deref(),
         context.request.client_user_agent.as_deref(),
         reasoning_effort_from_request(&context.request),
@@ -507,7 +530,7 @@ pub(super) async fn record_live_response_stream_event(
                 client_api_key_id: context.request.client_api_key_id.as_deref(),
                 account_id: &context.account_id,
                 route: &context.route,
-                model: &context.display_model,
+                model: effective_model,
                 requested_model: Some(&context.requested_model),
                 client_ip: context.client_ip.as_deref(),
                 client_user_agent: context.request.client_user_agent.as_deref(),
@@ -528,7 +551,7 @@ pub(super) async fn record_live_response_stream_event(
         event.provider = Some("openai".to_string());
         event.account_id = Some(context.account_id.clone());
         event.route = Some(context.route.clone());
-        event.model = Some(context.display_model.clone());
+        event.model = Some(effective_model.to_string());
         event.status_code = Some(status_code);
         event.latency_ms = Some(elapsed_millis_i64(context.started_at));
         event.metadata = metadata;
