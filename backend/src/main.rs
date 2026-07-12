@@ -1,4 +1,4 @@
-use std::{env, error::Error, io, path::PathBuf};
+use std::{env, error::Error, io};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -7,19 +7,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         None | Some("serve") => {
             reject_extra_arguments(arguments)?;
             codex_proxy_rs::bootstrap::services::run().await
-        }
-        Some("import-sqlite") => {
-            let source = arguments
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| invalid_cli("usage: codex-proxy-rs import-sqlite <path.sqlite>"))?;
-            reject_extra_arguments(arguments)?;
-            let config = codex_proxy_rs::bootstrap::config::AppConfig::load()?;
-            let pool = codex_proxy_rs::infra::database::connect(&config.database.url).await?;
-            let report =
-                codex_proxy_rs::bootstrap::import_sqlite::import_sqlite(&pool, source).await?;
-            println!("{report}");
-            Ok(())
         }
         Some("rebuild-buckets") => {
             reject_extra_arguments(arguments)?;
@@ -35,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
         Some(command) => Err(invalid_cli(&format!(
-            "unknown command {command:?}; expected serve, import-sqlite, or rebuild-buckets"
+            "unknown command {command:?}; expected serve or rebuild-buckets"
         ))
         .into()),
     }

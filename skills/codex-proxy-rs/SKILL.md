@@ -19,7 +19,7 @@ description: Codex Proxy RS 仓库开发指南。Use when working on its Rust/Ax
 ## 任务分流
 
 - 后端：遵循 `backend/src` 当前领域边界；测试统一放在 `backend/tests`，禁止写入 `backend/src`。
-- 存储：PostgreSQL 是权威持久化，Redis 保存运行态数据，本地数据目录保存身份密钥和更新状态；SQLite 只用于历史库导入。
+- 存储：PostgreSQL 是权威持久化，Redis 保存运行态数据，本地数据目录保存身份密钥和更新状态。
 - 前端：使用 Vue 3 `<script setup>`、TypeScript、Tailwind v4、已有组件和主题 token。
 - Docker / 发布：保留非 root runtime、Compose 密钥注入、命名卷、GitHub Release、GHCR 和在线更新契约。
 - 文档：README 面向部署者和使用者；`docs/architecture.md` 面向开发者。不要新增过程型审计或迁移文档。

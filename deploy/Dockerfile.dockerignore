@@ -13,12 +13,6 @@ data/
 logs/
 deploy/data/
 deploy/logs/
-*.sqlite
-*.sqlite3
-*.db
-*.db-shm
-*.db-wal
-*.sqlite-*
 *.log
 
 # Local configuration.
