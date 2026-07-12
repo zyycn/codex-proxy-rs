@@ -218,6 +218,21 @@ from generate_series(1, 55) as seeded(sequence)",
     assert_eq!(page_body["data"]["items"].as_array().unwrap().len(), 15);
     assert_eq!(page_body["data"]["items"][0]["id"], "key_015");
 
+    let sorted_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/keys?page=1&pageSize=20&sortBy=createdAt&sortDirection=asc")
+                .header("cookie", "cpr_admin_session=session_1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let sorted_body = response_json(sorted_response).await;
+    assert_eq!(sorted_body["data"]["items"][0]["id"], "key_001");
+
     let search_response = app
         .oneshot(
             Request::builder()

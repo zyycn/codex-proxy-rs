@@ -418,29 +418,26 @@ impl CodexBackendClient {
         ))
     }
 
-    /// 发送 Compact 请求。
-    pub async fn create_compact_response(
+    /// 获取后端模型目录条目。
+    pub(super) async fn fetch_models_with_context(
         &self,
-        request: &CodexCompactRequest,
         context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexCompactResponse> {
-        let headers = self.compact_request_headers(context)?;
+    ) -> CodexClientResult<Vec<Value>> {
+        let fingerprint = self.fingerprint.current();
+        let endpoint = endpoint_url(&self.base_url, "codex/models");
+        let headers = self.auxiliary_request_headers(&fingerprint, context)?;
         let response = self
             .client
-            .post(endpoint_url(&self.base_url, CODEX_RESPONSES_COMPACT_PATH))
+            .get(endpoint)
+            .query(&[("client_version", fingerprint.app_version.as_str())])
             .headers(headers)
-            .json(request)
             .send()
             .await?;
-
         let status = response.status();
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
-        let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
-        let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let body = response.text().await?;
-
         if !status.is_success() {
             return Err(CodexClientError::Upstream {
                 status,
@@ -451,61 +448,28 @@ impl CodexBackendClient {
                 set_cookie_headers,
             });
         }
-
         let parsed =
-            serde_json::from_str::<Value>(&body).map_err(|_| CodexClientError::Upstream {
+            serde_json::from_str::<Value>(&body).map_err(|error| CodexClientError::Upstream {
                 status: StatusCode::BAD_GATEWAY,
                 retry_after_seconds: None,
                 body: format!(
-                    "Compact response is not valid JSON: {}",
+                    "model catalog response is not valid JSON: {error}; body: {}",
                     truncate_for_error(&body)
                 ),
                 diagnostics: CodexUpstreamDiagnostics::with_status(
                     StatusCode::BAD_GATEWAY.as_u16(),
                 ),
-                set_cookie_headers: set_cookie_headers.clone(),
+                set_cookie_headers,
             })?;
-        Ok(CodexCompactResponse {
-            body: parsed,
-            set_cookie_headers,
-            rate_limit_headers,
-            diagnostics,
-            response_metadata,
-        })
-    }
-
-    /// 获取后端模型目录条目。
-    pub(super) async fn fetch_models_with_context(
-        &self,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<Vec<Value>> {
-        let fingerprint = self.fingerprint.current();
-        let endpoints = [
-            format!(
-                "{}/codex/models?client_version={}",
-                self.base_url, fingerprint.app_version
-            ),
-            format!("{}/models", self.base_url),
-            format!("{}/sentinel/chat-requirements", self.base_url),
-        ];
-
-        for endpoint in endpoints {
-            let headers = self.auxiliary_request_headers(&fingerprint, context)?;
-            let response = self.client.get(endpoint).headers(headers).send().await?;
-            if !response.status().is_success() {
-                continue;
-            }
-            let parsed = response.json::<Value>().await?;
-            let models = extract_model_entries(&parsed);
-            if !models.is_empty() {
-                return Ok(models);
-            }
+        let models = extract_model_entries(&parsed);
+        if !models.is_empty() {
+            return Ok(models);
         }
 
         Err(CodexClientError::Upstream {
             status: StatusCode::BAD_GATEWAY,
             retry_after_seconds: None,
-            body: "backend model catalog is unavailable".to_string(),
+            body: "model catalog response contains no models".to_string(),
             diagnostics: CodexUpstreamDiagnostics::with_status(StatusCode::BAD_GATEWAY.as_u16()),
             set_cookie_headers: Vec::new(),
         })
@@ -623,51 +587,6 @@ impl CodexBackendClient {
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-        Ok(headers)
-    }
-
-    fn compact_request_headers(
-        &self,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<HeaderMap> {
-        let fingerprint = self.fingerprint.current();
-        let ordered_headers = build_ordered_codex_base_headers(
-            &fingerprint,
-            context.access_token,
-            context.account_id,
-        );
-
-        let mut headers = HeaderMap::new();
-        insert_ordered_headers(&mut headers, &ordered_headers)?;
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
-        headers.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static("responses_websockets=2026-02-06"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-openai-internal-codex-residency"),
-            HeaderValue::from_static("us"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-client-request-id"),
-            HeaderValue::from_str(context.client_request_id.unwrap_or(context.request_id))?,
-        );
-        insert_optional_header(
-            &mut headers,
-            "x-codex-installation-id",
-            context.installation_id,
-        )?;
-        insert_optional_header(&mut headers, "session-id", context.session_id)?;
-        insert_optional_header(&mut headers, "thread-id", context.thread_id)?;
-        insert_optional_header(&mut headers, "x-codex-turn-id", context.turn_id)?;
-        insert_optional_header(&mut headers, "x-codex-window-id", context.codex_window_id)?;
-        insert_optional_header(
-            &mut headers,
-            "x-codex-parent-thread-id",
-            context.parent_thread_id,
-        )?;
-
         Ok(headers)
     }
 }

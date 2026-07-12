@@ -14,7 +14,6 @@ import {
 } from '@lucide/vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
-import { ApiError } from '@/api/request'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 
@@ -35,7 +34,6 @@ export function useDashboard(): any {
   const loading = ref(false)
   const refreshing = ref(false)
   const trendLoading = ref(false)
-  const errorMessage = ref('')
   const lastRefreshedAt = ref('')
   let trendRequestId = 0
   const { resume: startAutoRefresh } = useIntervalFn(
@@ -50,10 +48,9 @@ export function useDashboard(): any {
     if (loading.value || refreshing.value) return
     try {
       loading.value = true
-      errorMessage.value = ''
       await loadDashboardSnapshot()
-    } catch (error) {
-      errorMessage.value = dashboardErrorMessage(error, '概览加载失败')
+    } catch {
+      // 自动刷新会继续重试，保留最后一次成功快照
     } finally {
       loading.value = false
     }
@@ -63,12 +60,11 @@ export function useDashboard(): any {
     if (loading.value || refreshing.value) return
     refreshing.value = true
     try {
-      errorMessage.value = ''
       await withMinimumDuration(async () => {
         await loadDashboardSnapshot()
       })
-    } catch (error) {
-      errorMessage.value = dashboardErrorMessage(error, '概览刷新失败')
+    } catch {
+      // 手动刷新失败时保留当前数据，不打断概览操作
     } finally {
       refreshing.value = false
     }
@@ -80,13 +76,12 @@ export function useDashboard(): any {
     const requestId = nextTrendRequestId()
     try {
       trendLoading.value = true
-      errorMessage.value = ''
       const trend = await getDashboardTrend({ kind: trendKind })
       if (isCurrentTrendRequest(requestId, trendKind)) {
         applyTrend(trend)
       }
-    } catch (error) {
-      errorMessage.value = dashboardErrorMessage(error, '趋势加载失败')
+    } catch {
+      // 趋势请求失败时保留当前趋势，下一次刷新继续尝试
     } finally {
       if (isCurrentTrendRequest(requestId, trendKind)) {
         trendLoading.value = false
@@ -144,7 +139,7 @@ export function useDashboard(): any {
           todayTokensValue: 0,
           yesterdayTokensValue: 0,
           totalTokens: '0',
-          todayCostUsd: '—',
+          todayBillingAmountUsd: '—',
         },
         cache: {
           todayHitRate: '—',
@@ -249,7 +244,7 @@ export function useDashboard(): any {
           { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
           {
             label: '计费',
-            value: tokens.todayCostUsd,
+            value: tokens.todayBillingAmountUsd,
             tone: 'success',
           },
         ],
@@ -425,12 +420,6 @@ export function useDashboard(): any {
     return '--cp-info'
   }
 
-  function dashboardErrorMessage(error: unknown, fallback: string) {
-    if (!(error instanceof ApiError)) return fallback
-    const requestId = error.requestId ? `（请求 ID：${error.requestId}）` : ''
-    return `${error.message || fallback}${requestId}`
-  }
-
   onMounted(() => {
     void loadDashboardData()
     startAutoRefresh()
@@ -440,7 +429,6 @@ export function useDashboard(): any {
     loading,
     refreshing,
     trendLoading,
-    errorMessage,
     activeTrendKind,
     lastRefreshedAt,
     metrics,

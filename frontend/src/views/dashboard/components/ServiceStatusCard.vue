@@ -30,8 +30,7 @@ const valueToneClasses: Record<string, string> = {
         <BaseEmpty
           v-if="items.length === 0"
           compact
-          title="暂无指纹信息"
-          description="诊断接口返回后会显示客户端指纹信息。"
+          title="暂无指纹数据"
           class="h-72 place-content-center"
         />
         <template v-else>

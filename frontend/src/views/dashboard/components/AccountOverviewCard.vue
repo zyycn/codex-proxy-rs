@@ -208,7 +208,7 @@ const quotaToneClasses: Record<string, string> = {
             v-if="accounts.length === 0"
             compact
             title="暂无账号用量"
-            description="账号产生请求后会显示最近使用排序和 Token 负载。"
+            description="暂无账号请求记录"
             class="min-h-40 place-content-center xl:h-full"
           />
           <template v-else>

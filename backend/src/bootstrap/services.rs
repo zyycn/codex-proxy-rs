@@ -119,6 +119,7 @@ pub struct Services {
     pub fingerprint: RuntimeFingerprint,
     pub account_pseudonymizer: Arc<AccountPseudonymizer>,
     pub system_update: Arc<SystemUpdateService>,
+    pub connection_drain: crate::api::middleware::connection_drain::ConnectionDrain,
     pub background_tasks: BackgroundTaskStores,
     pub(crate) account_pool_static: AccountPoolStaticSettings,
 }
@@ -307,6 +308,7 @@ impl Services {
             cloudflare: cloudflare_recovery,
         }));
         let system_update = Arc::new(SystemUpdateService::from_env());
+        let connection_drain = crate::api::middleware::connection_drain::ConnectionDrain::default();
 
         Ok(Self {
             database,
@@ -331,6 +333,7 @@ impl Services {
             fingerprint,
             account_pseudonymizer,
             system_update,
+            connection_drain,
             background_tasks: stores,
             account_pool_static,
         })
@@ -367,6 +370,7 @@ impl From<&Services> for crate::api::router::ApiServices {
             fingerprint: services.fingerprint.clone(),
             process_control: Arc::new(crate::bootstrap::shutdown::RuntimeProcessControl),
             system_update: services.system_update.clone(),
+            connection_drain: services.connection_drain.clone(),
         }
     }
 }
@@ -449,7 +453,8 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let port = config.server.port;
     let log_guard = init_logging(&config)?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
-    let (router, task_coordinator) = build_router(config).await?;
+    let (router, task_coordinator, connection_drain) = build_router(config).await?;
+    let mut task_coordinator = Some(task_coordinator);
 
     let serve_result = {
         let (graceful_shutdown_tx, graceful_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -466,8 +471,28 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             result = &mut serve => result,
             () = crate::bootstrap::shutdown::shutdown_signal() => {
                 let _ = graceful_shutdown_tx.send(());
+                let active_websocket_connections = connection_drain.begin_shutdown();
+                tracing::info!(
+                    active_websocket_connections,
+                    "正在排空入站连接并关闭运行时任务"
+                );
+                let coordinator = task_coordinator.take();
+                let connection_drain = connection_drain.clone();
+                let runtime_shutdown = async move {
+                    let shutdown_tasks = async move {
+                        if let Some(coordinator) = coordinator {
+                            coordinator.shutdown().await;
+                        }
+                    };
+                    tokio::join!(shutdown_tasks, connection_drain.wait());
+                };
+                let drain_runtime = async {
+                    let (serve_result, ()) = tokio::join!(&mut serve, runtime_shutdown);
+                    serve_result
+                };
+                tokio::pin!(drain_runtime);
                 tokio::select! {
-                    result = &mut serve => result,
+                    result = &mut drain_runtime => result,
                     () = tokio::time::sleep(HTTP_DRAIN_TIMEOUT) => {
                         tracing::warn!(
                             timeout_secs = HTTP_DRAIN_TIMEOUT.as_secs(),
@@ -484,7 +509,14 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     };
 
-    task_coordinator.shutdown().await;
+    if let Some(coordinator) = task_coordinator.take() {
+        let active_websocket_connections = connection_drain.begin_shutdown();
+        tracing::info!(
+            active_websocket_connections,
+            "HTTP 服务已退出，正在关闭其余运行时任务"
+        );
+        tokio::join!(coordinator.shutdown(), connection_drain.wait());
+    }
     serve_result?;
 
     if let Some(executable_path) = crate::bootstrap::shutdown::restart_executable_path() {
@@ -507,6 +539,7 @@ async fn build_router(
     (
         Router,
         crate::bootstrap::tasks::coordinator::TaskCoordinator,
+        crate::api::middleware::connection_drain::ConnectionDrain,
     ),
     Box<dyn Error + Send + Sync>,
 > {
@@ -571,11 +604,15 @@ async fn build_router(
     let task_coordinator =
         crate::bootstrap::tasks::coordinator::TaskCoordinator::start(&runtime_config, &services);
     let app_state = crate::api::AppState::from(&services);
+    let connection_drain = services.connection_drain.clone();
+    let router = crate::api::router::router().with_state(app_state).layer(
+        axum::middleware::from_fn_with_state(
+            connection_drain.clone(),
+            crate::api::middleware::connection_drain::drain_response_body,
+        ),
+    );
 
-    Ok((
-        crate::api::router::router().with_state(app_state),
-        task_coordinator,
-    ))
+    Ok((router, task_coordinator, connection_drain))
 }
 
 fn init_logging(config: &AppConfig) -> Result<LogGuard, LogError> {

@@ -51,13 +51,13 @@ pub struct ApiServices {
     pub fingerprint: RuntimeFingerprint,
     pub process_control: Arc<dyn ProcessControl>,
     pub system_update: Arc<SystemUpdateService>,
+    pub connection_drain: crate::api::middleware::connection_drain::ConnectionDrain,
 }
 
 /// 由 bootstrap 实现的进程生命周期控制端口。
 pub trait ProcessControl: Send + Sync + 'static {
     fn request_shutdown(&self);
     fn request_restart(&self, executable_path: PathBuf);
-    fn subscribe_shutdown(&self) -> tokio::sync::broadcast::Receiver<()>;
 }
 
 /// 由 bootstrap 实现的基础设施健康检查端口。

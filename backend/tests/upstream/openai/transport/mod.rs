@@ -256,12 +256,3 @@ pub(crate) fn websocket_pool_config_for_tests(
         initial_event_timeout: None,
     }
 }
-
-pub(crate) async fn write_compact_json_response(stream: &mut TcpStream) {
-    stream
-        .write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 15\r\n\r\n{\"id\":\"resp_1\"}",
-        )
-        .await
-        .unwrap();
-}

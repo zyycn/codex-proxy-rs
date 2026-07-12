@@ -16,6 +16,7 @@ import {
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
+import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { useIdSet } from '@/composables/useIdSet'
 import { withMinimumDuration } from '@/utils/async'
 
@@ -40,10 +41,21 @@ type AccountRefreshResult = {
   error?: string | null
 }
 
+const attentionAccountStatuses = new Set(['expired', 'disabled', 'banned'])
+const accountStatusSortRank: Record<string, number> = {
+  active: 0,
+  quota_exhausted: 1,
+  expired: 2,
+  disabled: 3,
+  banned: 4,
+}
+
 export function useAccountMutations(options: {
   page: Ref<number>
   pageSize: Ref<number>
   searchQuery: Ref<string>
+  statusQuery: Ref<string>
+  sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
   totalAccounts: Ref<number>
 }) {
@@ -53,7 +65,7 @@ export function useAccountMutations(options: {
   const accountSummary = ref({
     total: 0,
     active: 0,
-    highUsage: 0,
+    quotaExhausted: 0,
     attention: 0,
   })
   const createModalOpen = ref(false)
@@ -103,6 +115,9 @@ export function useAccountMutations(options: {
         page: options.page.value,
         pageSize: options.pageSize.value,
         search: options.searchQuery.value,
+        status: options.statusQuery.value || undefined,
+        sortBy: options.sort.value?.key,
+        sortDirection: options.sort.value?.direction,
       })
       accounts.value = result.items
       accountSummary.value = result.summary
@@ -381,6 +396,66 @@ export function useAccountMutations(options: {
     )
   }
 
+  function patchAccountStatus(accountId: string, status: string) {
+    const current = accounts.value.find((account) => account.id === accountId)
+    if (!current) return
+
+    if (options.statusQuery.value && options.statusQuery.value !== status) {
+      accounts.value = accounts.value.filter((account) => account.id !== accountId)
+      options.totalAccounts.value = Math.max(0, options.totalAccounts.value - 1)
+      options.selectedIds.value = new Set(
+        [...options.selectedIds.value].filter((id) => id !== accountId),
+      )
+    } else {
+      const nextAccounts = accounts.value.map((account) =>
+        account.id === accountId
+          ? {
+              ...account,
+              status,
+              displayStatus: account.tokenRefreshing ? 'refreshing' : status,
+            }
+          : account,
+      )
+      accounts.value = sortAccountsByStatusIfActive(nextAccounts)
+    }
+
+    if (current.status === status) return
+    accountSummary.value = {
+      ...accountSummary.value,
+      active: Math.max(
+        0,
+        accountSummary.value.active +
+          Number(status === 'active') -
+          Number(current.status === 'active'),
+      ),
+      quotaExhausted: Math.max(
+        0,
+        accountSummary.value.quotaExhausted +
+          Number(status === 'quota_exhausted') -
+          Number(current.status === 'quota_exhausted'),
+      ),
+      attention: Math.max(
+        0,
+        accountSummary.value.attention +
+          Number(attentionAccountStatuses.has(status)) -
+          Number(attentionAccountStatuses.has(current.status)),
+      ),
+    }
+  }
+
+  function sortAccountsByStatusIfActive(rows: AccountRow[]) {
+    const sort = options.sort.value
+    if (sort?.key !== 'status') return rows
+    const direction = sort.direction === 'asc' ? 1 : -1
+    return [...rows].sort((left, right) => {
+      const rankDifference =
+        (accountStatusSortRank[left.status] ?? 5) - (accountStatusSortRank[right.status] ?? 5)
+      return rankDifference === 0
+        ? left.id.localeCompare(right.id) * direction
+        : rankDifference * direction
+    })
+  }
+
   async function handleToggleSchedule(account: any) {
     const nextStatus = account.status === 'disabled' ? 'active' : 'disabled'
     await updatingStatusAccounts.run(account.id, async () => {
@@ -436,6 +511,7 @@ export function useAccountMutations(options: {
     handleExportAccounts,
     handleRefresh,
     handleRefreshQuota,
+    patchAccountStatus,
     handleToggleSchedule,
     scheduleActionLabel,
   }

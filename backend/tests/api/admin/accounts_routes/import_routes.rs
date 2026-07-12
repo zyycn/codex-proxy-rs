@@ -220,7 +220,7 @@ async fn admin_accounts_import_should_read_sub2api_backup_access_token_only_acco
     let body = response_json(response).await;
     let store = PgAccountStore::new(pool);
     let stored_metadata = store
-        .list_metadata_page(1, 10, None)
+        .list_metadata_page(1, 10, None, None, None)
         .await
         .unwrap()
         .items
@@ -304,7 +304,7 @@ async fn admin_accounts_import_should_read_cliproxyapi_codex_auth_files() {
     let status = response.status();
     let body = response_json(response).await;
     let stored = PgAccountStore::new(pool)
-        .list_metadata_page(1, 10, None)
+        .list_metadata_page(1, 10, None, None, None)
         .await
         .unwrap()
         .items
@@ -497,7 +497,7 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
     let body = response_json(response).await;
     let store = PgAccountStore::new(pool);
     let stored = store
-        .list_metadata_page(1, 10, None)
+        .list_metadata_page(1, 10, None, None, None)
         .await
         .unwrap()
         .items
@@ -571,7 +571,7 @@ async fn admin_accounts_import_from_refresh_token_should_not_store_consumed_refr
     let body = response_json(response).await;
     let store = PgAccountStore::new(pool);
     let stored = store
-        .list_metadata_page(1, 10, None)
+        .list_metadata_page(1, 10, None, None, None)
         .await
         .unwrap()
         .items

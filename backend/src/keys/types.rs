@@ -2,7 +2,23 @@
 
 use thiserror::Error;
 
+use crate::infra::json::SortDirection;
+
 use super::store::StoredClientApiKey;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientApiKeySortField {
+    Name,
+    Enabled,
+    CreatedAt,
+    LastUsedAt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientApiKeyListSort {
+    pub field: ClientApiKeySortField,
+    pub direction: SortDirection,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedClientApiKey {

@@ -27,7 +27,7 @@ const emit = defineEmits<{
   <BaseCard
     :padded="false"
     title="管理员 API Key"
-    description="用于外部系统集成，具有管理员权限。"
+    description="用于外部系统集成，具有管理员权限"
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
@@ -88,7 +88,7 @@ const emit = defineEmits<{
 
       <div v-if="generatedKey" class="grid gap-2">
         <p class="m-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)">
-          完整 Key 仅显示一次，请立即保存。
+          完整 Key 仅显示一次，请立即保存
         </p>
         <div class="flex min-w-0 items-center gap-2">
           <code

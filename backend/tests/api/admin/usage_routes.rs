@@ -43,6 +43,12 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
     record.input_tokens = Some(12);
     record.output_tokens = Some(4);
     record.latency_ms = Some(0);
+    record.metadata = json!({
+        "compact": true,
+        "requestKind": "compaction",
+        "subagentKind": "thread_spawn",
+        "reasoningEffort": "max"
+    });
     usage.append(&record).await.unwrap();
 
     let response = app
@@ -65,6 +71,10 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
     assert_eq!(item["id"], "usage_route_success");
     assert_eq!(item["clientApiKeyId"], "key_42");
     assert_eq!(item["statusCode"], 200);
+    assert_eq!(item["compact"], true);
+    assert_eq!(item["requestKind"], "compaction");
+    assert_eq!(item["subagentKind"], "thread_spawn");
+    assert_eq!(item["reasoningEffort"], "max");
     assert!(item.get("level").is_none());
 }
 
@@ -87,6 +97,76 @@ async fn usage_summary_and_trend_expose_only_real_success_metrics() {
     let trend = admin_get(&app, "/api/admin/usage/records/insights/token-trend").await;
     assert_eq!(trend["data"][0]["inputTokensValue"], 100);
     assert!(trend["data"][0].get("cacheCreationTokens").is_none());
+}
+
+#[tokio::test]
+async fn usage_route_applies_official_gpt_5_6_sol_pricing() {
+    let (app, usage, _, _guard) = monitoring_test_app("monitoring-gpt-5-6-pricing", true).await;
+    let mut record = success_record("gpt 5.6 pricing");
+    record.id = "usage_gpt_5_6_sol".to_string();
+    record.model = "gpt-5.6-sol-2026-07-01".to_string();
+    record.input_tokens = Some(1_000_000);
+    record.cached_tokens = Some(200_000);
+    record.output_tokens = Some(1_000_000);
+    usage.append(&record).await.unwrap();
+
+    let body = admin_get(&app, "/api/admin/usage/records").await;
+    let billing = &body["data"]["items"][0]["billing"];
+
+    assert_eq!(billing["inputPricePerMtoken"], 5.0);
+    assert_eq!(billing["cacheReadPricePerMtoken"], 0.5);
+    assert_eq!(billing["outputPricePerMtoken"], 30.0);
+    assert_eq!(billing["totalAmount"], 34.1);
+}
+
+#[tokio::test]
+async fn usage_route_should_bill_unknown_model_at_highest_rate() {
+    let (app, usage, _, _guard) = monitoring_test_app("monitoring-unknown-pricing", true).await;
+    let mut record = success_record("unknown pricing");
+    record.id = "usage_unknown_pricing".to_string();
+    record.model = "unpublished-model".to_string();
+    record.input_tokens = Some(1_000_000);
+    record.cached_tokens = Some(200_000);
+    record.output_tokens = Some(1_000_000);
+    usage.append(&record).await.unwrap();
+
+    let body = admin_get(&app, "/api/admin/usage/records").await;
+
+    let billing = &body["data"]["items"][0]["billing"];
+    assert_eq!(billing["inputPricePerMtoken"], 60.0);
+    assert_eq!(billing["cacheReadPricePerMtoken"], 0.0);
+    assert_eq!(billing["outputPricePerMtoken"], 270.0);
+    assert_eq!(billing["totalAmount"], 330.0);
+}
+
+#[tokio::test]
+async fn endpoint_distribution_groups_only_by_inbound_route() {
+    let (app, usage, _, _guard) = monitoring_test_app("monitoring-endpoints", true).await;
+    for (id, provider, input_tokens) in [("one", "openai", 10), ("two", "other", 20)] {
+        let mut record = success_record(id);
+        record.id = format!("usage_endpoint_{id}");
+        record.route = Some("/v1/responses".to_string());
+        record.provider = provider.to_string();
+        record.input_tokens = Some(input_tokens);
+        usage.append(&record).await.unwrap();
+    }
+    let mut compact = success_record("compact");
+    compact.id = "usage_endpoint_compact".to_string();
+    compact.route = Some("/v1/responses".to_string());
+    compact.input_tokens = Some(5);
+    compact.metadata = json!({"compact": true, "requestKind": "compaction"});
+    usage.append(&compact).await.unwrap();
+
+    let body = admin_get(&app, "/api/admin/usage/records/insights/endpoints").await;
+    let items = body["data"].as_array().unwrap();
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"], "/v1/responses");
+    assert_eq!(items[0]["requestCountValue"], 3);
+    assert!(items.iter().all(|item| {
+        let name = item["name"].as_str().unwrap();
+        !name.contains("openai") && !name.contains("other") && !name.contains(" -> ")
+    }));
 }
 
 #[tokio::test]

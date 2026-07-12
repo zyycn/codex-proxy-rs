@@ -2,6 +2,26 @@
 
 use serde::Serialize;
 
+/// 列表排序方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    /// 升序。
+    Asc,
+    /// 降序。
+    Desc,
+}
+
+impl SortDirection {
+    /// 解析管理端查询参数中的排序方向。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "asc" => Some(Self::Asc),
+            "desc" => Some(Self::Desc),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 分页
 // ---------------------------------------------------------------------------

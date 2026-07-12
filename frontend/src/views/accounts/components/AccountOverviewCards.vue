@@ -24,9 +24,9 @@ const overviewItems = computed(() => [
     icon: ShieldCheck,
   },
   {
-    label: '额度预警',
-    value: formatCount(props.summary.highUsage),
-    caption: '任一窗口 >= 80%',
+    label: '配额耗尽',
+    value: formatCount(props.summary.quotaExhausted),
+    caption: '等待配额恢复',
     tone: 'warning',
     icon: Gauge,
   },

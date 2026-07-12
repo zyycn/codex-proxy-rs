@@ -3,6 +3,24 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::infra::json::SortDirection;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountSortField {
+    Email,
+    Status,
+    PlanType,
+    Usage,
+    LastUsedAt,
+    ExpiresAt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountListSort {
+    pub field: AccountSortField,
+    pub direction: SortDirection,
+}
+
 /// 账号当前状态。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AccountStatus {
@@ -27,6 +45,18 @@ impl AccountStatus {
             Self::QuotaExhausted => "quota_exhausted",
             Self::Disabled => "disabled",
             Self::Banned => "banned",
+        }
+    }
+
+    /// 解析持久化/API 使用的账号状态字符串。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "active" => Some(Self::Active),
+            "expired" => Some(Self::Expired),
+            "quota_exhausted" => Some(Self::QuotaExhausted),
+            "disabled" => Some(Self::Disabled),
+            "banned" => Some(Self::Banned),
+            _ => None,
         }
     }
 }

@@ -163,7 +163,7 @@ pub struct AccountUsageTimeBucket {
     pub latency_count: i64,
     pub max_latency_ms: i64,
     pub min_latency_ms: i64,
-    pub cost_usd: Option<f64>,
+    pub billing_amount_usd: Option<f64>,
 }
 
 impl From<UsageSummary> for AccountUsageSummary {
@@ -187,7 +187,7 @@ impl From<UsageSummary> for AccountUsageSummary {
 
 impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {
     fn from(record: UsageTimeBucketRecord) -> Self {
-        let cost_usd = time_bucket_cost_usd(&record);
+        let billing_amount_usd = time_bucket_billing_amount_usd(&record);
         Self {
             bucket_start: record.bucket_start,
             model: record.model,
@@ -203,12 +203,12 @@ impl From<UsageTimeBucketRecord> for AccountUsageTimeBucket {
             latency_count: record.latency_count,
             max_latency_ms: record.max_latency_ms,
             min_latency_ms: record.min_latency_ms,
-            cost_usd,
+            billing_amount_usd,
         }
     }
 }
 
-fn time_bucket_cost_usd(record: &UsageTimeBucketRecord) -> Option<f64> {
+fn time_bucket_billing_amount_usd(record: &UsageTimeBucketRecord) -> Option<f64> {
     let input_tokens = nonnegative_i64_to_u64(record.input_tokens);
     let output_tokens = nonnegative_i64_to_u64(record.output_tokens);
     let cached_tokens = nonnegative_i64_to_u64(record.cached_tokens);
@@ -221,7 +221,7 @@ fn time_bucket_cost_usd(record: &UsageTimeBucketRecord) -> Option<f64> {
         return None;
     }
 
-    Some(billing::calculate_cost(
+    Some(billing::calculate_billing_amount(
         input_tokens,
         output_tokens,
         cached_tokens,

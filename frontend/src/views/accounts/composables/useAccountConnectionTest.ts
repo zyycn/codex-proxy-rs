@@ -18,6 +18,9 @@ type ConnectionTestLogTone = 'normal' | 'info' | 'success' | 'danger'
 
 interface ConnectionTestAccount {
   id: string
+  status: string
+  displayStatus?: string
+  tokenRefreshing?: boolean
 }
 
 interface ConnectionTestModelOption {
@@ -47,8 +50,8 @@ type ConnectionTestEvent =
   | { type: 'request'; payload?: ConnectionTestRequestPayload }
   | { type: 'status'; text?: string }
   | { type: 'content'; text?: string }
-  | { type: 'test_complete'; success?: boolean; error?: string }
-  | { type: 'error'; error?: string }
+  | { type: 'test_complete'; success?: boolean; error?: string; accountStatus?: string }
+  | { type: 'error'; error?: string; accountStatus?: string }
 
 interface AccountModelsResponse {
   models?: Array<{
@@ -58,10 +61,10 @@ interface AccountModelsResponse {
 }
 
 interface AccountConnectionTestOptions {
-  onResult?: () => void
+  onAccountStatus: (accountId: string, status: string) => void
 }
 
-export function useAccountConnectionTest(options: AccountConnectionTestOptions = {}) {
+export function useAccountConnectionTest(options: AccountConnectionTestOptions) {
   const showConnectionTestModal = shallowRef(false)
   const testingAccount = shallowRef<ConnectionTestAccount | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
@@ -99,7 +102,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
     if (connectionTestStatus.value === 'running') {
       return {
         label: '正在测试',
-        description: '正在发送一条真实 Responses 流式请求。',
+        description: '正在发送一条真实 Responses 流式请求',
         icon: Clock3,
         badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
         iconClass: 'text-(--cp-info)',
@@ -108,7 +111,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
     if (connectionTestStatus.value === 'success') {
       return {
         label: '连接正常',
-        description: '账号令牌可用，已完成 Codex Responses 流式验证。',
+        description: '账号令牌可用，已完成 Codex Responses 流式验证',
         icon: CheckCircle2,
         badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
         iconClass: 'text-(--cp-success)',
@@ -117,7 +120,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
     if (connectionTestStatus.value === 'error') {
       return {
         label: '测试失败',
-        description: '真实请求未完成，优先检查令牌状态、账号权限或上游网络。',
+        description: '真实请求未完成，优先检查令牌状态、账号权限或上游网络',
         icon: XCircle,
         badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
         iconClass: 'text-(--cp-danger)',
@@ -125,7 +128,7 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
     }
     return {
       label: '准备测试',
-      description: '点击开始后发送一条轻量 Responses 流式请求。',
+      description: '点击开始后发送一条轻量 Responses 流式请求',
       icon: Wifi,
       badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
       iconClass: 'text-(--cp-text-muted)',
@@ -221,6 +224,17 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
     )
   }
 
+  function applyAccountStatus(status?: string) {
+    const account = testingAccount.value
+    if (!account || !status) return
+    testingAccount.value = {
+      ...account,
+      status,
+      displayStatus: account.tokenRefreshing ? account.displayStatus : status,
+    }
+    options.onAccountStatus(account.id, status)
+  }
+
   function clearConnectionTestRun() {
     const run = connectionTestRun
     connectionTestRun = undefined
@@ -263,9 +277,10 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
       return
     }
     if (event.type === 'test_complete') {
+      applyAccountStatus(event.accountStatus)
       if (event.success) {
         if (!connectionTestContent.value) {
-          setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容。')
+          setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容')
         }
         appendConnectionTestLog('测试完成', 'success')
         finishConnectionTest('success')
@@ -274,15 +289,14 @@ export function useAccountConnectionTest(options: AccountConnectionTestOptions =
         appendConnectionTestLog(connectionTestError.value, 'danger')
         finishConnectionTest('error')
       }
-      options.onResult?.()
       clearConnectionTestRun()
       return
     }
     if (event.type === 'error') {
+      applyAccountStatus(event.accountStatus)
       connectionTestError.value = event.error || '测试连接失败'
       appendConnectionTestLog(connectionTestError.value, 'danger')
       finishConnectionTest('error')
-      options.onResult?.()
       clearConnectionTestRun()
     }
   }

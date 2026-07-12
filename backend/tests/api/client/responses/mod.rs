@@ -17,7 +17,7 @@ mod websocket;
 
 #[tokio::test]
 async fn responses_route_should_reject_missing_client_api_key() {
-    let (app, _key, _dir) = test_app_with_client_api_key().await;
+    let (app, _key, _dir, _connections) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -33,7 +33,7 @@ async fn responses_route_should_reject_missing_client_api_key() {
 
 #[tokio::test]
 async fn responses_route_should_reject_unknown_models_with_openai_error() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -55,7 +55,7 @@ async fn responses_route_should_reject_unknown_models_with_openai_error() {
 
 #[tokio::test]
 async fn responses_route_should_accept_body_larger_than_axum_default_limit() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = test_app_with_client_api_key().await;
     let large_input = "x".repeat(3 * 1024 * 1024);
     let body = serde_json::json!({
         "model": "unknown-model",
@@ -79,7 +79,7 @@ async fn responses_route_should_accept_body_larger_than_axum_default_limit() {
 
 #[tokio::test]
 async fn responses_route_should_reject_body_over_proxy_limit() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = test_app_with_client_api_key().await;
     let body = serde_json::json!({
         "model": "gpt-5.5",
         "input": "x".repeat(17 * 1024 * 1024),
@@ -102,7 +102,7 @@ async fn responses_route_should_reject_body_over_proxy_limit() {
 
 #[tokio::test]
 async fn responses_route_should_terminate_generated_stream_errors_with_done_marker() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -128,7 +128,7 @@ async fn responses_route_should_terminate_generated_stream_errors_with_done_mark
 
 #[tokio::test]
 async fn responses_route_should_default_omitted_stream_to_sse() {
-    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = test_app_with_client_api_key().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -157,6 +157,7 @@ pub(super) async fn test_app_with_client_api_key() -> (
     axum::Router,
     String,
     crate::support::storage::TestDatabaseGuard,
+    codex_proxy_rs::api::middleware::connection_drain::ConnectionDrain,
 ) {
     let (pool, dir) = init_test_db("openai-responses-routes").await;
     let redis = create_test_redis("openai-responses-routes").await;
@@ -175,10 +176,12 @@ pub(super) async fn test_app_with_client_api_key() -> (
         .await
         .expect("hot path state should initialize");
     let state = AppState::from(services.as_ref());
+    let connection_drain = services.connection_drain.clone();
     (
         codex_proxy_rs::api::router::router().with_state(state),
         plaintext,
         dir,
+        connection_drain,
     )
 }
 

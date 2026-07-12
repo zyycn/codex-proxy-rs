@@ -77,8 +77,8 @@ pub fn format_rate(value: Option<f64>) -> String {
     value.map_or_else(|| "—".to_string(), |value| format_percent(value * 100.0))
 }
 
-/// 使用紧凑货币格式展示美元成本。
-pub fn format_cost(value: f64) -> String {
+/// 使用紧凑货币格式展示美元计费金额。
+pub fn format_billing_amount(value: f64) -> String {
     if !value.is_finite() {
         return "—".to_string();
     }

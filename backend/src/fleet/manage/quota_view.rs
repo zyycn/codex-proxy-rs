@@ -107,12 +107,6 @@ impl Default for AccountQuotaData {
 }
 
 impl AccountQuotaData {
-    pub(crate) fn has_high_usage(&self) -> bool {
-        self.windows
-            .iter()
-            .any(|window| window.used_percent.is_some_and(|percent| percent >= 80.0))
-    }
-
     pub(crate) fn usage_windows(&self) -> Vec<AccountQuotaUsageWindow> {
         self.windows
             .iter()

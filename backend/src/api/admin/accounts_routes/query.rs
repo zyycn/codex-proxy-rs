@@ -202,23 +202,16 @@ pub(super) fn apply_selected_quota_window_usage(
     usage
 }
 
-pub(super) async fn account_summary_data(
-    state: &AppState,
-    quota_by_account: &HashMap<String, AccountQuotaData>,
-) -> AdminAccountSummaryData {
+pub(super) async fn account_summary_data(state: &AppState) -> AdminAccountSummaryData {
     let accounts = list_all_account_metadata(state).await;
     let total = accounts.len() as u64;
     let active = accounts
         .iter()
         .filter(|account| account.status == AccountStatus::Active)
         .count() as u64;
-    let high_usage = accounts
+    let quota_exhausted = accounts
         .iter()
-        .filter(|account| {
-            quota_by_account
-                .get(&account.id)
-                .is_some_and(account_quota_has_high_usage)
-        })
+        .filter(|account| account.status == AccountStatus::QuotaExhausted)
         .count() as u64;
     let attention = accounts
         .iter()
@@ -228,7 +221,7 @@ pub(super) async fn account_summary_data(
     AdminAccountSummaryData {
         total,
         active,
-        high_usage,
+        quota_exhausted,
         attention,
     }
 }
@@ -259,7 +252,7 @@ pub(super) async fn list_all_account_metadata(state: &AppState) -> Vec<ManagedAc
         let Ok(result) = state
             .services
             .admin_accounts
-            .list_page(page, ACCOUNT_STATS_PAGE_LIMIT, None)
+            .list_page(page, ACCOUNT_STATS_PAGE_LIMIT, None, None, None)
             .await
         else {
             return Vec::new();
@@ -273,15 +266,52 @@ pub(super) async fn list_all_account_metadata(state: &AppState) -> Vec<ManagedAc
     }
 }
 
-pub(super) fn account_quota_has_high_usage(quota: &AccountQuotaData) -> bool {
-    quota.has_high_usage()
-}
-
 pub(super) fn account_summary_needs_attention(status: AccountStatus) -> bool {
     matches!(
         status,
         AccountStatus::Expired | AccountStatus::Disabled | AccountStatus::Banned
     )
+}
+
+pub(super) fn account_status_filter(
+    status: Option<String>,
+) -> Result<Option<AccountStatus>, AdminError> {
+    let Some(status) = status.map(|value| value.trim().to_string()) else {
+        return Ok(None);
+    };
+    if status.is_empty() {
+        return Ok(None);
+    }
+    AccountStatus::parse(&status)
+        .map(Some)
+        .ok_or_else(|| AdminError::bad_request("Invalid account status"))
+}
+
+pub(super) fn account_list_sort(
+    sort_by: Option<String>,
+    sort_direction: Option<String>,
+) -> Result<Option<AccountListSort>, AdminError> {
+    let (sort_by, sort_direction) = match (sort_by, sort_direction) {
+        (None, None) => return Ok(None),
+        (Some(sort_by), Some(sort_direction)) => (sort_by, sort_direction),
+        _ => {
+            return Err(AdminError::bad_request(
+                "Account sort field and direction must be provided together",
+            ));
+        }
+    };
+    let field = match sort_by.trim() {
+        "email" => AccountSortField::Email,
+        "status" => AccountSortField::Status,
+        "planType" => AccountSortField::PlanType,
+        "usage" => AccountSortField::Usage,
+        "lastUsedAt" => AccountSortField::LastUsedAt,
+        "expiresAt" => AccountSortField::ExpiresAt,
+        _ => return Err(AdminError::bad_request("Invalid account sort field")),
+    };
+    let direction = SortDirection::parse(&sort_direction)
+        .ok_or_else(|| AdminError::bad_request("Invalid account sort direction"))?;
+    Ok(Some(AccountListSort { field, direction }))
 }
 
 pub(super) async fn list_current_window_model_usage(
@@ -323,7 +353,7 @@ pub(super) async fn list_current_window_model_usage(
         let input_tokens = row.input_tokens;
         let output_tokens = row.output_tokens;
         let cached_tokens = row.cached_tokens;
-        let total_cost_usd = billing::calculate_cost(
+        let billing_amount_usd = billing::calculate_billing_amount(
             nonnegative_i64_to_u64(input_tokens),
             nonnegative_i64_to_u64(output_tokens),
             nonnegative_i64_to_u64(cached_tokens),
@@ -342,7 +372,7 @@ pub(super) async fn list_current_window_model_usage(
                 input_tokens: 0,
                 output_tokens: 0,
                 cached_tokens: 0,
-                total_cost_usd: 0.0,
+                billing_amount_usd: 0.0,
                 last_used_at: None,
             });
         record.request_count += request_count;
@@ -350,7 +380,7 @@ pub(super) async fn list_current_window_model_usage(
         record.input_tokens += input_tokens;
         record.output_tokens += output_tokens;
         record.cached_tokens += cached_tokens;
-        record.total_cost_usd += total_cost_usd;
+        record.billing_amount_usd += billing_amount_usd;
         record.last_used_at = record.last_used_at.max(last_used_at);
     }
     let records = records_by_model.into_values().collect::<Vec<_>>();
@@ -408,7 +438,7 @@ pub(super) fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountMo
     } else {
         0.0
     };
-    let total_cost_usd = usage.total_cost_usd;
+    let billing_amount_usd = usage.billing_amount_usd;
 
     AdminAccountModelUsageData {
         model: usage.model,
@@ -424,8 +454,8 @@ pub(super) fn model_usage_data(usage: AccountModelUsageRecord) -> AdminAccountMo
         cached_tokens_display: format_tokens(cached_tokens),
         total_tokens,
         total_tokens_display: format_tokens(total_tokens),
-        total_cost_usd,
-        total_cost_usd_display: format_cost(total_cost_usd),
+        billing_amount_usd,
+        billing_amount_usd_display: format_billing_amount(billing_amount_usd),
         last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
         last_used_at_display: china_relative_time(usage.last_used_at, Utc::now()),
     }

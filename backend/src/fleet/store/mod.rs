@@ -7,8 +7,8 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
-use crate::fleet::account::{Account, AccountStatus};
-use crate::infra::json::{NumberedPage, page_offset};
+use crate::fleet::account::{Account, AccountListSort, AccountSortField, AccountStatus};
+use crate::infra::json::{NumberedPage, SortDirection, page_offset};
 
 mod queries;
 mod rows;
@@ -16,7 +16,7 @@ mod rows;
 use queries::*;
 use rows::{
     count_account_metadata, get_pool_account, list_pool_accounts, map_account_store_error,
-    metadata_from_row, optional_update_value, push_account_metadata_search, quota_plan_type,
+    metadata_from_row, optional_update_value, push_account_metadata_filter, quota_plan_type,
     quota_snapshot_from_row, status_to_db, stored_account_from_row,
 };
 

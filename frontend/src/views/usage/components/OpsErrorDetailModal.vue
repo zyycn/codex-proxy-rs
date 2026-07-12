@@ -47,7 +47,7 @@ function latencyDisplay(value: unknown) {
   <BaseModal
     v-model="open"
     title="错误明细"
-    description="失败链路、状态码视角与结构化诊断信息"
+    description="状态码、失败分类与诊断信息"
     variant="danger"
     width="920px"
     scrollable

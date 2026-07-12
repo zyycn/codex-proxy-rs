@@ -30,7 +30,6 @@ const loading = shallowRef(false)
 const checking = shallowRef(false)
 const updating = shallowRef(false)
 const restarting = shallowRef(false)
-const restartCountdown = shallowRef(0)
 const updateError = shallowRef('')
 const updateSuccess = shallowRef(false)
 const needRestart = shallowRef(false)
@@ -40,11 +39,11 @@ const updateStreaming = shallowRef(false)
 const updateStreamError = shallowRef('')
 const updateEventSource = shallowRef<EventSource | null>(null)
 
-let restartTimer: number | undefined
 let loadVersionPromise: Promise<SystemVersion> | undefined
 let loadSystemPromise: Promise<void> | undefined
 const maxUpdateLogs = 200
-const restartCountdownSeconds = 8
+const restartStopPollAttempts = 50
+const restartStopPollIntervalMs = 200
 const restartReadyPollAttempts = 60
 const restartReadyPollIntervalMs = 1000
 
@@ -227,13 +226,6 @@ async function updateNow(targetVersion: string) {
   }
 }
 
-function clearRestartTimer() {
-  if (restartTimer !== undefined) {
-    window.clearInterval(restartTimer)
-    restartTimer = undefined
-  }
-}
-
 function delay(ms: number) {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms)
@@ -241,7 +233,22 @@ function delay(ms: number) {
 }
 
 async function waitForServiceAndReload() {
-  restartCountdown.value = 0
+  let stopped = false
+  for (let attempt = 0; attempt < restartStopPollAttempts; attempt += 1) {
+    try {
+      await checkSystemHealth()
+    } catch {
+      stopped = true
+      break
+    }
+    await delay(restartStopPollIntervalMs)
+  }
+
+  if (!stopped) {
+    updateError.value = '未检测到服务停止，请检查重启进程状态'
+    restarting.value = false
+    return
+  }
 
   for (let attempt = 0; attempt < restartReadyPollAttempts; attempt += 1) {
     try {
@@ -257,7 +264,6 @@ async function waitForServiceAndReload() {
 
   updateError.value = '服务重启恢复超时，请检查进程是否已被自重启或外部守护进程拉起'
   restarting.value = false
-  restartCountdown.value = 0
 }
 
 function apiErrorStatus(error: unknown) {
@@ -268,30 +274,20 @@ async function restartNow() {
   if (restarting.value) return
 
   restarting.value = true
-  restartCountdown.value = restartCountdownSeconds
   updateError.value = ''
-  clearRestartTimer()
   disconnectUpdateEvents()
 
   try {
     await restartSystem()
   } catch (error) {
-    // The connection can drop immediately after the restart request is accepted.
     if (apiErrorStatus(error) > 0) {
       restarting.value = false
-      restartCountdown.value = 0
       updateError.value = error instanceof Error ? error.message : '重启失败'
       throw error
     }
   }
 
-  restartTimer = window.setInterval(() => {
-    restartCountdown.value -= 1
-    if (restartCountdown.value <= 0) {
-      clearRestartTimer()
-      void waitForServiceAndReload()
-    }
-  }, 1000)
+  await waitForServiceAndReload()
 }
 
 export function useSystemUpdate() {
@@ -302,7 +298,6 @@ export function useSystemUpdate() {
     checking,
     updating,
     restarting,
-    restartCountdown,
     updateError,
     updateSuccess,
     needRestart,
@@ -318,7 +313,6 @@ export function useSystemUpdate() {
     checkUpdates,
     updateNow,
     restartNow,
-    clearRestartTimer,
     connectUpdateEvents,
     disconnectUpdateEvents,
     clearUpdateLogs,

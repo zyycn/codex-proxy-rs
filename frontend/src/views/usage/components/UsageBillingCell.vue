@@ -3,34 +3,34 @@ import { Info } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
-import { usageCostDetails, usageCostText } from '../constants'
+import { usageBilling, usageBillingText } from '../constants'
 
 const props = defineProps<{
   record: any
 }>()
 
-const costDetails = computed(() => usageCostDetails(props.record))
-const mainCostItems = computed(() => {
-  const details = costDetails.value
-  if (!details) return []
+const billing = computed(() => usageBilling(props.record))
+const amountItems = computed(() => {
+  const value = billing.value
+  if (!value) return []
 
   return [
-    { label: '输入成本', value: details.inputCostDisplay, accent: false },
-    { label: '输出成本', value: details.outputCostDisplay, accent: false },
-    { label: '输入单价', value: details.inputPriceDisplay, accent: true },
-    { label: '输出单价', value: details.outputPriceDisplay, accent: true },
-    { label: '缓存读取成本', value: details.cacheReadCostDisplay, accent: false },
+    { label: '输入费用', value: value.inputAmountDisplay, accent: false },
+    { label: '输出费用', value: value.outputAmountDisplay, accent: false },
+    { label: '输入单价', value: value.inputPriceDisplay, accent: true },
+    { label: '输出单价', value: value.outputPriceDisplay, accent: true },
+    { label: '缓存读取费用', value: value.cacheReadAmountDisplay, accent: false },
   ]
 })
 const billingItems = computed(() => {
-  const details = costDetails.value
-  if (!details) return []
+  const value = billing.value
+  if (!value) return []
 
   return [
-    { label: '服务档位', value: details.serviceTierDisplay, tone: 'info' },
-    { label: '倍率', value: details.multiplierDisplay, tone: 'info' },
-    { label: '总费用', value: details.totalCostDisplay, tone: 'success' },
-    { label: '原始', value: details.originalCostDisplay, tone: 'default' },
+    { label: '服务档位', value: value.serviceTierDisplay, tone: 'info' },
+    { label: '倍率', value: value.multiplierDisplay, tone: 'info' },
+    { label: '总费用', value: value.totalAmountDisplay, tone: 'success' },
+    { label: '标准费用', value: value.standardAmountDisplay, tone: 'default' },
   ]
 })
 
@@ -44,11 +44,11 @@ function itemValueClass(tone?: string, accent?: boolean) {
 <template>
   <div class="flex items-center justify-end gap-1.5">
     <span class="font-mono text-[12px] font-[760] tabular-nums text-(--cp-success-text)">
-      {{ usageCostText(record) }}
+      {{ usageBillingText(record) }}
     </span>
 
     <BasePopover
-      v-if="costDetails"
+      v-if="billing"
       trigger="hover"
       placement="right"
       width="248px"
@@ -67,9 +67,9 @@ function itemValueClass(tone?: string, accent?: boolean) {
       <div
         class="grid gap-2 text-[12px] leading-none [&_span:first-child]:whitespace-nowrap [&_span:last-child]:whitespace-nowrap"
       >
-        <p class="m-0 font-[760] text-(--cp-text-primary)">成本明细</p>
+        <p class="m-0 font-[760] text-(--cp-text-primary)">计费明细</p>
         <div class="grid gap-1.5 text-(--cp-text-secondary)">
-          <div v-for="item in mainCostItems" :key="item.label" class="flex justify-between gap-4">
+          <div v-for="item in amountItems" :key="item.label" class="flex justify-between gap-4">
             <span>{{ item.label }}</span>
             <span class="font-mono font-[760]" :class="itemValueClass(undefined, item.accent)">
               {{ item.value }}

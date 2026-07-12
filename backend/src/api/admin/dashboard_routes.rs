@@ -17,7 +17,7 @@ use crate::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
         usage_routes::{
-            UsageRecordCostDetailsData, UsageRecordTokenDetailsData, usage_cost_details,
+            UsageRecordBillingData, UsageRecordTokenDetailsData, usage_billing,
             usage_record_models, usage_token_details,
         },
     },
@@ -102,8 +102,11 @@ struct DashboardUsageRecordData {
     client_ip: Option<String>,
     user_agent: Option<String>,
     reasoning_effort: Option<String>,
+    compact: bool,
+    request_kind: Option<String>,
+    subagent_kind: Option<String>,
     token_details: UsageRecordTokenDetailsData,
-    cost_details: Option<UsageRecordCostDetailsData>,
+    billing: Option<UsageRecordBillingData>,
     first_token_latency_ms_display: String,
     latency_ms_display: String,
 }
@@ -514,8 +517,15 @@ fn dashboard_usage_record_data(
     let user_agent = metadata_string(&record.metadata, &["userAgent", "user_agent"]);
     let reasoning_effort =
         metadata_string(&record.metadata, &["reasoningEffort", "reasoning_effort"]);
+    let compact = record
+        .metadata
+        .get("compact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let request_kind = metadata_string(&record.metadata, &["requestKind", "request_kind"]);
+    let subagent_kind = metadata_string(&record.metadata, &["subagentKind", "subagent_kind"]);
     let token_details = usage_token_details(&record);
-    let cost_details = usage_cost_details(&record, upstream_model.as_deref(), &token_details);
+    let billing = usage_billing(&record, upstream_model.as_deref(), &token_details);
     let first_token_latency_ms = record.first_token_ms;
 
     DashboardUsageRecordData {
@@ -531,8 +541,11 @@ fn dashboard_usage_record_data(
         client_ip,
         user_agent,
         reasoning_effort,
+        compact,
+        request_kind,
+        subagent_kind,
         token_details,
-        cost_details,
+        billing,
         first_token_latency_ms_display: format_duration_ms(first_token_latency_ms),
         latency_ms_display: format_duration_ms(record.latency_ms),
     }

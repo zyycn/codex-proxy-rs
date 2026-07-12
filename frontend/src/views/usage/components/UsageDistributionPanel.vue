@@ -14,7 +14,7 @@ const props = defineProps<{
   items: any[]
   color: string
   sourceOptions?: any[]
-  showCostColumn?: boolean
+  showAccountBillingColumn?: boolean
 }>()
 
 const source = defineModel<string>('source', { default: '' })
@@ -29,13 +29,13 @@ const totalMetric = computed(() =>
 const totalMetricText = computed(() => sortedItems.value[0]?.totalTokensTotal ?? '0')
 
 const tableGridClass = computed(() =>
-  props.showCostColumn === false
+  props.showAccountBillingColumn === false
     ? 'grid-cols-[minmax(128px,1fr)_repeat(4,minmax(66px,0.75fr))]'
     : 'grid-cols-[minmax(128px,1fr)_repeat(5,minmax(64px,0.75fr))]',
 )
 
 const tableWidthClass = computed(() =>
-  props.showCostColumn === false ? 'min-w-[414px] w-full' : 'min-w-[492px] w-full',
+  props.showAccountBillingColumn === false ? 'min-w-[414px] w-full' : 'min-w-[492px] w-full',
 )
 
 const hasData = computed(() =>
@@ -140,7 +140,7 @@ function distributionNameParts(name: unknown) {
                 <span class="text-center">请求</span>
                 <span class="text-center">Token</span>
                 <span class="text-center">实际</span>
-                <span v-if="showCostColumn !== false" class="text-center">成本</span>
+                <span v-if="showAccountBillingColumn !== false" class="text-center">计费</span>
                 <span class="text-center">标准</span>
               </div>
 
@@ -190,22 +190,22 @@ function distributionNameParts(name: unknown) {
                   </span>
                   <span
                     class="text-center font-mono tabular-nums text-(--cp-success-text)"
-                    :title="item.actualCost"
+                    :title="item.actualBillingAmount"
                   >
-                    {{ item.actualCost }}
+                    {{ item.actualBillingAmount }}
                   </span>
                   <span
-                    v-if="showCostColumn !== false"
+                    v-if="showAccountBillingColumn !== false"
                     class="text-center font-mono tabular-nums text-(--cp-warning-text)"
-                    :title="item.accountCost"
+                    :title="item.accountBillingAmount"
                   >
-                    {{ item.accountCost }}
+                    {{ item.accountBillingAmount }}
                   </span>
                   <span
                     class="text-center font-mono tabular-nums text-(--cp-text-secondary)"
-                    :title="item.cost"
+                    :title="item.standardBillingAmount"
                   >
-                    {{ item.cost }}
+                    {{ item.standardBillingAmount }}
                   </span>
                 </div>
               </div>
@@ -219,7 +219,7 @@ function distributionNameParts(name: unknown) {
         compact
         plain
         title="暂无分布数据"
-        description="当前范围暂无使用记录。"
+        description="当前范围暂无使用记录"
         class="h-70 place-content-center lg:h-64"
       />
     </template>

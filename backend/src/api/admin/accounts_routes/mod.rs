@@ -26,7 +26,7 @@ use crate::{
         session::AdminAuth,
     },
     fleet::{
-        account::AccountStatus,
+        account::{AccountListSort, AccountSortField, AccountStatus},
         manage::{
             AccountHealthCheck, AccountManageError, AccountRefreshOutcome, AccountRefreshResult,
             AccountUpdate, ManagedAccount, OAuthExchangeInput,
@@ -38,9 +38,10 @@ use crate::{
     },
     infra::{
         format::{
-            format_cost, format_percent, format_plain_number, format_tokens, nonnegative_i64_to_u64,
+            format_billing_amount, format_percent, format_plain_number, format_tokens,
+            nonnegative_i64_to_u64,
         },
-        json::{clamp_limit, clamp_page, total_pages},
+        json::{SortDirection, clamp_limit, clamp_page, total_pages},
         time::{china_datetime, china_relative_time, china_rfc3339},
     },
     telemetry::{
@@ -59,6 +60,9 @@ pub(crate) struct AccountsQuery {
     page: Option<u32>,
     page_size: Option<u32>,
     search: Option<String>,
+    status: Option<String>,
+    sort_by: Option<String>,
+    sort_direction: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,8 +286,8 @@ struct AdminAccountModelUsageData {
     cached_tokens_display: String,
     total_tokens: u64,
     total_tokens_display: String,
-    total_cost_usd: f64,
-    total_cost_usd_display: String,
+    billing_amount_usd: f64,
+    billing_amount_usd_display: String,
     last_used_at: Option<String>,
     last_used_at_display: String,
 }
@@ -304,7 +308,7 @@ struct AccountModelUsageRecord {
     input_tokens: i64,
     output_tokens: i64,
     cached_tokens: i64,
-    total_cost_usd: f64,
+    billing_amount_usd: f64,
     last_used_at: Option<DateTime<Utc>>,
 }
 
@@ -337,7 +341,7 @@ impl AccountListStats {
 struct AdminAccountSummaryData {
     total: u64,
     active: u64,
-    high_usage: u64,
+    quota_exhausted: u64,
     attention: u64,
 }
 
@@ -505,13 +509,15 @@ pub(crate) async fn accounts(
 ) -> Result<impl IntoResponse, AdminError> {
     let page = clamp_page(params.page.unwrap_or(1));
     let page_size = clamp_limit(params.page_size.unwrap_or(50));
+    let status = account_status_filter(params.status)?;
+    let sort = account_list_sort(params.sort_by, params.sort_direction)?;
     let quota_by_account = quota_snapshots_by_account(&state).await;
-    let summary = account_summary_data(&state, &quota_by_account).await;
+    let summary = account_summary_data(&state).await;
 
     match state
         .services
         .admin_accounts
-        .list_page(page, page_size, params.search)
+        .list_page(page, page_size, params.search, status, sort)
         .await
     {
         Ok(page) => {

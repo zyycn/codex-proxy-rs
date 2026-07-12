@@ -17,10 +17,12 @@ use crate::{
     },
     api::admin::session::AdminAuth,
     infra::{
-        json::{NumberedPage, clamp_limit, clamp_page},
+        json::{NumberedPage, SortDirection, clamp_limit, clamp_page},
         time::{china_relative_time_str, china_rfc3339_str},
     },
-    keys::types::{KeyManageError, ManagedClientApiKey},
+    keys::types::{
+        ClientApiKeyListSort, ClientApiKeySortField, KeyManageError, ManagedClientApiKey,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +31,8 @@ pub(crate) struct ApiKeysQuery {
     page: Option<u32>,
     page_size: Option<u32>,
     search: Option<String>,
+    sort_by: Option<String>,
+    sort_direction: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,10 +124,11 @@ pub(crate) async fn api_keys(
 ) -> Result<impl IntoResponse, AdminError> {
     let page = clamp_page(query.page.unwrap_or(1));
     let page_size = clamp_limit(query.page_size.unwrap_or(50));
+    let sort = client_api_key_list_sort(query.sort_by, query.sort_direction)?;
     match state
         .services
         .admin_client_keys
-        .list_page(page, page_size, query.search)
+        .list_page(page, page_size, query.search, sort)
         .await
     {
         Ok(page) => {
@@ -140,6 +145,31 @@ pub(crate) async fn api_keys(
         }
         Err(error) => Err(client_key_error(&error)),
     }
+}
+
+fn client_api_key_list_sort(
+    sort_by: Option<String>,
+    sort_direction: Option<String>,
+) -> Result<Option<ClientApiKeyListSort>, AdminError> {
+    let (sort_by, sort_direction) = match (sort_by, sort_direction) {
+        (None, None) => return Ok(None),
+        (Some(sort_by), Some(sort_direction)) => (sort_by, sort_direction),
+        _ => {
+            return Err(AdminError::bad_request(
+                "Client API key sort field and direction must be provided together",
+            ));
+        }
+    };
+    let field = match sort_by.trim() {
+        "name" => ClientApiKeySortField::Name,
+        "enabled" => ClientApiKeySortField::Enabled,
+        "createdAt" => ClientApiKeySortField::CreatedAt,
+        "lastUsedAt" => ClientApiKeySortField::LastUsedAt,
+        _ => return Err(AdminError::bad_request("Invalid client API key sort field")),
+    };
+    let direction = SortDirection::parse(&sort_direction)
+        .ok_or_else(|| AdminError::bad_request("Invalid client API key sort direction"))?;
+    Ok(Some(ClientApiKeyListSort { field, direction }))
 }
 
 /// `POST /api/admin/keys`

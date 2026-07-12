@@ -349,6 +349,7 @@ async fn account_test_stream_should_translate_upstream_responses_sse() {
     assert_eq!(events[2]["text"], "ok");
     assert_eq!(events[3]["type"], "test_complete");
     assert_eq!(events[3]["success"], true);
+    assert_eq!(events[3]["accountStatus"], "active");
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["stream"], true);
     assert_eq!(upstream_body["store"], false);
@@ -408,7 +409,9 @@ async fn account_test_stream_should_preserve_manually_disabled_status_on_success
     )
     .unwrap();
 
-    assert_eq!(test_events(&body).last().unwrap()["type"], "test_complete");
+    let events = test_events(&body);
+    assert_eq!(events.last().unwrap()["type"], "test_complete");
+    assert_eq!(events.last().unwrap()["accountStatus"], "disabled");
     assert_eq!(
         store.get("acct_test").await.unwrap().unwrap().status,
         AccountStatus::Disabled
@@ -459,6 +462,7 @@ async fn account_test_stream_should_mark_expired_after_auth_failure() {
     let stored = store.get("acct_test").await.unwrap().unwrap();
 
     assert_eq!(events.last().unwrap()["type"], "error");
+    assert_eq!(events.last().unwrap()["accountStatus"], "expired");
     assert_eq!(stored.status, AccountStatus::Expired);
     assert!(stored.next_refresh_at.is_none());
 }
@@ -519,5 +523,6 @@ async fn account_test_stream_should_mark_quota_exhausted_after_failed_sse() {
     let stored = store.get("acct_test").await.unwrap().unwrap();
 
     assert_eq!(events.last().unwrap()["type"], "error");
+    assert_eq!(events.last().unwrap()["accountStatus"], "quota_exhausted");
     assert_eq!(stored.status, AccountStatus::QuotaExhausted);
 }

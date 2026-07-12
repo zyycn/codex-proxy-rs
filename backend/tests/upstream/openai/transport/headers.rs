@@ -689,10 +689,12 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         })))
         .mount(&server)
         .await;
+    let fingerprint = crate::support::fingerprint::runtime_test_fingerprint();
+    let client_version = fingerprint.current().app_version.clone();
     let client = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         server.uri(),
-        crate::support::fingerprint::runtime_test_fingerprint(),
+        fingerprint,
     );
 
     let models = client
@@ -712,6 +714,13 @@ async fn codex_backend_client_models_should_use_original_auxiliary_headers() {
         .iter()
         .find(|request| request.url.path() == "/codex/models")
         .unwrap();
+    assert_eq!(
+        models_request
+            .url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "client_version").then(|| value.into_owned())),
+        Some(client_version)
+    );
     let headers = &models_request.headers;
     assert_eq!(
         headers.get("accept").and_then(|value| value.to_str().ok()),
@@ -820,93 +829,6 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
             "x-responsesapi-include-timing-metrics",
             "version",
             "x-codex-parent-thread-id",
-        ],
-    );
-}
-
-#[tokio::test]
-async fn codex_backend_client_should_send_compact_headers_in_fingerprint_order() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let request = read_http_request(&mut stream).await;
-        write_compact_json_response(&mut stream).await;
-        request
-    });
-    let client = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        crate::support::fingerprint::runtime_test_fingerprint(),
-    );
-
-    client
-        .create_compact_response(
-            &codex_proxy_rs::upstream::openai::protocol::responses::CodexCompactRequest {
-                body: json!({
-                    "model": "gpt-5.5",
-                    "input": [],
-                    "instructions": ""
-                })
-                .as_object()
-                .cloned()
-                .unwrap(),
-                client_ip: None,
-                client_user_agent: None,
-                client_api_key_id: None,
-                client_session_id: None,
-                client_thread_id: None,
-                client_request_id: None,
-                client_turn_id: None,
-                client_window_id: None,
-                client_parent_thread_id: None,
-            },
-            CodexRequestContext {
-                access_token: "access-token",
-                account_id: Some("chatgpt-account"),
-                request_id: "req_compact",
-                turn_state: None,
-                turn_metadata: None,
-                beta_features: None,
-                include_timing_metrics: None,
-                version: None,
-                codex_window_id: None,
-                parent_thread_id: None,
-                cookie_header: Some("cf_clearance=old"),
-                installation_id: Some("install-1"),
-                session_id: None,
-                thread_id: None,
-                prompt_cache_key: None,
-                client_request_id: None,
-                turn_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-    let raw_request = server.await.unwrap();
-    let header_names = read_header_names(&raw_request);
-    assert_header_subsequence(
-        &header_names,
-        &[
-            "authorization",
-            "chatgpt-account-id",
-            "originator",
-            "user-agent",
-            "sec-ch-ua",
-            "sec-ch-ua-mobile",
-            "sec-ch-ua-platform",
-            "accept-encoding",
-            "accept-language",
-            "sec-fetch-site",
-            "sec-fetch-mode",
-            "sec-fetch-dest",
-            "content-type",
-            "cookie",
-            "openai-beta",
-            "x-openai-internal-codex-residency",
-            "x-client-request-id",
-            "x-codex-installation-id",
         ],
     );
 }

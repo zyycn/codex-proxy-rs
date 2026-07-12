@@ -40,7 +40,7 @@ const label = formField('label')
   <BaseModal
     v-model="open"
     title="创建 API Key"
-    description="创建后可在密钥列表中随时复制或导入 CCSwitch。"
+    description="创建后可在密钥列表中随时复制或导入 CCSwitch"
     variant="info"
     width="540px"
     :close-disabled="saving"
@@ -71,7 +71,7 @@ const label = formField('label')
   <BaseModal
     v-model="createdOpen"
     title="API Key 已创建"
-    description="可以立即复制或导入 CCSwitch，之后也可从密钥列表再次操作。"
+    description="可以立即复制或导入 CCSwitch，之后也可从密钥列表再次操作"
     variant="success"
     width="540px"
   >
@@ -80,7 +80,7 @@ const label = formField('label')
         class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3"
       >
         <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
-          该密钥具有网关访问权限，请仅发送给可信调用方。
+          该密钥具有网关访问权限，请仅发送给可信调用方
         </p>
       </div>
 

@@ -83,7 +83,7 @@ async function openSystemUpdate() {
       await loadSystem(false)
     }
   } catch {
-    // 弹窗打开后由弹窗内的加载逻辑提示失败原因。
+    // 弹窗打开后由弹窗内的加载逻辑提示失败原因
   } finally {
     systemUpdateOpening.value = false
     systemUpdateOpen.value = true

@@ -82,7 +82,8 @@ pub async fn responses_websocket(State(state): State<AppState>, mut request: Req
         }
     };
     let upgrade = hyper::upgrade::on(&mut request);
-    tokio::spawn(async move {
+    let connection_drain = state.services.connection_drain.clone();
+    connection_drain.spawn(async move {
         match upgrade.await {
             Ok(upgraded) => {
                 let socket = WebSocketStream::from_raw_socket(

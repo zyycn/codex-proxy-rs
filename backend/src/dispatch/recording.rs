@@ -12,8 +12,9 @@ use crate::{
         ops::types::OpsErrorLog,
         recorder::{
             DispatchErrorLogRecord, Recorder, enrich_event_route_metadata,
-            enrich_usage_record_identity, event_kind as response_event_kind,
-            reasoning_effort_from_request, record_dispatch_error_event,
+            enrich_response_request_semantics, enrich_usage_record_identity,
+            event_kind as response_event_kind, reasoning_effort_from_request,
+            record_dispatch_error_event,
         },
         usage::types::UsageRecordLevel,
     },
@@ -177,6 +178,7 @@ pub(super) async fn record_response_upstream_error_event(
         reasoning_effort_from_request(record.request),
         record.request.service_tier(),
     );
+    enrich_response_request_semantics(&mut metadata, record.request);
     event.metadata = metadata;
     if let Err(error) = record.recorder.record_error(event).await {
         tracing::error!(account_id = %record.account_id, error = %error, "failed to record upstream error event");
@@ -224,6 +226,7 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
         reasoning_effort_from_request(record.request),
         record.request.service_tier(),
     );
+    enrich_response_request_semantics(&mut metadata, record.request);
     let mut event = OpsErrorLog::new(
         response_event_kind(record.route),
         "v1 responses stream failed",
@@ -409,10 +412,14 @@ fn response_request_summary(
     let body = request.body();
     let input = body.get("input");
     let tools = body.get("tools");
+    let semantics = request.semantics();
     json!({
         "model": request.model(),
         "stream": request.stream(),
         "store": request.store(),
+        "compact": semantics.compact,
+        "requestKind": semantics.request_kind,
+        "subagentKind": semantics.subagent_kind,
         "transport": backend_transport_name(transport),
         "inputType": json_value_kind(input),
         "inputItemsCount": input.and_then(Value::as_array).map(Vec::len),
@@ -514,6 +521,7 @@ pub(super) async fn record_live_response_stream_event(
         reasoning_effort_from_request(&context.request),
         context.request.service_tier(),
     );
+    enrich_response_request_semantics(&mut metadata, &context.request);
 
     if is_success_usage_event(level, status_code) {
         crate::telemetry::recorder::record_response_event(

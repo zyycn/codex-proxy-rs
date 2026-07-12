@@ -1,5 +1,9 @@
+use codex_proxy_rs::infra::json::SortDirection;
 use codex_proxy_rs::keys::{
-    manage::KeyManageService, service::KeyVerifier, store::PgClientKeyStore,
+    manage::KeyManageService,
+    service::KeyVerifier,
+    store::PgClientKeyStore,
+    types::{ClientApiKeyListSort, ClientApiKeySortField},
 };
 
 use crate::support::storage::init_test_db;
@@ -22,7 +26,7 @@ async fn client_key_store_should_create_list_disable_enable_and_delete_keys() {
         .unwrap();
     assert_eq!(stored_key.0, created.key);
 
-    let first_page = store.list_page(1, 10, None).await.unwrap();
+    let first_page = store.list_page(1, 10, None, None).await.unwrap();
     assert_eq!(first_page.items.len(), 1);
     assert_eq!(first_page.items[0].name, "primary");
     assert_eq!(first_page.items[0].prefix, created.prefix);
@@ -125,7 +129,7 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
         .await
         .unwrap();
 
-    let first_page = store.list_page(1, 2, None).await.unwrap();
+    let first_page = store.list_page(1, 2, None, None).await.unwrap();
     assert_eq!(first_page.total, 3);
     assert_eq!(
         first_page
@@ -136,7 +140,7 @@ async fn client_key_store_should_page_keys_by_created_at_desc() {
         ["c", "b"]
     );
 
-    let second_page = store.list_page(2, 2, None).await.unwrap();
+    let second_page = store.list_page(2, 2, None, None).await.unwrap();
     assert_eq!(
         second_page
             .items
@@ -159,18 +163,105 @@ async fn client_key_store_should_search_name_label_and_id_before_paging() {
         .unwrap();
 
     let page = store
-        .list_page(1, 10, Some("nightly-needle"))
+        .list_page(1, 10, Some("nightly-needle"), None)
         .await
         .unwrap();
 
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].id, matching.id);
 
-    let name_page = store.list_page(1, 10, Some("interact")).await.unwrap();
+    let name_page = store
+        .list_page(1, 10, Some("interact"), None)
+        .await
+        .unwrap();
     assert_eq!(name_page.items[0].id, named.id);
 
-    let id_page = store.list_page(1, 10, Some(&matching.id)).await.unwrap();
+    let id_page = store
+        .list_page(1, 10, Some(&matching.id), None)
+        .await
+        .unwrap();
     assert_eq!(id_page.items[0].id, matching.id);
+}
+
+#[tokio::test]
+async fn client_key_store_should_sort_supported_columns() {
+    let (store, _dir) = client_key_store("client-keys-sort").await;
+    let admin = KeyManageService::new(store.clone());
+    let charlie = admin.create("charlie").await.unwrap();
+    let alpha = admin.create("alpha").await.unwrap();
+    let bravo = admin.create("bravo").await.unwrap();
+    for (key, enabled, created_at, last_used_at) in [
+        (
+            &charlie,
+            true,
+            "2026-07-03T00:00:00Z",
+            Some("2026-07-01T00:00:00Z"),
+        ),
+        (
+            &alpha,
+            false,
+            "2026-07-01T00:00:00Z",
+            Some("2026-07-03T00:00:00Z"),
+        ),
+        (&bravo, true, "2026-07-02T00:00:00Z", None),
+    ] {
+        sqlx::query(
+            "update client_api_keys set enabled = $1, created_at = $2, last_used_at = $3 where id = $4",
+        )
+        .bind(enabled)
+        .bind(crate::support::storage::timestamp(created_at))
+        .bind(last_used_at.map(crate::support::storage::timestamp))
+        .bind(&key.id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    }
+
+    for (field, direction, expected) in [
+        (
+            ClientApiKeySortField::Name,
+            SortDirection::Asc,
+            ["alpha", "bravo", "charlie"],
+        ),
+        (
+            ClientApiKeySortField::CreatedAt,
+            SortDirection::Desc,
+            ["charlie", "bravo", "alpha"],
+        ),
+        (
+            ClientApiKeySortField::LastUsedAt,
+            SortDirection::Desc,
+            ["alpha", "charlie", "bravo"],
+        ),
+    ] {
+        let page = store
+            .list_page(1, 10, None, Some(ClientApiKeyListSort { field, direction }))
+            .await
+            .unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    let enabled_page = store
+        .list_page(
+            1,
+            10,
+            None,
+            Some(ClientApiKeyListSort {
+                field: ClientApiKeySortField::Enabled,
+                direction: SortDirection::Asc,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(enabled_page.items[0].name, "alpha");
+    assert!(!enabled_page.items[0].enabled);
+    assert!(enabled_page.items[1..].iter().all(|item| item.enabled));
 }
 
 async fn client_key_store(

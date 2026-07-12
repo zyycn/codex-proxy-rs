@@ -5,6 +5,7 @@ import { onMounted, ref, type Ref } from 'vue'
 import { createApiKey, deleteApiKeys, getApiKeys, updateApiKey } from '@/api'
 import type { ClientApiKey } from '@/api/modules/api-keys'
 import { toast } from '@/components/base/BaseToast'
+import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 
@@ -12,6 +13,7 @@ export function useApiKeyMutations(options: {
   page: Ref<number>
   pageSize: Ref<number>
   searchQuery: Ref<string>
+  sort: Ref<BaseTableSort | undefined>
   selectedIds: Ref<Set<string>>
   totalApiKeys: Ref<number>
 }) {
@@ -46,6 +48,8 @@ export function useApiKeyMutations(options: {
         page: options.page.value,
         pageSize: options.pageSize.value,
         search: options.searchQuery.value.trim() || undefined,
+        sortBy: options.sort.value?.key,
+        sortDirection: options.sort.value?.direction,
       })
       apiKeys.value = result.items
       options.page.value = result.page.page

@@ -16,7 +16,6 @@ const ADMIN_MALFORMED_JSON_CODE: u32 = 40000;
 const ADMIN_BAD_REQUEST_CODE: u32 = 40001;
 const ADMIN_INVALID_TIME_RANGE_CODE: u32 = 40002;
 const ADMIN_INVALID_MODEL_SOURCE_CODE: u32 = 40003;
-const ADMIN_INVALID_ENDPOINT_SOURCE_CODE: u32 = 40004;
 const ADMIN_SESSION_REQUIRED_CODE: u32 = 40101;
 const ADMIN_INVALID_CREDENTIALS_CODE: u32 = 40102;
 const ADMIN_INVALID_API_KEY_CODE: u32 = 40103;
@@ -64,14 +63,6 @@ impl AdminError {
         Self::new(
             StatusCode::BAD_REQUEST,
             ADMIN_INVALID_MODEL_SOURCE_CODE,
-            message,
-        )
-    }
-
-    pub fn invalid_endpoint_source(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::BAD_REQUEST,
-            ADMIN_INVALID_ENDPOINT_SOURCE_CODE,
             message,
         )
     }

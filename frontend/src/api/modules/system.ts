@@ -55,7 +55,7 @@ export function getSystemVersion() {
 }
 
 export async function checkSystemHealth() {
-  const response = await fetch(SYSTEM_HEALTH_URL)
+  const response = await fetch(SYSTEM_HEALTH_URL, { cache: 'no-store' })
   if (!response.ok) {
     throw new Error('service is not ready')
   }

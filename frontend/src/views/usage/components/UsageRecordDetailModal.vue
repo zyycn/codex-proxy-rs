@@ -11,8 +11,8 @@ import { useUiStore } from '@/stores/modules/ui'
 import {
   usageAccountText,
   usageClientIp,
-  usageCostDetails,
-  usageCostText,
+  usageBilling,
+  usageBillingText,
   usageModelDisplay,
   usageReasoningEffort,
   usageRecordType,
@@ -35,7 +35,7 @@ const requestText = computed(() => visibleRequestText(props.record))
 const responseText = computed(() => visibleResponseText(props.record))
 const modelDisplay = computed(() => usageModelDisplay(props.record))
 const tokenDetails = computed(() => usageTokenDetails(props.record))
-const costDetails = computed(() => usageCostDetails(props.record))
+const billing = computed(() => usageBilling(props.record))
 
 const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
 const panelTitleClass = 'm-0 text-[12px] leading-none font-[780] text-(--cp-text-secondary)'
@@ -92,23 +92,23 @@ const detailGroups = computed(() => [
 const modelRouteGroup = computed(() => detailGroups.value[0])
 const clientUpstreamGroup = computed(() => detailGroups.value[1])
 
-const costItems = computed(() => {
-  const details = costDetails.value
-  if (!details) {
-    return [{ label: '总费用', value: usageCostText(props.record), mono: true }]
+const billingItems = computed(() => {
+  const value = billing.value
+  if (!value) {
+    return [{ label: '总费用', value: usageBillingText(props.record), mono: true }]
   }
 
   return [
-    { label: '总费用', value: details.totalCostDisplay, mono: true },
-    { label: '输入', value: details.inputCostDisplay, mono: true },
-    { label: '输出', value: details.outputCostDisplay, mono: true },
-    { label: '缓存读取', value: details.cacheReadCostDisplay, mono: true },
-    { label: '原始', value: details.originalCostDisplay, mono: true },
-    { label: '输入单价', value: details.inputPriceDisplay, mono: true },
-    { label: '输出单价', value: details.outputPriceDisplay, mono: true },
-    { label: '缓存单价', value: details.cacheReadPriceDisplay, mono: true },
-    { label: '服务层级', value: details.serviceTierDisplay },
-    { label: '倍率', value: details.multiplierDisplay, mono: true },
+    { label: '总费用', value: value.totalAmountDisplay, mono: true },
+    { label: '输入', value: value.inputAmountDisplay, mono: true },
+    { label: '输出', value: value.outputAmountDisplay, mono: true },
+    { label: '缓存读取', value: value.cacheReadAmountDisplay, mono: true },
+    { label: '标准费用', value: value.standardAmountDisplay, mono: true },
+    { label: '输入单价', value: value.inputPriceDisplay, mono: true },
+    { label: '输出单价', value: value.outputPriceDisplay, mono: true },
+    { label: '缓存单价', value: value.cacheReadPriceDisplay, mono: true },
+    { label: '服务层级', value: value.serviceTierDisplay },
+    { label: '倍率', value: value.multiplierDisplay, mono: true },
   ]
 })
 
@@ -326,7 +326,7 @@ function themeColor(name: string, fallback: string) {
           <section :class="panelClass">
             <h3 :class="panelTitleClass">费用</h3>
             <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-              <div v-for="item in costItems" :key="item.label" class="min-w-0">
+              <div v-for="item in billingItems" :key="item.label" class="min-w-0">
                 <dt :class="fieldLabelClass">{{ item.label }}</dt>
                 <dd :class="fieldValueClass(item.mono)" :title="displayValue(item.value)">
                   {{ displayValue(item.value) }}

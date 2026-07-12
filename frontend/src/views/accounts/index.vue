@@ -7,8 +7,9 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
-import { accountColumns } from './constants'
+import { accountColumns, accountStatusFilterOptions } from './constants'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
 import { useAccountFilters } from './composables/useAccountFilters'
 import { useAccountMutations } from './composables/useAccountMutations'
@@ -31,10 +32,13 @@ const {
   page,
   pageSize,
   searchQuery,
+  statusQuery,
+  sort,
   accountPagination,
   bindAccountLoader,
   handlePageChange,
   handlePageSizeChange,
+  handleSortChange,
 } = useAccountFilters(totalAccounts)
 
 const {
@@ -66,12 +70,15 @@ const {
   handleExportAccounts,
   handleRefresh,
   handleRefreshQuota,
+  patchAccountStatus,
   handleToggleSchedule,
   scheduleActionLabel,
 } = useAccountMutations({
   page,
   pageSize,
   searchQuery,
+  statusQuery,
+  sort,
   selectedIds,
   totalAccounts,
 })
@@ -94,7 +101,7 @@ const {
   openConnectionTest,
   handleTestConnection,
 } = useAccountConnectionTest({
-  onResult: () => void loadAccounts(),
+  onAccountStatus: patchAccountStatus,
 })
 
 const {
@@ -119,7 +126,7 @@ bindAccountLoader(loadAccounts)
           账号管理
         </h1>
         <p class="mt-2.5 text-[15px] leading-[1.15] font-semibold mb-0 text-(--cp-text-secondary)">
-          维护 Codex 账号池，快速确认可用性、配额与连接状态。
+          维护 Codex 账号池，快速确认可用性、配额与连接状态
         </p>
       </div>
     </header>
@@ -133,18 +140,31 @@ bindAccountLoader(loadAccounts)
       body-class="flex min-h-0 flex-1 px-4 pb-3 md:px-5"
     >
       <template #header>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+        <div
+          class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
+          role="group"
+          aria-label="账号筛选与操作"
+        >
+          <div class="flex min-w-0 items-center gap-2 md:flex-none md:gap-3">
             <BaseInput
               v-model="searchQuery"
               placeholder="搜索邮箱或 ID..."
-              class="w-80 max-w-full [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)]"
+              class="min-w-0 flex-1 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-80 md:flex-none"
             >
               <template #prefix>
                 <Search class="size-4.5 text-(--cp-text-tertiary)" />
               </template>
             </BaseInput>
 
+            <BaseSelect
+              v-model="statusQuery"
+              :options="accountStatusFilterOptions"
+              aria-label="按账号状态筛选"
+              class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
+            />
+          </div>
+
+          <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
             <BaseButton
               v-if="selectedIds.size > 0"
               variant="danger"
@@ -154,9 +174,6 @@ bindAccountLoader(loadAccounts)
               <Trash2 class="size-4" />
               删除选中 ({{ selectedIds.size }})
             </BaseButton>
-          </div>
-
-          <div class="flex shrink-0 items-center gap-2">
             <BaseButton
               v-if="selectedIds.size > 0"
               variant="default"
@@ -183,10 +200,12 @@ bindAccountLoader(loadAccounts)
           :selected-row-keys="selectedRowKeys"
           :expanded-row-keys="expandedRowKeys"
           :pagination="accountPagination"
+          :sort="sort"
           empty-text="暂无账号数据"
           min-width="1480px"
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
+          @sort-change="handleSortChange"
         >
           <template #expander="{ row }">
             <button
@@ -296,20 +315,20 @@ bindAccountLoader(loadAccounts)
     <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
-      description="删除后该账号将不再参与调度，此操作不可撤销。"
+      description="删除后该账号将不再参与调度，此操作不可撤销"
       variant="danger"
       confirm-text="确认删除"
       :loading="batchDeleting"
       width="480px"
       @confirm="handleBatchDelete"
     >
-      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销。</p>
+      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销</p>
     </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除账号"
-      description="删除后该账号将不再参与调度，此操作不可撤销。"
+      description="删除后该账号将不再参与调度，此操作不可撤销"
       variant="danger"
       confirm-text="确认删除"
       :loading="deletingAccount"

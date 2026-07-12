@@ -7,17 +7,6 @@ use super::types::{
     ReasoningEffortInfo,
 };
 
-const BUILTIN_CODEX_MODELS: [(&str, &str, bool); 8] = [
-    ("gpt-5.5", "GPT-5.5", true),
-    ("gpt-5.4", "GPT-5.4", false),
-    ("gpt-5.4-mini", "GPT-5.4 Mini", false),
-    ("gpt-5.3-codex", "GPT-5.3 Codex", false),
-    ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", false),
-    ("codex-auto-review", "Codex Auto Review", false),
-    ("gpt-5.2", "GPT-5.2", false),
-    ("gpt-image-1", "GPT Image 1", false),
-];
-
 /// 模型目录聚合。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCatalog {
@@ -55,11 +44,11 @@ impl ModelPlanSnapshot {
 }
 
 impl ModelCatalog {
-    /// 从静态配置构造模型目录。
+    /// 从运行时别名构造尚未刷新上游快照的空模型目录。
     pub fn from_config(config: &ModelConfig) -> Self {
         let model_aliases = normalize_aliases(&config.model_aliases);
         Self {
-            models: builtin_codex_models(),
+            models: Vec::new(),
             model_aliases,
             model_plan_index: BTreeMap::new(),
             fetched_plan_types: BTreeSet::new(),
@@ -101,7 +90,7 @@ impl ModelCatalog {
             .collect::<Vec<_>>();
         if models.is_empty() {
             return Self {
-                models: builtin_codex_models(),
+                models,
                 model_aliases,
                 model_plan_index,
                 fetched_plan_types,
@@ -230,39 +219,6 @@ fn normalize_aliases(input: &BTreeMap<String, String>) -> BTreeMap<String, Strin
         .collect()
 }
 
-fn builtin_codex_models() -> Vec<CodexModelInfo> {
-    BUILTIN_CODEX_MODELS
-        .into_iter()
-        .map(|(id, display_name, is_default)| CodexModelInfo {
-            id: id.to_string(),
-            display_name: display_name.to_string(),
-            description: String::new(),
-            is_default,
-            supported_reasoning_efforts: default_reasoning_efforts(),
-            default_reasoning_effort: "medium".to_string(),
-            input_modalities: vec!["text".to_string()],
-            output_modalities: vec!["text".to_string()],
-            supports_personality: false,
-            upgrade: None,
-            source: "builtin".to_string(),
-            context_window: None,
-            max_context_window: None,
-            max_output_tokens: None,
-            truncation_policy_limit: None,
-        })
-        .collect()
-}
-
-fn default_reasoning_efforts() -> Vec<ReasoningEffortInfo> {
-    ["minimal", "low", "medium", "high"]
-        .into_iter()
-        .map(|reasoning_effort| ReasoningEffortInfo {
-            reasoning_effort: reasoning_effort.to_string(),
-            description: String::new(),
-        })
-        .collect()
-}
-
 fn normalize_backend_model(raw: BackendModelEntry) -> CodexModelInfo {
     let id = first_non_empty([raw.slug.as_deref(), raw.id.as_deref(), raw.name.as_deref()])
         .unwrap_or("unknown")
@@ -279,22 +235,21 @@ fn normalize_backend_model(raw: BackendModelEntry) -> CodexModelInfo {
     } else {
         raw.supported_reasoning_efforts
     };
-    let mut supported_reasoning_efforts = reasoning_entries
+    let supported_reasoning_efforts = reasoning_entries
         .into_iter()
         .filter_map(normalize_backend_reasoning_effort)
         .collect::<Vec<_>>();
-    if supported_reasoning_efforts.is_empty() {
-        supported_reasoning_efforts.push(ReasoningEffortInfo {
-            reasoning_effort: "medium".to_string(),
-            description: "Default".to_string(),
-        });
-    }
     let default_reasoning_effort = first_non_empty([
         raw.default_reasoning_effort.as_deref(),
         raw.default_reasoning_level.as_deref(),
     ])
-    .unwrap_or("medium")
-    .to_string();
+    .map(ToString::to_string)
+    .or_else(|| {
+        supported_reasoning_efforts
+            .first()
+            .map(|effort| effort.reasoning_effort.clone())
+    })
+    .unwrap_or_default();
 
     CodexModelInfo {
         id,

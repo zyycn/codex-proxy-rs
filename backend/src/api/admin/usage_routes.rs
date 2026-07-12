@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     api::AppState,
@@ -17,17 +18,17 @@ use crate::{
     },
     infra::{
         format::{
-            format_compact_number, format_cost, format_duration_ms, format_duration_ms_f64,
-            format_multiplier, format_number, format_percent, format_token_price, format_tokens,
+            format_billing_amount, format_compact_number, format_duration_ms,
+            format_duration_ms_f64, format_multiplier, format_number, format_percent,
+            format_token_price, format_tokens,
         },
         json::{NumberedPage, clamp_limit, clamp_page},
         time::china_datetime,
     },
     telemetry::{
         usage::query::{
-            UsageQueryError, UsageQueryFilter, UsageRecordBreakdown, UsageRecordEndpointSource,
-            UsageRecordModelSource, UsageRecordSummary, UsageRecordTrendPoint,
-            usage_record_cost_details,
+            UsageQueryError, UsageQueryFilter, UsageRecordBreakdown, UsageRecordModelSource,
+            UsageRecordSummary, UsageRecordTrendPoint, usage_record_billing,
         },
         usage::types::{UsageRecord, metadata_string},
     },
@@ -87,8 +88,11 @@ pub(crate) struct UsageRecordData {
     client_ip: Option<String>,
     user_agent: Option<String>,
     reasoning_effort: Option<String>,
+    compact: bool,
+    request_kind: Option<String>,
+    subagent_kind: Option<String>,
     token_details: UsageRecordTokenDetailsData,
-    cost_details: Option<UsageRecordCostDetailsData>,
+    billing: Option<UsageRecordBillingData>,
     first_token_latency_ms: Option<i64>,
     first_token_latency_ms_display: String,
     latency_ms_display: String,
@@ -111,23 +115,23 @@ pub(crate) struct UsageRecordTokenDetailsData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UsageRecordCostDetailsData {
-    input_cost: f64,
-    output_cost: f64,
-    cache_read_cost: f64,
-    total_cost: f64,
-    original_cost: f64,
+pub(crate) struct UsageRecordBillingData {
+    input_amount: f64,
+    output_amount: f64,
+    cache_read_amount: f64,
+    standard_amount: f64,
+    total_amount: f64,
     input_price_per_mtoken: f64,
     output_price_per_mtoken: f64,
     cache_read_price_per_mtoken: f64,
     service_tier: Option<String>,
     service_tier_display: String,
     multiplier: f64,
-    input_cost_display: String,
-    output_cost_display: String,
-    cache_read_cost_display: String,
-    total_cost_display: String,
-    original_cost_display: String,
+    input_amount_display: String,
+    output_amount_display: String,
+    cache_read_amount_display: String,
+    standard_amount_display: String,
+    total_amount_display: String,
     input_price_display: String,
     output_price_display: String,
     cache_read_price_display: String,
@@ -158,9 +162,9 @@ struct UsageRecordBreakdownData {
     total_tokens_value: u64,
     total_tokens_total: String,
     total_tokens_total_value: u64,
-    cost: String,
-    actual_cost: String,
-    account_cost: String,
+    standard_billing_amount: String,
+    actual_billing_amount: String,
+    account_billing_amount: String,
     average_latency_ms: String,
 }
 
@@ -178,8 +182,8 @@ struct UsageRecordTrendPointData {
     total_tokens_value: u64,
     cache_hit_rate: String,
     cache_hit_rate_value: f64,
-    cost: String,
-    actual_cost: String,
+    standard_billing_amount: String,
+    actual_billing_amount: String,
     average_latency_ms: String,
     average_latency_ms_value: Option<f64>,
 }
@@ -264,14 +268,13 @@ pub(crate) async fn usage_records_model_distribution(
 pub(crate) async fn usage_records_endpoint_distribution(
     State(state): State<AppState>,
     _auth: AdminAuth,
-    Query(query): Query<UsageRecordDistributionQuery>,
+    Query(query): Query<UsageRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let source = endpoint_source_from_query(query.source)?;
-    let filter = filter_from_query(query.records)?;
+    let filter = filter_from_query(query)?;
     match state
         .services
         .usage_records
-        .endpoint_distribution(filter, source)
+        .endpoint_distribution(filter)
         .await
     {
         Ok(items) => Ok(AdminResponse::new(
@@ -390,19 +393,6 @@ fn model_source_from_query(value: Option<String>) -> Result<UsageRecordModelSour
     }
 }
 
-fn endpoint_source_from_query(
-    value: Option<String>,
-) -> Result<UsageRecordEndpointSource, AdminError> {
-    match non_empty(value).as_deref().unwrap_or("inbound") {
-        "inbound" => Ok(UsageRecordEndpointSource::Inbound),
-        "upstream" => Ok(UsageRecordEndpointSource::Upstream),
-        "path" => Ok(UsageRecordEndpointSource::Path),
-        _ => Err(AdminError::invalid_endpoint_source(
-            "Invalid endpoint distribution source",
-        )),
-    }
-}
-
 fn optional_datetime(
     value: Option<String>,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>, AdminError> {
@@ -452,8 +442,15 @@ fn usage_record_data(
     let user_agent = metadata_string(&record.metadata, &["userAgent", "user_agent"]);
     let reasoning_effort =
         metadata_string(&record.metadata, &["reasoningEffort", "reasoning_effort"]);
+    let compact = record
+        .metadata
+        .get("compact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let request_kind = metadata_string(&record.metadata, &["requestKind", "request_kind"]);
+    let subagent_kind = metadata_string(&record.metadata, &["subagentKind", "subagent_kind"]);
     let token_details = usage_token_details(&record);
-    let cost_details = usage_cost_details(&record, upstream_model.as_deref(), &token_details);
+    let billing = usage_billing(&record, upstream_model.as_deref(), &token_details);
     let first_token_latency_ms = record.first_token_ms;
     let first_token_latency_ms_display = format_duration_ms(first_token_latency_ms);
     let latency_ms_display = format_duration_ms(record.latency_ms);
@@ -466,8 +463,11 @@ fn usage_record_data(
         client_ip,
         user_agent,
         reasoning_effort,
+        compact,
+        request_kind,
+        subagent_kind,
         token_details,
-        cost_details,
+        billing,
         first_token_latency_ms,
         first_token_latency_ms_display,
         latency_ms_display,
@@ -523,12 +523,12 @@ pub(crate) fn usage_token_details(record: &UsageRecord) -> UsageRecordTokenDetai
     }
 }
 
-pub(crate) fn usage_cost_details(
+pub(crate) fn usage_billing(
     record: &UsageRecord,
     upstream_model: Option<&str>,
     tokens: &UsageRecordTokenDetailsData,
-) -> Option<UsageRecordCostDetailsData> {
-    let cost = usage_record_cost_details(
+) -> Option<UsageRecordBillingData> {
+    let billing = usage_record_billing(
         record,
         upstream_model,
         tokens.input_tokens,
@@ -536,27 +536,27 @@ pub(crate) fn usage_cost_details(
         tokens.cached_tokens,
     )?;
 
-    Some(UsageRecordCostDetailsData {
-        input_cost: cost.input_cost,
-        output_cost: cost.output_cost,
-        cache_read_cost: cost.cache_read_cost,
-        total_cost: cost.total_cost,
-        original_cost: cost.original_cost,
-        input_price_per_mtoken: cost.input_price_per_mtoken,
-        output_price_per_mtoken: cost.output_price_per_mtoken,
-        cache_read_price_per_mtoken: cost.cache_read_price_per_mtoken,
-        service_tier: cost.service_tier,
-        service_tier_display: cost.service_tier_display,
-        multiplier: cost.multiplier,
-        input_cost_display: format_cost(cost.input_cost),
-        output_cost_display: format_cost(cost.output_cost),
-        cache_read_cost_display: format_cost(cost.cache_read_cost),
-        total_cost_display: format_cost(cost.total_cost),
-        original_cost_display: format_cost(cost.original_cost),
-        input_price_display: format_token_price(cost.input_price_per_mtoken),
-        output_price_display: format_token_price(cost.output_price_per_mtoken),
-        cache_read_price_display: format_token_price(cost.cache_read_price_per_mtoken),
-        multiplier_display: format_multiplier(cost.multiplier),
+    Some(UsageRecordBillingData {
+        input_amount: billing.input_amount,
+        output_amount: billing.output_amount,
+        cache_read_amount: billing.cache_read_amount,
+        standard_amount: billing.standard_amount,
+        total_amount: billing.total_amount,
+        input_price_per_mtoken: billing.input_price_per_mtoken,
+        output_price_per_mtoken: billing.output_price_per_mtoken,
+        cache_read_price_per_mtoken: billing.cache_read_price_per_mtoken,
+        service_tier: billing.service_tier,
+        service_tier_display: billing.service_tier_display,
+        multiplier: billing.multiplier,
+        input_amount_display: format_billing_amount(billing.input_amount),
+        output_amount_display: format_billing_amount(billing.output_amount),
+        cache_read_amount_display: format_billing_amount(billing.cache_read_amount),
+        standard_amount_display: format_billing_amount(billing.standard_amount),
+        total_amount_display: format_billing_amount(billing.total_amount),
+        input_price_display: format_token_price(billing.input_price_per_mtoken),
+        output_price_display: format_token_price(billing.output_price_per_mtoken),
+        cache_read_price_display: format_token_price(billing.cache_read_price_per_mtoken),
+        multiplier_display: format_multiplier(billing.multiplier),
     })
 }
 
@@ -592,9 +592,9 @@ impl UsageRecordBreakdownData {
             total_tokens_value: item.total_tokens,
             total_tokens_total: format_tokens(total_tokens_total),
             total_tokens_total_value: total_tokens_total,
-            cost: format_cost(item.cost),
-            actual_cost: format_cost(item.actual_cost),
-            account_cost: format_cost(item.account_cost),
+            standard_billing_amount: format_billing_amount(item.standard_billing_amount),
+            actual_billing_amount: format_billing_amount(item.actual_billing_amount),
+            account_billing_amount: format_billing_amount(item.account_billing_amount),
             average_latency_ms: format_duration_ms_f64(item.average_latency_ms),
         }
     }
@@ -631,8 +631,8 @@ impl From<UsageRecordTrendPoint> for UsageRecordTrendPointData {
             total_tokens_value: point.total_tokens,
             cache_hit_rate: format_percent(cache_hit_rate_value),
             cache_hit_rate_value,
-            cost: format_cost(point.cost),
-            actual_cost: format_cost(point.actual_cost),
+            standard_billing_amount: format_billing_amount(point.standard_billing_amount),
+            actual_billing_amount: format_billing_amount(point.actual_billing_amount),
             average_latency_ms: format_duration_ms_f64(point.average_latency_ms),
             average_latency_ms_value: point.average_latency_ms,
         }

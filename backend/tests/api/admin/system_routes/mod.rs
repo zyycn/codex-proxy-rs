@@ -48,6 +48,10 @@ impl TestProcessControl {
     fn signal_shutdown(&self) {
         let _ = self.shutdown.send(());
     }
+
+    fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
+        self.shutdown.subscribe()
+    }
 }
 
 impl ProcessControl for TestProcessControl {
@@ -57,10 +61,6 @@ impl ProcessControl for TestProcessControl {
 
     fn request_restart(&self, _executable_path: PathBuf) {
         self.signal_shutdown();
-    }
-
-    fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
-        self.shutdown.subscribe()
     }
 }
 
@@ -816,44 +816,6 @@ async fn update_events_should_open_authenticated_sse_stream() {
         .unwrap_or_default();
 
     assert!(response.status() == StatusCode::OK && content_type.starts_with("text/event-stream"));
-}
-
-#[tokio::test]
-async fn update_events_should_close_on_shutdown() {
-    let deploy = tempfile::tempdir().unwrap();
-    let mut update_config = system_update_config(
-        "zyycn/codex-proxy-rs-events-shutdown-route",
-        "http://127.0.0.1:9",
-    );
-    configure_system_update_paths(
-        &mut update_config,
-        deploy.path(),
-        &deploy.path().join("codex-proxy-rs"),
-        &deploy.path().join("web/dist"),
-    );
-    let (app, _dir, process_control) =
-        admin_system_test_app_with_process_control("system-events-shutdown", update_config).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/api/admin/system/update-events")
-                .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_system_update_events_shutdown")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    process_control.signal_shutdown();
-
-    let body = tokio::time::timeout(Duration::from_secs(2), to_bytes(response.into_body(), 1024))
-        .await
-        .expect("update event stream should end after shutdown")
-        .unwrap();
-
-    assert!(body.is_empty());
 }
 
 #[tokio::test]

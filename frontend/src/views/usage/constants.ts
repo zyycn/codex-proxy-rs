@@ -3,7 +3,6 @@ export const usageRecordColumns = [
     key: 'accountEmail',
     label: '账号',
     width: '250px',
-    fixed: 'left' as const,
     ellipsis: false,
   },
   {
@@ -41,7 +40,7 @@ export const usageRecordColumns = [
     ellipsis: false,
   },
   {
-    key: 'costDetails',
+    key: 'billing',
     label: '费用',
     width: '132px',
     align: 'right' as const,
@@ -90,7 +89,6 @@ export const usageRecordColumns = [
     label: '操作',
     width: '92px',
     ellipsis: false,
-    fixed: 'right' as const,
     headerClass: '!px-4',
     cellClass: '!px-4',
   },
@@ -101,7 +99,6 @@ export const opsErrorColumns = [
     key: 'createdAtDisplay',
     label: '时间',
     width: '190px',
-    fixed: 'left' as const,
     cellClass:
       'whitespace-nowrap font-mono text-[12px] font-[650] tabular-nums text-(--cp-text-secondary)',
   },
@@ -147,7 +144,6 @@ export const opsErrorColumns = [
     key: 'actions',
     label: '操作',
     width: '80px',
-    fixed: 'right' as const,
     headerClass: '!px-4',
     cellClass: '!px-4',
   },
@@ -250,6 +246,10 @@ export function usageReasoningEffort(record: any) {
   return record?.reasoningEffort || record?.metadata?.reasoningEffort || '—'
 }
 
+export function usageIsCompact(record: any) {
+  return record?.compact === true || record?.metadata?.compact === true
+}
+
 export function usageModelDisplay(record: any) {
   const requestedModel = record?.requestedModel || record?.metadata?.requestedModel || ''
   const upstreamModel = record?.upstreamModel || record?.metadata?.upstreamModel || ''
@@ -292,12 +292,12 @@ export function usageTokenDetails(record: any) {
   }
 }
 
-export function usageCostDetails(record: any) {
-  return record?.costDetails || null
+export function usageBilling(record: any) {
+  return record?.billing || null
 }
 
-export function usageCostText(record: any) {
-  return usageCostDetails(record)?.totalCostDisplay || '—'
+export function usageBillingText(record: any) {
+  return usageBilling(record)?.totalAmountDisplay || '—'
 }
 
 function formatCompactTokenCount(value: number) {
