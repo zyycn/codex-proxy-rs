@@ -3,12 +3,13 @@ import { clamp, sumBy } from 'es-toolkit'
 export interface BaseTableColumn {
   key: string
   label?: string
+  sortable?: boolean
+  sortKey?: string
   format?: (value: any, row: Record<string, any>) => any
   width?: number | string
   minWidth?: number | string
   maxWidth?: number | string
   flex?: number
-  fixed?: 'left' | 'right'
   align?: 'left' | 'right' | 'center'
   ellipsis?: boolean
   emptyText?: string
@@ -16,13 +17,26 @@ export interface BaseTableColumn {
   cellClass?: string
 }
 
+export type BaseTableSortDirection = 'asc' | 'desc'
+
+export interface BaseTableSort {
+  key: string
+  direction: BaseTableSortDirection
+}
+
 export type ResolvedTableColumn = BaseTableColumn & {
+  fixed?: 'left' | 'right'
   resolvedWidth: string
   resolvedMinWidth?: string
   resolvedMaxWidth?: string
 }
 
-export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | string) {
+export function resolveColumns(
+  columns: BaseTableColumn[],
+  minWidth?: number | string,
+): ResolvedTableColumn[] {
+  const actionColumnIndex = columns.findIndex((column) => column.key === 'actions')
+  const fixedColumnIndex = actionColumnIndex >= 0 ? actionColumnIndex : 0
   const fixedPercentTotal = sumBy(columns, (column) =>
     column.width === undefined ? 0 : numericPercentWidth(column.width),
   )
@@ -35,7 +49,7 @@ export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | s
   const available = clamp(100 - fixedPercentTotal, 0, Number.POSITIVE_INFINITY)
   const availablePixels = clamp(minWidthPixels - fixedPixelTotal, 0, Number.POSITIVE_INFINITY)
 
-  return columns.map((column) => {
+  return columns.map((column, index) => {
     const flex = column.flex ?? 1
     const width =
       column.width === undefined
@@ -50,6 +64,7 @@ export function resolveColumns(columns: BaseTableColumn[], minWidth?: number | s
 
     return {
       ...column,
+      fixed: index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined,
       resolvedWidth: width,
       resolvedMinWidth: column.minWidth === undefined ? undefined : normalizeWidth(column.minWidth),
       resolvedMaxWidth: column.maxWidth === undefined ? undefined : normalizeWidth(column.maxWidth),

@@ -26,9 +26,7 @@ export function useUsageRecordsTable(options: {
   const insights = ref(emptyInsights())
   const refreshingList = ref(false)
   const modelDistributionSource = ref('requested')
-  const endpointDistributionSource = ref('inbound')
   let modelDistributionRequestId = 0
-  let endpointDistributionRequestId = 0
   const scopedParams = () => ({ ...options.timeRangeParams.value })
   const filterParams = () => ({
     search: options.searchQuery.value || undefined,
@@ -93,10 +91,7 @@ export function useUsageRecordsTable(options: {
           ...globalParams,
           source: modelDistributionSource.value,
         }),
-        getUsageRecordEndpointDistribution({
-          ...globalParams,
-          source: endpointDistributionSource.value,
-        }),
+        getUsageRecordEndpointDistribution(globalParams),
         getUsageRecordTokenTrend(globalParams),
         getUsageRecordLatencyTrend(globalParams),
       ])
@@ -130,23 +125,6 @@ export function useUsageRecordsTable(options: {
     }
   }
 
-  async function loadEndpointDistribution() {
-    const requestId = ++endpointDistributionRequestId
-    try {
-      const endpointDistribution = await getUsageRecordEndpointDistribution({
-        ...scopedParams(),
-        source: endpointDistributionSource.value,
-      })
-      if (requestId !== endpointDistributionRequestId) return
-      insights.value = {
-        ...insights.value,
-        endpointDistribution,
-      }
-    } catch (error: any) {
-      toast.error(error.message || '加载失败')
-    }
-  }
-
   async function refreshUsageRecords() {
     if (refreshingList.value || loading.value) return
     refreshingList.value = true
@@ -165,10 +143,6 @@ export function useUsageRecordsTable(options: {
     void loadModelDistribution()
   })
 
-  watch(endpointDistributionSource, () => {
-    void loadEndpointDistribution()
-  })
-
   return {
     loading,
     analyticsLoading,
@@ -177,7 +151,6 @@ export function useUsageRecordsTable(options: {
     insights,
     refreshingList,
     modelDistributionSource,
-    endpointDistributionSource,
     loadUsageRecords,
     refreshUsageRecords,
   }

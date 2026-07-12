@@ -36,13 +36,18 @@ const focusableSelector = [
 
 const variant = computed(() => props.variant ?? 'default')
 
-const modalStyle = computed(() => ({
-  width: typeof props.width === 'number' ? `${props.width}px` : (props.width ?? undefined),
-  maxWidth: '100%',
-}))
+const modalStyle = computed(() => {
+  const preferredWidth =
+    typeof props.width === 'number' ? `${props.width}px` : (props.width ?? '560px')
+
+  return {
+    width: `min(${preferredWidth}, calc(100dvw - 1.5rem))`,
+  }
+})
 const bodyClass = computed(() => [
-  'p-7',
-  props.description || variant.value !== 'default' ? 'pt-5' : 'pt-6',
+  'min-h-0 flex-1 overflow-x-hidden p-4 sm:p-7',
+  props.scrollable ? 'overflow-hidden' : 'overflow-y-auto overscroll-contain',
+  props.description || variant.value !== 'default' ? 'pt-4 sm:pt-5' : 'pt-4 sm:pt-6',
 ])
 const scrollViewClass = computed(() => ['pr-4', props.bodyViewClass].filter(Boolean).join(' '))
 
@@ -165,21 +170,23 @@ onBeforeUnmount(() => {
     <Transition name="cp-modal">
       <div
         v-if="open"
-        class="fixed inset-0 z-50 grid place-items-center p-6"
+        class="fixed inset-0 z-50 grid place-items-center overflow-hidden p-3 sm:p-6"
         role="presentation"
         @keydown="handleKeydown"
       >
         <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
         <section
           ref="panel"
-          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
+          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover) sm:max-h-[calc(100dvh-3rem)]"
           :style="modalStyle"
           role="dialog"
           aria-modal="true"
           :aria-label="title"
           tabindex="-1"
         >
-          <header class="grid grid-cols-[auto_minmax(0,1fr)_28px] gap-4 p-7 pb-0">
+          <header
+            class="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_28px] gap-3 p-4 pb-0 sm:gap-4 sm:p-7 sm:pb-0"
+          >
             <span
               v-if="variant !== 'default'"
               class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
@@ -213,7 +220,7 @@ onBeforeUnmount(() => {
           <div :class="bodyClass">
             <BaseScrollbar
               v-if="scrollable"
-              class="-mr-4"
+              class="h-full sm:-mr-4"
               :max-height="bodyMaxHeight"
               :view-class="scrollViewClass"
             >
@@ -221,7 +228,10 @@ onBeforeUnmount(() => {
             </BaseScrollbar>
             <slot v-else />
           </div>
-          <footer v-if="!hideFooter" class="flex justify-end gap-3 px-7 pb-7">
+          <footer
+            v-if="!hideFooter"
+            class="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 sm:gap-3 sm:px-7 sm:pb-7"
+          >
             <slot name="footer">
               <BaseButton variant="default" @click="open = false">取消</BaseButton>
               <BaseButton variant="primary" @click="open = false">确认</BaseButton>

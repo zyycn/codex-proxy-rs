@@ -19,10 +19,7 @@ use crate::{
     api::AppState,
     api::middleware::request_id::{ClientIp, RequestId},
     dispatch::{errors::ResponseDispatchError, service::ResponseDispatchStream},
-    upstream::openai::protocol::{
-        responses::{CodexCompactRequest, CodexResponsesRequest},
-        sse::sse_body_has_done,
-    },
+    upstream::openai::protocol::{responses::CodexResponsesRequest, sse::sse_body_has_done},
 };
 
 use self::sse::{done_sse_frame, event_stream_response as sse_event_stream_response};
@@ -143,49 +140,6 @@ fn identity_context_string(body: &Map<String, Value>, key: &str) -> Option<Strin
     })
 }
 
-/// 从客户端原始 Responses JSON body 构造 Codex compact 请求。
-///
-/// compact 端点只返回一次性 JSON（代理按非流式读取），故剥离 `stream` 这一
-/// transport 控制字段，避免上游返回代理无法解析的 SSE 形态。业务语义字段
-/// （`reasoning`/`text`/`store`/`prompt_cache_key`/`previous_response_id`/
-/// `include`/`client_metadata`/未知字段）一律原样透传。
-pub fn build_compact_request(
-    mut body: Map<String, Value>,
-    headers: &HeaderMap,
-) -> CodexCompactRequest {
-    let client_session_id = identity_context_string(&body, "session_id")
-        .or_else(|| header_string(headers, "session-id"));
-    let client_thread_id =
-        identity_context_string(&body, "thread_id").or_else(|| header_string(headers, "thread-id"));
-    let client_request_id = identity_context_string(&body, "x-client-request-id")
-        .or_else(|| header_string(headers, "x-client-request-id"));
-    let client_turn_id = identity_context_string(&body, "turn_id")
-        .or_else(|| header_string(headers, "x-codex-turn-id"));
-    let client_window_id = identity_context_string(&body, "x-codex-window-id")
-        .or_else(|| header_string(headers, "x-codex-window-id"));
-    let client_parent_thread_id = identity_context_string(&body, "x-codex-parent-thread-id")
-        .or_else(|| header_string(headers, "x-codex-parent-thread-id"));
-    body.remove(COMPACT_STREAM_KEY);
-    for key in TRANSPORT_ONLY_KEYS {
-        body.remove(key);
-    }
-    CodexCompactRequest {
-        body,
-        client_ip: None,
-        client_user_agent: user_agent_from_headers(headers),
-        client_api_key_id: None,
-        client_session_id,
-        client_thread_id,
-        client_request_id,
-        client_turn_id,
-        client_window_id,
-        client_parent_thread_id,
-    }
-}
-
-/// compact 端点不支持流式，转发前剥离 `stream`（transport 控制字段，非业务语义）。
-const COMPACT_STREAM_KEY: &str = "stream";
-
 fn inject_subagent_metadata(body: &mut Map<String, Value>, subagent: &str) {
     let metadata = body
         .entry("client_metadata")
@@ -291,24 +245,6 @@ pub async fn review_responses(
     .await
 }
 
-/// `POST /v1/responses/compact`
-pub async fn compact_responses(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    client_ip: Option<Extension<ClientIp>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    handle_compact_responses(
-        state,
-        request_id,
-        client_ip.map(|Extension(client_ip)| client_ip.as_str().to_string()),
-        headers,
-        body,
-    )
-    .await
-}
-
 async fn handle_responses(
     state: AppState,
     request_id: RequestId,
@@ -381,49 +317,6 @@ async fn handle_responses(
     }
 }
 
-async fn handle_compact_responses(
-    state: AppState,
-    request_id: RequestId,
-    client_ip: Option<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let Some(client_api_key_id) =
-        crate::api::client::auth::authorized_client_api_key_id(&state, &headers).await
-    else {
-        return missing_client_api_key_response().into_response();
-    };
-
-    let Some(body) = parse_responses_body(&body) else {
-        return invalid_responses_request_response().into_response();
-    };
-    let model = match validated_responses_model(&state, request_model(&body)).await {
-        Ok(model) => model,
-        Err(ResponsesRequestValidationError::InvalidRequest) => {
-            return invalid_responses_request_response().into_response();
-        }
-        Err(ResponsesRequestValidationError::ModelNotFound) => {
-            return model_not_found_response().into_response();
-        }
-    };
-    let mut compact_request = build_compact_request(body, &headers);
-    compact_request.client_ip = client_ip;
-    compact_request.client_api_key_id = Some(client_api_key_id);
-
-    match state
-        .services
-        .responses
-        .compact(request_id.as_str(), compact_request, &model)
-        .await
-    {
-        Ok(result) => apply_safe_response_headers(
-            (StatusCode::OK, Json(result.body)).into_response(),
-            result.response_headers,
-        ),
-        Err(error) => responses_dispatch_error_response(error),
-    }
-}
-
 /// 解析请求体：必须是 JSON object，否则视为 invalid request。
 fn parse_responses_body(body: &Bytes) -> Option<Map<String, Value>> {
     match serde_json::from_slice::<Value>(body) {
@@ -470,7 +363,7 @@ async fn validated_responses_model(
         return Err(ResponsesRequestValidationError::InvalidRequest);
     }
     let catalog = model_catalog_for_state(state).await;
-    if catalog.is_recognized_model_name(model) {
+    if catalog.is_empty() || catalog.is_recognized_model_name(model) {
         Ok(model.to_string())
     } else {
         Err(ResponsesRequestValidationError::ModelNotFound)

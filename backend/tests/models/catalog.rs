@@ -34,10 +34,6 @@ fn model_catalog_should_resolve_alias_chain_to_model_id() {
             .public_model_ids()
             .contains(&"codex-fast".to_string())
     );
-    assert_eq!(
-        catalog.model_info_for_name("codex-fast").unwrap().id,
-        "gpt-5.5"
-    );
     assert_eq!(catalog.resolve_model_id("codex-fast"), "gpt-5.5");
 }
 
@@ -103,13 +99,12 @@ fn model_catalog_should_merge_backend_snapshots_and_build_plan_allowlist() {
 }
 
 #[tokio::test]
-async fn model_service_should_return_builtin_catalog_when_store_is_missing() {
+async fn model_service_should_return_empty_catalog_when_store_is_missing() {
     let service = ModelService::new(test_model_config(), None, None);
 
     let catalog = service.catalog().await;
 
-    assert!(catalog.is_recognized_model_name("gpt-5.5"));
-    assert!(!catalog.models().is_empty());
+    assert!(catalog.is_empty());
     assert!(catalog.model_plan_allowlist().is_empty());
 }
 

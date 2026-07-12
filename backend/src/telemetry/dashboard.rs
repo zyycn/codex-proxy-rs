@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::infra::{
     format::{
-        format_compact_number, format_cost, format_duration_ms, format_percent, format_rate,
-        format_tokens, nonnegative_i64_to_u64,
+        format_billing_amount, format_compact_number, format_duration_ms, format_percent,
+        format_rate, format_tokens, nonnegative_i64_to_u64,
     },
     time::{china_day_start, china_hour, china_hour_start, china_quarter_hour_start},
 };
@@ -78,7 +78,7 @@ struct DashboardTokenCardData {
     today_tokens_value: u64,
     yesterday_tokens_value: u64,
     total_tokens: String,
-    today_cost_usd: String,
+    today_billing_amount_usd: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -188,7 +188,7 @@ pub fn dashboard_cards_at(
     let yesterday_start = today_start - Duration::days(1);
     let today = usage_window(buckets, today_start, now);
     let yesterday = usage_window(buckets, yesterday_start, today_start);
-    let today_cost = cost_window(buckets, today_start, now).unwrap_or(0.0);
+    let today_billing_amount = billing_window(buckets, today_start, now).unwrap_or(0.0);
     let total_requests = nonnegative_i64_to_u64(lifetime_usage.request_count);
     let total_tokens = nonnegative_i64_to_u64(lifetime_usage.total_tokens);
     let total_cached_tokens = nonnegative_i64_to_u64(lifetime_usage.cached_tokens);
@@ -213,7 +213,7 @@ pub fn dashboard_cards_at(
             today_tokens_value: today.tokens(),
             yesterday_tokens_value: yesterday.tokens(),
             total_tokens: format_tokens(total_tokens),
-            today_cost_usd: format_cost(today_cost),
+            today_billing_amount_usd: format_billing_amount(today_billing_amount),
         },
         cache: DashboardCacheCardData {
             today_hit_rate: format_rate(today.cache_hit_rate()),
@@ -474,17 +474,17 @@ fn usage_window(
         })
 }
 
-fn cost_window(
+fn billing_window(
     records: &[AccountUsageTimeBucket],
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Option<f64> {
-    let costs = records
+    let billing_amounts = records
         .iter()
         .filter(|record| record.bucket_start >= start && record.bucket_start < end)
-        .filter_map(|record| record.cost_usd)
+        .filter_map(|record| record.billing_amount_usd)
         .collect::<Vec<_>>();
-    (!costs.is_empty()).then(|| costs.into_iter().sum())
+    (!billing_amounts.is_empty()).then(|| billing_amounts.into_iter().sum())
 }
 
 fn apply_bucket(window: &mut UsageWindow, record: &AccountUsageTimeBucket) {

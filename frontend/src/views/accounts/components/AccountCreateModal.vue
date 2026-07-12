@@ -96,9 +96,9 @@ const oauthPanelTitle = computed(() =>
 
 const oauthPanelDescription = computed(() => {
   if (props.reauthorizing) {
-    return '生成新的授权链接，完成后粘贴回调地址更新账号凭据。'
+    return '生成新的授权链接，完成后粘贴回调地址更新账号凭据'
   }
-  return '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入。'
+  return '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入'
 })
 
 const canSubmit = computed(() => {
@@ -114,21 +114,21 @@ const canSubmit = computed(() => {
 
 const description = computed(() => {
   if (props.reauthorizing) {
-    return '完成授权后粘贴回调地址，系统会更新账号凭据。'
+    return '完成授权后粘贴回调地址，系统会更新账号凭据'
   }
   if (mode.value === 'token') {
-    return '一行一个 Access Token 或 Refresh Token，Access Token 会直接补全账号信息。'
+    return '一行一个 Access Token 或 Refresh Token，Access Token 会直接补全账号信息'
   }
   if (mode.value === 'oauth') {
-    return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号。'
+    return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号'
   }
   if (mode.value === 'sub2api') {
-    return '导入 Sub2API 导出的账号 JSON，已存在账号会更新。'
+    return '导入 Sub2API 导出的账号 JSON，已存在账号会更新'
   }
   if (mode.value === 'cliproxyapi') {
-    return '导入 CLIProxyAPI Codex auth JSON，已存在账号会更新。'
+    return '导入 CLIProxyAPI Codex auth JSON，已存在账号会更新'
   }
-  return '导入 Codex Proxy RS 账号 JSON，已存在账号会更新。'
+  return '导入 Codex Proxy RS 账号 JSON，已存在账号会更新'
 })
 
 async function loadImportFile(files: FileList | null) {

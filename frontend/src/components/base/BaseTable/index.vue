@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, useSlots } from 'vue'
+import { Triangle } from '@lucide/vue'
+import { computed, shallowRef, useSlots, watch } from 'vue'
 
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
@@ -14,6 +15,8 @@ import {
   resolveColumns,
   tableStyle as resolveTableStyle,
   type BaseTableColumn,
+  type BaseTableSort,
+  type ResolvedTableColumn,
 } from './columns'
 import type { BaseTablePagination as BaseTablePaginationConfig } from './pagination'
 import { useHorizontalStickyShadow } from './useHorizontalStickyShadow'
@@ -34,6 +37,7 @@ const props = withDefaults(
     minWidth?: number | string
     pagination?: BaseTablePaginationConfig
     expandedRowKeys?: Array<string | number>
+    sort?: BaseTableSort
   }>(),
   {
     rowKey: 'id',
@@ -50,10 +54,11 @@ const props = withDefaults(
 const emit = defineEmits<{
   'page-change': [page: number]
   'page-size-change': [pageSize: number]
+  'sort-change': [sort: BaseTableSort | undefined]
 }>()
 const slots = useSlots()
 
-const headerRowClass = 'h-10 text-[11px] font-bold text-(--cp-text-muted)'
+const headerRowClass = 'h-10 text-[12px] font-bold text-(--cp-text-muted)'
 const bodyRowClass = 'h-13'
 const headerCellClass =
   'min-w-0 bg-(--cp-bg-subtle) px-4 first:pl-3 shadow-[0_10px_16px_-18px_#0e172638]'
@@ -62,14 +67,27 @@ const bodyCellClass =
 
 const computedColumns = computed(() => resolveColumns(props.columns, props.minWidth))
 const tableViewStyle = computed(() => resolveTableStyle(props.minWidth))
-const hasRows = computed(() => props.rows.length > 0)
+const retainedRows = shallowRef<any[]>([])
+watch(
+  [() => props.rows, () => props.loading],
+  ([rows, loading]) => {
+    if (rows.length > 0 || !loading) {
+      retainedRows.value = rows
+    }
+  },
+  { immediate: true },
+)
+const displayRows = computed(() =>
+  props.loading && props.rows.length === 0 ? retainedRows.value : props.rows,
+)
+const hasRows = computed(() => displayRows.value.length > 0)
 const { horizontalScrolled, horizontalCanScrollRight, handleTableScroll } =
   useHorizontalStickyShadow({
     hasRows,
-    watchSources: () => [props.rows.length, props.minWidth],
+    watchSources: () => [displayRows.value.length, props.minWidth],
   })
 
-function fixedHeaderClass(column: BaseTableColumn) {
+function fixedHeaderClass(column: ResolvedTableColumn) {
   if (!column.fixed) {
     return undefined
   }
@@ -88,7 +106,7 @@ function fixedHeaderClass(column: BaseTableColumn) {
   ]
 }
 
-function fixedBodyClass(column: BaseTableColumn, row: TableRow, index: number) {
+function fixedBodyClass(column: ResolvedTableColumn, row: TableRow, index: number) {
   if (!column.fixed) {
     return undefined
   }
@@ -145,11 +163,48 @@ function isLastColumn(index: number) {
 function bodyCellTitle(column: BaseTableColumn, row: TableRow) {
   return slots[column.key] ? undefined : cellTitle(column, row)
 }
+
+function columnSortKey(column: BaseTableColumn) {
+  return column.sortKey || column.key
+}
+
+function columnSortDirection(column: BaseTableColumn) {
+  return props.sort?.key === columnSortKey(column) ? props.sort.direction : undefined
+}
+
+function toggleColumnSort(column: BaseTableColumn) {
+  const key = columnSortKey(column)
+  const direction = columnSortDirection(column)
+  if (!direction) {
+    emit('sort-change', { key, direction: 'asc' })
+  } else if (direction === 'asc') {
+    emit('sort-change', { key, direction: 'desc' })
+  } else {
+    emit('sort-change', undefined)
+  }
+}
+
+function columnAriaSort(column: BaseTableColumn) {
+  const direction = columnSortDirection(column)
+  if (direction === 'asc') return 'ascending'
+  if (direction === 'desc') return 'descending'
+  return column.sortable ? 'none' : undefined
+}
+
+function sortButtonLabel(column: BaseTableColumn) {
+  const direction = columnSortDirection(column)
+  if (!direction) return `${column.label || column.key}：升序排列`
+  if (direction === 'asc') return `${column.label || column.key}：降序排列`
+  return `${column.label || column.key}：取消排序`
+}
 </script>
 
 <template>
   <div class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
-    <div v-loading="loading" class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3">
+    <div
+      v-loading="{ loading, preserveContent: hasRows }"
+      class="relative flex min-h-0 max-w-full flex-1 overflow-hidden pb-3"
+    >
       <div class="flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
         <div ref="headerWrap" class="max-w-full overflow-hidden">
           <table
@@ -180,9 +235,47 @@ function bodyCellTitle(column: BaseTableColumn, row: TableRow) {
                   ]"
                   role="columnheader"
                   scope="col"
+                  :aria-sort="columnAriaSort(column)"
                 >
                   <div :class="cellContentClass(column)">
-                    <slot :name="`header-${column.key}`" :column="column">
+                    <button
+                      v-if="column.sortable"
+                      type="button"
+                      class="inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-inherit outline-none transition-colors hover:text-(--cp-text-primary) focus-visible:text-(--cp-info)"
+                      :aria-label="sortButtonLabel(column)"
+                      :title="sortButtonLabel(column)"
+                      @click="toggleColumnSort(column)"
+                    >
+                      <span class="truncate">
+                        <slot :name="`header-${column.key}`" :column="column">
+                          {{ column.label }}
+                        </slot>
+                      </span>
+                      <span
+                        class="inline-flex shrink-0 -translate-y-px flex-col gap-px"
+                        aria-hidden="true"
+                      >
+                        <Triangle
+                          class="size-[5px] fill-current"
+                          :class="
+                            columnSortDirection(column) === 'asc'
+                              ? 'text-(--cp-info)'
+                              : 'text-(--cp-text-tertiary)'
+                          "
+                          :stroke-width="0"
+                        />
+                        <Triangle
+                          class="size-[5px] rotate-180 fill-current"
+                          :class="
+                            columnSortDirection(column) === 'desc'
+                              ? 'text-(--cp-info)'
+                              : 'text-(--cp-text-tertiary)'
+                          "
+                          :stroke-width="0"
+                        />
+                      </span>
+                    </button>
+                    <slot v-else :name="`header-${column.key}`" :column="column">
                       {{ column.label }}
                     </slot>
                   </div>
@@ -216,7 +309,7 @@ function bodyCellTitle(column: BaseTableColumn, row: TableRow) {
             </colgroup>
 
             <tbody>
-              <template v-for="(row, index) in rows" :key="getRowKey(row, index)">
+              <template v-for="(row, index) in displayRows" :key="getRowKey(row, index)">
                 <tr :class="rowClass(row, index)" role="row">
                   <td
                     v-for="(column, columnIndex) in computedColumns"

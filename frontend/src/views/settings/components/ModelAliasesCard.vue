@@ -27,7 +27,7 @@ const emit = defineEmits<{
   <BaseCard
     :padded="false"
     title="模型映射"
-    description="把客户端可见名称指向真实上游模型。"
+    description="把客户端可见名称指向真实上游模型"
     header-class="px-5 pt-4"
     body-class="px-5 py-5"
   >
@@ -44,7 +44,7 @@ const emit = defineEmits<{
         v-if="rows.length === 0"
         class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3 text-[13px] font-[650] text-(--cp-text-muted)"
       >
-        还没有模型映射。
+        还没有模型映射
       </div>
 
       <div

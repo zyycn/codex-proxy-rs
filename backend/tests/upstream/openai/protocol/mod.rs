@@ -1,5 +1,5 @@
 use axum::http::HeaderMap;
-use codex_proxy_rs::api::client::responses::{build_codex_request, build_compact_request};
+use codex_proxy_rs::api::client::responses::build_codex_request;
 use codex_proxy_rs::upstream::openai::protocol::events::{
     RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage, parse_rate_limit_headers,
     parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body,

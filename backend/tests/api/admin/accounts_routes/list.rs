@@ -617,25 +617,28 @@ async fn admin_accounts_list_should_include_bucket_containing_window_start_for_m
 }
 
 #[tokio::test]
-async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
+async fn admin_accounts_list_should_return_numbered_page_with_search_and_status_total() {
     let (app, _state, pool, _dir) = admin_accounts_test_app("admin-accounts-numbered", 67).await;
-    for (id, email, label, added_at) in [
+    for (id, email, label, status, added_at) in [
         (
             "acct_prod_new",
             "new-prod@example.com",
             "prod primary",
+            "active",
             "2026-06-18T00:02:00Z",
         ),
         (
             "acct_stage",
             "stage@example.com",
             "stage",
+            "quota_exhausted",
             "2026-06-18T00:01:00Z",
         ),
         (
             "acct_prod_old",
             "old@example.com",
             "prod backup",
+            "disabled",
             "2026-06-18T00:00:00Z",
         ),
     ] {
@@ -644,7 +647,7 @@ async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
             .bind(email)
             .bind(label)
             .bind("cipher")
-            .bind("active")
+            .bind(status)
             .bind(crate::support::storage::timestamp(added_at))
             .bind(crate::support::storage::timestamp(added_at))
             .execute(&pool)
@@ -656,7 +659,7 @@ async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/admin/accounts?page=1&pageSize=1&search=prod")
+                .uri("/api/admin/accounts?page=1&pageSize=1&search=prod&status=active")
                 .header("cookie", "cpr_admin_session=session_1")
                 .header("x-request-id", "req_accounts_numbered")
                 .body(Body::empty())
@@ -671,8 +674,105 @@ async fn admin_accounts_list_should_return_numbered_page_with_search_total() {
     assert_eq!(body["data"]["items"][0]["id"], "acct_prod_new");
     assert_eq!(body["data"]["page"]["page"], 1);
     assert_eq!(body["data"]["page"]["pageSize"], 1);
-    assert_eq!(body["data"]["page"]["total"], 2);
-    assert_eq!(body["data"]["page"]["totalPages"], 2);
+    assert_eq!(body["data"]["page"]["total"], 1);
+    assert_eq!(body["data"]["page"]["totalPages"], 1);
     assert_eq!(body["data"]["summary"]["total"], 3);
-    assert_eq!(body["data"]["summary"]["active"], 3);
+    assert_eq!(body["data"]["summary"]["active"], 1);
+    assert_eq!(body["data"]["summary"]["quotaExhausted"], 1);
+    assert_eq!(body["data"]["summary"]["attention"], 1);
+    assert!(body["data"]["summary"].get("highUsage").is_none());
+}
+
+#[tokio::test]
+async fn admin_accounts_list_should_sort_supported_columns_across_the_full_result_set() {
+    let (app, _state, pool, _dir) = admin_accounts_test_app("admin-accounts-sort", 73).await;
+    for (id, email, status, plan_type, quota, expires_at, last_used_at) in [
+        (
+            "acct_a",
+            "charlie@example.com",
+            "expired",
+            "plus",
+            70,
+            "2026-07-03T00:00:00Z",
+            "2026-07-02T00:00:00Z",
+        ),
+        (
+            "acct_b",
+            "alpha@example.com",
+            "active",
+            "team",
+            10,
+            "2026-07-01T00:00:00Z",
+            "2026-07-03T00:00:00Z",
+        ),
+        (
+            "acct_c",
+            "bravo@example.com",
+            "banned",
+            "free",
+            90,
+            "2026-07-02T00:00:00Z",
+            "2026-07-01T00:00:00Z",
+        ),
+    ] {
+        sqlx::query(
+            "insert into accounts (
+               id, email, plan_type, access_token, access_token_expires_at, status,
+               quota_json, quota_fetched_at, added_at, updated_at
+             ) values ($1, $2, $3, 'cipher', $4, $5, $6, now(), now(), now())",
+        )
+        .bind(id)
+        .bind(email)
+        .bind(plan_type)
+        .bind(crate::support::storage::timestamp(expires_at))
+        .bind(status)
+        .bind(sqlx::types::Json(json!({
+            "snapshots": [{
+                "source": "core",
+                "primary": { "used_percent": quota, "window_minutes": 300 }
+            }]
+        })))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("insert into account_usage (account_id, last_used_at) values ($1, $2)")
+            .bind(id)
+            .bind(crate::support::storage::timestamp(last_used_at))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    for (sort_by, direction, expected) in [
+        ("email", "asc", ["acct_b", "acct_c", "acct_a"]),
+        ("status", "asc", ["acct_b", "acct_a", "acct_c"]),
+        ("planType", "asc", ["acct_c", "acct_a", "acct_b"]),
+        ("usage", "desc", ["acct_c", "acct_a", "acct_b"]),
+        ("lastUsedAt", "asc", ["acct_c", "acct_a", "acct_b"]),
+        ("expiresAt", "desc", ["acct_a", "acct_c", "acct_b"]),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/admin/accounts?page=1&pageSize=10&sortBy={sort_by}&sortDirection={direction}"
+                    ))
+                    .header("cookie", "cpr_admin_session=session_1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{sort_by} {direction}");
+        let body = response_json(response).await;
+        let actual = body["data"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{sort_by} {direction}");
+    }
 }

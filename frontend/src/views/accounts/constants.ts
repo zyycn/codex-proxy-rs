@@ -22,24 +22,50 @@ export const accountColumns = [
   {
     key: 'identity',
     label: '邮箱',
+    sortable: true,
+    sortKey: 'email',
     width: '340px',
     minWidth: '340px',
-    fixed: 'left' as const,
     cellClass: relaxedCellClass,
   },
-  { key: 'status', label: '状态', flex: 0.6, minWidth: '60px', cellClass: relaxedCellClass },
-  { key: 'planType', label: '套餐', flex: 0.8, minWidth: '112px', cellClass: relaxedCellClass },
-  { key: 'usage', label: '用量', flex: 1.3, minWidth: '220px', cellClass: relaxedCellClass },
   {
-    key: 'updatedAtDisplay',
+    key: 'status',
+    label: '状态',
+    sortable: true,
+    flex: 0.6,
+    minWidth: '60px',
+    cellClass: relaxedCellClass,
+  },
+  {
+    key: 'planType',
+    label: '套餐',
+    sortable: true,
+    flex: 0.8,
+    minWidth: '112px',
+    cellClass: relaxedCellClass,
+  },
+  {
+    key: 'usage',
+    label: '用量',
+    sortable: true,
+    flex: 1.3,
+    minWidth: '220px',
+    cellClass: relaxedCellClass,
+  },
+  {
+    key: 'lastUsedAt',
     label: '最后使用',
+    sortable: true,
     flex: 1.2,
     minWidth: '160px',
+    format: (_value: unknown, row: any) => row.usage?.lastUsedAtDisplay,
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
   {
     key: 'accessTokenExpiresAtDisplay',
     label: '过期时间',
+    sortable: true,
+    sortKey: 'expiresAt',
     flex: 1.2,
     minWidth: '160px',
     cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
@@ -47,11 +73,8 @@ export const accountColumns = [
   {
     key: 'actions',
     label: '操作',
-    width: '116px',
-    minWidth: '116px',
-    fixed: 'right' as const,
-    headerClass: '!pr-3',
-    cellClass: `!px-2 ${relaxedCellClass}`,
+    width: '110px',
+    minWidth: '110px',
   },
 ]
 
@@ -72,3 +95,12 @@ export const statusTones: Record<string, 'success' | 'danger' | 'warning' | 'inf
   quota_exhausted: 'warning',
   refreshing: 'info',
 }
+
+export const accountStatusFilterOptions = [
+  { label: '全部状态', value: '' },
+  { label: statusLabels.active, value: 'active' },
+  { label: statusLabels.expired, value: 'expired' },
+  { label: statusLabels.quota_exhausted, value: 'quota_exhausted' },
+  { label: statusLabels.disabled, value: 'disabled' },
+  { label: statusLabels.banned, value: 'banned' },
+]

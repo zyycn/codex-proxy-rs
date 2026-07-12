@@ -11,7 +11,7 @@ export function useOpsErrorsTable(timeRangeParams: Ref<Record<string, string>>) 
   const refreshing = shallowRef(false)
   const records = ref<any[]>([])
   const page = shallowRef(1)
-  const pageSize = shallowRef(20)
+  const pageSize = shallowRef(10)
   const total = shallowRef(0)
   const searchQuery = shallowRef('')
   const failureClass = shallowRef('')
@@ -21,7 +21,7 @@ export function useOpsErrorsTable(timeRangeParams: Ref<Record<string, string>>) 
     page: page.value,
     pageSize: pageSize.value,
     total: total.value,
-    pageSizes: [20, 50, 100],
+    pageSizes: [10, 20, 50, 100],
   }))
 
   async function load() {

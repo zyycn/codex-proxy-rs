@@ -176,43 +176,42 @@ pub(super) fn optional_update_value(value: &Option<Option<String>>) -> Option<&s
 }
 
 pub(super) fn status_from_db(value: &str) -> PgAccountStoreResult<AccountStatus> {
-    match value {
-        "active" => Ok(AccountStatus::Active),
-        "expired" => Ok(AccountStatus::Expired),
-        "quota_exhausted" => Ok(AccountStatus::QuotaExhausted),
-        "disabled" => Ok(AccountStatus::Disabled),
-        "banned" => Ok(AccountStatus::Banned),
-        other => Err(PgAccountStoreError::InvalidStatus(other.to_string())),
-    }
+    AccountStatus::parse(value).ok_or_else(|| PgAccountStoreError::InvalidStatus(value.to_string()))
 }
 
 pub(super) async fn count_account_metadata(
     pool: &PgPool,
     search: Option<&str>,
+    status: Option<AccountStatus>,
 ) -> PgAccountStoreResult<u64> {
     let mut builder = QueryBuilder::<Postgres>::new("select count(*) from accounts");
-    push_account_metadata_search(&mut builder, search);
+    push_account_metadata_filter(&mut builder, search, status);
     let (total,): (i64,) = builder.build_query_as().fetch_one(pool).await?;
     Ok(nonnegative_i64_to_u64(total))
 }
 
-pub(super) fn push_account_metadata_search(
+pub(super) fn push_account_metadata_filter(
     builder: &mut QueryBuilder<Postgres>,
     search: Option<&str>,
+    status: Option<AccountStatus>,
 ) {
-    let Some(search) = search else {
-        return;
-    };
-
-    let pattern = format!("%{search}%");
-    builder.push(" where id ilike ");
-    builder.push_bind(pattern.clone());
-    builder.push(" or email ilike ");
-    builder.push_bind(pattern.clone());
-    builder.push(" or label ilike ");
-    builder.push_bind(pattern.clone());
-    builder.push(" or chatgpt_account_id ilike ");
-    builder.push_bind(pattern.clone());
-    builder.push(" or chatgpt_user_id ilike ");
-    builder.push_bind(pattern);
+    builder.push(" where true");
+    if let Some(search) = search {
+        let pattern = format!("%{search}%");
+        builder.push(" and (id ilike ");
+        builder.push_bind(pattern.clone());
+        builder.push(" or email ilike ");
+        builder.push_bind(pattern.clone());
+        builder.push(" or label ilike ");
+        builder.push_bind(pattern.clone());
+        builder.push(" or chatgpt_account_id ilike ");
+        builder.push_bind(pattern.clone());
+        builder.push(" or chatgpt_user_id ilike ");
+        builder.push_bind(pattern);
+        builder.push(")");
+    }
+    if let Some(status) = status {
+        builder.push(" and status = ");
+        builder.push_bind(status.as_str());
+    }
 }

@@ -1,10 +1,9 @@
 //! PostgreSQL 成功使用事实存储。
 
 use super::query::{
-    UsageRecordAccountUsage, UsageRecordBreakdown, UsageRecordEndpointSource,
-    UsageRecordModelSource, UsageRecordSummary, UsageRecordTrendPoint, count_usage_records,
-    usage_account_usage, usage_breakdown, usage_record_account_email_map, usage_record_from_row,
-    usage_summary, usage_trend,
+    UsageRecordAccountUsage, UsageRecordBreakdown, UsageRecordModelSource, UsageRecordSummary,
+    UsageRecordTrendPoint, count_usage_records, usage_account_usage, usage_breakdown,
+    usage_record_account_email_map, usage_record_from_row, usage_summary, usage_trend,
 };
 
 use std::collections::HashMap;
@@ -233,16 +232,14 @@ insert into usage_records (
     pub async fn endpoint_distribution(
         &self,
         filter: UsageRecordFilter,
-        source: UsageRecordEndpointSource,
     ) -> PgUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
-        let expression = match source {
-            UsageRecordEndpointSource::Inbound => "coalesce(nullif(route, ''), '未知端点')",
-            UsageRecordEndpointSource::Upstream => "provider",
-            UsageRecordEndpointSource::Path => {
-                "coalesce(nullif(route, ''), '未知端点') || ' -> ' || provider"
-            }
-        };
-        usage_breakdown(&self.pool, &filter, expression, 8).await
+        usage_breakdown(
+            &self.pool,
+            &filter,
+            "coalesce(nullif(route, ''), '未知端点')",
+            8,
+        )
+        .await
     }
 
     pub async fn trend(

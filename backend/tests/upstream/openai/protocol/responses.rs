@@ -412,74 +412,39 @@ fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_heade
 }
 
 #[test]
-fn openai_compact_request_should_strip_only_stream_and_pass_through_rest() {
-    // compact 端点仅支持非流式响应，故只剥离 transport 控制字段 `stream`；
-    // 其余字段（store/prompt_cache_key/previous_response_id/include/client_metadata、
-    // reasoning 未知键、text、input item）作为业务语义原样透传上游。
+fn responses_request_semantics_should_use_turn_metadata_and_structured_input() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-codex-turn-metadata",
+        r#"{"request_kind":"compaction","subagent_kind":"thread_spawn"}"#
+            .parse()
+            .unwrap(),
+    );
     let body = json!({
-        "model": "gpt-5.5-fast",
-        "instructions": "compress the session",
-        "input": [
-            {"role": "user", "content": "hello"},
-            {
-                "type": "reasoning",
-                "id": "rs_1",
-                "status": "completed",
-                "summary": [{"type": "summary_text", "text": "kept"}],
-                "ignored": "keep"
-            },
-            {"type": "compaction", "encrypted_content": "enc_compact"},
-            {"type": "compaction", "id": "keep_missing_encrypted"}
-        ],
-        "tools": [{"type": "function", "name": "lookup"}],
-        "parallel_tool_calls": false,
-        "reasoning": {"effort": "high", "summary": "auto", "extra": "keep"},
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "Compact",
-                "schema": {"type": "object"},
-                "strict": true
-            }
-        },
-        "stream": true,
-        "store": true,
-        "prompt_cache_key": "keep",
-        "previous_response_id": "resp_previous",
-        "include": ["reasoning.encrypted_content"],
-        "client_metadata": {"keep": "yes"}
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [{"type": "compaction_trigger"}]
+    });
 
-    let compact = build_compact_request(body, &HeaderMap::new());
-    let body = serde_json::to_value(&compact).expect("compact request should serialize");
+    let request = build_codex_request(body.as_object().unwrap().clone(), &headers, None);
+    let semantics = request.semantics();
 
-    assert_eq!(body["model"], "gpt-5.5-fast");
-    assert_eq!(body["instructions"], "compress the session");
-    assert_eq!(body["parallel_tool_calls"], false);
-    assert_eq!(
-        body["reasoning"],
-        json!({"effort": "high", "summary": "auto", "extra": "keep"})
-    );
-    assert_eq!(
-        body["tools"],
-        json!([{"type": "function", "name": "lookup"}])
-    );
-    assert_eq!(body["text"]["format"]["type"], "json_schema");
-    // 仅 stream 被剥离。
-    assert!(body.get("stream").is_none());
-    // 其余字段原样透传。
-    assert_eq!(body["store"], true);
-    assert_eq!(body["prompt_cache_key"], "keep");
-    assert_eq!(body["previous_response_id"], "resp_previous");
-    assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
-    assert_eq!(body["client_metadata"], json!({"keep": "yes"}));
-    assert_eq!(body["input"].as_array().unwrap().len(), 4);
-    assert_eq!(body["input"][1]["ignored"], "keep");
-    assert_eq!(body["input"][2]["encrypted_content"], "enc_compact");
-    assert_eq!(body["input"][3]["id"], "keep_missing_encrypted");
+    assert_eq!(semantics.request_kind.as_deref(), Some("compaction"));
+    assert_eq!(semantics.subagent_kind.as_deref(), Some("thread_spawn"));
+    assert!(semantics.compact);
+    assert_eq!(request.reasoning().unwrap()["effort"], "max");
+}
+
+#[test]
+fn responses_request_semantics_should_detect_compaction_trigger_without_metadata() {
+    let body = json!({
+        "model": "gpt-5.6-terra",
+        "input": [{"type": "compaction_trigger"}]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+
+    assert!(request.semantics().compact);
 }
 
 #[test]

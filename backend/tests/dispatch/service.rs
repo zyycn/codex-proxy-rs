@@ -222,7 +222,6 @@ const WEBSOCKET_FIRST_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/first_account_limited.json");
 const WEBSOCKET_SECOND_ACCOUNT_LIMITED: &str =
     include_str!("../fixtures/responses/websocket/second_account_limited.json");
-mod compact_routes;
 mod responses_http;
 mod responses_recovery;
 mod responses_websocket;

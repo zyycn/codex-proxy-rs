@@ -10,7 +10,10 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
-    fleet::{account::AccountStatus, store::AccountStore},
+    fleet::{
+        account::{AccountListSort, AccountStatus},
+        store::AccountStore,
+    },
     infra::{json::NumberedPage, time::elapsed_millis_i64},
     upstream::openai::token_client::RefreshFailure,
 };
@@ -32,10 +35,12 @@ impl AccountManageService {
         page: u32,
         page_size: u32,
         search: Option<String>,
+        status: Option<AccountStatus>,
+        sort: Option<AccountListSort>,
     ) -> Result<NumberedPage<ManagedAccount>, AccountManageError> {
         let page = self
             .store
-            .list_metadata_page(page, page_size, search.as_deref())
+            .list_metadata_page(page, page_size, search.as_deref(), status, sort)
             .await
             .map_err(|_| AccountManageError::List)?;
         Ok(NumberedPage {

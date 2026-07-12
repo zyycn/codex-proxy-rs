@@ -1,15 +1,18 @@
 <script setup lang="ts">
+import { Minimize2 } from '@lucide/vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import {
   usageAccountText,
+  usageIsCompact,
   usageReasoningEffort,
   usageRecordColumns,
   usageRecordType,
   usageRecordTypeClass,
 } from '@/views/usage/constants'
 import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
-import UsageCostCell from '@/views/usage/components/UsageCostCell.vue'
+import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
 import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
 import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
 
@@ -59,6 +62,20 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column
             </span>
           </template>
 
+          <template #route="{ row }">
+            <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
+              <code class="font-mono text-[12px] font-[650]">{{ row.route || '—' }}</code>
+              <span
+                v-if="usageIsCompact(row)"
+                class="inline-flex shrink-0 text-(--cp-warning-text)"
+                title="压缩请求"
+                aria-label="压缩请求"
+              >
+                <Minimize2 class="size-3.5" stroke-width="2.4" />
+              </span>
+            </div>
+          </template>
+
           <template #recordType="{ row }">
             <span
               class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
@@ -72,8 +89,8 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column
             <UsageTokenCell :record="row" />
           </template>
 
-          <template #costDetails="{ row }">
-            <UsageCostCell :record="row" />
+          <template #billing="{ row }">
+            <UsageBillingCell :record="row" />
           </template>
         </BaseTable>
       </div>

@@ -50,6 +50,16 @@ impl AccountTestOutcome {
             status,
         }
     }
+
+    fn attach_account_status(&mut self, status: AccountStatus) {
+        let Some(event) = self.event.as_object_mut() else {
+            return;
+        };
+        event.insert(
+            "accountStatus".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+    }
 }
 
 impl AccountManageService {
@@ -166,7 +176,7 @@ impl AccountManageService {
                 turn_id: None,
             };
 
-            let outcome = match codex.create_response_stream(&request, context).await {
+            let mut outcome = match codex.create_response_stream(&request, context).await {
                 Ok(response) => process_upstream_test_stream(response.body, &tx).await,
                 Err(error) => AccountTestOutcome::error(
                     error.to_string(),
@@ -174,10 +184,12 @@ impl AccountManageService {
                 ),
             };
 
-            if let Some(status) = outcome.status {
-                service
+            if let Some(status) = outcome.status
+                && let Some(status) = service
                     .apply_connection_test_status(&stored_account_id, status)
-                    .await;
+                    .await
+            {
+                outcome.attach_account_status(status);
             }
             send_test_event(&tx, outcome.event).await;
         });
@@ -190,26 +202,30 @@ impl AccountManageService {
         Ok(Box::pin(stream))
     }
 
-    async fn apply_connection_test_status(&self, account_id: &str, status: AccountStatus) {
+    async fn apply_connection_test_status(
+        &self,
+        account_id: &str,
+        status: AccountStatus,
+    ) -> Option<AccountStatus> {
         let current = match self.store.get(account_id).await {
             Ok(Some(account)) => account,
-            Ok(None) => return,
+            Ok(None) => return None,
             Err(error) => {
                 tracing::warn!(
                     account_id,
                     error = %error,
                     "failed to inspect account after connection test"
                 );
-                return;
+                return None;
             }
         };
         if current.status == AccountStatus::Disabled {
-            return;
+            return Some(AccountStatus::Disabled);
         }
 
         match self.store.set_status(account_id, status).await {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => return None,
             Err(error) => {
                 tracing::warn!(
                     account_id,
@@ -217,7 +233,7 @@ impl AccountManageService {
                     error = %error,
                     "failed to persist account status after connection test"
                 );
-                return;
+                return None;
             }
         }
 
@@ -232,6 +248,7 @@ impl AccountManageService {
         }
         self.sync_account_pool_best_effort(account_id, "connection test")
             .await;
+        Some(status)
     }
 }
 

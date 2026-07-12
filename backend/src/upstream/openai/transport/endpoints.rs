@@ -1,7 +1,5 @@
 /// `/codex/responses`
 pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
-/// `/codex/responses/compact`
-pub const CODEX_RESPONSES_COMPACT_PATH: &str = "/codex/responses/compact";
 /// `/codex/usage`
 pub const CODEX_USAGE_PATH: &str = "/codex/usage";
 /// `/api/codex/usage`

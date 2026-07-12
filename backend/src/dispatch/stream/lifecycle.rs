@@ -57,6 +57,7 @@ impl ResponseDispatchService {
         let display_model = catalog.resolve_model_id(requested_model);
         request.set_model(display_model.clone());
         request.set_stream(true);
+        let compact = request.semantics().compact;
         let tuple_schema = request.tuple_schema.clone();
         let now = Utc::now();
         prepare_variant_identity(&mut request);
@@ -86,7 +87,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: exhausted_accounts.last_account_id(),
                         stream: true,
-                        compact: false,
+                        compact,
                         transport: Some(backend_transport_name(
                             backend_transport_for_response_request(&request),
                         )),
@@ -107,7 +108,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: $account_id,
                         stream: true,
-                        compact: false,
+                        compact,
                         transport: $transport,
                     },
                     &error,

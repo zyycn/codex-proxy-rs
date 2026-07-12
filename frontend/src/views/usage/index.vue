@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, Eye } from '@lucide/vue'
+import { CalendarDays, Eye, Minimize2 } from '@lucide/vue'
 import dayjs from 'dayjs'
 import { computed, ref, shallowRef, watch } from 'vue'
 
@@ -11,6 +11,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import {
   usageTimeRangeOptions,
   usageAccountText,
+  usageIsCompact,
   usageReasoningEffort,
   usageRecordColumns,
   usageRecordType,
@@ -20,7 +21,7 @@ import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageFilters } from './composables/useUsageFilters'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import UsageClientIpCell from './components/UsageClientIpCell.vue'
-import UsageCostCell from './components/UsageCostCell.vue'
+import UsageBillingCell from './components/UsageBillingCell.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageModelCell from './components/UsageModelCell.vue'
@@ -77,7 +78,6 @@ const {
   insights,
   refreshingList,
   modelDistributionSource,
-  endpointDistributionSource,
   loadUsageRecords,
   refreshUsageRecords,
 } = useUsageRecordsTable({
@@ -108,58 +108,56 @@ watch(timeRange, () => {
           使用记录
         </h1>
         <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          分离查看成功用量事实与错误排查明细。
+          查看请求用量、性能趋势与调用错误记录
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-2">
-        <BaseSegmented v-model="recordView" :options="recordViewOptions" class="w-52" />
         <CalendarDays class="size-4 text-(--cp-text-muted)" />
         <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
       </div>
     </header>
 
-    <template v-if="recordView === 'success'">
-      <UsageSummaryCards :summary="summary" />
-      <UsageInsightsGrid
-        v-model:model-source="modelDistributionSource"
-        v-model:endpoint-source="endpointDistributionSource"
-        :insights="insights"
-        :loading="analyticsLoading"
-      />
+    <UsageSummaryCards :summary="summary" />
+    <UsageInsightsGrid
+      v-model:model-source="modelDistributionSource"
+      :insights="insights"
+      :loading="analyticsLoading"
+    />
 
-      <BaseCard
-        :padded="false"
-        class="mt-5 flex flex-col"
-        header-class="px-5 pt-4"
-        body-class="flex flex-col px-5 pt-3 pb-4"
-      >
-        <template #header>
-          <div class="grid gap-3">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">
-                  请求明细
-                </h2>
-                <p
-                  class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
-                >
-                  按请求查看成功调用、上游状态与 Token 消耗。
-                </p>
-              </div>
-            </div>
-
-            <UsageFilters
-              v-model:search="searchQuery"
-              :loading="loading"
-              :refreshing="refreshingList"
-              @refresh="refreshUsageRecords"
-            />
+    <BaseCard
+      :padded="false"
+      class="mt-5 flex flex-col"
+      header-class="px-5 pt-4"
+      body-class="flex min-h-0 flex-col px-5 pt-3 pb-4"
+    >
+      <template #header>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="m-0 text-xl leading-[1.15] font-[760] text-(--cp-text-primary)">请求明细</h2>
+            <p
+              class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-[650] text-(--cp-text-secondary)"
+            >
+              成功请求与失败请求明细
+            </p>
           </div>
-        </template>
+          <BaseSegmented v-model="recordView" :options="recordViewOptions" class="w-52" />
+        </div>
+      </template>
 
-        <template #body>
+      <template #body>
+        <div
+          v-show="recordView === 'success'"
+          class="grid min-h-[520px] flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
+        >
+          <UsageFilters
+            v-model:search="searchQuery"
+            :loading="loading"
+            :refreshing="refreshingList"
+            @refresh="refreshUsageRecords"
+          />
+
           <BaseTable
-            class="min-h-[520px] flex-1"
+            class="min-h-0 flex-1"
             :columns="usageRecordColumns"
             :rows="records"
             :loading="loading"
@@ -191,6 +189,20 @@ watch(timeRange, () => {
               </span>
             </template>
 
+            <template #route="{ row }">
+              <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
+                <code class="font-mono text-[12px] font-[650]">{{ row.route || '—' }}</code>
+                <span
+                  v-if="usageIsCompact(row)"
+                  class="inline-flex shrink-0 text-(--cp-warning-text)"
+                  title="压缩请求"
+                  aria-label="压缩请求"
+                >
+                  <Minimize2 class="size-3.5" stroke-width="2.4" />
+                </span>
+              </div>
+            </template>
+
             <template #recordType="{ row }">
               <span
                 class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
@@ -204,8 +216,8 @@ watch(timeRange, () => {
               <UsageTokenCell :record="row" />
             </template>
 
-            <template #costDetails="{ row }">
-              <UsageCostCell :record="row" />
+            <template #billing="{ row }">
+              <UsageBillingCell :record="row" />
             </template>
 
             <template #actions="{ row }">
@@ -222,12 +234,14 @@ watch(timeRange, () => {
               </div>
             </template>
           </BaseTable>
-        </template>
-      </BaseCard>
+        </div>
 
-      <UsageRecordDetailModal v-model="showDetailModal" :record="selectedUsageRecord" />
-    </template>
+        <div v-show="recordView === 'errors'" class="min-h-[520px] flex-1">
+          <OpsErrorPanel :time-range-params="timeRangeParams" />
+        </div>
+      </template>
+    </BaseCard>
 
-    <OpsErrorPanel v-else :time-range-params="timeRangeParams" />
+    <UsageRecordDetailModal v-model="showDetailModal" :record="selectedUsageRecord" />
   </div>
 </template>

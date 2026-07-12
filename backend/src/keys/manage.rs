@@ -5,7 +5,8 @@ use crate::infra::json::NumberedPage;
 use super::{
     store::PgClientKeyStore,
     types::{
-        BatchDeleteClientApiKeys, KeyManageError, ManagedClientApiKey, parse_client_key_status,
+        BatchDeleteClientApiKeys, ClientApiKeyListSort, KeyManageError, ManagedClientApiKey,
+        parse_client_key_status,
     },
 };
 
@@ -36,10 +37,11 @@ impl KeyManageService {
         page: u32,
         page_size: u32,
         search: Option<String>,
+        sort: Option<ClientApiKeyListSort>,
     ) -> Result<NumberedPage<ManagedClientApiKey>, KeyManageError> {
         let page = self
             .store
-            .list_page(page, page_size, search.as_deref())
+            .list_page(page, page_size, search.as_deref(), sort)
             .await
             .map_err(|_| KeyManageError::List)?;
         Ok(NumberedPage {

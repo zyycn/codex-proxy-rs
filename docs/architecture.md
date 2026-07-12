@@ -206,8 +206,8 @@ fleet/
 
 ### models
 
-- `catalog.rs`：模型合并、别名解析和目录查询。
-- `service.rs`：运行时模型服务、刷新和设置订阅。
+- `catalog.rs`：合并官方模型快照、解析运行时别名并提供目录查询，不维护静态模型或推理强度列表。
+- `service.rs`：运行时模型服务、刷新和设置订阅。刷新任务使用可用账号请求官方 `/codex/models?client_version=...` 接口，并按订阅计划更新目录。
 - `store.rs`：按订阅计划保存 Redis 模型快照。
 - `types.rs`：模型和计划快照类型。
 
@@ -288,6 +288,7 @@ api/
 ├── router.rs
 ├── assets.rs
 ├── middleware/
+│   ├── connection_drain.rs
 │   ├── request_id.rs
 │   └── trace.rs
 ├── client/
@@ -314,6 +315,7 @@ api/
 ```
 
 - `router.rs`：组合客户端 API、管理端 API、SPA 静态资源和 `/healthz`。
+- `middleware/connection_drain.rs`：统一结束 HTTP 流并追踪入站 WebSocket，不由业务接口分别处理进程关闭。
 - `middleware/request_id.rs`：接收或生成请求 ID，并写入响应头。
 - `middleware/trace.rs`：HTTP 访问日志。
 - `client`：`/v1` 路由、Bearer API Key 鉴权和 Responses 入站协议。`responses/mod.rs` 负责共享请求构造，`sse.rs` 与 `websocket.rs` 只处理各自的下游传输。
@@ -363,7 +365,7 @@ bootstrap/
 9. 初始化默认指纹、管理员、模型运行时缓存和内存账号池。
 10. 启动后台任务，挂载 HTTP 路由。
 
-关闭时先停止接收新请求，HTTP 连接最多排空 20 秒；后台任务并行关闭，单任务最多等待 5 秒。
+关闭时先停止接收新请求，再统一结束 HTTP 长流和入站 WebSocket，同时关闭上游 WebSocket 池与后台任务。全部连接最多排空 20 秒，单个后台任务最多等待 5 秒；超时后才强制结束剩余连接。
 
 ## 代理请求链路
 
@@ -380,7 +382,7 @@ bootstrap/
 9. 在结果尚未提交给客户端时，账号级失败可继续尝试候选账本中的下一个账号。
 10. 完成后更新账号用量、会话亲和、调度反馈和遥测事实，并释放账号槽位。
 
-`POST /v1/responses/compact` 使用相同的账号池、身份隔离和错误分类，但由 `upstream_call.rs` 的 compact 分支执行。
+会话压缩不使用独立端点。Codex 通过 `/v1/responses` 请求中的 `compaction_trigger` 和 `request_kind=compaction` 表达压缩语义；代理沿用同一条调度链路，并在遥测元数据中记录 `compact`、`requestKind` 和 `subagentKind`。
 
 ## 账号调度与换号
 
@@ -552,7 +554,6 @@ frontend/src/
 | `POST /v1/responses` | Responses 非流式或 SSE 流式入口 |
 | `GET /v1/responses` | 官方 Responses WebSocket upgrade 入口 |
 | `POST /v1/responses/review` | Review 请求入口 |
-| `POST /v1/responses/compact` | Compact 请求入口 |
 | `GET /v1/models*` | 模型列表、详情、catalog 和运行信息 |
 | `/api/admin/*` | 登录、账号、Key、设置、用量、错误、Dashboard 和系统更新 |
 | 其他非 API 路径 | Vue SPA 静态资源或 `index.html` |

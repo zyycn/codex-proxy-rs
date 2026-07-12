@@ -17,7 +17,7 @@ use crate::{
             },
         },
     },
-    upstream::openai::protocol::responses::{CodexCompactRequest, CodexResponsesRequest},
+    upstream::openai::protocol::responses::CodexResponsesRequest,
 };
 
 /// 成功与失败事实的唯一写入入口。
@@ -394,11 +394,20 @@ pub(crate) fn enrich_usage_record_identity(
     insert_trimmed_string(object, "serviceTier", service_tier);
 }
 
-pub(crate) fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
-    reasoning_effort_from_value(request.reasoning())
+pub(crate) fn enrich_response_request_semantics(
+    metadata: &mut Value,
+    request: &CodexResponsesRequest,
+) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let semantics = request.semantics();
+    object.insert("compact".to_string(), Value::Bool(semantics.compact));
+    insert_trimmed_string(object, "requestKind", semantics.request_kind.as_deref());
+    insert_trimmed_string(object, "subagentKind", semantics.subagent_kind.as_deref());
 }
 
-pub(crate) fn reasoning_effort_from_compact_request(request: &CodexCompactRequest) -> Option<&str> {
+pub(crate) fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
     reasoning_effort_from_value(request.reasoning())
 }
 

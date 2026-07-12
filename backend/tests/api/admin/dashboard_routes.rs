@@ -306,9 +306,9 @@ async fn dashboard_summary_should_return_requested_trend_kind() {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tier() {
-    let cost = dashboard_summary_today_cost_for_usage_record(
-        "dashboard-cost-priority",
+async fn dashboard_summary_should_calculate_priority_billing_from_event_service_tier() {
+    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+        "dashboard-billing-priority",
         "gpt-5.5",
         json!({
             "usage": {
@@ -321,13 +321,13 @@ async fn dashboard_summary_should_calculate_priority_cost_from_event_service_tie
     )
     .await;
 
-    assert_eq!(cost, "$8.75");
+    assert_eq!(billing_amount, "$8.75");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
-    let cost = dashboard_summary_today_cost_for_usage_record(
-        "dashboard-cost-cached",
+    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+        "dashboard-billing-cached",
         "gpt-5.5",
         json!({
             "usage": {
@@ -339,13 +339,13 @@ async fn dashboard_summary_should_charge_cached_input_at_cache_read_price() {
     )
     .await;
 
-    assert_eq!(cost, "$0.03");
+    assert_eq!(billing_amount, "$0.03");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_apply_long_context_prices() {
-    let cost = dashboard_summary_today_cost_for_usage_record(
-        "dashboard-cost-long-context",
+    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+        "dashboard-billing-long-context",
         "gpt-5.5",
         json!({
             "usage": {
@@ -357,14 +357,14 @@ async fn dashboard_summary_should_apply_long_context_prices() {
     )
     .await;
 
-    assert_eq!(cost, "$3.04");
+    assert_eq!(billing_amount, "$3.04");
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
-    let cost = dashboard_summary_today_cost_for_usage_record(
-        "dashboard-cost-codex-model",
-        "codex-auto-review",
+async fn dashboard_summary_should_match_versioned_model_names_for_billing() {
+    let billing_amount = dashboard_summary_today_billing_for_usage_record(
+        "dashboard-billing-codex-model",
+        "gpt-5.6-terra-2026-07-01",
         json!({
             "usage": {
                 "inputTokens": 100_000u64,
@@ -375,13 +375,13 @@ async fn dashboard_summary_should_normalize_codex_model_names_for_cost() {
     )
     .await;
 
-    assert_eq!(cost, "$1.75");
+    assert_eq!(billing_amount, "$1.75");
 }
 
 #[tokio::test]
 async fn dashboard_summary_should_not_price_usage_summary_without_model_dimension() {
     let (app, _store, pool, _dir) = dashboard_test_app(
-        "dashboard-cost-summary-fallback",
+        "dashboard-billing-summary-fallback",
         crate::support::fingerprint::test_fingerprint(),
     )
     .await;
@@ -389,7 +389,10 @@ async fn dashboard_summary_should_not_price_usage_summary_without_model_dimensio
 
     let body = dashboard_summary(app).await;
 
-    assert_eq!(body["data"]["cards"]["tokens"]["todayCostUsd"], "$0.00");
+    assert_eq!(
+        body["data"]["cards"]["tokens"]["todayBillingAmountUsd"],
+        "$0.00"
+    );
 }
 
 #[tokio::test]
@@ -635,7 +638,7 @@ async fn dashboard_summary_should_return_today_health_timeline() {
     assert_eq!(points.matches('4').count(), 1);
 }
 
-async fn dashboard_summary_today_cost_for_usage_record(
+async fn dashboard_summary_today_billing_for_usage_record(
     db_name: &str,
     model: &str,
     metadata: Value,
@@ -662,7 +665,7 @@ async fn dashboard_summary_today_cost_for_usage_record(
     store.append(&record).await.unwrap();
 
     let body = dashboard_summary(app).await;
-    body["data"]["cards"]["tokens"]["todayCostUsd"]
+    body["data"]["cards"]["tokens"]["todayBillingAmountUsd"]
         .as_str()
         .unwrap()
         .to_string()

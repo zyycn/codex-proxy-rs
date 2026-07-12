@@ -30,7 +30,6 @@ const {
   checking,
   updating,
   restarting,
-  restartCountdown,
   updateError,
   updateSuccess,
   needRestart,
@@ -44,7 +43,6 @@ const {
   checkUpdates,
   updateNow,
   restartNow,
-  clearRestartTimer,
   disconnectUpdateEvents,
 } = useSystemUpdate()
 
@@ -55,6 +53,14 @@ const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
 
 const statusView = computed(() => {
+  if (restarting.value) {
+    return {
+      label: '重启中',
+      icon: RefreshCw,
+      badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
+      iconClass: 'text-(--cp-info)',
+    }
+  }
   if (updating.value) {
     return {
       label: '更新中',
@@ -163,9 +169,7 @@ const streamStatusLabel = computed(() => {
 })
 
 const restartButtonLabel = computed(() => {
-  if (!restarting.value) return '立即重启'
-  if (restartCountdown.value > 0) return `重启中 ${restartCountdown.value}s`
-  return '等待恢复'
+  return restarting.value ? '重启中' : '立即重启'
 })
 
 function displayValue(value: unknown) {
@@ -271,9 +275,6 @@ async function handleConfirmUpdate() {
 async function handleRestart() {
   try {
     await restartNow()
-    if (restarting.value) {
-      toast.success('正在重启服务')
-    }
   } catch (error: any) {
     toast.error(error.message || '重启失败')
   }
@@ -298,7 +299,6 @@ watch(
 )
 
 onUnmounted(() => {
-  clearRestartTimer()
   disconnectUpdateEvents()
 })
 </script>
@@ -307,7 +307,6 @@ onUnmounted(() => {
   <BaseModal
     v-model="open"
     title="系统更新"
-    description="版本、更新状态与实时进度。"
     variant="success"
     width="820px"
     scrollable
@@ -481,8 +480,8 @@ onUnmounted(() => {
 
   <BaseConfirmModal
     v-model="updateConfirmOpen"
-    title="远端目标版本已变化"
-    description="检测到远端 latest 与当前显示的目标版本不一致。"
+    title="发现新的更新版本"
+    description="检测到远端 latest 与当前显示的目标版本不一致"
     variant="warning"
     confirm-text="确认更新"
     :loading="updating"
@@ -507,7 +506,7 @@ onUnmounted(() => {
         </div>
       </div>
       <p class="m-0 text-[12px] leading-relaxed font-[650] text-(--cp-text-muted)">
-        点击确认后弹窗会关闭，并按远端最新目标版本开始更新。
+        点击确认后弹窗会关闭，并按远端最新目标版本开始更新
       </p>
     </div>
   </BaseConfirmModal>

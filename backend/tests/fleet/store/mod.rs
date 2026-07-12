@@ -143,7 +143,10 @@ async fn account_store_should_page_account_metadata_by_added_at_desc() {
     seed_repo_account(&pool, "acct_b", "2026-06-11T00:01:00Z").await;
     seed_repo_account(&pool, "acct_c", "2026-06-11T00:02:00Z").await;
 
-    let first_page = repo.list_metadata_page(1, 2, None).await.unwrap();
+    let first_page = repo
+        .list_metadata_page(1, 2, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(
         first_page
             .items
@@ -153,7 +156,10 @@ async fn account_store_should_page_account_metadata_by_added_at_desc() {
         ["acct_c", "acct_b"]
     );
 
-    let second_page = repo.list_metadata_page(2, 2, None).await.unwrap();
+    let second_page = repo
+        .list_metadata_page(2, 2, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(
         second_page
             .items
@@ -183,7 +189,7 @@ async fn account_store_page_should_return_row_mapping_errors_instead_of_skipping
     .unwrap();
 
     let error = repo
-        .list_metadata_page(1, 20, None)
+        .list_metadata_page(1, 20, None, None, None)
         .await
         .expect_err("invalid rows must fail the page instead of disappearing");
     assert!(
@@ -210,7 +216,10 @@ async fn account_store_should_list_metadata_without_exposing_tokens() {
     .await
     .unwrap();
 
-    let page = repo.list_metadata_page(1, 10, None).await.unwrap();
+    let page = repo
+        .list_metadata_page(1, 10, None, None, None)
+        .await
+        .unwrap();
 
     assert_eq!(page.items[0].id, "acct_plain");
     assert_eq!(page.items[0].email.as_deref(), Some("user@example.com"));

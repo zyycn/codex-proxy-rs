@@ -11,6 +11,7 @@ use crate::infra::{
     identity::generate_client_api_key,
     json::{NumberedPage, page_offset},
 };
+use crate::keys::types::{ClientApiKeyListSort, ClientApiKeySortField};
 
 const CLIENT_KEY_SELECT_SQL: &str = r"select
   id, name, label, prefix, key, enabled, created_at, last_used_at
@@ -96,6 +97,7 @@ values ($1, $2, null, $3, $4, true, $5, null)",
         page: u32,
         page_size: u32,
         search: Option<&str>,
+        sort: Option<ClientApiKeyListSort>,
     ) -> Result<NumberedPage<StoredClientApiKey>, PgClientKeyStoreError> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 200);
@@ -112,7 +114,8 @@ values ($1, $2, null, $3, $4, true, $5, null)",
 
         let mut builder = QueryBuilder::<Postgres>::new(CLIENT_KEY_SELECT_SQL);
         push_search(&mut builder, search);
-        builder.push(" order by created_at desc, id desc limit ");
+        push_order(&mut builder, sort);
+        builder.push(" limit ");
         builder.push_bind(i64::from(page_size));
         builder.push(" offset ");
         builder.push_bind(page_offset(page, page_size).min(i64::MAX as u64) as i64);
@@ -211,6 +214,28 @@ where keys.id = touched.id",
             last_used_at: row.get("last_used_at"),
         }
     }
+}
+
+fn push_order(builder: &mut QueryBuilder<Postgres>, sort: Option<ClientApiKeyListSort>) {
+    let Some(sort) = sort else {
+        builder.push(" order by created_at desc, id desc");
+        return;
+    };
+
+    builder.push(" order by ");
+    match sort.field {
+        ClientApiKeySortField::Name => builder.push("lower(name)"),
+        ClientApiKeySortField::Enabled => builder.push("enabled"),
+        ClientApiKeySortField::CreatedAt => builder.push("created_at"),
+        ClientApiKeySortField::LastUsedAt => builder.push("last_used_at"),
+    };
+    let direction = match sort.direction {
+        crate::infra::json::SortDirection::Asc => " asc",
+        crate::infra::json::SortDirection::Desc => " desc",
+    };
+    builder.push(direction);
+    builder.push(" nulls last, id");
+    builder.push(direction);
 }
 
 fn push_search(builder: &mut QueryBuilder<Postgres>, search: Option<&str>) {

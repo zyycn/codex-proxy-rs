@@ -2,7 +2,7 @@
 
 use crate::{
     infra::identity::AccountPseudonymizer,
-    upstream::openai::protocol::responses::{CodexCompactRequest, CodexResponsesRequest},
+    upstream::openai::protocol::responses::CodexResponsesRequest,
 };
 
 /// 持久化密钥驱动的账号身份隔离服务。
@@ -80,27 +80,6 @@ impl AccountIdentityService {
                 turn_id: request.client_turn_id.as_deref(),
                 window_id: request.codex_window_id.as_deref(),
                 parent_thread_id: request.parent_thread_id.as_deref(),
-            },
-        )
-    }
-
-    pub fn scope_compact(
-        &self,
-        request: &CodexCompactRequest,
-        account_id: &str,
-        proxy_request_id: &str,
-    ) -> AccountScopedIdentity {
-        self.scope_values(
-            account_id,
-            proxy_request_id,
-            IdentityValues {
-                prompt_cache_key: request.prompt_cache_key(),
-                session_id: request.client_session_id.as_deref(),
-                thread_id: request.client_thread_id.as_deref(),
-                client_request_id: request.client_request_id.as_deref(),
-                turn_id: request.client_turn_id.as_deref(),
-                window_id: request.client_window_id.as_deref(),
-                parent_thread_id: request.client_parent_thread_id.as_deref(),
             },
         )
     }

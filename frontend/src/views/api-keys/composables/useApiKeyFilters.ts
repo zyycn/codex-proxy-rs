@@ -1,10 +1,13 @@
 import { watchDebounced } from '@vueuse/core'
 import { computed, shallowRef, type Ref } from 'vue'
 
+import type { BaseTableSort } from '@/components/base/BaseTable/columns'
+
 export function useApiKeyFilters(totalApiKeys: Ref<number>) {
   const page = shallowRef(1)
   const pageSize = shallowRef(20)
   const searchQuery = shallowRef('')
+  const sort = shallowRef<BaseTableSort>()
   let loadApiKeys: (() => Promise<void> | void) | undefined
 
   const apiKeyPagination = computed(() => ({
@@ -35,6 +38,12 @@ export function useApiKeyFilters(totalApiKeys: Ref<number>) {
     requestLoad()
   }
 
+  function handleSortChange(nextSort: BaseTableSort | undefined) {
+    sort.value = nextSort
+    page.value = 1
+    requestLoad()
+  }
+
   watchDebounced(
     searchQuery,
     () => {
@@ -48,9 +57,11 @@ export function useApiKeyFilters(totalApiKeys: Ref<number>) {
     page,
     pageSize,
     searchQuery,
+    sort,
     apiKeyPagination,
     bindApiKeyLoader,
     handlePageChange,
     handlePageSizeChange,
+    handleSortChange,
   }
 }

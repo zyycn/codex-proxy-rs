@@ -18,18 +18,20 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="flex flex-wrap items-center justify-between gap-3" aria-label="API Key 筛选">
-    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-      <BaseInput
-        v-model="search"
-        placeholder="搜索名称、标签或 ID"
-        class="min-w-64 flex-1 sm:max-w-96"
-      >
+  <div
+    class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
+    role="group"
+    aria-label="API Key 筛选与操作"
+  >
+    <div class="min-w-0 w-full md:w-96 md:flex-none">
+      <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-(--cp-text-tertiary)" />
         </template>
       </BaseInput>
+    </div>
 
+    <div class="flex shrink-0 self-end items-center justify-end gap-2 md:ml-auto">
       <BaseButton
         v-if="selectedCount > 0"
         variant="danger"
@@ -41,9 +43,6 @@ const emit = defineEmits<{
         </template>
         删除选中 ({{ selectedCount }})
       </BaseButton>
-    </div>
-
-    <div class="flex shrink-0 items-center gap-2">
       <BaseButton variant="primary" @click="emit('create')">
         <template #icon>
           <Plus class="size-4" />

@@ -29,10 +29,12 @@ const {
   page,
   pageSize,
   searchQuery,
+  sort,
   apiKeyPagination,
   bindApiKeyLoader,
   handlePageChange,
   handlePageSizeChange,
+  handleSortChange,
 } = useApiKeyFilters(totalApiKeys)
 
 const {
@@ -57,7 +59,7 @@ const {
   handleBatchDelete,
   handleToggleStatus,
   copyToClipboard,
-} = useApiKeyMutations({ page, pageSize, searchQuery, selectedIds, totalApiKeys })
+} = useApiKeyMutations({ page, pageSize, searchQuery, sort, selectedIds, totalApiKeys })
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = useApiKeysTable(
   apiKeys,
@@ -122,7 +124,7 @@ function importToCcs(apiKey: ClientApiKey) {
           API 密钥
         </h1>
         <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          签发与维护客户端访问凭证，控制网关调用入口。
+          签发与维护客户端访问凭证，控制网关调用入口
         </p>
       </div>
     </header>
@@ -151,10 +153,12 @@ function importToCcs(apiKey: ClientApiKey) {
           :loading="loading"
           :selected-row-keys="selectedRowKeys"
           :pagination="apiKeyPagination"
+          :sort="sort"
           empty-text="暂无 API Key"
           min-width="1320px"
           @page-change="handlePageChange"
           @page-size-change="handlePageSizeChange"
+          @sort-change="handleSortChange"
         >
           <template #header-selection>
             <BaseCheckbox
@@ -221,20 +225,20 @@ function importToCcs(apiKey: ClientApiKey) {
     <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
-      description="删除后这些 API Key 将立即失效，此操作不可撤销。"
+      description="删除后这些 API Key 将立即失效，此操作不可撤销"
       variant="danger"
       confirm-text="确认删除"
       :loading="batchDeleting"
       width="480px"
       @confirm="handleBatchDelete"
     >
-      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销。</p>
+      <p class="m-0">确定要删除选中的 {{ selectedIds.size }} 个 API Key 吗？此操作不可撤销</p>
     </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除 API Key"
-      description="删除后该 API Key 将立即失效，此操作不可撤销。"
+      description="删除后该 API Key 将立即失效，此操作不可撤销"
       variant="danger"
       confirm-text="确认删除"
       :loading="deletingKey"

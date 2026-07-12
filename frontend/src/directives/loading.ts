@@ -5,19 +5,21 @@ type LoadingBindingValue =
   | {
       loading?: boolean
       text?: string
+      preserveContent?: boolean
     }
 
 interface LoadingState {
   overlay: HTMLDivElement
   previousPosition: string
   managedPosition: boolean
+  preserveContent: boolean
 }
 
 type LoadingElement = HTMLElement & {
   __cpLoading?: LoadingState
 }
 
-const OVERLAY_CLASS = [
+const OVERLAY_BASE_CLASS = [
   'absolute',
   'inset-0',
   'z-20',
@@ -25,9 +27,8 @@ const OVERLAY_CLASS = [
   'min-h-18',
   'place-items-center',
   'rounded-[inherit]',
-  'bg-(--cp-bg-surface)/82',
-  'backdrop-blur-[4px]',
 ].join(' ')
+const OVERLAY_MASK_CLASS = 'bg-(--cp-bg-surface)/82 backdrop-blur-[4px]'
 const PANEL_CLASS = [
   'inline-flex',
   'min-h-10',
@@ -58,18 +59,24 @@ function normalizeBinding(value: LoadingBindingValue | undefined) {
     return {
       loading: Boolean(value.loading),
       text: value.text || '加载中',
+      preserveContent: Boolean(value.preserveContent),
     }
   }
 
   return {
     loading: Boolean(value),
     text: '加载中',
+    preserveContent: false,
   }
 }
 
-function createOverlay(text: string) {
+function overlayClass(preserveContent: boolean) {
+  return preserveContent ? OVERLAY_BASE_CLASS : `${OVERLAY_BASE_CLASS} ${OVERLAY_MASK_CLASS}`
+}
+
+function createOverlay(text: string, preserveContent: boolean) {
   const overlay = document.createElement('div')
-  overlay.className = OVERLAY_CLASS
+  overlay.className = overlayClass(preserveContent)
   overlay.setAttribute('role', 'status')
   overlay.setAttribute('aria-live', 'polite')
 
@@ -91,10 +98,14 @@ function createOverlay(text: string) {
   return overlay
 }
 
-function showLoading(element: LoadingElement, text: string) {
+function showLoading(element: LoadingElement, text: string, preserveContent: boolean) {
   if (element.__cpLoading) {
     const label = element.__cpLoading.overlay.querySelector<HTMLElement>('[data-loading-label]')
     if (label) label.textContent = text
+    if (element.__cpLoading.preserveContent !== preserveContent) {
+      element.__cpLoading.overlay.className = overlayClass(preserveContent)
+      element.__cpLoading.preserveContent = preserveContent
+    }
     return
   }
 
@@ -104,7 +115,7 @@ function showLoading(element: LoadingElement, text: string) {
     element.style.position = 'relative'
   }
 
-  const overlay = createOverlay(text)
+  const overlay = createOverlay(text, preserveContent)
   element.append(overlay)
   element.setAttribute('aria-busy', 'true')
   element.classList.add('overflow-hidden')
@@ -112,6 +123,7 @@ function showLoading(element: LoadingElement, text: string) {
     overlay,
     previousPosition,
     managedPosition,
+    preserveContent,
   }
 }
 
@@ -129,9 +141,9 @@ function hideLoading(element: LoadingElement) {
 }
 
 function syncLoading(element: LoadingElement, binding: DirectiveBinding<LoadingBindingValue>) {
-  const { loading, text } = normalizeBinding(binding.value)
+  const { loading, text, preserveContent } = normalizeBinding(binding.value)
   if (loading) {
-    showLoading(element, text)
+    showLoading(element, text, preserveContent)
   } else {
     hideLoading(element)
   }

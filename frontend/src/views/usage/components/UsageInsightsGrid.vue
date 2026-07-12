@@ -18,19 +18,12 @@ const chartHeight = 236
 const chartSplitNumber = 3
 
 const modelSource = defineModel<string>('modelSource', { default: 'requested' })
-const endpointSource = defineModel<string>('endpointSource', { default: 'inbound' })
 const { themeRevision } = storeToRefs(useUiStore())
 
 const modelSourceOptions = [
   { label: '请求模型', value: 'requested' },
   { label: '上游模型', value: 'upstream' },
   { label: '映射', value: 'mapping' },
-]
-
-const endpointSourceOptions = [
-  { label: '入站', value: 'inbound' },
-  { label: '上游', value: 'upstream' },
-  { label: '路径', value: 'path' },
 ]
 
 const modelItems = computed(() => props.insights?.modelDistribution ?? [])
@@ -233,8 +226,10 @@ function formatTooltip(params: unknown) {
     const display = trendPointDisplay(point, name)
     return `${marker}${name}: ${display}`
   })
-  const costLine = point ? `实际: ${point.actualCost} ｜ 标准: ${point.cost}` : ''
-  return [title, ...lines, costLine].filter(Boolean).join('<br/>')
+  const billingLine = point
+    ? `实际: ${point.actualBillingAmount} ｜ 标准: ${point.standardBillingAmount}`
+    : ''
+  return [title, ...lines, billingLine].filter(Boolean).join('<br/>')
 }
 
 function formatLatencyTooltip(params: unknown) {
@@ -283,7 +278,7 @@ function themeColor(name: string, fallback: string) {
     <UsageDistributionPanel
       v-model:source="modelSource"
       title="模型分布"
-      description="按请求模型、上游模型与映射关系聚合"
+      description="请求模型与上游模型"
       name-label="模型"
       :items="modelItems"
       color="--cp-info"
@@ -291,20 +286,18 @@ function themeColor(name: string, fallback: string) {
     />
 
     <UsageDistributionPanel
-      v-model:source="endpointSource"
       title="端点分布"
-      description="按入站端点、上游端点与路径聚合"
+      description="客户端 API 路由"
       name-label="端点"
       :items="endpointItems"
       color="--cp-normal"
-      :source-options="endpointSourceOptions"
-      :show-cost-column="false"
+      :show-account-billing-column="false"
     />
 
     <BaseCard
       :padded="false"
       title="Token 使用趋势"
-      description="按日期聚合输入、输出与缓存命中"
+      description="每日 Token 用量"
       header-class="px-5 pt-4"
       body-class="px-5 pt-3 pb-4"
     >
@@ -317,7 +310,7 @@ function themeColor(name: string, fallback: string) {
             v-else
             compact
             title="暂无趋势数据"
-            description="当前范围暂无 Token 数据。"
+            description="当前范围暂无 Token 数据"
             class="min-h-50 place-content-center bg-transparent"
           />
         </div>
@@ -327,7 +320,7 @@ function themeColor(name: string, fallback: string) {
     <BaseCard
       :padded="false"
       title="延迟分布"
-      description="按日期聚合平均响应耗时"
+      description="每日平均响应耗时"
       header-class="px-5 pt-4"
       body-class="px-5 pt-3 pb-4"
     >
@@ -338,7 +331,7 @@ function themeColor(name: string, fallback: string) {
             v-else
             compact
             title="暂无延迟数据"
-            description="当前范围暂无延迟数据。"
+            description="当前范围暂无延迟数据"
             class="min-h-50 place-content-center bg-transparent"
           />
         </div>

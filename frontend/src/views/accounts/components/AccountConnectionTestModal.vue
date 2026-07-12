@@ -39,7 +39,7 @@ function connectionLogClass(tone: string) {
   <BaseModal
     v-model="open"
     title="测试连接"
-    description="验证账号令牌、ChatGPT 账号 ID 与 Codex 模型端点是否可用。"
+    description="验证账号令牌、ChatGPT 账号 ID 与 Codex 模型端点是否可用"
     variant="info"
     width="720px"
   >

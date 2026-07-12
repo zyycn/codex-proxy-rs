@@ -88,6 +88,17 @@ pub enum StreamCommitPolicy {
     UntilOutputOrTerminal,
 }
 
+/// Responses 请求携带的 Codex 运行语义。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexRequestSemantics {
+    /// Codex turn metadata 中的请求类型。
+    pub request_kind: Option<String>,
+    /// Codex turn metadata 中的子代理类型。
+    pub subagent_kind: Option<String>,
+    /// 请求是否为远端压缩。
+    pub compact: bool,
+}
+
 impl Serialize for CodexResponsesRequest {
     /// 上游 body 序列化即原始 `body` map（HTTP SSE 直发；WebSocket 在外层前置 `type`）。
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -682,6 +693,40 @@ impl CodexResponsesRequest {
         self.body.get("client_metadata")
     }
 
+    /// 提取 Codex 请求类型、子代理类型与压缩语义。
+    pub fn semantics(&self) -> CodexRequestSemantics {
+        let turn_metadata = self
+            .turn_metadata
+            .as_deref()
+            .or_else(|| {
+                self.client_metadata()?
+                    .get("x-codex-turn-metadata")?
+                    .as_str()
+            })
+            .and_then(|value| serde_json::from_str::<Value>(value).ok());
+        let request_kind = turn_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("request_kind"))
+            .and_then(Value::as_str)
+            .and_then(non_empty_owned_string);
+        let subagent_kind = turn_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("subagent_kind"))
+            .and_then(Value::as_str)
+            .and_then(non_empty_owned_string);
+        let compact = request_kind.as_deref() == Some("compaction")
+            || self
+                .input()
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction_trigger"));
+
+        CodexRequestSemantics {
+            request_kind,
+            subagent_kind,
+            compact,
+        }
+    }
+
     /// 设置 / 合并 client metadata。
     pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
         match client_metadata {
@@ -720,65 +765,7 @@ impl CodexResponsesRequest {
     }
 }
 
-/// Codex compact 端点请求体。
-///
-/// 发往上游的 Responses compact 请求。`body` 持有客户端原始 JSON object
-/// （已剥离 compact 上游不接受的字段），逐字段透传上游；
-/// `client_ip`/`client_user_agent` 仅供管理端使用记录展示，不进上游 body。
-#[derive(Debug, Clone)]
-pub struct CodexCompactRequest {
-    /// 上游请求体（唯一真相源）。
-    pub body: Map<String, Value>,
-    /// 代理侧识别的客户端 IP，仅用于管理端使用记录展示。
-    pub client_ip: Option<String>,
-    /// 客户端 User-Agent，仅用于管理端使用记录展示。
-    pub client_user_agent: Option<String>,
-    /// 已鉴权客户端 API key 的稳定 ID，仅用于事实归因。
-    pub client_api_key_id: Option<String>,
-    /// 客户端 session ID，仅保留在本地身份上下文。
-    pub client_session_id: Option<String>,
-    /// 客户端 thread ID，仅保留在本地身份上下文。
-    pub client_thread_id: Option<String>,
-    /// 客户端 request ID，仅保留在本地身份上下文。
-    pub client_request_id: Option<String>,
-    /// 客户端 turn ID，仅保留在本地身份上下文。
-    pub client_turn_id: Option<String>,
-    /// 客户端 window ID，仅保留在本地身份上下文。
-    pub client_window_id: Option<String>,
-    /// 客户端 parent thread ID，仅保留在本地身份上下文。
-    pub client_parent_thread_id: Option<String>,
-}
-
-impl Serialize for CodexCompactRequest {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.body.serialize(serializer)
-    }
-}
-
-impl CodexCompactRequest {
-    /// 模型名。
-    pub fn model(&self) -> &str {
-        self.body
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    }
-
-    /// 设置模型名（模型后缀路由归一）。
-    pub fn set_model(&mut self, model: impl Into<String>) {
-        self.body
-            .insert("model".to_string(), Value::String(model.into()));
-    }
-
-    /// reasoning 配置（透传原值）。
-    pub fn reasoning(&self) -> Option<&Value> {
-        self.body.get("reasoning")
-    }
-
-    pub fn prompt_cache_key(&self) -> Option<&str> {
-        self.body.get("prompt_cache_key").and_then(Value::as_str)
-    }
+fn non_empty_owned_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }

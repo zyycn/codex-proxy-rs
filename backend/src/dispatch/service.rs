@@ -1,7 +1,7 @@
 //! Responses 创建编排与调度服务。
 //!
 //! 包含了将 OpenAI 请求调度到 Codex 上游账号的完整逻辑，包括：
-//! - 响应创建（非流式 / 流式 / compact）
+//! - 响应创建（非流式 / 流式）
 //! - 会话亲和性与隐式续接
 //! - reasoning replay
 //! - 账号回退与错误恢复
@@ -42,7 +42,10 @@ use crate::{
     },
     models::service::ModelService,
     telemetry::{
-        recorder::{Recorder, reasoning_effort_from_request, record_response_event},
+        recorder::{
+            Recorder, enrich_response_request_semantics, reasoning_effort_from_request,
+            record_response_event,
+        },
         usage::types::ResponseUsageRecord,
     },
     upstream::openai::{
@@ -157,6 +160,7 @@ impl ResponseDispatchService {
         let catalog = self.models.catalog().await;
         let display_model = catalog.resolve_model_id(requested_model);
         request.set_model(display_model.clone());
+        let compact = request.semantics().compact;
         let tuple_schema = request.tuple_schema.clone();
         let image_generation_requested = request.expects_image_generation();
         let now = Utc::now();
@@ -216,7 +220,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: exhausted_accounts.last_account_id(),
                         stream: false,
-                        compact: false,
+                        compact,
                         transport: Some(backend_transport_name(
                             backend_transport_for_response_request(&request),
                         )),
@@ -309,7 +313,7 @@ impl ResponseDispatchService {
                                         client_api_key_id: request.client_api_key_id.as_deref(),
                                         account_id: Some(&release_account_id),
                                         stream: false,
-                                        compact: false,
+                                        compact,
                                         transport: Some(backend_transport_name(response.transport)),
                                     },
                                     &error,
@@ -470,6 +474,7 @@ impl ResponseDispatchService {
                 insert_response_upstream_diagnostics(&mut metadata, &response.diagnostics);
                 insert_response_trace_metadata(&mut metadata, &trace, Some(&attempt));
                 insert_websocket_pool_decision(&mut metadata, response.websocket_pool_decision);
+                enrich_response_request_semantics(&mut metadata, &request);
                 record_response_event(ResponseUsageRecord {
                     recorder: &self.recorder,
                     request_id,
@@ -511,7 +516,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: Some(&account.id),
                         stream: false,
-                        compact: false,
+                        compact,
                         transport: Some(backend_transport_name(response.transport)),
                     },
                     &error,
@@ -530,7 +535,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: Some(&account.id),
                         stream: false,
-                        compact: false,
+                        compact,
                         transport: Some(backend_transport_name(response.transport)),
                     },
                     &error,
@@ -549,7 +554,7 @@ impl ResponseDispatchService {
                         client_api_key_id: request.client_api_key_id.as_deref(),
                         account_id: Some(&account.id),
                         stream: false,
-                        compact: false,
+                        compact,
                         transport: Some(backend_transport_name(response.transport)),
                     },
                     &error,

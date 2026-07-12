@@ -315,15 +315,18 @@ impl PgAccountStore {
         page: u32,
         page_size: u32,
         search: Option<&str>,
+        status: Option<AccountStatus>,
+        sort: Option<AccountListSort>,
     ) -> PgAccountStoreResult<NumberedPage<StoredAccountMetadata>> {
         let page_size = page_size.clamp(1, 200);
         let search = search.map(str::trim).filter(|value| !value.is_empty());
-        let total = count_account_metadata(&self.pool, search).await?;
+        let total = count_account_metadata(&self.pool, search, status).await?;
         let offset = page_offset(page, page_size);
 
         let mut builder = QueryBuilder::<Postgres>::new(LIST_ACCOUNT_METADATA_SELECT_SQL);
-        push_account_metadata_search(&mut builder, search);
-        builder.push(" order by added_at desc, id desc limit ");
+        push_account_metadata_filter(&mut builder, search, status);
+        push_account_metadata_order(&mut builder, sort);
+        builder.push(" limit ");
         builder.push_bind(i64::from(page_size));
         builder.push(" offset ");
         builder.push_bind(offset.min(i64::MAX as u64) as i64);
@@ -372,4 +375,42 @@ impl PgAccountStore {
             .and_then(|row| row.get::<Option<sqlx::types::Json<Value>>, _>("quota_json"))
             .map(|value| value.0.to_string()))
     }
+}
+
+fn push_account_metadata_order(
+    builder: &mut QueryBuilder<Postgres>,
+    sort: Option<AccountListSort>,
+) {
+    let Some(sort) = sort else {
+        builder.push(" order by added_at desc, id desc");
+        return;
+    };
+
+    builder.push(" order by ");
+    match sort.field {
+        AccountSortField::Email => builder.push("lower(coalesce(email, id))"),
+        AccountSortField::Status => builder.push(
+            "case status when 'active' then 0 when 'quota_exhausted' then 1 \
+             when 'expired' then 2 when 'disabled' then 3 when 'banned' then 4 else 5 end",
+        ),
+        AccountSortField::PlanType => builder.push("lower(coalesce(plan_type, ''))"),
+        AccountSortField::Usage => builder.push(
+            "(select max((quota_values.value #>> '{}')::double precision) \
+             from jsonb_path_query(coalesce(accounts.quota_json, '{}'::jsonb), \
+             '$.**.used_percent') as quota_values(value) \
+             where jsonb_typeof(quota_values.value) = 'number')",
+        ),
+        AccountSortField::LastUsedAt => builder.push(
+            "(select account_usage.last_used_at from account_usage \
+             where account_usage.account_id = accounts.id)",
+        ),
+        AccountSortField::ExpiresAt => builder.push("access_token_expires_at"),
+    };
+    let direction = match sort.direction {
+        SortDirection::Asc => " asc",
+        SortDirection::Desc => " desc",
+    };
+    builder.push(direction);
+    builder.push(" nulls last, id");
+    builder.push(direction);
 }

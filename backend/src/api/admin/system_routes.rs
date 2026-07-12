@@ -66,28 +66,24 @@ pub(crate) async fn update_event_stream(
     _auth: AdminAuth,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError> {
     let receiver = state.services.system_update.subscribe_update_events();
-    let shutdown = state.services.process_control.subscribe_shutdown();
     let stream = futures::stream::unfold(
-        (receiver, shutdown, false),
-        |(mut receiver, mut shutdown, close_after_send)| async move {
+        (receiver, false),
+        |(mut receiver, close_after_send)| async move {
             if close_after_send {
                 return None;
             }
             loop {
-                tokio::select! {
-                    _ = shutdown.recv() => return None,
-                    received = receiver.recv() => match received {
-                        Ok(message) => {
-                            let close_after_send = message.is_terminal();
-                            let id = message.id().to_string();
-                            let data = serde_json::to_string(&message)
-                                .unwrap_or_else(|_| "{}".to_string());
-                            let event = Event::default().event("update").id(id).data(data);
-                            return Some((Ok(event), (receiver, shutdown, close_after_send)));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                match receiver.recv().await {
+                    Ok(message) => {
+                        let close_after_send = message.is_terminal();
+                        let id = message.id().to_string();
+                        let data =
+                            serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
+                        let event = Event::default().event("update").id(id).data(data);
+                        return Some((Ok(event), (receiver, close_after_send)));
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
             }
         },

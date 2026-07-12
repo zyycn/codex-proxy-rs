@@ -81,14 +81,14 @@ pub struct ClearUsageRecords {
     pub cleared: u64,
 }
 
-/// 管理端使用记录费用明细。
+/// 管理端使用记录计费明细。
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct UsageRecordCostDetails {
-    pub input_cost: f64,
-    pub output_cost: f64,
-    pub cache_read_cost: f64,
-    pub total_cost: f64,
-    pub original_cost: f64,
+pub(crate) struct UsageRecordBilling {
+    pub input_amount: f64,
+    pub output_amount: f64,
+    pub cache_read_amount: f64,
+    pub standard_amount: f64,
+    pub total_amount: f64,
     pub input_price_per_mtoken: f64,
     pub output_price_per_mtoken: f64,
     pub cache_read_price_per_mtoken: f64,
@@ -202,14 +202,13 @@ impl UsageQueryService {
             .map_err(|_| UsageQueryError::List)
     }
 
-    /// 按端点来源聚合使用记录分布。
+    /// 按入站端点聚合使用记录分布。
     pub async fn endpoint_distribution(
         &self,
         filter: UsageQueryFilter,
-        source: UsageRecordEndpointSource,
     ) -> Result<Vec<UsageRecordBreakdown>, UsageQueryError> {
         self.store
-            .endpoint_distribution(filter.into(), source)
+            .endpoint_distribution(filter.into())
             .await
             .map_err(|_| UsageQueryError::List)
     }
@@ -235,13 +234,13 @@ impl UsageQueryService {
     }
 }
 
-pub(crate) fn usage_record_cost_details(
+pub(crate) fn usage_record_billing(
     record: &UsageRecord,
     upstream_model: Option<&str>,
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
-) -> Option<UsageRecordCostDetails> {
+) -> Option<UsageRecordBilling> {
     if input_tokens == 0 && output_tokens == 0 && cached_tokens == 0 {
         return None;
     }
@@ -252,21 +251,20 @@ pub(crate) fn usage_record_cost_details(
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     let service_tier = record.service_tier.as_deref();
-    let breakdown = billing::calculate_cost_breakdown(
+    let breakdown = billing::calculate_billing(
         input_tokens,
         output_tokens,
         cached_tokens,
         model,
         service_tier,
     );
-    let original_cost = breakdown.input_cost + breakdown.output_cost + breakdown.cache_read_cost;
 
-    Some(UsageRecordCostDetails {
-        input_cost: breakdown.input_cost,
-        output_cost: breakdown.output_cost,
-        cache_read_cost: breakdown.cache_read_cost,
-        total_cost: breakdown.total_cost,
-        original_cost,
+    Some(UsageRecordBilling {
+        input_amount: breakdown.input_amount,
+        output_amount: breakdown.output_amount,
+        cache_read_amount: breakdown.cache_read_amount,
+        standard_amount: breakdown.standard_amount,
+        total_amount: breakdown.total_amount,
         input_price_per_mtoken: breakdown.input_price_per_mtoken,
         output_price_per_mtoken: breakdown.output_price_per_mtoken,
         cache_read_price_per_mtoken: breakdown.cache_read_price_per_mtoken,
@@ -429,7 +427,7 @@ from usage_records",
         let request_count = nonnegative(row.get("request_count"));
         let latency_sum = nonnegative(row.get("latency_sum"));
         let latency_count = nonnegative(row.get("latency_count"));
-        let cost = usage_breakdown_cost(
+        let billing_amount = usage_breakdown_billing_amount(
             input_tokens,
             output_tokens,
             cached_tokens,
@@ -444,7 +442,7 @@ from usage_records",
                 input_tokens,
                 output_tokens,
                 cached_tokens,
-                cost,
+                billing_amount,
                 latency_sum,
                 latency_count,
             });
@@ -489,7 +487,7 @@ from usage_records",
         let input_tokens = nonnegative(row.get("input_tokens"));
         let output_tokens = nonnegative(row.get("output_tokens"));
         let cached_tokens = nonnegative(row.get("cached_tokens"));
-        let cost = usage_breakdown_cost(
+        let billing_amount = usage_breakdown_billing_amount(
             input_tokens,
             output_tokens,
             cached_tokens,
@@ -502,7 +500,7 @@ from usage_records",
                 input_tokens,
                 output_tokens,
                 cached_tokens,
-                cost,
+                billing_amount,
                 nonnegative(row.get("latency_sum")),
                 nonnegative(row.get("latency_count")),
             );
@@ -553,14 +551,14 @@ fn nonnegative(value: Option<i64>) -> u64 {
     optional_nonnegative_i64_to_u64(value)
 }
 
-fn usage_breakdown_cost(
+fn usage_breakdown_billing_amount(
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
     model: &str,
     service_tier: Option<&str>,
 ) -> f64 {
-    billing::calculate_cost(
+    billing::calculate_billing_amount(
         input_tokens,
         output_tokens,
         cached_tokens,
@@ -580,7 +578,7 @@ struct BreakdownSample {
     input_tokens: u64,
     output_tokens: u64,
     cached_tokens: u64,
-    cost: f64,
+    billing_amount: f64,
     latency_sum: u64,
     latency_count: u64,
 }
@@ -603,9 +601,9 @@ impl BreakdownAccumulator {
         self.item.output_tokens += sample.output_tokens;
         self.item.cached_tokens += sample.cached_tokens;
         self.item.total_tokens += sample.input_tokens + sample.output_tokens;
-        self.item.cost += sample.cost;
-        self.item.actual_cost += sample.cost;
-        self.item.account_cost += sample.cost;
+        self.item.standard_billing_amount += sample.billing_amount;
+        self.item.actual_billing_amount += sample.billing_amount;
+        self.item.account_billing_amount += sample.billing_amount;
         self.latency_sum += sample.latency_sum;
         self.latency_count += sample.latency_count;
     }
@@ -640,7 +638,7 @@ impl UsageTrendAccumulator {
         input: u64,
         output: u64,
         cached: u64,
-        cost: f64,
+        billing_amount: f64,
         latency_sum: u64,
         latency_count: u64,
     ) {
@@ -648,8 +646,8 @@ impl UsageTrendAccumulator {
         self.point.output_tokens += output;
         self.point.cached_tokens += cached;
         self.point.total_tokens += input + output;
-        self.point.cost += cost;
-        self.point.actual_cost += cost;
+        self.point.standard_billing_amount += billing_amount;
+        self.point.actual_billing_amount += billing_amount;
         self.latency_sum += latency_sum;
         self.latency_count += latency_count;
     }
@@ -687,13 +685,6 @@ pub enum UsageRecordModelSource {
     Mapping,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UsageRecordEndpointSource {
-    Inbound,
-    Upstream,
-    Path,
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageRecordBreakdown {
     pub name: String,
@@ -702,9 +693,9 @@ pub struct UsageRecordBreakdown {
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub total_tokens: u64,
-    pub cost: f64,
-    pub actual_cost: f64,
-    pub account_cost: f64,
+    pub standard_billing_amount: f64,
+    pub actual_billing_amount: f64,
+    pub account_billing_amount: f64,
     pub average_latency_ms: Option<f64>,
 }
 
@@ -715,7 +706,7 @@ pub struct UsageRecordTrendPoint {
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub total_tokens: u64,
-    pub cost: f64,
-    pub actual_cost: f64,
+    pub standard_billing_amount: f64,
+    pub actual_billing_amount: f64,
     pub average_latency_ms: Option<f64>,
 }

@@ -61,7 +61,7 @@ defineProps<{
         <span>输出</span>
         <span>缓存</span>
         <span>总TOKEN</span>
-        <span>总花费</span>
+        <span>计费金额</span>
         <span>最近请求时间</span>
       </div>
       <div
@@ -83,7 +83,7 @@ defineProps<{
           <span>{{ model.outputTokensDisplay }}</span>
           <span>{{ model.cachedTokensDisplay }}</span>
           <span>{{ model.totalTokensDisplay }}</span>
-          <span>{{ model.totalCostUsdDisplay }}</span>
+          <span>{{ model.billingAmountUsdDisplay }}</span>
           <span>{{ model.lastUsedAtDisplay }}</span>
         </div>
       </template>

@@ -28,7 +28,7 @@ impl Drop for TestServer {
 
 #[tokio::test]
 async fn responses_websocket_should_reject_missing_client_api_key_during_handshake() {
-    let (app, _api_key, _dir) = super::test_app_with_client_api_key().await;
+    let (app, _api_key, _dir, _connections) = super::test_app_with_client_api_key().await;
     let server = spawn_app(app).await;
     let request = format!("ws://{}/v1/responses", server.address)
         .into_client_request()
@@ -44,7 +44,7 @@ async fn responses_websocket_should_reject_missing_client_api_key_during_handsha
 
 #[tokio::test]
 async fn responses_websocket_should_return_official_error_frame_when_accounts_are_unavailable() {
-    let (app, api_key, _dir) = super::test_app_with_client_api_key().await;
+    let (app, api_key, _dir, _connections) = super::test_app_with_client_api_key().await;
     let server = spawn_app(app).await;
     let mut websocket = connect_responses_websocket(server.address, &api_key).await;
 
@@ -60,6 +60,25 @@ async fn responses_websocket_should_return_official_error_frame_when_accounts_ar
         events.last().unwrap()["error"]["code"],
         "no_available_accounts"
     );
+}
+
+#[tokio::test]
+async fn responses_websocket_should_disconnect_when_connection_draining_starts() {
+    let (app, api_key, _dir, connection_drain) = super::test_app_with_client_api_key().await;
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    assert_eq!(connection_drain.begin_shutdown(), 1);
+    tokio::time::timeout(Duration::from_secs(1), connection_drain.wait())
+        .await
+        .expect("Responses WebSocket task should stop during connection draining");
+    let disconnected = tokio::time::timeout(Duration::from_secs(1), websocket.next())
+        .await
+        .expect("Responses WebSocket client should observe the disconnected connection");
+    assert!(matches!(
+        disconnected,
+        None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+    ));
 }
 
 #[tokio::test]

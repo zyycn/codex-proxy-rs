@@ -1,10 +1,14 @@
 import { watchDebounced } from '@vueuse/core'
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
+
+import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 
 export function useAccountFilters(totalAccounts: Ref<number>) {
   const page = ref(1)
   const pageSize = ref(20)
   const searchQuery = ref('')
+  const statusQuery = ref('')
+  const sort = ref<BaseTableSort>()
   let loadAccounts: (() => Promise<void> | void) | undefined
 
   const accountPagination = computed(() => ({
@@ -35,6 +39,12 @@ export function useAccountFilters(totalAccounts: Ref<number>) {
     requestLoad()
   }
 
+  function handleSortChange(nextSort: BaseTableSort | undefined) {
+    sort.value = nextSort
+    page.value = 1
+    requestLoad()
+  }
+
   watchDebounced(
     searchQuery,
     () => {
@@ -44,13 +54,21 @@ export function useAccountFilters(totalAccounts: Ref<number>) {
     { debounce: 250 },
   )
 
+  watch(statusQuery, () => {
+    page.value = 1
+    requestLoad()
+  })
+
   return {
     page,
     pageSize,
     searchQuery,
+    statusQuery,
+    sort,
     accountPagination,
     bindAccountLoader,
     handlePageChange,
     handlePageSizeChange,
+    handleSortChange,
   }
 }

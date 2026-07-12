@@ -29,11 +29,11 @@ interface AliasRow {
 
 interface SettingsForm {
   modelAliases: Record<string, string>
-  refreshMarginSeconds: number
-  refreshConcurrency: number
-  maxConcurrentPerAccount: number
-  requestIntervalMs: number
-  rotationStrategy: RotationStrategy
+  refreshMarginSeconds: number | null
+  refreshConcurrency: number | null
+  maxConcurrentPerAccount: number | null
+  requestIntervalMs: number | null
+  rotationStrategy: RotationStrategy | ''
 }
 
 interface RotationOption {
@@ -58,11 +58,11 @@ const { copy } = useClipboard()
 
 const form = reactive<SettingsForm>({
   modelAliases: {},
-  refreshMarginSeconds: 3600,
-  refreshConcurrency: 2,
-  maxConcurrentPerAccount: 3,
-  requestIntervalMs: 50,
-  rotationStrategy: 'smart',
+  refreshMarginSeconds: null,
+  refreshConcurrency: null,
+  maxConcurrentPerAccount: null,
+  requestIntervalMs: null,
+  rotationStrategy: '',
 })
 
 const aliasRows = ref<AliasRow[]>([])
@@ -74,22 +74,22 @@ const rotationOptions: RotationOption[] = [
   {
     label: '智能调度（推荐）',
     value: 'smart',
-    description: '按负载、窗口用量、请求数和健康反馈评分，优先选择更空闲的账号。',
+    description: '按负载、窗口用量、请求数和健康反馈评分，优先选择更空闲的账号',
   },
   {
     label: '额度重置优先',
     value: 'quota_reset_priority',
-    description: '优先选择额度窗口更快重置的账号，适合在重置前消耗剩余额度。',
+    description: '优先选择额度窗口更快重置的账号，适合在重置前消耗剩余额度',
   },
   {
     label: '轮询',
     value: 'round_robin',
-    description: '在可用候选账号间按顺序轮转，分配结果最可预测。',
+    description: '在可用候选账号间按顺序轮转，分配结果最可预测',
   },
   {
     label: '粘滞',
     value: 'sticky',
-    description: '优先复用最近使用的账号，直到不可用后再切换。',
+    description: '优先复用最近使用的账号，直到不可用后再切换',
   },
 ]
 
@@ -100,10 +100,14 @@ function numericModel(
   >,
 ) {
   return computed({
-    get: () => String(form[key] ?? 0),
+    get: () => (form[key] === null ? '' : String(form[key])),
     set: (value: string) => {
+      if (!value.trim()) {
+        form[key] = null
+        return
+      }
       const parsed = Number(value)
-      form[key] = Number.isFinite(parsed) ? parsed : 0
+      form[key] = Number.isFinite(parsed) ? parsed : null
     },
   })
 }
@@ -142,14 +146,28 @@ function rowsToAliases(rows: AliasRow[]) {
 }
 
 function applySettings(data: any) {
-  form.modelAliases = data.modelAliases || {}
-  form.refreshMarginSeconds = Number(data.refreshMarginSeconds ?? 3600)
-  form.refreshConcurrency = Number(data.refreshConcurrency ?? 2)
-  form.maxConcurrentPerAccount = Number(data.maxConcurrentPerAccount ?? 3)
-  form.requestIntervalMs = Number(data.requestIntervalMs ?? 50)
-  form.rotationStrategy = (data.rotationStrategy || 'smart') as RotationStrategy
+  form.modelAliases = isRecord(data?.modelAliases) ? data.modelAliases : {}
+  form.refreshMarginSeconds = optionalNumber(data?.refreshMarginSeconds)
+  form.refreshConcurrency = optionalNumber(data?.refreshConcurrency)
+  form.maxConcurrentPerAccount = optionalNumber(data?.maxConcurrentPerAccount)
+  form.requestIntervalMs = optionalNumber(data?.requestIntervalMs)
+  form.rotationStrategy = isRotationStrategy(data?.rotationStrategy) ? data.rotationStrategy : ''
   aliasRows.value = modelAliasesToRows(form.modelAliases)
   aliasError.value = ''
+}
+
+function optionalNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function isRecord(value: unknown): value is Record<string, string> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isRotationStrategy(value: unknown): value is RotationStrategy {
+  return rotationOptions.some((option) => option.value === value)
 }
 
 function applyAdminApiKeyStatus(data: any) {
@@ -197,15 +215,33 @@ async function handleSave() {
     return
   }
 
+  const {
+    refreshMarginSeconds,
+    refreshConcurrency,
+    maxConcurrentPerAccount,
+    requestIntervalMs,
+    rotationStrategy,
+  } = form
+  if (
+    refreshMarginSeconds === null ||
+    refreshConcurrency === null ||
+    maxConcurrentPerAccount === null ||
+    requestIntervalMs === null ||
+    !rotationStrategy
+  ) {
+    toast.warning('请完整填写运行参数和调度策略')
+    return
+  }
+
   try {
     saving.value = true
     const data = await updateSettings({
       modelAliases: aliasResult.modelAliases,
-      refreshMarginSeconds: form.refreshMarginSeconds,
-      refreshConcurrency: form.refreshConcurrency,
-      maxConcurrentPerAccount: form.maxConcurrentPerAccount,
-      requestIntervalMs: form.requestIntervalMs,
-      rotationStrategy: form.rotationStrategy,
+      refreshMarginSeconds,
+      refreshConcurrency,
+      maxConcurrentPerAccount,
+      requestIntervalMs,
+      rotationStrategy,
     })
     applySettings(data)
     toast.success('设置已保存')
@@ -272,7 +308,7 @@ onMounted(loadSettings)
           系统设置
         </h1>
         <p class="mt-2.5 mb-0 text-[15px] leading-[1.15] font-semibold text-(--cp-text-secondary)">
-          让模型入口、账号选择和 Token 刷新保持可控。
+          管理运行参数、调度策略、模型映射与外部访问配置
         </p>
       </div>
 
@@ -319,14 +355,14 @@ onMounted(loadSettings)
       <BaseConfirmModal
         v-model="showDeleteAdminKeyModal"
         title="删除管理员 API Key"
-        description="删除后外部系统将无法继续使用该 Key 调用管理接口。"
+        description="删除后外部系统将无法继续使用该 Key 调用管理接口"
         variant="danger"
         confirm-text="确认删除"
         :loading="adminKeyDeleting"
         width="480px"
         @confirm="handleDeleteAdminApiKey"
       >
-        <p class="m-0">确定要删除当前管理员 API Key 吗？此操作会立即生效。</p>
+        <p class="m-0">确定要删除当前管理员 API Key 吗？此操作会立即生效</p>
       </BaseConfirmModal>
     </div>
   </div>

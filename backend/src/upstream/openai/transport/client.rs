@@ -24,8 +24,7 @@ use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
-    CodexCompactRequest, CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed,
-    transport_for_request,
+    CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed, transport_for_request,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
@@ -33,7 +32,7 @@ use crate::upstream::openai::protocol::websocket::{
 };
 
 use super::diagnostics::CodexUpstreamDiagnostics;
-use super::endpoints::{CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH, endpoint_url};
+use super::endpoints::{CODEX_RESPONSES_PATH, endpoint_url};
 use super::headers::{
     build_ordered_codex_base_headers, insert_optional_header, insert_ordered_headers,
     websocket_header_pairs,
@@ -330,21 +329,6 @@ pub struct CodexBackendStreamingResponse {
     pub turn_state_update: Option<CodexTurnStateUpdate>,
     /// WebSocket 连接池决策。
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
-    /// 上游诊断元数据。
-    pub diagnostics: CodexUpstreamDiagnostics,
-    /// 安全响应元数据。
-    pub response_metadata: CodexResponseMetadata,
-}
-
-/// Codex compact 端点响应。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexCompactResponse {
-    /// 上游返回的 JSON。
-    pub body: Value,
-    /// 上游透传的 `set-cookie` 列表。
-    pub set_cookie_headers: Vec<String>,
-    /// 上游透传的限流头。
-    pub rate_limit_headers: Vec<(String, String)>,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 安全响应元数据。
