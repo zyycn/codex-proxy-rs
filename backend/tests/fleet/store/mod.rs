@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use codex_proxy_rs::fleet::{
     account::AccountStatus,
     quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at},
-    store::{AccountClaimsUpdate, AccountStore, NewAccount, PgAccountStore},
+    store::{AccountClaimsUpdate, AccountStore, ImportedAccountUpsert, NewAccount, PgAccountStore},
 };
 use codex_proxy_rs::telemetry::account_usage::store::{
     AccountUsageDelta, AccountUsageStore, AccountUsageWindow, PgAccountUsageStore,
@@ -11,6 +11,15 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
 use crate::support::storage::init_test_db;
+
+#[derive(sqlx::FromRow)]
+struct ImportedAccountState {
+    access_token: String,
+    refresh_token: Option<String>,
+    next_refresh_at: Option<DateTime<Utc>>,
+    quota_verify_required: bool,
+    quota_fetched_at: Option<DateTime<Utc>>,
+}
 
 #[tokio::test]
 async fn account_store_should_store_plain_tokens_and_load_secret_wrappers() {
@@ -54,6 +63,78 @@ async fn account_store_should_store_plain_tokens_and_load_secret_wrappers() {
 }
 
 #[tokio::test]
+async fn account_store_import_upsert_should_commit_complete_state_atomically() {
+    let (pool, _dir) = account_store_parts("accounts-import-atomic", 1).await;
+    let repo = PgAccountStore::new(pool.clone());
+    let next_refresh_at = Utc::now() + Duration::minutes(30);
+    let quota_fetched_at = Utc::now();
+    repo.upsert_from_import(ImportedAccountUpsert {
+        account: imported_account("acct_import", Some("refresh-import")),
+        next_refresh_at: Some(next_refresh_at),
+        quota_json: Some(r#"{"plan_type":"plus","remaining":42}"#.to_string()),
+        quota_fetched_at: Some(quota_fetched_at),
+        quota_verify_required: true,
+    })
+    .await
+    .unwrap();
+
+    let stored: ImportedAccountState = sqlx::query_as(
+        "select access_token, refresh_token, next_refresh_at, quota_verify_required,
+                    quota_fetched_at
+             from accounts where id = 'acct_import'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.access_token, "access-import");
+    assert_eq!(stored.refresh_token.as_deref(), Some("refresh-import"));
+    assert_eq!(stored.next_refresh_at, Some(pg_timestamp(next_refresh_at)));
+    assert!(stored.quota_verify_required);
+    assert_eq!(
+        stored.quota_fetched_at,
+        Some(pg_timestamp(quota_fetched_at))
+    );
+}
+
+#[tokio::test]
+async fn account_store_import_upsert_should_leave_no_partial_account_on_failure() {
+    let (pool, _dir) = account_store_parts("accounts-import-rollback", 1).await;
+    let repo = PgAccountStore::new(pool.clone());
+    let result = repo
+        .upsert_from_import(ImportedAccountUpsert {
+            account: imported_account("acct_invalid_import", None),
+            next_refresh_at: Some(Utc::now()),
+            quota_json: Some("not-json".to_string()),
+            quota_fetched_at: Some(Utc::now()),
+            quota_verify_required: true,
+        })
+        .await;
+    assert!(result.is_err());
+    let rows: i64 =
+        sqlx::query_scalar("select count(*) from accounts where id = 'acct_invalid_import'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0);
+}
+
+fn imported_account(id: &str, refresh_token: Option<&str>) -> NewAccount {
+    NewAccount {
+        id: id.to_string(),
+        email: Some("import@example.com".to_string()),
+        account_id: Some(format!("chatgpt-{id}")),
+        user_id: Some(format!("user-{id}")),
+        label: Some("imported".to_string()),
+        plan_type: Some("plus".to_string()),
+        access_token: SecretString::new("access-import".to_string().into()),
+        refresh_token: refresh_token.map(|token| SecretString::new(token.to_string().into())),
+        access_token_expires_at: Some(Utc::now() + Duration::hours(1)),
+        status: AccountStatus::Active,
+        added_at: None,
+    }
+}
+
+#[tokio::test]
 async fn account_store_should_page_account_metadata_by_added_at_desc() {
     let (pool, _dir) = account_store_parts("accounts", 5).await;
     let repo = PgAccountStore::new(pool.clone());
@@ -81,6 +162,33 @@ async fn account_store_should_page_account_metadata_by_added_at_desc() {
             .collect::<Vec<_>>(),
         ["acct_a"]
     );
+}
+
+#[tokio::test]
+async fn account_store_page_should_return_row_mapping_errors_instead_of_skipping_rows() {
+    let (pool, _dir) = account_store_parts("accounts-invalid-row", 1).await;
+    let repo = PgAccountStore::new(pool.clone());
+    sqlx::query("alter table accounts drop constraint accounts_status_check")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let now = Utc::now();
+    sqlx::query(
+        "insert into accounts (id, access_token, status, added_at, updated_at)
+         values ('acct_invalid_status', 'token', 'corrupt', $1, $1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let error = repo
+        .list_metadata_page(1, 20, None)
+        .await
+        .expect_err("invalid rows must fail the page instead of disappearing");
+    assert!(error
+        .to_string()
+        .contains("PostgreSQL account store status error: corrupt"));
 }
 
 #[tokio::test]

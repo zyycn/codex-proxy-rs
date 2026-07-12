@@ -10,6 +10,7 @@ import {
   type SystemUpdateInfo,
   type SystemVersion,
 } from '@/api'
+import { ApiError } from '@/api/request'
 
 export type SystemUpdateLogLevel = 'info' | 'success' | 'warning' | 'error'
 
@@ -260,12 +261,7 @@ async function waitForServiceAndReload() {
 }
 
 function apiErrorStatus(error: unknown) {
-  if (typeof error !== 'object' || error === null || !('status' in error)) {
-    return 0
-  }
-
-  const status = (error as { status?: unknown }).status
-  return typeof status === 'number' ? status : 0
+  return error instanceof ApiError ? error.status : 0
 }
 
 async function restartNow() {

@@ -1,4 +1,3 @@
-// @env browser
 import { watchDebounced } from '@vueuse/core'
 import { computed, ref, type Ref } from 'vue'
 

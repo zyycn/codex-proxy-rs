@@ -38,6 +38,174 @@ async fn usage_store_should_filter_numbered_pages_of_success_facts() {
 }
 
 #[tokio::test]
+async fn usage_store_should_apply_every_query_filter_dimension() {
+    let (pool, _guard) = init_test_db("usage-record-filter-matrix").await;
+    let store = PgUsageRecordStore::new(pool);
+    let now = Utc::now();
+    let mut matching = success_record("needle message");
+    matching.id = "usage_matrix_matching".to_string();
+    matching.kind = "response".to_string();
+    matching.client_api_key_id = Some("key_matching".to_string());
+    matching.provider = "provider_matching".to_string();
+    matching.request_id = Some("request_matching".to_string());
+    matching.account_id = "account_matching".to_string();
+    matching.route = Some("/v1/matching".to_string());
+    matching.model = "model_matching".to_string();
+    matching.status_code = 201;
+    matching.transport = Some("websocket".to_string());
+    matching.attempt_index = Some(3);
+    matching.response_id = Some("response_matching".to_string());
+    matching.upstream_request_id = Some("upstream_matching".to_string());
+    matching.created_at = now;
+    store.append(&matching).await.unwrap();
+
+    let mut other = success_record("other message");
+    other.id = "usage_matrix_other".to_string();
+    other.kind = "other".to_string();
+    other.client_api_key_id = Some("key_other".to_string());
+    other.provider = "provider_other".to_string();
+    other.request_id = Some("request_other".to_string());
+    other.account_id = "account_other".to_string();
+    other.route = Some("/v1/other".to_string());
+    other.model = "model_other".to_string();
+    other.status_code = 202;
+    other.transport = Some("http_sse".to_string());
+    other.attempt_index = Some(4);
+    other.response_id = Some("response_other".to_string());
+    other.upstream_request_id = Some("upstream_other".to_string());
+    other.created_at = now - Duration::hours(2);
+    store.append(&other).await.unwrap();
+
+    let filters = vec![
+        (
+            "kind",
+            UsageRecordFilter {
+                kind: Some(matching.kind.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "client key",
+            UsageRecordFilter {
+                client_api_key_id: matching.client_api_key_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "provider",
+            UsageRecordFilter {
+                provider: Some(matching.provider.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "request",
+            UsageRecordFilter {
+                request_id: matching.request_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "account",
+            UsageRecordFilter {
+                account_id: Some(matching.account_id.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "route",
+            UsageRecordFilter {
+                route: matching.route.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "model",
+            UsageRecordFilter {
+                model: Some(matching.model.clone()),
+                ..Default::default()
+            },
+        ),
+        (
+            "status",
+            UsageRecordFilter {
+                status_code: Some(matching.status_code),
+                ..Default::default()
+            },
+        ),
+        (
+            "transport",
+            UsageRecordFilter {
+                transport: matching.transport.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "attempt",
+            UsageRecordFilter {
+                attempt_index: matching.attempt_index,
+                ..Default::default()
+            },
+        ),
+        (
+            "response",
+            UsageRecordFilter {
+                response_id: matching.response_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "upstream request",
+            UsageRecordFilter {
+                upstream_request_id: matching.upstream_request_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "message search",
+            UsageRecordFilter {
+                search: Some("needle message".to_string()),
+                ..Default::default()
+            },
+        ),
+        (
+            "request search",
+            UsageRecordFilter {
+                search: matching.request_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "response search",
+            UsageRecordFilter {
+                search: matching.response_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "upstream search",
+            UsageRecordFilter {
+                search: matching.upstream_request_id.clone(),
+                ..Default::default()
+            },
+        ),
+        (
+            "time window",
+            UsageRecordFilter {
+                start_time: Some(now - Duration::minutes(1)),
+                end_time: Some(now + Duration::minutes(1)),
+                ..Default::default()
+            },
+        ),
+    ];
+    for (dimension, filter) in filters {
+        let page = store.list_page(filter, 1, 20).await.unwrap();
+        assert_eq!(page.total, 1, "{dimension}");
+        assert_eq!(page.items[0].id, matching.id, "{dimension}");
+    }
+}
+
+#[tokio::test]
 async fn usage_store_should_list_recent_records_in_descending_order() {
     let (pool, _guard) = init_test_db("usage-record-recent").await;
     let store = PgUsageRecordStore::new(pool);
@@ -73,11 +241,12 @@ async fn usage_record_and_bucket_are_one_transaction_and_keep_zero_ms_samples() 
     record.first_token_ms = Some(0);
     record.input_tokens = Some(11);
     record.output_tokens = Some(7);
+    record.service_tier = Some("priority".to_string());
     store.append(&record).await.unwrap();
 
-    let bucket: (i64, i64, i64, i64, i64) = sqlx::query_as(
+    let bucket: (i64, i64, i64, i64, i64, String) = sqlx::query_as(
         "select success_count, input_tokens, output_tokens, latency_count,
-                first_token_latency_count
+                first_token_latency_count, service_tier
          from request_time_buckets where account_id = $1 and model = $2",
     )
     .bind(&record.account_id)
@@ -85,7 +254,7 @@ async fn usage_record_and_bucket_are_one_transaction_and_keep_zero_ms_samples() 
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(bucket, (1, 11, 7, 1, 1));
+    assert_eq!(bucket, (1, 11, 7, 1, 1, "priority".to_string()));
 
     sqlx::raw_sql(
         "create function reject_test_bucket() returns trigger language plpgsql as $$

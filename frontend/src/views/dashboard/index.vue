@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
+import { AlertCircle, RefreshCw } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -15,6 +15,7 @@ const {
   loading,
   refreshing,
   trendLoading,
+  errorMessage,
   activeTrendKind,
   metrics,
   trendPoints,
@@ -54,6 +55,15 @@ const {
         <RefreshCw :size="19" :class="loading || refreshing ? 'animate-spin' : undefined" />
       </BaseButton>
     </header>
+
+    <div
+      v-if="errorMessage"
+      class="mt-4 flex items-start gap-3 border-l-2 border-(--cp-danger) bg-(--cp-danger-bg) px-4 py-3 text-sm font-semibold text-(--cp-text-primary)"
+      role="alert"
+    >
+      <AlertCircle :size="18" class="mt-px shrink-0 text-(--cp-danger)" />
+      <span class="min-w-0 break-words">{{ errorMessage }}</span>
+    </div>
 
     <section
       class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4 xl:gap-6"

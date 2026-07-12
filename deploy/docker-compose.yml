@@ -8,12 +8,13 @@ x-json-logging: &json-logging
 
 services:
   postgres:
-    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
     restart: unless-stopped
     environment:
       POSTGRES_DB: codex_proxy
       POSTGRES_USER: codex_proxy
       POSTGRES_PASSWORD: ${CPR_POSTGRES_PASSWORD:?CPR_POSTGRES_PASSWORD must be set in deploy/.env}
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
     volumes:
       - postgres-data:/var/lib/postgresql
     ports:

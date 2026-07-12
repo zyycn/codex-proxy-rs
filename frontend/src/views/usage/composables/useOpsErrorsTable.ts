@@ -1,4 +1,3 @@
-// @env browser
 import { watchDebounced } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, onMounted, ref, shallowRef, watch, type Ref } from 'vue'

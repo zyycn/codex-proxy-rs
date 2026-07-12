@@ -388,7 +388,6 @@ async fn retry_upstream_5xx<T, F, Fut>(
     account_id: &str,
     endpoint: Option<&str>,
     retry_message: &'static str,
-    failure_message: &'static str,
     mut operation: F,
 ) -> Result<T, CodexClientError>
 where
@@ -414,17 +413,7 @@ where
                 retries += 1;
             }
             Ok(response) => return Ok(response),
-            Err(error) => {
-                log_upstream_failure(
-                    request_id,
-                    account_id,
-                    endpoint,
-                    retries,
-                    &error,
-                    failure_message,
-                );
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         }
     }
 }
@@ -438,7 +427,7 @@ fn log_upstream_retry(
     message: &'static str,
 ) {
     if let Some(endpoint) = endpoint {
-        tracing::warn!(
+        tracing::debug!(
             request_id,
             account_id = %account_id,
             endpoint,
@@ -447,38 +436,10 @@ fn log_upstream_retry(
             message
         );
     } else {
-        tracing::warn!(
+        tracing::debug!(
             request_id,
             account_id = %account_id,
             retry,
-            error = %error,
-            message
-        );
-    }
-}
-
-fn log_upstream_failure(
-    request_id: &str,
-    account_id: &str,
-    endpoint: Option<&str>,
-    retries: usize,
-    error: &CodexClientError,
-    message: &'static str,
-) {
-    if let Some(endpoint) = endpoint {
-        tracing::warn!(
-            request_id,
-            account_id = %account_id,
-            endpoint,
-            retries,
-            error = %error,
-            message
-        );
-    } else {
-        tracing::warn!(
-            request_id,
-            account_id = %account_id,
-            retries,
             error = %error,
             message
         );
@@ -495,7 +456,6 @@ pub(crate) async fn create_response_with_account_retrying_5xx(
         &context.account.id,
         None,
         "upstream response request failed with retryable 5xx",
-        "upstream response request failed",
         || create_response_with_account(context, request, started_at),
     )
     .await
@@ -510,7 +470,6 @@ pub(crate) async fn create_response_stream_with_account_retrying_5xx(
         &context.account.id,
         None,
         "upstream response stream request failed with retryable 5xx",
-        "upstream response stream request failed",
         || create_response_stream_with_account(context, request),
     )
     .await
@@ -525,7 +484,6 @@ pub(crate) async fn create_compact_response_with_account_retrying_5xx(
         &context.account.id,
         Some("compact"),
         "upstream compact request failed with retryable 5xx",
-        "upstream compact request failed",
         || create_compact_response_with_account(context, request),
     )
     .await
@@ -637,7 +595,7 @@ impl ResponseDispatchService {
                     let usage = extract_usage(&response.body);
                     if let Some(usage) = usage {
                         self.account_pool
-                            .record_token_usage(&account.id, request.model(), &usage)
+                            .record_token_usage(&account.id, &usage)
                             .await;
                     }
                     let mut metadata = json!({

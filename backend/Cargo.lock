@@ -2315,7 +2315,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "uuid",
  "webpki-roots",
 ]
 
@@ -2382,7 +2381,6 @@ dependencies = [
  "sqlx-core",
  "thiserror",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2418,7 +2416,6 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
- "uuid",
  "whoami",
 ]
 
@@ -2445,7 +2442,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "url",
- "uuid",
 ]
 
 [[package]]

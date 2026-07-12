@@ -8,8 +8,8 @@ use codex_proxy_rs::fleet::store::{AccountStore, AccountStoreResult};
 use codex_proxy_rs::models::service::ModelService;
 use codex_proxy_rs::models::types::ModelConfig;
 use codex_proxy_rs::telemetry::account_usage::store::{
-    AccountModelUsageDelta, AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore,
-    AccountUsageStoreError, AccountUsageWindow,
+    AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageStoreError,
+    AccountUsageWindow,
 };
 use codex_proxy_rs::upstream::openai::fingerprint::{PgFingerprintStore, RuntimeFingerprint};
 use wiremock::{
@@ -23,6 +23,7 @@ mod cleanup;
 mod coordinator;
 mod fingerprint_update;
 mod model_refresh;
+mod retention_trim;
 
 struct FakeAccountStore;
 
@@ -93,15 +94,6 @@ impl AccountUsageStore for FakeAccountUsageStore {
         &self,
         _account_id: &str,
         _usage: AccountUsageDelta,
-    ) -> Result<(), AccountUsageStoreError> {
-        Ok(())
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        _account_id: &str,
-        _model: &str,
-        _usage: AccountModelUsageDelta,
     ) -> Result<(), AccountUsageStoreError> {
         Ok(())
     }

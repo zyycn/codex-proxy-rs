@@ -1148,7 +1148,7 @@ async fn responses_external_previous_response_not_found_should_return_exact_upst
         .expect(1)
         .mount(&server)
         .await;
-    let (app, api_key, _pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
 
     let response = app
         .oneshot(
@@ -1157,12 +1157,13 @@ async fn responses_external_previous_response_not_found_should_return_exact_upst
                 .uri("/v1/responses")
                 .header("authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
+                .header("x-request-id", "req_external_previous_not_found")
                 .body(Body::from(
                     json!({
                         "model": "gpt-5.5",
                         "previous_response_id": "resp_external",
                         "input": [{"role": "user", "content": "Continue"}],
-                        "stream": false,
+                        "stream": true,
                         "use_websocket": false
                     })
                     .to_string(),
@@ -1173,10 +1174,21 @@ async fn responses_external_previous_response_not_found_should_return_exact_upst
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
+    let event = latest_response_upstream_ops_error_log(&pool).await;
+    let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body, upstream_error);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some("req_external_previous_not_found")
+    );
+    assert_eq!(event.status_code, Some(400));
+    assert_eq!(event.client_status_code, Some(400));
+    assert_eq!(event.upstream_status_code, Some(400));
+    assert_eq!(event.attempt_index, Some(0));
+    assert_eq!(metadata["attemptCount"], 1);
 }
 
 #[tokio::test]
@@ -1218,8 +1230,8 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
                 function_call_ids: Vec::new(),
                 variant_hash: None,
                 continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
-                replay: Some(ResponseReplaySnapshot {
-                    full_input: vec![
+                replay: Some(replay_snapshot(
+                    vec![
                         json!({"role": "user", "content": "Earlier question"}),
                         json!({
                             "type": "reasoning",
@@ -1228,7 +1240,8 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
                             "summary": []
                         }),
                     ],
-                }),
+                    Vec::new(),
+                )),
                 created_at: Utc::now(),
             },
         )
@@ -1273,7 +1286,7 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
     let body: Value = serde_json::from_slice(&secondary.body).unwrap();
     assert!(body.get("previous_response_id").is_none());
     assert_eq!(body["input"][0]["content"], "Earlier question");
-    assert_eq!(body["input"][1]["id"], "reasoning-old");
+    assert!(body["input"][1].get("id").is_none());
     assert!(body["input"][1].get("encrypted_content").is_none());
     assert_eq!(body["input"][2]["content"], "Current question");
     assert!(secondary.headers.get("x-codex-turn-state").is_none());

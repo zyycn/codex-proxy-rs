@@ -1,6 +1,111 @@
 use super::*;
 
 #[tokio::test]
+async fn responses_should_succeed_when_postgres_telemetry_write_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_COMPLETED_USAGE_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_account_pool_and_telemetry(server.uri()).await;
+    sqlx::query("alter table usage_records rename to usage_records_unavailable")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["id"], "resp_usage");
+}
+
+#[tokio::test]
+async fn responses_should_succeed_when_redis_affinity_write_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_COMPLETED_USAGE_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (pool, _dir) = init_test_db("openai-affinity-write-failure").await;
+    let api_key = insert_client_api_key(&pool).await;
+    insert_account(&pool).await;
+    let redis = create_test_redis("affinity-write-failure").await;
+    let config = test_config(test_database_url(), server.uri());
+    let usage_record_options = UsageRecordOptions::from_config(&config);
+    let state =
+        test_app_state_with_storage(config, pool, redis.clone(), usage_record_options).await;
+    state
+        .services
+        .account_pool
+        .restore_from_store()
+        .await
+        .unwrap();
+    let mut connection = redis.manager();
+    let _: () = redis::cmd("SET")
+        .arg(redis.key("affinity:v2:account:acct_chat"))
+        .arg("wrong-type")
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let app = router::router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["id"], "resp_usage");
+}
+
+#[tokio::test]
 async fn responses_should_use_imported_account_record_usage_cookie_and_usage_record() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -57,15 +162,6 @@ async fn responses_should_use_imported_account_record_usage_cookie_and_usage_rec
     .await
     .unwrap();
     assert_eq!(usage, (1, 7, 4, 2));
-    let model_usage: (i64, i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens, cached_tokens from account_model_usage where account_id = $1 and model = $2",
-    )
-    .bind("acct_chat")
-    .bind("gpt-5.5")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(model_usage, (1, 7, 4, 2));
     let cookie_header = PgCookieStore::new(pool.clone())
         .cookie_header("acct_chat", "chatgpt.com")
         .await
@@ -498,14 +594,6 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let model_usage: (i64, i64, i64) = sqlx::query_as(
-        "select request_count, input_tokens, output_tokens from account_model_usage where account_id = $1 and model = $2",
-    )
-    .bind("acct_chat")
-    .bind("gpt-5.5")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
 
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("text/event-stream"));
@@ -516,7 +604,6 @@ async fn responses_stream_should_proxy_sse_and_record_usage() {
         "stream responses should terminate clients, body was {body:?}"
     );
     assert_eq!(usage, (1, 3, 5));
-    assert_eq!(model_usage, (1, 3, 5));
 }
 
 #[tokio::test]

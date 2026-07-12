@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 
+use codex_proxy_rs::infra::database::migrate;
+
 use crate::support::storage::init_test_db;
 
 #[tokio::test]
-async fn postgres_schema_is_terminal_v1_without_runtime_tables() {
+async fn postgres_schema_is_terminal_v1_without_unused_storage() {
     let (pool, _guard) = init_test_db("schema-terminal-v1").await;
     let tables = sqlx::query_scalar::<_, String>(
         "select table_name
@@ -19,7 +21,6 @@ async fn postgres_schema_is_terminal_v1_without_runtime_tables() {
         BTreeSet::from_iter(
             [
                 "account_cookies",
-                "account_model_usage",
                 "account_usage",
                 "accounts",
                 "admin_users",
@@ -36,13 +37,28 @@ async fn postgres_schema_is_terminal_v1_without_runtime_tables() {
         )
     );
 
-    let versions = sqlx::query_as::<_, (i64, String)>(
-        "select version, name from schema_migrations order by version",
+    let versions = sqlx::query_as::<_, (i64, String, String)>(
+        "select version, name, checksum from schema_migrations order by version",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(versions, vec![(1, "initial".to_string())]);
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].0, 1);
+    assert_eq!(versions[0].1, "initial");
+    assert!(versions.iter().all(|migration| migration.2.len() == 64));
+}
+
+#[tokio::test]
+async fn postgres_migrate_should_reject_changed_applied_sql_checksum() {
+    let (pool, _guard) = init_test_db("schema-checksum-mismatch").await;
+    sqlx::query("update schema_migrations set checksum = repeat('0', 64) where version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let error = migrate(&pool).await.unwrap_err();
+    assert!(error.to_string().contains("checksum mismatch"));
 }
 
 #[tokio::test]
@@ -136,9 +152,15 @@ async fn postgres_schema_has_required_fact_and_bucket_indexes() {
         "idx_ops_error_logs_created_id",
         "idx_ops_error_logs_key_created",
         "idx_ops_error_logs_failure_class",
-        "idx_request_time_buckets_model",
     ] {
         assert!(indexes.contains(index), "missing {index}");
+    }
+    for retired_index in [
+        "idx_accounts_status",
+        "idx_account_usage_last_used_account",
+        "idx_request_time_buckets_model",
+    ] {
+        assert!(!indexes.contains(retired_index), "retained {retired_index}");
     }
 }
 

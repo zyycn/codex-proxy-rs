@@ -113,14 +113,8 @@ fn release_should_remove_the_exact_concurrent_slot() {
         ))
         .unwrap();
 
-    assert_eq!(
-        pool.release(&second).unwrap().model.as_deref(),
-        Some("model-second")
-    );
-    assert_eq!(
-        pool.release(&first).unwrap().model.as_deref(),
-        Some("model-first")
-    );
+    assert!(pool.release(&second));
+    assert!(pool.release(&first));
 }
 
 #[test]

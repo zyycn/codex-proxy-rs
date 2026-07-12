@@ -76,6 +76,29 @@ async fn responses_route_should_accept_body_larger_than_axum_default_limit() {
 }
 
 #[tokio::test]
+async fn responses_route_should_reject_body_over_proxy_limit() {
+    let (app, api_key, _dir) = test_app_with_client_api_key().await;
+    let body = serde_json::json!({
+        "model": "gpt-5.5",
+        "input": "x".repeat(17 * 1024 * 1024),
+    })
+    .to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn responses_route_should_terminate_generated_stream_errors_with_done_marker() {
     let (app, api_key, _dir) = test_app_with_client_api_key().await;
     let response = app

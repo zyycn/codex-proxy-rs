@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from 'vue'
 
 import BaseButton from './BaseButton.vue'
 import BaseScrollbar from './BaseScrollbar.vue'
+import { lockBodyScroll, unlockBodyScroll } from '@/utils/bodyScrollLock'
 
 type ModalVariant = 'default' | 'info' | 'warning' | 'danger' | 'success'
 
@@ -20,6 +21,18 @@ const props = defineProps<{
 }>()
 
 const open = defineModel<boolean>({ default: false })
+const panel = useTemplateRef<HTMLElement>('panel')
+let previouslyFocused: HTMLElement | null = null
+let ownsScrollLock = false
+
+const focusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
 
 const variant = computed(() => props.variant ?? 'default')
 
@@ -68,19 +81,103 @@ function closeModal() {
   if (props.closeDisabled) return
   open.value = false
 }
+
+function focusableElements() {
+  return Array.from(panel.value?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
+    (element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true',
+  )
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeModal()
+    return
+  }
+  if (event.key !== 'Tab') return
+
+  const focusable = focusableElements()
+  if (focusable.length === 0) {
+    event.preventDefault()
+    panel.value?.focus()
+    return
+  }
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!panel.value?.contains(document.activeElement)) {
+    event.preventDefault()
+    if (event.shiftKey) last?.focus()
+    else first?.focus()
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last?.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first?.focus()
+  }
+}
+
+function acquireScrollLock() {
+  if (ownsScrollLock) return
+  ownsScrollLock = true
+  lockBodyScroll()
+}
+
+function releaseScrollLock() {
+  if (!ownsScrollLock) return
+  ownsScrollLock = false
+  unlockBodyScroll()
+}
+
+function restorePreviousFocus() {
+  if (previouslyFocused?.isConnected) previouslyFocused.focus()
+  previouslyFocused = null
+}
+
+watch(
+  open,
+  async (isOpen) => {
+    if (isOpen) {
+      previouslyFocused =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      acquireScrollLock()
+      await nextTick()
+      const first = focusableElements()[0]
+      if (first) first.focus()
+      else panel.value?.focus()
+      return
+    }
+
+    releaseScrollLock()
+    restorePreviousFocus()
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  releaseScrollLock()
+  restorePreviousFocus()
+})
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="cp-modal">
-      <div v-if="open" class="fixed inset-0 z-50 grid place-items-center p-6" role="presentation">
+      <div
+        v-if="open"
+        class="fixed inset-0 z-50 grid place-items-center p-6"
+        role="presentation"
+        @keydown="handleKeydown"
+      >
         <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
         <section
+          ref="panel"
           class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative w-[min(560px,100%)] rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover)"
           :style="modalStyle"
           role="dialog"
           aria-modal="true"
           :aria-label="title"
+          tabindex="-1"
         >
           <header class="grid grid-cols-[auto_minmax(0,1fr)_28px] gap-4 p-7 pb-0">
             <span

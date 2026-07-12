@@ -1,4 +1,4 @@
-use std::{env, thread};
+use std::{env, sync::OnceLock, thread};
 
 use chrono::{DateTime, Utc};
 use codex_proxy_rs::{
@@ -22,6 +22,8 @@ const DEFAULT_TEST_DATABASE_URL: &str =
     "postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy";
 const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:6379";
 static DATABASE_INIT_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+static REDIS_TEST_CLEANUP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+static REDIS_TEST_RUN_ID: OnceLock<String> = OnceLock::new();
 
 pub(crate) struct TestDatabaseGuard {
     database_name: Option<String>,
@@ -122,11 +124,46 @@ async fn drop_test_database(base_url: &str, database_name: &str) -> Result<(), s
 }
 
 pub(crate) async fn create_test_redis(label: &str) -> RedisConnection {
+    let redis_url = test_redis_url();
+    REDIS_TEST_CLEANUP
+        .get_or_init(|| async {
+            cleanup_stale_test_redis_keys(&redis_url)
+                .await
+                .unwrap_or_else(|error| panic!("clean stale Redis test keys: {error}"));
+        })
+        .await;
     let label = sanitize_label(label);
-    let prefix = format!("cpr:test:{label}:{}", Uuid::new_v4().simple());
-    RedisConnection::connect(&test_redis_url(), prefix)
+    let run_id = REDIS_TEST_RUN_ID.get_or_init(|| Uuid::new_v4().simple().to_string());
+    let prefix = format!("cpr:test:{run_id}:{label}:{}", Uuid::new_v4().simple());
+    RedisConnection::connect(&redis_url, prefix)
         .await
         .unwrap_or_else(|error| panic!("connect CPR_TEST_REDIS_URL: {error}"))
+}
+
+async fn cleanup_stale_test_redis_keys(redis_url: &str) -> redis::RedisResult<()> {
+    let client = redis::Client::open(redis_url)?;
+    let mut connection = client.get_connection_manager().await?;
+    let mut cursor = 0u64;
+    loop {
+        let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg("cpr:test:*")
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut connection)
+            .await?;
+        if !keys.is_empty() {
+            let _: usize = redis::cmd("UNLINK")
+                .arg(keys)
+                .query_async(&mut connection)
+                .await?;
+        }
+        if next_cursor == 0 {
+            return Ok(());
+        }
+        cursor = next_cursor;
+    }
 }
 
 pub(crate) fn background_task_stores(pool: PgPool, redis: RedisConnection) -> BackgroundTaskStores {

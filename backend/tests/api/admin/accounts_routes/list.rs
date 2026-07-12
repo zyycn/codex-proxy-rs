@@ -253,32 +253,6 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         .await
         .unwrap();
     sqlx::query(
-        "insert into account_model_usage (account_id, model, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind("acct_stats")
-    .bind("gpt-5.5")
-    .bind(2)
-    .bind(3_500_100)
-    .bind(13_920)
-    .bind(3_400_010)
-    .bind(crate::support::storage::timestamp("2026-06-23T08:51:13Z"))
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "insert into account_model_usage (account_id, model, request_count, input_tokens, output_tokens, cached_tokens, last_used_at) values ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind("acct_stats")
-    .bind("gpt-5")
-    .bind(1)
-    .bind(200)
-    .bind(30)
-    .bind(20)
-    .bind(crate::support::storage::timestamp("2026-06-23T08:52:13Z"))
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
         "insert into request_time_buckets (bucket_start, provider, account_id, model, service_tier, success_count, input_tokens, output_tokens, cached_tokens, updated_at) values ($1, 'openai', $2, $3, '__unknown__', $4, $5, $6, $7, $8)",
     )
     .bind(crate::support::storage::timestamp("2026-06-23T08:45:00+00:00"))

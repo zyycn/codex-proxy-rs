@@ -5,7 +5,9 @@ use serde_json::Value;
 
 use crate::{
     dispatch::affinity::{
-        types::ResponseReplaySnapshot, SessionAffinityEntry, SessionAffinityService,
+        service::{MAX_REPLAY_DEPTH, MAX_REPLAY_SESSION_BYTES, MAX_REPLAY_SNAPSHOT_BYTES},
+        types::ResponseReplaySnapshot,
+        SessionAffinityEntry, SessionAffinityService,
     },
     upstream::openai::protocol::responses::{CodexResponsesRequest, StreamCommitPolicy},
 };
@@ -22,6 +24,7 @@ pub(in crate::dispatch) enum HistorySource {
 pub(in crate::dispatch) struct HistoryRecoveryPlan {
     source: HistorySource,
     managed_entry: Option<SessionAffinityEntry>,
+    replay_input: Option<Vec<Value>>,
     external_attempted_account_id: Option<String>,
     replay_owner_account: bool,
 }
@@ -35,6 +38,7 @@ impl HistoryRecoveryPlan {
             return Self {
                 source: HistorySource::None,
                 managed_entry: None,
+                replay_input: None,
                 external_attempted_account_id: None,
                 replay_owner_account: false,
             };
@@ -42,6 +46,14 @@ impl HistoryRecoveryPlan {
         let managed_entry = session_affinity
             .lookup(previous_response_id, Utc::now())
             .await;
+        let replay_input = match managed_entry.as_ref() {
+            Some(entry) => {
+                session_affinity
+                    .replay_input(previous_response_id, entry, Utc::now())
+                    .await
+            }
+            None => None,
+        };
         Self {
             source: if managed_entry.is_some() {
                 HistorySource::Managed
@@ -49,6 +61,7 @@ impl HistoryRecoveryPlan {
                 HistorySource::ExternalUnknown
             },
             managed_entry,
+            replay_input,
             external_attempted_account_id: None,
             replay_owner_account: false,
         }
@@ -99,8 +112,8 @@ impl HistoryRecoveryPlan {
                     }
                     Some(request)
                 } else {
-                    entry.replay.as_ref().map(|snapshot| {
-                        let mut request = full_replay_request(original, snapshot);
+                    self.replay_input.as_ref().map(|replay_input| {
+                        let mut request = full_replay_request(original, replay_input);
                         request.local_conversation_id = Some(entry.conversation_id.clone());
                         request
                     })
@@ -114,7 +127,10 @@ impl HistoryRecoveryPlan {
         let Some(entry) = self.managed_entry.as_ref() else {
             return false;
         };
-        if entry.account_id != account_id || entry.replay.is_none() || self.replay_owner_account {
+        if entry.account_id != account_id
+            || self.replay_input.is_none()
+            || self.replay_owner_account
+        {
             return false;
         }
         self.replay_owner_account = true;
@@ -126,7 +142,7 @@ impl HistoryRecoveryPlan {
             && self
                 .managed_entry
                 .as_ref()
-                .is_none_or(|entry| entry.replay.is_some())
+                .is_none_or(|_| self.replay_input.is_some())
     }
 
     pub(in crate::dispatch) fn is_external_unknown(&self) -> bool {
@@ -138,22 +154,49 @@ impl HistoryRecoveryPlan {
         original: &CodexResponsesRequest,
         output: &[Value],
     ) -> Option<ResponseReplaySnapshot> {
-        let mut full_input = match self.source {
-            HistorySource::None => original.input().to_vec(),
-            HistorySource::Managed => self
-                .managed_entry
-                .as_ref()?
-                .replay
-                .as_ref()?
-                .full_input
-                .clone(),
+        let (parent_response_id, parent_depth, parent_bytes) = match self.source {
+            HistorySource::None => (None, 0, 0),
+            HistorySource::Managed => {
+                self.replay_input.as_ref()?;
+                let replay = self.managed_entry.as_ref()?.replay.as_ref()?;
+                (
+                    original.previous_response_id().map(ToString::to_string),
+                    replay.depth,
+                    replay.total_bytes,
+                )
+            }
             HistorySource::ExternalUnknown => return None,
         };
-        if matches!(self.source, HistorySource::Managed) {
-            full_input.extend_from_slice(original.input());
+        let depth = parent_depth.checked_add(1)?;
+        if depth > MAX_REPLAY_DEPTH {
+            tracing::warn!(depth, "response replay depth limit reached");
+            return None;
         }
-        full_input.extend_from_slice(output);
-        Some(ResponseReplaySnapshot { full_input })
+
+        let mut turn_input = original.input().to_vec();
+        let mut turn_output = output.to_vec();
+        sanitize_replay_items(&mut turn_input);
+        sanitize_replay_items(&mut turn_output);
+        let Some(node_bytes) = limited_replay_json_bytes(&turn_input, &turn_output) else {
+            tracing::warn!("response replay snapshot byte limit reached");
+            return None;
+        };
+        let total_bytes = parent_bytes.checked_add(node_bytes)?;
+        if total_bytes > MAX_REPLAY_SESSION_BYTES {
+            tracing::warn!(
+                node_bytes,
+                total_bytes,
+                "response replay session byte limit reached"
+            );
+            return None;
+        }
+        Some(ResponseReplaySnapshot {
+            parent_response_id,
+            turn_input,
+            turn_output,
+            depth,
+            total_bytes,
+        })
     }
 
     pub(in crate::dispatch) fn conversation_id<'a>(
@@ -169,12 +212,12 @@ impl HistoryRecoveryPlan {
 
 fn full_replay_request(
     original: &CodexResponsesRequest,
-    snapshot: &ResponseReplaySnapshot,
+    replay_input: &[Value],
 ) -> CodexResponsesRequest {
     let mut request = original.clone();
-    let mut input = snapshot.full_input.clone();
+    let mut input = replay_input.to_vec();
     input.extend_from_slice(original.input());
-    strip_account_bound_encrypted_content(&mut input);
+    sanitize_replay_items(&mut input);
     request.set_input(input);
     request.set_previous_response_id(None);
     request.turn_state = None;
@@ -182,18 +225,66 @@ fn full_replay_request(
     request
 }
 
-fn strip_account_bound_encrypted_content(values: &mut [Value]) {
+fn sanitize_replay_items(values: &mut [Value]) {
     for value in values {
         match value {
-            Value::Array(values) => strip_account_bound_encrypted_content(values),
+            Value::Array(values) => sanitize_replay_items(values),
             Value::Object(object) => {
+                object.remove("id");
                 object.remove("encrypted_content");
                 for value in object.values_mut() {
-                    strip_account_bound_encrypted_content(std::slice::from_mut(value));
+                    strip_encrypted_content(std::slice::from_mut(value));
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
         }
+    }
+}
+
+fn strip_encrypted_content(values: &mut [Value]) {
+    for value in values {
+        match value {
+            Value::Array(values) => strip_encrypted_content(values),
+            Value::Object(object) => {
+                object.remove("encrypted_content");
+                for value in object.values_mut() {
+                    strip_encrypted_content(std::slice::from_mut(value));
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+}
+
+fn limited_replay_json_bytes(input: &[Value], output: &[Value]) -> Option<u64> {
+    let mut writer = ReplaySizeWriter::default();
+    serde_json::to_writer(&mut writer, &(input, output)).ok()?;
+    Some(writer.written)
+}
+
+#[derive(Default)]
+struct ReplaySizeWriter {
+    written: u64,
+}
+
+impl std::io::Write for ReplaySizeWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(buffer.len() as u64)
+            .filter(|next| *next <= MAX_REPLAY_SNAPSHOT_BYTES)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::FileTooLarge,
+                    "response replay snapshot byte limit reached",
+                )
+            })?;
+        self.written = next;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

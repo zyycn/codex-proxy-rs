@@ -84,6 +84,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let (first_closed_tx, first_closed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         // 第一条连接：完成一次响应后由服务端主动关闭（模拟 idle 期间被上游/中间盒断开）。
         let (first_stream, _) = listener.accept().await.unwrap();
@@ -97,6 +98,8 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
             .await
             .unwrap();
         first_websocket.close(None).await.unwrap();
+        let _ = first_websocket.next().await;
+        first_closed_tx.send(()).unwrap();
 
         // 第二条连接：证明复用被跳过、直接新建。
         let (second_stream, _) = listener.accept().await.unwrap();
@@ -138,8 +141,10 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
         )
         .await
         .expect("first pooled websocket response should succeed");
-    // 给后台 pump 一点时间观察到服务端的 close 帧并标记连接死亡。
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    first_closed_rx
+        .await
+        .expect("client pump should acknowledge the upstream close");
+    tokio::task::yield_now().await;
     let second = backend
         .create_response(
             &request,
@@ -157,7 +162,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn codex_backend_client_stream_should_keep_fresh_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -311,6 +316,7 @@ async fn codex_backend_client_stream_should_keep_reused_socket_after_structural_
         )
         .await
         .expect("seed response should populate pool");
+    tokio::time::pause();
     let response = backend
         .create_response_stream(
             &request,
@@ -335,7 +341,7 @@ async fn codex_backend_client_stream_should_keep_reused_socket_after_structural_
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn codex_backend_client_stream_should_keep_bypass_socket_after_structural_activity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -592,7 +598,7 @@ async fn websocket_pool_should_bypass_busy_key_with_one_shot_connections() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn websocket_pool_should_release_fresh_reservation_when_prefetch_is_cancelled() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -655,7 +661,7 @@ async fn websocket_pool_should_release_fresh_reservation_when_prefetch_is_cancel
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -830,18 +836,22 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
-        let _first_message = first_websocket.next().await.unwrap().unwrap();
-        first_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_no_pong_first", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-        // 故意不再读取该连接：既不回 pong，也不发任何帧，模拟静默失活。
+        let first_connection = tokio::spawn(async move {
+            let mut first_websocket = accept_codex_test_websocket(first_stream).await;
+            let _first_message = first_websocket.next().await.unwrap().unwrap();
+            first_websocket
+                .send(Message::Text(
+                    completed_websocket_response("resp_no_pong_first", 2, 1).into(),
+                ))
+                .await
+                .unwrap();
+            let _ = release_first_rx.await;
+        });
+
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
         let mut second_websocket = accept_codex_test_websocket(second_stream).await;
@@ -853,7 +863,7 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
             .await
             .unwrap();
         second_websocket.close(None).await.unwrap();
-        drop(first_websocket);
+        first_connection.await.unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
         ping_interval: Some(Duration::from_millis(1)),
@@ -876,8 +886,9 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
         )
         .await
         .expect("first websocket response should succeed");
-    // 等待 pump 的 liveness watchdog 判定静默连接失活。
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
     let second = backend
         .create_response(
             &request,
@@ -885,14 +896,16 @@ async fn websocket_pool_should_evict_idle_connection_when_liveness_lapses_despit
         )
         .await
         .expect("second websocket response should use a fresh connection");
+    release_first_tx.send(()).unwrap();
     server.await.unwrap();
 
     assert!(first.body.contains("resp_no_pong_first"));
     assert!(second.body.contains("resp_no_pong_second"));
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn websocket_pool_should_gc_expired_idle_connections() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -966,7 +979,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_repeated_pings() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1295,6 +1308,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let (liveness_closed_tx, liveness_closed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1326,6 +1340,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
             .expect("liveness timeout should send a close frame")
             .expect("close frame should be valid");
         assert!(matches!(close, Message::Close(_)));
+        liveness_closed_tx.send(()).unwrap();
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1379,7 +1394,9 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
         )
         .await
         .expect("first pooled websocket response should succeed");
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    liveness_closed_rx
+        .await
+        .expect("liveness watchdog should close the idle connection");
     pool.maintain_idle_connections().await;
     let second = backend
         .create_response(

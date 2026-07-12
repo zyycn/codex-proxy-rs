@@ -1,4 +1,3 @@
-// @env browser
 import { useObjectUrl } from '@vueuse/core'
 import { nextTick, shallowRef } from 'vue'
 

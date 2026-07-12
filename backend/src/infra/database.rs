@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
-use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
+use sha2::{Digest, Sha256};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
 const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,
     name: "initial",
@@ -15,6 +15,18 @@ struct Migration {
     version: i64,
     name: &'static str,
     sql: &'static str,
+}
+
+struct AppliedMigration {
+    version: i64,
+    name: String,
+    checksum: String,
+}
+
+impl Migration {
+    fn checksum(&self) -> String {
+        hex::encode(Sha256::digest(self.sql.as_bytes()))
+    }
 }
 
 /// 连接 PostgreSQL 并应用未执行的迁移。
@@ -35,19 +47,18 @@ pub async fn ping(pool: &PgPool) -> Result<(), sqlx::Error> {
 
 /// 将 PostgreSQL schema 推进到当前版本。
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
+    validate_migration_catalog()?;
+
     let mut tx = pool.begin().await?;
     ensure_migrations_table(&mut tx).await?;
 
-    let applied_versions = applied_migration_versions(&mut tx).await?;
-    if applied_versions.is_empty() {
+    let applied = applied_migrations(&mut tx).await?;
+    if applied.is_empty() {
         reject_unversioned_existing_schema(&mut tx).await?;
     }
-    validate_applied_migrations(&applied_versions)?;
+    validate_applied_migrations(&applied)?;
 
-    for migration in MIGRATIONS {
-        if applied_versions.contains(&migration.version) {
-            continue;
-        }
+    for migration in MIGRATIONS.iter().skip(applied.len()) {
         sqlx::raw_sql(migration.sql).execute(&mut *tx).await?;
         record_migration(&mut tx, migration).await?;
     }
@@ -55,11 +66,32 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
+fn validate_migration_catalog() -> Result<(), sqlx::Error> {
+    let mut previous = 0;
+    for migration in MIGRATIONS {
+        if migration.version <= previous {
+            return Err(sqlx::Error::Protocol(format!(
+                "PostgreSQL migration versions must be strictly increasing: {} follows {previous}",
+                migration.version
+            )));
+        }
+        if migration.name.trim().is_empty() {
+            return Err(sqlx::Error::Protocol(format!(
+                "PostgreSQL migration {} has an empty name",
+                migration.version
+            )));
+        }
+        previous = migration.version;
+    }
+    Ok(())
+}
+
 async fn ensure_migrations_table(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
     sqlx::query(
         "create table if not exists schema_migrations (
           version bigint not null check (version > 0),
           name text not null,
+          checksum text not null,
           applied_at timestamptz not null default now(),
           primary key (version)
         )",
@@ -69,31 +101,49 @@ async fn ensure_migrations_table(tx: &mut Transaction<'_, Postgres>) -> Result<(
     Ok(())
 }
 
-async fn applied_migration_versions(
+async fn applied_migrations(
     tx: &mut Transaction<'_, Postgres>,
-) -> Result<Vec<i64>, sqlx::Error> {
-    let rows: Vec<(i64,)> =
-        sqlx::query_as("select version from schema_migrations order by version")
+) -> Result<Vec<AppliedMigration>, sqlx::Error> {
+    let rows =
+        sqlx::query("select version, name, checksum from schema_migrations order by version")
             .fetch_all(&mut **tx)
             .await?;
-    Ok(rows.into_iter().map(|row| row.0).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| AppliedMigration {
+            version: row.get("version"),
+            name: row.get("name"),
+            checksum: row.get("checksum"),
+        })
+        .collect())
 }
 
-fn validate_applied_migrations(applied_versions: &[i64]) -> Result<(), sqlx::Error> {
-    for version in applied_versions {
-        if !MIGRATIONS
-            .iter()
-            .any(|migration| migration.version == *version)
-        {
-            return Err(unsupported_schema_version(*version));
-        }
+fn validate_applied_migrations(applied: &[AppliedMigration]) -> Result<(), sqlx::Error> {
+    if applied.len() > MIGRATIONS.len() {
+        return Err(unsupported_schema_version(
+            applied.last().map_or(0, |migration| migration.version),
+        ));
     }
-    if let Some(version) = applied_versions
-        .last()
-        .copied()
-        .filter(|version| *version > CURRENT_SCHEMA_VERSION)
-    {
-        return Err(unsupported_schema_version(version));
+
+    for (index, applied_migration) in applied.iter().enumerate() {
+        let expected = &MIGRATIONS[index];
+        if applied_migration.version != expected.version {
+            return Err(unsupported_schema_version(applied_migration.version));
+        }
+        if applied_migration.name != expected.name {
+            return Err(sqlx::Error::Protocol(format!(
+                "PostgreSQL migration {} name mismatch: database has {:?}, binary expects {:?}",
+                expected.version, applied_migration.name, expected.name
+            )));
+        }
+
+        let expected_checksum = expected.checksum();
+        if applied_migration.checksum != expected_checksum {
+            return Err(sqlx::Error::Protocol(format!(
+                "PostgreSQL migration {} checksum mismatch",
+                expected.version
+            )));
+        }
     }
     Ok(())
 }
@@ -123,18 +173,24 @@ async fn record_migration(
     migration: &Migration,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "insert into schema_migrations (version, name, applied_at)
-         values ($1, $2, now())",
+        "insert into schema_migrations (version, name, checksum, applied_at)
+         values ($1, $2, $3, now())",
     )
     .bind(migration.version)
     .bind(migration.name)
+    .bind(migration.checksum())
     .execute(&mut **tx)
     .await?;
     Ok(())
 }
 
+fn current_schema_version() -> i64 {
+    MIGRATIONS.last().map_or(0, |migration| migration.version)
+}
+
 fn unsupported_schema_version(version: i64) -> sqlx::Error {
     sqlx::Error::Protocol(format!(
-        "unsupported PostgreSQL schema version {version}; expected {CURRENT_SCHEMA_VERSION}"
+        "unsupported PostgreSQL schema version {version}; expected {}",
+        current_schema_version()
     ))
 }

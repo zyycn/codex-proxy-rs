@@ -37,8 +37,14 @@ async fn admin_login_should_issue_http_only_session_cookie() {
         .get("set-cookie")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
+    let cache_control = response
+        .headers()
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
 
     assert_eq!(status, StatusCode::OK, "login status");
+    assert_eq!(cache_control.as_deref(), Some("no-store"));
     let body = response_json(response).await;
     let cookie = cookie.expect("login should set admin session cookie");
     assert!(cookie.starts_with("cpr_admin_session="));
@@ -60,6 +66,52 @@ async fn admin_login_should_issue_http_only_session_cookie() {
         .await
         .unwrap();
     assert_eq!(usage_records_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_logout_should_revoke_session_and_clear_cookie() {
+    let (app, _dir, _pool) =
+        admin_login_test_app("admin-logout-revokes-session", "correct-password").await;
+    let login = post_login(&app, "correct-password").await;
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap()
+        .to_string();
+
+    let logout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/logout")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), StatusCode::OK);
+    assert!(logout
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("Max-Age=0")));
+
+    let status = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/auth/status")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(status).await;
+    assert_eq!(body["data"]["authenticated"], false);
 }
 
 #[tokio::test]

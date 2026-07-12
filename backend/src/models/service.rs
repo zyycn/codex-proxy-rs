@@ -204,6 +204,15 @@ impl ModelService {
             return Err(ModelServiceError::NoAccounts);
         }
 
+        let previous_snapshots = store
+            .list_plan_snapshots()
+            .await
+            .map_err(map_load_snapshots_error)?
+            .into_iter()
+            .map(|snapshot| (snapshot.plan_type.clone(), snapshot))
+            .collect::<BTreeMap<_, _>>();
+        let mut next_snapshots = BTreeMap::new();
+
         let mut result = ModelRefreshResult {
             refreshed_plans: 0,
             model_count: 0,
@@ -223,11 +232,17 @@ impl ModelService {
                 Ok(entries) if !entries.is_empty() => entries,
                 Ok(_) => {
                     result.failed_plans += 1;
+                    if let Some(snapshot) = previous_snapshots.get(&plan_account.plan_type) {
+                        next_snapshots.insert(plan_account.plan_type.clone(), snapshot.clone());
+                    }
                     continue;
                 }
                 Err(error) => {
                     tracing::warn!(error = %error, plan_type = %plan_account.plan_type, "刷新后端模型失败");
                     result.failed_plans += 1;
+                    if let Some(snapshot) = previous_snapshots.get(&plan_account.plan_type) {
+                        next_snapshots.insert(plan_account.plan_type.clone(), snapshot.clone());
+                    }
                     continue;
                 }
             };
@@ -236,13 +251,13 @@ impl ModelService {
                 ModelPlanSnapshot::from_backend_values(plan_account.plan_type.clone(), entries);
             if snapshot.models.is_empty() {
                 result.failed_plans += 1;
+                if let Some(snapshot) = previous_snapshots.get(&plan_account.plan_type) {
+                    next_snapshots.insert(plan_account.plan_type.clone(), snapshot.clone());
+                }
                 continue;
             }
             result.model_count += snapshot.models.len();
-            store
-                .replace_plan_snapshot(&snapshot)
-                .await
-                .map_err(map_store_snapshot_error)?;
+            next_snapshots.insert(plan_account.plan_type.clone(), snapshot);
             result.refreshed_plans += 1;
         }
 
@@ -250,7 +265,12 @@ impl ModelService {
             return Err(ModelServiceError::AllPlansFailed(result));
         }
 
-        self.reload_from_store().await?;
+        let next_snapshots = next_snapshots.into_values().collect::<Vec<_>>();
+        store
+            .replace_plan_snapshots(&next_snapshots)
+            .await
+            .map_err(map_store_snapshot_error)?;
+        self.replace_snapshots(next_snapshots);
 
         Ok(result)
     }

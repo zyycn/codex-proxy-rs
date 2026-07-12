@@ -193,12 +193,17 @@ impl ResponseDispatchService {
             ResponseDispatchAttempt,
         ) = loop {
             let acquired = if let Some(account_id) = next_required_account_id.take() {
-                self.account_pool
+                match self
+                    .account_pool
                     .acquire_with(
                         &AccountAcquireRequest::new(request.model(), Utc::now())
                             .with_required_account_id(account_id),
                     )
                     .await
+                {
+                    Some(acquired) => Some(acquired),
+                    None => candidates.acquire_next(&self.account_pool).await,
+                }
             } else {
                 candidates.acquire_next(&self.account_pool).await
             };
@@ -328,7 +333,6 @@ impl ResponseDispatchService {
                         self.account_pool
                             .record_empty_response_attempt(
                                 &release_account_id,
-                                request.model(),
                                 image_generation_requested,
                             )
                             .await;
@@ -481,6 +485,10 @@ impl ResponseDispatchService {
                 }
                 Err(error) => {
                     if is_continuation_busy_error(&error) {
+                        if history.recover_managed_history(&release_account_id) {
+                            next_required_account_id = Some(release_account_id);
+                            continue;
+                        }
                         return Err(ResponseDispatchError::ContinuationBusy);
                     }
                     let history_unavailable = is_history_recovery_upstream_error(&error);
@@ -534,12 +542,7 @@ impl ResponseDispatchService {
                 self.cloudflare.reset_account_recovery(&account.id).await;
                 if let Some(usage) = response.usage {
                     self.account_pool
-                        .record_response_usage(
-                            &account.id,
-                            request.model(),
-                            usage,
-                            image_generation_requested,
-                        )
+                        .record_response_usage(&account.id, usage, image_generation_requested)
                         .await;
                 }
                 if completed {

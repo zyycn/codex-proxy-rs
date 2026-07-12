@@ -131,14 +131,6 @@ async fn seed_account_related_rows(pool: &PgPool, account_id: &str) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query(
-        "insert into account_model_usage (account_id, model, request_count) values ($1, $2, 1)",
-    )
-    .bind(account_id)
-    .bind("gpt-5.5")
-    .execute(pool)
-    .await
-    .unwrap();
     sqlx::query("insert into account_cookies (id, account_id, domain, name, value, updated_at) values ($1, $2, $3, $4, $5, $6)")
         .bind("cookie_lifecycle")
         .bind(account_id)
@@ -162,12 +154,6 @@ async fn assert_account_related_rows_deleted(pool: &PgPool, account_id: &str) {
         .fetch_one(pool)
         .await
         .unwrap();
-    let model_usage: i64 =
-        sqlx::query_scalar("select count(*) from account_model_usage where account_id = $1")
-            .bind(account_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
     let cookies: i64 =
         sqlx::query_scalar("select count(*) from account_cookies where account_id = $1")
             .bind(account_id)
@@ -176,7 +162,6 @@ async fn assert_account_related_rows_deleted(pool: &PgPool, account_id: &str) {
             .unwrap();
     assert_eq!(accounts, 0);
     assert_eq!(usage, 0);
-    assert_eq!(model_usage, 0);
     assert_eq!(cookies, 0);
 }
 

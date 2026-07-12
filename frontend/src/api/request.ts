@@ -3,7 +3,6 @@ import axios, {
   type AxiosInstance,
   type AxiosRequestConfig,
   type AxiosResponse,
-  type InternalAxiosRequestConfig,
 } from 'axios'
 
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
@@ -22,7 +21,7 @@ interface ApiErrorBody {
   data?: unknown
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
@@ -40,22 +39,30 @@ const http: AxiosInstance = axios.create({
   withCredentials: true,
 })
 
-http.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
-    if (config.method === 'get') {
-      config.params = {
-        ...config.params,
-        _t: Date.now(),
-      }
-    }
+let unauthorizedHandled = false
 
-    return config
-  },
-  (error: AxiosError) => {
-    console.error('Request error:', error)
-    return Promise.reject(error)
-  },
-)
+export function resetUnauthorizedHandling() {
+  unauthorizedHandled = false
+}
+
+function isAuthenticationRequest(url?: string) {
+  return Boolean(url?.includes('/api/admin/login') || url?.includes('/api/admin/auth/status'))
+}
+
+function handleUnauthorizedOnce() {
+  if (unauthorizedHandled) return
+  unauthorizedHandled = true
+  void Promise.all([import('@/stores/modules/auth'), import('@/router')])
+    .then(async ([{ useAuthStore }, { router }]) => {
+      useAuthStore().invalidateSession()
+      if (router.currentRoute.value.path !== '/login') {
+        await router.replace({ name: 'login' })
+      }
+    })
+    .catch(() => {
+      unauthorizedHandled = false
+    })
+}
 
 http.interceptors.response.use(
   (response: AxiosResponse) => {
@@ -69,21 +76,8 @@ http.interceptors.response.use(
     const code = response?.data?.code
     const requestId = response?.headers?.['x-request-id']
 
-    switch (status) {
-      case 401:
-        console.warn('Unauthorized, redirecting to login...')
-        break
-      case 403:
-        console.error('Forbidden:', message)
-        break
-      case 404:
-        console.error('Not Found:', message)
-        break
-      case 500:
-        console.error('Server Error:', message)
-        break
-      default:
-        break
+    if (status === 401 && !isAuthenticationRequest(error.config?.url)) {
+      handleUnauthorizedOnce()
     }
 
     return Promise.reject(new ApiError(message, status, code, requestId))

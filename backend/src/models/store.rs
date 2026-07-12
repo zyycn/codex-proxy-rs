@@ -27,10 +27,10 @@ pub type ModelSnapshotStoreResult<T> = Result<T, ModelSnapshotStoreError>;
 /// 模型快照存储端口。
 #[async_trait]
 pub trait ModelSnapshotStore: Send + Sync + 'static {
-    /// 用单个计划快照替换同名快照。
-    async fn replace_plan_snapshot(
+    /// 用完整计划集合原子替换 Redis 快照。
+    async fn replace_plan_snapshots(
         &self,
-        snapshot: &ModelPlanSnapshot,
+        snapshots: &[ModelPlanSnapshot],
     ) -> ModelSnapshotStoreResult<()>;
 
     /// 列出所有计划快照。
@@ -59,22 +59,35 @@ impl RedisModelSnapshotStore {
 
 #[async_trait]
 impl ModelSnapshotStore for RedisModelSnapshotStore {
-    async fn replace_plan_snapshot(
+    async fn replace_plan_snapshots(
         &self,
-        snapshot: &ModelPlanSnapshot,
+        snapshots: &[ModelPlanSnapshot],
     ) -> ModelSnapshotStoreResult<()> {
-        let value = serde_json::to_string(&StoredPlanSnapshot {
-            models: snapshot.models.clone(),
-            fetched_at: Utc::now(),
-        })
-        .map_err(store_error)?;
+        let fetched_at = Utc::now();
+        let mut values = Vec::with_capacity(snapshots.len());
+        for snapshot in snapshots {
+            let value = serde_json::to_string(&StoredPlanSnapshot {
+                models: snapshot.models.clone(),
+                fetched_at,
+            })
+            .map_err(store_error)?;
+            values.push((&snapshot.plan_type, value));
+        }
+
+        let key = self.redis.key("models:plan_snapshots");
         let mut connection = self.redis.manager();
-        let _: usize = connection
-            .hset(
-                self.redis.key("models:plan_snapshots"),
-                &snapshot.plan_type,
-                value,
-            )
+        let mut transaction = redis::pipe();
+        transaction.atomic().cmd("DEL").arg(&key).ignore();
+        for (plan_type, value) in values {
+            transaction
+                .cmd("HSET")
+                .arg(&key)
+                .arg(plan_type)
+                .arg(value)
+                .ignore();
+        }
+        let _: () = transaction
+            .query_async(&mut connection)
             .await
             .map_err(store_error)?;
         Ok(())

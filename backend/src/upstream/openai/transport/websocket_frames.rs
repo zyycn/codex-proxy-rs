@@ -454,7 +454,7 @@ pub(super) fn reusable_websocket_metadata(
 
 pub(super) struct WebSocketStreamPoolReturn {
     pub(super) lease: WebSocketPoolLease,
-    pub(super) created_at: Instant,
+    pub(super) created_at: tokio::time::Instant,
     pub(super) continuation: WebSocketContinuationState,
 }
 

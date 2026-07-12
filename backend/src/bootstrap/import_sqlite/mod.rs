@@ -156,7 +156,6 @@ async fn reject_nonempty_target(
          + (select count(*) from runtime_settings)
          + (select count(*) from accounts)
          + (select count(*) from account_usage)
-         + (select count(*) from account_model_usage)
          + (select count(*) from usage_records)
          + (select count(*) from ops_error_logs)
          + (select count(*) from request_time_buckets)

@@ -153,14 +153,6 @@ pub struct AccountPool {
 struct AccountSlot {
     id: uuid::Uuid,
     created_at: DateTime<Utc>,
-    model: Option<String>,
-}
-
-/// 账号释放结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleasedAccountUsage {
-    /// 被释放槽位对应的模型。槽位已被过期清理时为空。
-    pub model: Option<String>,
 }
 
 impl Default for AccountPool {
@@ -430,7 +422,7 @@ impl AccountPool {
         );
 
         let selected_id = selected.id.clone();
-        let slot_id = self.push_slot(&selected_id, request.now, Some(&request.model));
+        let slot_id = self.push_slot(&selected_id, request.now);
         AccountAcquireWithStatusRefresh {
             acquired: Some(AcquiredAccount {
                 account: selected,
@@ -528,15 +520,12 @@ impl AccountPool {
     }
 
     /// 释放指定账号的一个在途槽位。
-    pub fn release(&mut self, acquired: &AcquiredAccount) -> Option<ReleasedAccountUsage> {
+    pub fn release(&mut self, acquired: &AcquiredAccount) -> bool {
         self.release_slot(&acquired.account.id, acquired.slot_id, true)
     }
 
     /// 释放模型目录刷新选择的账号，不累计客户端请求用量。
-    pub fn release_distinct_plan_account(
-        &mut self,
-        selected: &DistinctPlanAccount,
-    ) -> Option<ReleasedAccountUsage> {
+    pub fn release_distinct_plan_account(&mut self, selected: &DistinctPlanAccount) -> bool {
         self.release_slot(&selected.account.id, selected.slot_id, false)
     }
 
@@ -545,27 +534,25 @@ impl AccountPool {
         account_id: &str,
         slot_id: uuid::Uuid,
         record_request_usage: bool,
-    ) -> Option<ReleasedAccountUsage> {
-        self.accounts.get(account_id)?;
+    ) -> bool {
+        if !self.accounts.contains_key(account_id) {
+            return false;
+        }
 
         let mut remove_slots = false;
-        let slot = self.slots.get_mut(account_id).and_then(|slots| {
-            let slot = slots
-                .iter()
-                .position(|slot| slot.id == slot_id)
-                .and_then(|position| slots.remove(position));
+        if let Some(slots) = self.slots.get_mut(account_id) {
+            if let Some(position) = slots.iter().position(|slot| slot.id == slot_id) {
+                slots.remove(position);
+            }
             remove_slots = slots.is_empty();
-            slot
-        });
+        }
         if remove_slots {
             self.slots.remove(account_id);
         }
         if record_request_usage {
             self.mark_request_usage(account_id, Utc::now());
         }
-        Some(ReleasedAccountUsage {
-            model: slot.and_then(|slot| slot.model),
-        })
+        true
     }
 
     /// 计算账号池容量摘要。
@@ -671,7 +658,7 @@ impl AccountPool {
 
         let mut accounts = Vec::with_capacity(selected_accounts.len());
         for (plan_type, account) in selected_accounts {
-            let slot_id = self.push_slot(&account.id, now, None);
+            let slot_id = self.push_slot(&account.id, now);
             accounts.push(DistinctPlanAccount {
                 plan_type,
                 account,
@@ -696,12 +683,7 @@ impl AccountPool {
             .map(|slot| slot.created_at)
     }
 
-    fn push_slot(
-        &mut self,
-        account_id: &str,
-        now: DateTime<Utc>,
-        model: Option<&str>,
-    ) -> uuid::Uuid {
+    fn push_slot(&mut self, account_id: &str, now: DateTime<Utc>) -> uuid::Uuid {
         let slot_id = uuid::Uuid::new_v4();
         self.slots
             .entry(account_id.to_string())
@@ -709,7 +691,6 @@ impl AccountPool {
             .push_back(AccountSlot {
                 id: slot_id,
                 created_at: now,
-                model: model.map(str::to_string),
             });
         slot_id
     }

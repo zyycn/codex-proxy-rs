@@ -22,9 +22,18 @@ pub struct SessionAffinityEntry {
     pub created_at: DateTime<Utc>,
 }
 
-/// 截止某个 completed response 的完整、无凭据业务输入快照。
+/// 单轮 completed response 的有界、无凭据重放增量。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseReplaySnapshot {
-    pub full_input: Vec<Value>,
+    /// 上一轮由本代理记录的 completed response。
+    pub parent_response_id: Option<String>,
+    /// 本轮客户端新增的输入，已剥离账号绑定字段。
+    pub turn_input: Vec<Value>,
+    /// 本轮上游输出，已剥离账号绑定字段和上游对象 ID。
+    pub turn_output: Vec<Value>,
+    /// 从会话起点到本节点的增量节点数。
+    pub depth: u16,
+    /// 从会话起点到本节点的 JSON 编码累计字节数。
+    pub total_bytes: u64,
 }

@@ -126,12 +126,17 @@ impl ResponseDispatchService {
         }
         loop {
             let acquired = if let Some(account_id) = next_required_account_id.take() {
-                self.account_pool
+                match self
+                    .account_pool
                     .acquire_with(
                         &AccountAcquireRequest::new(request.model(), Utc::now())
                             .with_required_account_id(account_id),
                     )
                     .await
+                {
+                    Some(acquired) => Some(acquired),
+                    None => candidates.acquire_next(&self.account_pool).await,
+                }
             } else {
                 candidates.acquire_next(&self.account_pool).await
             };
@@ -374,6 +379,10 @@ impl ResponseDispatchService {
                             acquired.complete().await;
                             if let ResponseDispatchError::Upstream(upstream_error) = &error {
                                 if is_continuation_busy_error(upstream_error) {
+                                    if history.recover_managed_history(&release_account_id) {
+                                        next_required_account_id = Some(release_account_id);
+                                        continue;
+                                    }
                                     return_stream_dispatch_error!(
                                         ResponseDispatchError::ContinuationBusy,
                                         account_id: Some(&release_account_id),
@@ -552,7 +561,6 @@ impl ResponseDispatchService {
                         account_plan_type: account.plan_type,
                         request_id: request_id.to_string(),
                         route: route.to_string(),
-                        model: request.model().to_string(),
                         display_model: display_model.clone(),
                         requested_model: requested_model.to_string(),
                         client_ip: request.client_ip.clone(),
@@ -711,6 +719,10 @@ impl ResponseDispatchService {
                 Err(error) => {
                     acquired.complete().await;
                     if is_continuation_busy_error(&error) {
+                        if history.recover_managed_history(&release_account_id) {
+                            next_required_account_id = Some(release_account_id);
+                            continue;
+                        }
                         return_stream_dispatch_error!(
                             ResponseDispatchError::ContinuationBusy,
                             account_id: Some(&release_account_id),

@@ -61,3 +61,27 @@ async fn redis_admin_session_store_hashes_tokens_and_uses_ttl() {
     assert!(store.delete_session("session-secret").await.unwrap());
     assert!(!store.validate_session("session-secret").await.unwrap());
 }
+
+#[tokio::test]
+async fn redis_admin_session_store_should_reject_expired_session() {
+    let redis = create_test_redis("admin-session-expired").await;
+    let store = RedisAdminSessionStore::new(redis.clone());
+    store
+        .create_session("expired-session", "admin_1", Duration::minutes(5))
+        .await
+        .unwrap();
+    let mut connection = redis.manager();
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(redis.key("admin:session:*"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let _: bool = redis::cmd("PEXPIREAT")
+        .arg(&keys[0])
+        .arg(1)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+
+    assert!(!store.validate_session("expired-session").await.unwrap());
+}
