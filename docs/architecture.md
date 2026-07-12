@@ -445,6 +445,8 @@ Responses 协议没有按事件序号续传未完成 response 的请求字段。
 
 PostgreSQL 是权威持久化存储。
 
+时间列统一使用 `timestamptz`，应用以 UTC 时间点读写。Compose 将 PostgreSQL 的会话显示时区和日志时区设为 `Asia/Shanghai`，因此直接查询时显示 `+08:00`；这不会改写已有数据，也不会改变数据库内部保存的绝对时间。API 输出、中国自然日统计和日志轮转仍由 `infra::time` 显式定义，不依赖宿主机时区。
+
 | 数据 | 表 |
 | --- | --- |
 | 管理员 | `admin_users` |
