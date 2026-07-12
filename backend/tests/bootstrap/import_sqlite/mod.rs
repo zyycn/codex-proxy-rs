@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use codex_proxy_rs::bootstrap::import_sqlite::{import_sqlite, ImportSqliteError};
+use codex_proxy_rs::{
+    bootstrap::import_sqlite::{import_sqlite, ImportSqliteError},
+    keys::{service::KeyVerifier, store::PgClientKeyStore},
+};
 use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, Row};
 
 use crate::support::storage::init_test_db;
@@ -23,6 +26,7 @@ async fn import_sqlite_should_split_facts_preserve_retrievable_keys_and_report_d
     assert_eq!(report.discarded_rows("session_affinities"), 1);
     assert_eq!(report.discarded_rows("account_refresh_leases"), 1);
     assert_eq!(report.discarded_rows("model_plan_snapshots"), 1);
+    assert_eq!(report.discarded_rows("account_model_usage"), 1);
     assert_eq!(report.cookie_expiration_parse_failures(), 1);
 
     let key: String = sqlx::query_scalar("select key from client_api_keys where id = $1")
@@ -30,7 +34,13 @@ async fn import_sqlite_should_split_facts_preserve_retrievable_keys_and_report_d
         .fetch_one(&target)
         .await
         .unwrap();
-    assert_eq!(key, "sk-old-secret");
+    assert_eq!(key, "sk_old_secret");
+    let verifier = KeyVerifier::new(PgClientKeyStore::new(target.clone()));
+    assert_eq!(
+        verifier.verify(&key).await.unwrap().as_deref(),
+        Some("key-1")
+    );
+    verifier.flush_pending_last_used().await;
 
     let refreshing_account: (String, Option<chrono::DateTime<chrono::Utc>>) =
         sqlx::query_as("select status, next_refresh_at from accounts where id = $1")
@@ -209,7 +219,7 @@ insert into admin_users values
 insert into admin_sessions values
   ('session', 'admin', '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z');
 insert into client_api_keys values
-  ('key-1', 'legacy', 'sk-old', 'sk-old-secret', null, 1,
+  ('key-1', 'legacy', 'sk_old_secre', 'sk_old_secret', null, 1,
    '2026-01-01T00:00:00Z', null);
 insert into runtime_settings values
   (1, '{}', 3600, 2, 3, 50, 'smart', 'admin-machine-secret',
@@ -228,7 +238,12 @@ values
   ('acct-refreshing', 'refreshing@example.com', 'chatgpt-refreshing', 'user-refreshing',
    null, 'plus', 'access-refreshing', 'refresh-refreshing', '2026-02-01T00:00:00Z',
    '2026-01-31T23:00:00Z', 'refreshing', null, null, 0, 0, null, null,
-   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+	   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+insert into account_model_usage
+  (account_id, model, request_count, error_count, input_tokens, output_tokens,
+   cached_tokens, last_used_at)
+values
+  ('acct-1', 'gpt-5.5', 1, 0, 10, 2, 4, '2026-01-01T00:01:00Z');
 insert into account_cookies values
   ('cookie-1', 'acct-1', '.chatgpt.com', 'session', 'secret', '/',
    'not-a-cookie-date', '2026-01-01T00:00:00Z');

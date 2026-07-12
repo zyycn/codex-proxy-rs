@@ -35,7 +35,7 @@ semver = "1.0.27"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 sha2 = "0.10.9"
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "sqlite-bundled", "chrono", "uuid", "json"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "sqlite-bundled", "chrono", "json"] }
 subtle = "2.6.1"
 tar = "0.4.44"
 thiserror = "2.0.18"

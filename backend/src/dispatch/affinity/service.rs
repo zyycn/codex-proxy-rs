@@ -9,6 +9,9 @@ use super::{
 };
 
 const DEFAULT_SESSION_AFFINITY_TTL_SECS: i64 = 4 * 60 * 60;
+pub const MAX_REPLAY_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_REPLAY_SESSION_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_REPLAY_DEPTH: u16 = 128;
 
 /// 运行时会话亲和性服务。
 #[derive(Clone)]
@@ -66,6 +69,36 @@ impl SessionAffinityService {
         now: DateTime<Utc>,
     ) -> Option<SessionAffinityEntry> {
         self.entry(response_id, now).await
+    }
+
+    pub async fn replay_input(
+        &self,
+        response_id: &str,
+        entry: &SessionAffinityEntry,
+        now: DateTime<Utc>,
+    ) -> Option<Vec<serde_json::Value>> {
+        match self
+            .store
+            .replay_input(
+                response_id,
+                entry,
+                now,
+                self.ttl,
+                MAX_REPLAY_DEPTH,
+                MAX_REPLAY_SESSION_BYTES,
+            )
+            .await
+        {
+            Ok(input) => input,
+            Err(error) => {
+                tracing::warn!(
+                    response_id,
+                    error = %error,
+                    "failed to reconstruct Redis response replay history"
+                );
+                None
+            }
+        }
     }
 
     pub async fn lookup_instructions_hash(

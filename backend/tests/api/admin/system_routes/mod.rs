@@ -1258,8 +1258,14 @@ async fn wait_for_operation_status(app: &axum::Router, expected: &str) -> Value 
         )
         .await
         .unwrap();
-    let data = response_json(response).await["data"].clone();
-    assert_eq!(data["operation"]["status"], expected);
+    let status_code = response.status();
+    let body = response_json(response).await;
+    assert_eq!(status_code, StatusCode::OK, "body={body}");
+    let data = body["data"].clone();
+    assert_eq!(
+        data["operation"]["status"], expected,
+        "update status response={body}"
+    );
     data
 }
 

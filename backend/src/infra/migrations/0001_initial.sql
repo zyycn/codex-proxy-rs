@@ -60,7 +60,6 @@ create table accounts (
   updated_at timestamptz not null
 );
 
-create index idx_accounts_status on accounts(status);
 create index idx_accounts_added_id on accounts(added_at desc, id desc);
 create unique index ux_accounts_chatgpt_identity
   on accounts(chatgpt_account_id, coalesce(chatgpt_user_id, ''))
@@ -96,24 +95,6 @@ create table account_usage (
   ),
   last_used_at timestamptz
 );
-
-create index idx_account_usage_last_used_account
-  on account_usage(last_used_at desc, account_id desc);
-
-create table account_model_usage (
-  account_id text not null references accounts(id) on delete cascade,
-  model text not null,
-  request_count bigint not null default 0 check (request_count >= 0),
-  error_count bigint not null default 0 check (error_count >= 0),
-  input_tokens bigint not null default 0 check (input_tokens >= 0),
-  output_tokens bigint not null default 0 check (output_tokens >= 0),
-  cached_tokens bigint not null default 0 check (cached_tokens >= 0),
-  last_used_at timestamptz,
-  primary key (account_id, model)
-);
-
-create index idx_account_model_usage_last_used
-  on account_model_usage(last_used_at desc, account_id, model);
 
 create table usage_records (
   id text primary key,
@@ -233,9 +214,6 @@ create table request_time_buckets (
   updated_at timestamptz not null,
   primary key (bucket_start, provider, account_id, model, service_tier)
 );
-
-create index idx_request_time_buckets_model
-  on request_time_buckets(model, bucket_start);
 
 create table account_cookies (
   id text primary key,

@@ -349,7 +349,6 @@ pub(in crate::dispatch) struct LiveResponseStreamContext {
     pub(in crate::dispatch) account_plan_type: Option<String>,
     pub(in crate::dispatch) request_id: String,
     pub(in crate::dispatch) route: String,
-    pub(in crate::dispatch) model: String,
     pub(in crate::dispatch) display_model: String,
     pub(in crate::dispatch) requested_model: String,
     pub(in crate::dispatch) client_ip: Option<String>,
@@ -418,7 +417,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
         Ok(Some(usage)) => {
             context
                 .account_pool
-                .record_token_usage(&context.account_id, &context.model, &usage)
+                .record_token_usage(&context.account_id, &usage)
                 .await;
             Some(usage)
         }

@@ -261,56 +261,35 @@ set
   updated_at = $2
 where id = $3";
 
-pub(super) const UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL: &str = r"
-update accounts
-set
-  email = $1,
-  chatgpt_account_id = $2,
-  chatgpt_user_id = $3,
-  label = $4,
-  plan_type = $5,
-  access_token = $6,
-  refresh_token = $7,
-  access_token_expires_at = $8,
-  status = $9,
-  quota_json = coalesce($10, quota_json),
-  quota_fetched_at = case when $11 is null then quota_fetched_at else $12 end,
+pub(super) const UPSERT_IMPORTED_ACCOUNT_SQL: &str = r"
+insert into accounts (
+  id, email, chatgpt_account_id, chatgpt_user_id, label, plan_type,
+  access_token, refresh_token, access_token_expires_at, next_refresh_at, status,
+  quota_json, quota_fetched_at, quota_limit_reached, quota_verify_required,
+  quota_cooldown_until, added_at, updated_at
+) values (
+  $1, $2, $3, $4, $5, $6,
+  $7, $8, $9, $10, $11,
+  $12, $13, false, $14,
+  null, $15, $16
+)
+on conflict(id) do update set
+  email = excluded.email,
+  chatgpt_account_id = excluded.chatgpt_account_id,
+  chatgpt_user_id = excluded.chatgpt_user_id,
+  label = excluded.label,
+  plan_type = excluded.plan_type,
+  access_token = excluded.access_token,
+  refresh_token = coalesce(excluded.refresh_token, accounts.refresh_token),
+  access_token_expires_at = excluded.access_token_expires_at,
+  next_refresh_at = excluded.next_refresh_at,
+  status = excluded.status,
+  quota_json = coalesce(excluded.quota_json, accounts.quota_json),
+  quota_fetched_at = coalesce(excluded.quota_fetched_at, accounts.quota_fetched_at),
   quota_limit_reached = false,
+  quota_verify_required = excluded.quota_verify_required,
   quota_cooldown_until = null,
-  quota_verify_required = $13,
-  updated_at = $14
-where id = $15";
-
-pub(super) const UPDATE_IMPORTED_ACCOUNT_PRESERVING_REFRESH_SQL: &str = r"
-update accounts
-set
-  email = $1,
-  chatgpt_account_id = $2,
-  chatgpt_user_id = $3,
-  label = $4,
-  plan_type = $5,
-  access_token = $6,
-  access_token_expires_at = $7,
-  status = $8,
-  quota_json = coalesce($9, quota_json),
-  quota_fetched_at = case when $10 is null then quota_fetched_at else $11 end,
-  quota_limit_reached = false,
-  quota_cooldown_until = null,
-  quota_verify_required = $12,
-  updated_at = $13
-where id = $14";
-
-pub(super) const APPLY_IMPORTED_QUOTA_STATE_SQL: &str = r"
-update accounts
-set
-  quota_json = coalesce($1, quota_json),
-  quota_fetched_at = case when $2 is null then quota_fetched_at else $3 end,
-  plan_type = coalesce($4, plan_type),
-  quota_limit_reached = false,
-  quota_cooldown_until = null,
-  quota_verify_required = $5,
-  updated_at = $6
-where id = $7";
+  updated_at = excluded.updated_at";
 
 pub(super) const DELETE_ACCOUNT_SQL: &str = "delete from accounts where id = $1";
 

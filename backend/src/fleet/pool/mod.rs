@@ -24,8 +24,7 @@ use crate::fleet::{
     window::should_reset_usage_window,
 };
 use crate::telemetry::account_usage::store::{
-    AccountModelUsageDelta, AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore,
-    AccountUsageWindow,
+    AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageWindow,
 };
 use crate::upstream::openai::protocol::events::{
     parse_rate_limit_headers, rate_limit_quota, TokenUsage as CodexTokenUsage,
@@ -307,9 +306,9 @@ impl AccountPoolService {
                 .await
                 .release_slot(account_id, slot_id, false)
         };
-        let Some(released) = released else {
+        if !released {
             return;
-        };
+        }
         self.candidate_changed.notify_one();
         if !record_request_usage {
             return;
@@ -319,32 +318,6 @@ impl AccountPoolService {
                 account_id,
                 error = %error,
                 "failed to persist account request usage"
-            );
-        }
-        let Some(model) = released.model else {
-            tracing::debug!(
-                account_id,
-                "released account without active slot; skipped model request usage persistence"
-            );
-            return;
-        };
-        if let Err(error) = self
-            .usage_store
-            .record_model_usage_delta(
-                account_id,
-                &model,
-                AccountModelUsageDelta {
-                    requests: 1,
-                    ..AccountModelUsageDelta::default()
-                },
-            )
-            .await
-        {
-            tracing::error!(
-                account_id,
-                model,
-                error = %error,
-                "failed to persist account model request usage"
             );
         }
     }
@@ -521,16 +494,14 @@ impl AccountPoolService {
     }
 
     /// 记录上游 token 用量。
-    pub async fn record_token_usage(&self, account_id: &str, model: &str, usage: &CodexTokenUsage) {
-        self.record_response_usage(account_id, model, *usage, false)
-            .await;
+    pub async fn record_token_usage(&self, account_id: &str, usage: &CodexTokenUsage) {
+        self.record_response_usage(account_id, *usage, false).await;
     }
 
     /// 记录 Responses 请求用量。
     pub async fn record_response_usage(
         &self,
         account_id: &str,
-        model: &str,
         usage: CodexTokenUsage,
         image_generation_requested: bool,
     ) {
@@ -559,27 +530,6 @@ impl AccountPoolService {
                 "failed to persist account token usage"
             );
         }
-        if let Err(error) = self
-            .usage_store
-            .record_model_usage_delta(
-                account_id,
-                model,
-                AccountModelUsageDelta {
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cached_tokens: usage.cached_tokens,
-                    ..AccountModelUsageDelta::default()
-                },
-            )
-            .await
-        {
-            tracing::error!(
-                account_id,
-                model,
-                error = %error,
-                "failed to persist account model token usage"
-            );
-        }
         self.pool.lock().await.record_window_token_usage(
             account_id,
             AccountWindowUsageDelta {
@@ -598,7 +548,6 @@ impl AccountPoolService {
     pub async fn record_empty_response_attempt(
         &self,
         account_id: &str,
-        model: &str,
         image_generation_requested: bool,
     ) {
         let usage = AccountUsageDelta {
@@ -611,25 +560,6 @@ impl AccountPoolService {
                 account_id,
                 error = %error,
                 "failed to persist empty response usage"
-            );
-        }
-        if let Err(error) = self
-            .usage_store
-            .record_model_usage_delta(
-                account_id,
-                model,
-                AccountModelUsageDelta {
-                    errors: 1,
-                    ..AccountModelUsageDelta::default()
-                },
-            )
-            .await
-        {
-            tracing::error!(
-                account_id,
-                model,
-                error = %error,
-                "failed to persist account model empty response usage"
             );
         }
         if image_generation_requested {

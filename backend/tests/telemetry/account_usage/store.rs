@@ -1,49 +1,53 @@
-use std::num::NonZeroU32;
-
-use chrono::Utc;
-use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
+use chrono::{Duration, Utc};
+use codex_proxy_rs::telemetry::account_usage::store::{
+    AccountUsageStore, AccountUsageWindow, PgAccountUsageStore,
+};
 
 use crate::support::storage::init_test_db;
 
 #[tokio::test]
-async fn trim_model_usage_should_keep_latest_rows_per_account() {
-    let (pool, _guard) = init_test_db("account-model-usage-limit").await;
+async fn rate_limit_window_update_should_reset_counters_atomically() {
+    let (pool, _guard) = init_test_db("account-rate-limit-window").await;
     sqlx::query(
         "insert into accounts (id, access_token, status, added_at, updated_at)
-         values ('account-limit', 'token', 'active', $1, $1)",
+         values ('account-window', 'token', 'active', now(), now())",
     )
-    .bind(Utc::now())
     .execute(&pool)
     .await
-    .expect("insert account");
-    sqlx::query(
-        "insert into account_model_usage (account_id, model, request_count, last_used_at)
-         select
-           'account-limit',
-           'model-' || lpad(sequence::text, 3, '0'),
-           1,
-           $1 + sequence * interval '1 second'
-         from generate_series(0, 101) as sequence",
-    )
-    .bind(Utc::now())
-    .execute(&pool)
-    .await
-    .expect("insert model usage rows");
-
-    let deleted = PgAccountUsageStore::new(pool.clone())
-        .trim_model_usage_to_limit(NonZeroU32::new(100).unwrap())
+    .unwrap();
+    let store = PgAccountUsageStore::new(pool.clone());
+    let initial_reset_at = Utc::now() + Duration::hours(1);
+    store
+        .sync_runtime_window(
+            "account-window",
+            AccountUsageWindow {
+                request_count: 7,
+                input_tokens: 11,
+                output_tokens: 13,
+                started_at: Some(Utc::now()),
+                reset_at: Some(initial_reset_at),
+                limit_window_seconds: Some(3_600),
+                ..AccountUsageWindow::default()
+            },
+        )
         .await
-        .expect("trim model usage rows");
-    let (remaining, oldest_remaining): (i64, i64) = sqlx::query_as(
-        "select
-           count(*),
-           count(*) filter (where model in ('model-000', 'model-001'))
-         from account_model_usage
-         where account_id = 'account-limit'",
+        .unwrap();
+
+    store
+        .sync_rate_limit_window(
+            "account-window",
+            initial_reset_at + Duration::hours(1),
+            Some(3_600),
+        )
+        .await
+        .unwrap();
+
+    let counters: (i64, i64, i64) = sqlx::query_as(
+        "select window_request_count, window_input_tokens, window_output_tokens
+         from account_usage where account_id = 'account-window'",
     )
     .fetch_one(&pool)
     .await
-    .expect("count retained model usage rows");
-
-    assert_eq!((deleted, remaining, oldest_remaining), (2, 100, 0));
+    .unwrap();
+    assert_eq!(counters, (0, 0, 0));
 }

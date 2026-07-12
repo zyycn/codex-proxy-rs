@@ -113,7 +113,7 @@ on conflict (bucket_start, provider, account_id, model, service_tier) do update 
         .bind(dimension(event.provider.as_deref()))
         .bind(dimension(event.account_id.as_deref()))
         .bind(dimension(event.model.as_deref()))
-        .bind(dimension(event.service_tier.as_deref()))
+        .bind(dimension(None))
         .bind(Utc::now())
         .execute(&mut **tx)
         .await?;

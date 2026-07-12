@@ -167,51 +167,16 @@ impl AccountManageService {
             added_at: None,
         };
 
-        match self.store.get(&account_id).await {
-            Ok(Some(_)) => {
-                let updated = self
-                    .store
-                    .update_from_import(crate::fleet::store::ImportedAccountUpdate {
-                        account,
-                        quota_json,
-                        quota_fetched_at,
-                        quota_verify_required,
-                    })
-                    .await
-                    .map_err(|_| AccountManageError::Import)?;
-                if !updated {
-                    return Err(AccountManageError::NotFound);
-                }
-                self.store
-                    .set_next_refresh_at(&account_id, next_refresh_at)
-                    .await
-                    .map_err(|_| AccountManageError::Import)?;
-            }
-            Ok(None) => {
-                self.store
-                    .insert(account)
-                    .await
-                    .map_err(|_| AccountManageError::Import)?;
-
-                self.store
-                    .set_next_refresh_at(&account_id, next_refresh_at)
-                    .await
-                    .map_err(|_| AccountManageError::Import)?;
-
-                if quota_json.is_some() || quota_fetched_at.is_some() || quota_verify_required {
-                    self.store
-                        .apply_imported_quota_state(
-                            &account_id,
-                            quota_json.as_deref(),
-                            quota_fetched_at,
-                            quota_verify_required,
-                        )
-                        .await
-                        .map_err(|_| AccountManageError::Import)?;
-                }
-            }
-            Err(_) => return Err(AccountManageError::Inspect),
-        }
+        self.store
+            .upsert_from_import(crate::fleet::store::ImportedAccountUpsert {
+                account,
+                next_refresh_at,
+                quota_json,
+                quota_fetched_at,
+                quota_verify_required,
+            })
+            .await
+            .map_err(|_| AccountManageError::Import)?;
 
         Ok(ImportedAccountState::Imported(account_id))
     }

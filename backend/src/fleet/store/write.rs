@@ -103,11 +103,11 @@ impl PgAccountStore {
         Ok(result.rows_affected() > 0)
     }
 
-    /// 通过导入数据更新已有账号。
-    pub async fn update_from_import(
+    /// 用单条原子语句新建或更新导入账号的完整状态。
+    pub async fn upsert_from_import(
         &self,
-        update: ImportedAccountUpdate,
-    ) -> PgAccountStoreResult<bool> {
+        update: ImportedAccountUpsert,
+    ) -> PgAccountStoreResult<()> {
         let now = Utc::now();
         let refresh_token = update
             .account
@@ -121,45 +121,26 @@ impl PgAccountStore {
             .map(sqlx::types::Json);
         let quota_fetched_at = update.quota_fetched_at;
 
-        let result = if let Some(refresh_token) = refresh_token {
-            sqlx::query(UPDATE_IMPORTED_ACCOUNT_WITH_REFRESH_SQL)
-                .bind(&update.account.email)
-                .bind(&update.account.account_id)
-                .bind(&update.account.user_id)
-                .bind(&update.account.label)
-                .bind(&update.account.plan_type)
-                .bind(update.account.access_token.expose_secret())
-                .bind(refresh_token)
-                .bind(update.account.access_token_expires_at)
-                .bind(status_to_db(update.account.status))
-                .bind(&quota_json)
-                .bind(quota_fetched_at)
-                .bind(quota_fetched_at)
-                .bind(update.quota_verify_required)
-                .bind(now)
-                .bind(&update.account.id)
-                .execute(&self.pool)
-                .await?
-        } else {
-            sqlx::query(UPDATE_IMPORTED_ACCOUNT_PRESERVING_REFRESH_SQL)
-                .bind(&update.account.email)
-                .bind(&update.account.account_id)
-                .bind(&update.account.user_id)
-                .bind(&update.account.label)
-                .bind(&update.account.plan_type)
-                .bind(update.account.access_token.expose_secret())
-                .bind(update.account.access_token_expires_at)
-                .bind(status_to_db(update.account.status))
-                .bind(&quota_json)
-                .bind(quota_fetched_at)
-                .bind(quota_fetched_at)
-                .bind(update.quota_verify_required)
-                .bind(now)
-                .bind(&update.account.id)
-                .execute(&self.pool)
-                .await?
-        };
-        Ok(result.rows_affected() > 0)
+        sqlx::query(UPSERT_IMPORTED_ACCOUNT_SQL)
+            .bind(&update.account.id)
+            .bind(&update.account.email)
+            .bind(&update.account.account_id)
+            .bind(&update.account.user_id)
+            .bind(&update.account.label)
+            .bind(&update.account.plan_type)
+            .bind(update.account.access_token.expose_secret())
+            .bind(refresh_token)
+            .bind(update.account.access_token_expires_at)
+            .bind(update.next_refresh_at)
+            .bind(status_to_db(update.account.status))
+            .bind(quota_json)
+            .bind(quota_fetched_at)
+            .bind(update.quota_verify_required)
+            .bind(update.account.added_at.unwrap_or(now))
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// 设置下一次刷新时间。
@@ -311,34 +292,6 @@ where id = $4",
             .bind(limit_reached)
             .bind(limit_reached)
             .bind(cooldown)
-            .bind(now)
-            .bind(account_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// 应用导入的配额状态。
-    pub async fn apply_imported_quota_state(
-        &self,
-        account_id: &str,
-        quota_json: Option<&str>,
-        quota_fetched_at: Option<DateTime<Utc>>,
-        quota_verify_required: bool,
-    ) -> PgAccountStoreResult<bool> {
-        let now = Utc::now();
-        let fetched = quota_fetched_at;
-        let plan_type = quota_json.and_then(quota_plan_type);
-        let quota_json = quota_json
-            .map(serde_json::from_str::<Value>)
-            .transpose()?
-            .map(sqlx::types::Json);
-        let result = sqlx::query(APPLY_IMPORTED_QUOTA_STATE_SQL)
-            .bind(quota_json)
-            .bind(fetched)
-            .bind(fetched)
-            .bind(&plan_type)
-            .bind(quota_verify_required)
             .bind(now)
             .bind(account_id)
             .execute(&self.pool)

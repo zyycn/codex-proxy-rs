@@ -299,6 +299,8 @@ pub(super) fn push_filter(builder: &mut QueryBuilder<Postgres>, filter: &UsageRe
         builder.push_bind(search);
         builder.push(" or response_id = ");
         builder.push_bind(search);
+        builder.push(" or upstream_request_id = ");
+        builder.push_bind(search);
         builder.push(")");
     }
     if let Some(start_time) = filter.start_time {

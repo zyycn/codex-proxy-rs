@@ -1,6 +1,9 @@
 //! 管理端路由。
 
 use axum::{
+    http::{header, HeaderValue},
+    middleware,
+    response::Response,
     routing::{get, post},
     Router,
 };
@@ -104,4 +107,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/keys", get(api_keys).post(create_api_key))
         .route("/api/admin/keys/delete", post(batch_delete_api_keys))
         .route("/api/admin/keys/update", post(update_api_key))
+        .layer(middleware::map_response(no_store))
+}
+
+async fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }

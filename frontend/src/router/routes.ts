@@ -1,47 +1,39 @@
 import type { RouteRecordRaw } from 'vue-router'
 
-import AdminLayout from '@/layout/index.vue'
-import AccountsView from '@/views/accounts/index.vue'
-import ApiKeysView from '@/views/api-keys/index.vue'
-import DashboardView from '@/views/dashboard/index.vue'
-import LoginView from '@/views/login/index.vue'
-import UsageView from '@/views/usage/index.vue'
-import SettingsView from '@/views/settings/index.vue'
-
 export const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
-    component: LoginView,
+    component: () => import('@/views/login/index.vue'),
   },
   {
     path: '/',
-    component: AdminLayout,
+    component: () => import('@/layout/index.vue'),
     children: [
       {
         path: '',
         name: 'dashboard',
-        component: DashboardView,
+        component: () => import('@/views/dashboard/index.vue'),
       },
       {
         path: 'accounts',
         name: 'accounts',
-        component: AccountsView,
+        component: () => import('@/views/accounts/index.vue'),
       },
       {
         path: 'api-keys',
         name: 'api-keys',
-        component: ApiKeysView,
+        component: () => import('@/views/api-keys/index.vue'),
       },
       {
         path: 'usage',
         name: 'usage',
-        component: UsageView,
+        component: () => import('@/views/usage/index.vue'),
       },
       {
         path: 'settings',
         name: 'settings',
-        component: SettingsView,
+        component: () => import('@/views/settings/index.vue'),
       },
     ],
   },

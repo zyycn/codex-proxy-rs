@@ -432,6 +432,222 @@ async fn responses_websocket_should_replay_history_when_reused_connection_dies_b
 }
 
 #[tokio::test]
+async fn responses_websocket_stream_should_replay_managed_history_after_previous_response_not_found(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        let mut first_websocket = accept_async(first_stream).await.unwrap();
+        let first_message = first_websocket.next().await.unwrap().unwrap();
+        let first_payload = serde_json::from_str::<Value>(&first_message.into_text().unwrap())
+            .expect("first websocket payload should be json");
+        first_websocket
+            .send(Message::Text(
+                response_failed_websocket_message(
+                    "resp_previous_missing",
+                    "previous_response_not_found",
+                    "Previous response with id resp_managed_stale was not found",
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        first_websocket.close(None).await.unwrap();
+
+        let replay_payload =
+            accept_successful_websocket_response(&listener, "resp_replayed_success").await;
+        (first_payload, replay_payload)
+    });
+    let (app, state, api_key, _dir) = test_app_with_account_and_state(base_url).await;
+    state
+        .services
+        .session_affinity
+        .record(
+            "resp_managed_stale".to_string(),
+            SessionAffinityEntry {
+                account_id: "acct_chat".to_string(),
+                conversation_id: "conversation-managed-stale".to_string(),
+                turn_state: Some("account-bound-turn-state".to_string()),
+                instructions_hash: None,
+                input_tokens: Some(7),
+                function_call_ids: Vec::new(),
+                variant_hash: None,
+                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
+                replay: Some(replay_snapshot(
+                    vec![json!({
+                        "role": "user",
+                        "content": "Earlier managed question"
+                    })],
+                    Vec::new(),
+                )),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "previous_response_id": "resp_managed_stale",
+                "input": [{"role": "user", "content": "Current managed question"}],
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    let (first_payload, replay_payload) = upstream.await.unwrap();
+
+    assert!(body.contains("resp_replayed_success"), "{body}");
+    assert!(!body.contains("resp_previous_missing"), "{body}");
+    assert_eq!(first_payload["previous_response_id"], "resp_managed_stale");
+    assert!(replay_payload.get("previous_response_id").is_none());
+    assert_eq!(
+        replay_payload["input"][0]["content"],
+        "Earlier managed question"
+    );
+    assert_eq!(
+        replay_payload["input"][1]["content"],
+        "Current managed question"
+    );
+}
+
+#[tokio::test]
+async fn responses_websocket_should_store_sanitized_incremental_replay_snapshot() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(stream).await.unwrap();
+        let _payload = websocket.next().await.unwrap().unwrap();
+        let mut completed: Value = serde_json::from_str(include_str!(
+            "../../fixtures/responses/websocket/completed_with_reasoning_replay.json"
+        ))
+        .unwrap();
+        completed["response"]["status"] = Value::String("completed".to_string());
+        completed["response"]["output"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "type": "message",
+                "id": "msg_sensitive_output",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}]
+            }));
+        websocket
+            .send(Message::Text(completed.to_string().into()))
+            .await
+            .unwrap();
+        websocket.close(None).await.unwrap();
+    });
+    let (app, state, api_key, _dir) = test_app_with_account_and_state(base_url).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "stream": false,
+                "input": [
+                    {
+                        "type": "message",
+                        "id": "account-bound-input-id",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "remember this",
+                            "encrypted_content": "nested-secret"
+                        }]
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_must_survive",
+                        "output": "ok"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    upstream.await.unwrap();
+
+    let stored = state
+        .services
+        .session_affinity
+        .lookup("resp_implicit_resume_first", Utc::now())
+        .await
+        .unwrap();
+    let replay = stored.replay.unwrap();
+    assert_eq!(replay.depth, 1);
+    assert!(replay.parent_response_id.is_none());
+    assert!(replay.turn_input[0].get("id").is_none());
+    assert_eq!(replay.turn_input[1]["call_id"], "call_must_survive");
+    assert!(replay.turn_output[0].get("id").is_none());
+    let serialized = serde_json::to_string(&replay).unwrap();
+    assert!(!serialized.contains("encrypted_content"));
+    assert!(!serialized.contains("nested-secret"));
+    assert!(!serialized.contains("enc_reasoning_replay"));
+}
+
+#[tokio::test]
+async fn responses_should_skip_oversized_replay_snapshot_without_failing_response() {
+    let server = MockServer::start().await;
+    let oversized = "x".repeat(2 * 1024 * 1024 + 1024);
+    let completed = json!({
+        "response": {
+            "id": "resp_oversized_replay",
+            "object": "response",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg_oversized",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": oversized}]
+            }],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+        }
+    });
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("event: response.completed\ndata: {completed}\n\n")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, state, api_key, _dir) = test_app_with_account_and_state(server.uri()).await;
+
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [{"role": "user", "content": "small input"}],
+                "stream": false,
+                "use_websocket": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let stored = state
+        .services
+        .session_affinity
+        .lookup("resp_oversized_replay", Utc::now())
+        .await
+        .unwrap();
+    assert!(stored.replay.is_none());
+}
+
+#[tokio::test]
 async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

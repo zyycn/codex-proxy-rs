@@ -241,7 +241,7 @@ async fn seed_model_snapshot(state: &AdminAccountsTestState, plan_type: &str) {
         ],
     );
     codex_proxy_rs::models::store::RedisModelSnapshotStore::new(state.redis.clone())
-        .replace_plan_snapshot(&snapshot)
+        .replace_plan_snapshots(&[snapshot])
         .await
         .unwrap();
 }
@@ -261,7 +261,7 @@ async fn seed_single_model_snapshot(
         }],
     );
     codex_proxy_rs::models::store::RedisModelSnapshotStore::new(state.redis.clone())
-        .replace_plan_snapshot(&snapshot)
+        .replace_plan_snapshots(&[snapshot])
         .await
         .unwrap();
 }

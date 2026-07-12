@@ -97,7 +97,7 @@ fn log_client_api_key_auth_failure(error: &ClientApiKeyAuthError) {
             );
         }
         _ => {
-            tracing::warn!(
+            tracing::info!(
                 auth_failure = error.reason(),
                 "client api key authorization failed"
             );

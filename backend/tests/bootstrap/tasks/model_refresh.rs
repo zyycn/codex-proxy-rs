@@ -53,18 +53,15 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
         Some(upstream),
     ));
     let request_usage_records = Arc::new(AtomicUsize::new(0));
-    let model_request_usage_records = Arc::new(AtomicUsize::new(0));
     let account_store = Arc::new(PlanAccountStore {
         accounts: vec![
             plan_account("acct-plus", "plus"),
             plan_account("acct-team", "team"),
         ],
         request_usage_records: request_usage_records.clone(),
-        model_request_usage_records: model_request_usage_records.clone(),
     });
     let usage_store = Arc::new(PlanAccountUsageStore {
         request_usage_records,
-        model_request_usage_records,
     });
     let account_pool = Arc::new(AccountPoolService::new(
         account_store.clone(),
@@ -93,12 +90,6 @@ async fn model_refresh_task_should_sync_model_plan_allowlist_to_account_pool() {
     assert_eq!(acquired.account.id, "acct-team");
     assert_eq!(
         account_store.request_usage_records.load(Ordering::SeqCst),
-        0
-    );
-    assert_eq!(
-        account_store
-            .model_request_usage_records
-            .load(Ordering::SeqCst),
         0
     );
 }
@@ -130,14 +121,17 @@ struct InMemorySnapshotStore {
 
 #[async_trait]
 impl ModelSnapshotStore for InMemorySnapshotStore {
-    async fn replace_plan_snapshot(
+    async fn replace_plan_snapshots(
         &self,
-        snapshot: &ModelPlanSnapshot,
+        snapshots: &[ModelPlanSnapshot],
     ) -> ModelSnapshotStoreResult<()> {
-        self.snapshots
-            .lock()
-            .await
-            .insert(snapshot.plan_type.clone(), snapshot.clone());
+        let mut stored = self.snapshots.lock().await;
+        stored.clear();
+        stored.extend(
+            snapshots
+                .iter()
+                .map(|snapshot| (snapshot.plan_type.clone(), snapshot.clone())),
+        );
         Ok(())
     }
 
@@ -170,7 +164,6 @@ impl CodexModelCatalogClient for FakeModelCatalogClient {
 struct PlanAccountStore {
     accounts: Vec<Account>,
     request_usage_records: Arc<AtomicUsize>,
-    model_request_usage_records: Arc<AtomicUsize>,
 }
 
 #[async_trait]
@@ -224,7 +217,6 @@ impl AccountStore for PlanAccountStore {
 
 struct PlanAccountUsageStore {
     request_usage_records: Arc<AtomicUsize>,
-    model_request_usage_records: Arc<AtomicUsize>,
 }
 
 #[async_trait]
@@ -243,19 +235,6 @@ impl AccountUsageStore for PlanAccountUsageStore {
     ) -> Result<(), AccountUsageStoreError> {
         if usage.requests > 0 {
             self.request_usage_records.fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(())
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        _account_id: &str,
-        _model: &str,
-        usage: AccountModelUsageDelta,
-    ) -> Result<(), AccountUsageStoreError> {
-        if usage.requests > 0 {
-            self.model_request_usage_records
-                .fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
     }

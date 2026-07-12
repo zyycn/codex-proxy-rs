@@ -18,7 +18,6 @@ pub(super) async fn import_core_tables(
     import_runtime_settings(source, target, report).await?;
     import_accounts(source, target, report).await?;
     import_account_usage(source, target, report).await?;
-    import_account_model_usage(source, target, report).await?;
     import_account_cookies(source, target, report).await?;
     import_fingerprints(source, target, report).await?;
     import_fingerprint_history(source, target, report).await
@@ -302,39 +301,6 @@ async fn import_account_usage(
     Ok(())
 }
 
-async fn import_account_model_usage(
-    source: &SqlitePool,
-    target: &mut Transaction<'_, Postgres>,
-    report: &mut ImportSqliteReport,
-) -> Result<(), ImportSqliteError> {
-    let mut rows =
-        sqlx::query("select * from account_model_usage order by account_id, model").fetch(source);
-    while let Some(row) = rows.try_next().await? {
-        sqlx::query(
-            "insert into account_model_usage
-             (account_id, model, request_count, error_count, input_tokens, output_tokens,
-              cached_tokens, last_used_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8)",
-        )
-        .bind(row.try_get::<String, _>("account_id")?)
-        .bind(row.try_get::<String, _>("model")?)
-        .bind(row.try_get::<i64, _>("request_count")?)
-        .bind(row.try_get::<i64, _>("error_count")?)
-        .bind(row.try_get::<i64, _>("input_tokens")?)
-        .bind(row.try_get::<i64, _>("output_tokens")?)
-        .bind(row.try_get::<i64, _>("cached_tokens")?)
-        .bind(parse_optional_timestamp(
-            "account_model_usage",
-            "last_used_at",
-            row.try_get("last_used_at")?,
-        )?)
-        .execute(&mut **target)
-        .await?;
-        report.add_imported("account_model_usage");
-    }
-    Ok(())
-}
-
 async fn import_account_cookies(
     source: &SqlitePool,
     target: &mut Transaction<'_, Postgres>,
@@ -474,18 +440,21 @@ pub(super) async fn count_discarded_runtime_tables(
     source: &SqlitePool,
     report: &mut ImportSqliteReport,
 ) -> Result<(), ImportSqliteError> {
-    let (sessions, affinities, leases, snapshots): (i64, i64, i64, i64) = sqlx::query_as(
-        "select
+    let (sessions, affinities, leases, snapshots, model_usage): (i64, i64, i64, i64, i64) =
+        sqlx::query_as(
+            "select
            (select count(*) from admin_sessions),
            (select count(*) from session_affinities),
            (select count(*) from account_refresh_leases),
-           (select count(*) from model_plan_snapshots)",
-    )
-    .fetch_one(source)
-    .await?;
+           (select count(*) from model_plan_snapshots),
+           (select count(*) from account_model_usage)",
+        )
+        .fetch_one(source)
+        .await?;
     report.add_discarded("admin_sessions", sessions.max(0) as u64);
     report.add_discarded("session_affinities", affinities.max(0) as u64);
     report.add_discarded("account_refresh_leases", leases.max(0) as u64);
     report.add_discarded("model_plan_snapshots", snapshots.max(0) as u64);
+    report.add_discarded("account_model_usage", model_usage.max(0) as u64);
     Ok(())
 }

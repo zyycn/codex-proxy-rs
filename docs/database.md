@@ -3,7 +3,7 @@
 本文档是 Codex Proxy RS 存储层的**唯一**权威文档:终态形态为 **PostgreSQL(持久层)+ Redis(运行态/缓存)**。全量定义 PG Schema、Redis 键契约、全局纪律、统计口径、SQLite → PG 的一次性搬迁方案与代码改造清单。
 
 - 取代 2026-07-08 版(SQLite 单进程形态 + 0004 迁移草案)。旧版描述的 v4 终态 Schema 语义**全部保留**,宿主引擎由 SQLite 换为 PG + Redis,0004 迁移方案改由导入命令吸收。
-- 基线:生产 SQLite 库 schema v3(读侧,只读打开);PG 库从 0001 终态基线全新建立(写侧)。
+- 基线:生产 SQLite 库 schema v3(读侧,只读打开);尚未上线的 PG 谱系由 0001 直接建立当前 v1 终态(写侧)。
 - 策略:**一次破坏性切换直达终态,不做兼容层**。没有双写期、没有 SQLite 回退路径、没有查询层兼容过滤;不满足终态契约的历史数据按 §6.3 规则导入或丢弃,丢弃项全部显式列出。
 
 ---
@@ -113,7 +113,7 @@
 1. **每个键有确定的过期路径**:TTL(会话、租约、亲和)或"最新态覆盖"(缓存 HASH)。禁止只增不减的键空间。
 2. **可丢弃性是准入条件**:FLUSHALL 之后系统必须无数据损失地继续运行(会话重登、租约重竞争、亲和退化为普通调度、缓存重拉)。不满足即不属于 Redis。
 3. **互斥必须原子**:获取用 `SET NX PX`,续约/释放用 Lua 比较 owner 后操作,禁止 GET-判断-SET 三段式。
-4. 二级索引(亲和的 conversation ZSET / account SET)由写入方维护,读取方容忍成员悬垂(主键已过期),遇悬垂惰性清理。
+4. 二级索引(亲和的 conversation / account ZSET)由写入方维护,读取方容忍成员悬垂(主键已过期),遇悬垂惰性清理。
 5. 单个业务对象统一编码为完整 JSON 文本,不把对象属性拆成 Redis Hash 字段。集合缓存可使用 HASH（如 `cpr:models:plan_snapshots`），但每个 field 的 value 仍是一个完整 JSON 对象，整读整写。
 
 ### 2.10 保留与可重建性(诚实边界)
@@ -125,16 +125,15 @@
 | `request_time_buckets` | 90 天(默认) | `runtime_settings.bucket_retention_days`,同上 |
 | `account_cookies` | 按 `expires_at` 清理 | 周期任务(PG) |
 | `account_usage` | 每账号 1 行 | 账号删除时 FK 级联删除 |
-| `account_model_usage` | 每账号最近 100 个模型 | 每小时按 `last_used_at desc nulls last, model` 裁剪 |
 | `fingerprints` | 当前指纹固定 1 行 | 固定 ID 覆盖更新 |
 | `fingerprint_update_history` | 全局最近 100 行 | 每小时按 `created_at desc, id desc` 裁剪 |
 | Redis 会话/租约/亲和 | TTL 自然过期 | 无清理任务 |
 | 其余 PG 实体表 | 随管理实体数量增长 | 不随请求数增长 |
 
-- trim 是**每小时执行的后台任务**:三张时间表每轮读 `runtime_settings` 保留列,两张历史/统计表使用上表的固定行数上限。不再在每次写入后内联执行——v3 的"每写一次 delete 一次"是已知的写放大缺陷,终态修复。
+- trim 是**每小时执行的后台任务**:三张时间表每轮读 `runtime_settings` 保留列,指纹历史使用上表的固定行数上限。不再在每次写入后内联执行——v3 的"每写一次 delete 一次"是已知的写放大缺陷,终态修复。
 - 30/30/90 天是数据时间窗,不是字节硬上限;高流量下时间窗内的事实仍可很大。PostgreSQL `autovacuum` 会回收 DELETE 后的页供后续复用,但不保证数据文件立即缩小;不周期执行会锁表的 `VACUUM FULL`。
 - `request_time_buckets` 在事实保留期内可由两张事实表重算(`rebuild-buckets` 命令,§7);超出事实保留期的桶是**因事实过期而升格的一级数据**,写入纪律 + 同事务写入(§5.2)是它们的唯一保障。
-- `account_usage` / `account_model_usage` 的累计列**不可重建**(事实早已过期),同样只受写入纪律保护。模型维度超过 100 后丢弃最久未用的分项累计,账号总累计仍由 `account_usage` 保留。本文档不声称"一切派生皆可重算"。
+- `account_usage` 的累计列**不可重建**(事实早已过期),只受写入纪律保护。模型窗口分布直接从 `request_time_buckets` 查询,不再维护无生产读者的第二份 `account_model_usage` 累计。本文档不声称"一切派生皆可重算"。
 - `window_*` 列是运行态(窗口边界来自上游),不可重建,可丢弃。
 
 ---
@@ -156,7 +155,6 @@
 │ │  usage_records(成功) · ops_error_logs(失败)    │   │
 │ └─ 派生(口径见 §2.10)──────────────────────────┘   │
 │    request_time_buckets · account_usage             │
-│    account_model_usage                              │
 └─────────────────────────────────────────────────────┘
 ┌─ Redis(运行态/缓存,可丢弃)─────────────────────────┐
 │  cpr:admin:session:*       管理端会话(TTL)          │
@@ -168,7 +166,6 @@
 
 ```text
 accounts     1──1 account_usage                  FK cascade(PK=FK)
-accounts     1──< account_model_usage            FK cascade(复合 PK 前缀)
 accounts     1──< account_cookies                FK cascade(account_domain 前缀)
 fingerprints 1──< fingerprint_update_history     FK cascade(idx_…_fingerprint)
 
@@ -176,7 +173,7 @@ usage_records.{account_id, client_api_key_id}    → 逻辑引用,无 FK
 ops_error_logs.{account_id, client_api_key_id}   → 逻辑引用,无 FK
 request_time_buckets.account_id                  → 逻辑维度,无 FK
 
-Redis 亲和.account_id → 账号删除时经 cpr:affinity:account:<id> 索引显式清理(§4B.3)
+Redis 亲和.account_id → 账号删除时经 cpr:affinity:v2:account:<id> 索引显式清理(§4B.3)
 Redis 租约.account_id → 不清理,TTL(分钟级)自然过期
 ```
 
@@ -188,16 +185,17 @@ Redis 租约.account_id → 不清理,TTL(分钟级)自然过期
 
 ## 4. PostgreSQL 表设计(终态 DDL)
 
-以下 DDL 即 `infra/migrations/0001_initial.sql`(PG 基线)。PG 库从此基线全新建立;历史数据经导入命令进入(§6),不存在 SQLite → PG 的迁移链。
+以下 DDL 即 `infra/migrations/0001_initial.sql` 描述的 PG v1 终态。PG 库由迁移框架从空库建立;历史数据经导入命令进入(§6),不存在 SQLite → PG 的原地迁移链。
 
 ### 4.1 schema_migrations
 
-迁移版本的唯一事实来源。由 `database.rs` 建库时创建,不走迁移文件。只增不改;已发布迁移永不修改;`CURRENT_SCHEMA_VERSION` 与迁移列表同步提交。PG 谱系从 1 重新编号,与 SQLite 谱系(止于 3)无延续关系。
+迁移版本的唯一事实来源。由 `database.rs` 建库时创建,不走迁移文件。已发布迁移只增不改;当前版本从 `MIGRATIONS.last()` 派生,不存在手工版本常量。启动时先校验内置版本严格递增且不重复,再校验数据库中的已应用记录是内置迁移的有序前缀,并逐条核对名称与 SHA-256 SQL checksum。PG 谱系从 1 重新编号,与 SQLite 谱系(止于 3)无延续关系。
 
 ```sql
 create table schema_migrations (
   version bigint not null check (version > 0),
   name text not null,
+  checksum text not null,
   applied_at timestamptz not null default now(),
   primary key (version)
 );
@@ -302,7 +300,6 @@ create table accounts (
   updated_at timestamptz not null
 );
 
-create index idx_accounts_status on accounts(status);
 create index idx_accounts_added_id on accounts(added_at desc, id desc);
 create unique index ux_accounts_chatgpt_identity
   on accounts(chatgpt_account_id, coalesce(chatgpt_user_id, ''))
@@ -348,9 +345,6 @@ create table account_usage (
   limit_window_seconds bigint check (limit_window_seconds is null or limit_window_seconds > 0),
   last_used_at timestamptz
 );
-
-create index idx_account_usage_last_used_account
-  on account_usage(last_used_at desc, account_id desc);
 ```
 
 | 组 | 说明 |
@@ -361,32 +355,7 @@ create index idx_account_usage_last_used_account
 
 宽表(20 计数列)而非 EAV:计数种类是代码常量,宽表一次 upsert 全更新、check 逐列可写;EAV 只换来动态 SQL 和类型丢失。
 
-### 4.7 account_model_usage
-
-账号 × 模型分布,服务账号详情页与调度辅助。自然复合键,不引入代理 id。
-
-```sql
-create table account_model_usage (
-  account_id text not null references accounts(id) on delete cascade,
-  model text not null,
-  request_count bigint not null default 0 check (request_count >= 0),
-  error_count bigint not null default 0 check (error_count >= 0),
-  input_tokens bigint not null default 0 check (input_tokens >= 0),
-  output_tokens bigint not null default 0 check (output_tokens >= 0),
-  cached_tokens bigint not null default 0 check (cached_tokens >= 0),
-  last_used_at timestamptz,
-  primary key (account_id, model)
-);
-
-create index idx_account_model_usage_last_used
-  on account_model_usage(last_used_at desc, account_id, model);
-```
-
-`error_count` 是**收窄口径**:仅统计已归属到账号+模型之后的失败,用作调度回避信号(频繁失败 → 降权)。这是全库唯一允许的口径重叠(与 ops_error_logs),因为用途不同(调度局部信号 vs 全局错误事实);Dashboard 错误率禁止取自本列。
-
-每小时按 `last_used_at desc nulls last, model` 为每个账号保留前 100 行。该硬上限限制历史模型名持续增长,不改变 `account_usage` 的账号总累计。
-
-### 4.8 usage_records ★
+### 4.7 usage_records ★
 
 **每个成功的客户端请求恰好一行**。用量、token、成本、账号与调用方归因的唯一事实来源。这是系统的账本;"只收成功"的边界由 DB 约束兜底,不再只靠 service 层。
 
@@ -451,7 +420,7 @@ create index idx_usage_records_upstream_request_id on usage_records(upstream_req
 
 **禁止**:写入失败事件;token 写回 metadata 当真相;加任何兼容过滤查询历史数据。
 
-### 4.9 ops_error_logs ★
+### 4.8 ops_error_logs ★
 
 **每个失败请求/运维错误恰好一行**。与 usage_records 互斥:一次请求终态只进一张表。失败与成功的查询维度完全不同(阶段/分类/归责 vs token/成本),拆表让两边 schema 各自朝自己的查询模型演进。
 
@@ -505,7 +474,7 @@ create index idx_ops_error_logs_upstream_request_id on ops_error_logs(upstream_r
 
 **预留演进列(有 UI/告警需求时增列,刻意不预建,本清单为唯一权威版本)**:`surface`、`error_phase`、`error_type`、`severity`、`requested_model` / `upstream_model` / `service_tier`、`client_ip` / `user_agent`、`error_source` / `error_owner`、`is_retryable` / `retry_count`。原则:字段跟着真实查询需求走,不照搬外部项目全集。
 
-### 4.10 request_time_buckets ★
+### 4.9 request_time_buckets ★
 
 15 分钟 × provider × 账号 × 模型 × service_tier 预聚合,Dashboard 趋势与流量卡片的唯一数据源。**单表同时服务两种口径**:traffic(success + error)与 usage(token,仅成功)。曾有双表方案,已否决:每请求两次 upsert 的写放大不值得;分列 + 写入纪律已同时提供两种口径,rebuild 命令兜底(保留期内,§2.10)。
 
@@ -530,8 +499,6 @@ create table request_time_buckets (
   updated_at timestamptz not null,
   primary key (bucket_start, provider, account_id, model, service_tier)
 );
-
-create index idx_request_time_buckets_model on request_time_buckets(model, bucket_start);
 ```
 
 | 字段 | 说明 |
@@ -545,9 +512,11 @@ create index idx_request_time_buckets_model on request_time_buckets(model, bucke
 
 **写入事务纪律**:事实 insert 与桶 upsert 必须同事务(§5.2)。
 
+**索引决策**:终态只保留以 `bucket_start` 为首列的主键索引。2026-07-12 在本地真实迁移数据(672 个桶)上对生产时间窗聚合执行 `EXPLAIN ANALYZE`:保留 `idx_request_time_buckets_model` 时为顺序扫描、`0.955 ms`;事务内删除后仍为相同顺序扫描、`0.764 ms`。现有三条查询均不以 `model` 等值作为前导条件,因此尚未上线的 0001 基线不创建该无读者索引。
+
 **禁止**:错误路径写 token/延迟列;落库 `request_count`;空字符串维度。
 
-### 4.11 account_cookies
+### 4.10 account_cookies
 
 账号维度上游 Cookie(部分上游流程需要浏览器态凭据)。语义直接采用 RFC 6265 模型;unique 约束 = RFC 替换语义,upsert 依据。
 
@@ -570,7 +539,7 @@ create index idx_account_cookies_expires on account_cookies(expires_at) where ex
 
 `value` 是 secret(§2.6)。`expires_at` NULL = 会话 Cookie,不参与清理。**过期时间在捕获时解析为 timestamptz**(RFC2822/RFC3339 均接受,解析失败按会话 Cookie 落 NULL)——v3 存原始字符串再做字典序比较是已知缺陷,终态修复。
 
-### 4.12 fingerprints
+### 4.11 fingerprints
 
 设备指纹模板(UA、header 集合与顺序——顺序本身是指纹的一部分)。行数常量级、按 PK 取用,**无二级索引**。版本三元组用 text:版本号不是数字(`1.2.3-beta`)。
 
@@ -592,7 +561,7 @@ create table fingerprints (
 );
 ```
 
-### 4.13 fingerprint_update_history
+### 4.12 fingerprint_update_history
 
 指纹更新审计。版本快照列固化"当时更新到了什么"——不能只存 FK,指纹行会被后续更新覆写。级联删除可接受:指纹本体删除后其历史无独立价值。
 
@@ -650,21 +619,27 @@ TTL    租约时长(acquire 时以 PX 设定)
 ### 4B.3 会话亲和
 
 ```text
-主键   cpr:affinity:resp:<response_id>
+主键   cpr:affinity:v2:resp:<response_id>
 值     {"accountId","conversationId","turnState","instructionsHash",
-        "inputTokens","functionCallIds":[…],"variantHash","createdAt"}
+        "inputTokens","functionCallIds":[…],"variantHash","continuationScope",
+        "replay":{"parentResponseId","turnInput","turnOutput","depth","totalBytes"},
+        "createdAt"}
 TTL    亲和 TTL(默认 4h),EXPIREAT createdAt+ttl
 
-索引   cpr:affinity:conv:<conversation_id>     ZSET member=response_id score=createdAt(epoch ms)
-索引   cpr:affinity:account:<account_id>       SET  member=response_id
+索引   cpr:affinity:v2:conv:<conversation_id>     ZSET member=response_id score=createdAt(epoch ms)
+索引   cpr:affinity:v2:account:<account_id>       ZSET member=response_id score=createdAt(epoch ms)
 ```
 
-- 写入(记录一次成功响应):MULTI 内 `SET resp EXAT` + `ZADD conv` + `EXPIRE conv ttl` + `SADD account` + `EXPIRE account ttl`,并顺手 `ZREMRANGEBYSCORE conv -inf now-ttl` 惰性剪枝。
+- `v2` 明确隔离旧的累计 `fullInput` 编码,不读取旧键。
+- 写入(记录一次成功响应):MULTI 内 `SET resp EXAT` + 两个 `ZADD` + 两个 `EXPIRE`，并对 conversation/account 索引执行 `ZREMRANGEBYSCORE -inf now-ttl` 惰性剪枝。
 - 按 response_id 查:GET 主键。按 conversation 查最新:`ZREVRANGE conv` 取候选 → GET 主键过滤 variant_hash / max_age → 第一个存活者;悬垂成员(主键已过期)当场 ZREM。
-- forget(response_id):GET 后 DEL 主键 + ZREM conv + SREM account。
-- **账号删除的级联**:SMEMBERS `cpr:affinity:account:<id>` → 逐个 forget。等价于 v3 的 FK cascade + `idx_session_affinities_account`。
+- replay 每轮只保存本轮 `turnInput` + `turnOutput` 增量和父 response ID,读取时按父链重建；禁止在每个节点重复保存累计 `fullInput`,从而避免多轮会话 O(n²) 空间增长。重放数据递归删除 `encrypted_content`,并删除每个顶层 replay item 的上游 `id`;`call_id` 等协议关联字段保留。
+- 容量边界:客户端 `/v1` 请求体最大 16 MiB;单 replay 节点 JSON 最大 2 MiB;单会话累计最大 16 MiB;父链最大 128 层。任一边界超限即不再为该响应写 replay 基线,正常上游响应不受影响,不会为绕过边界而截断或篡改请求。
+- forget(response_id):GET 后在一次事务中 DEL 主键 + ZREM 两个索引。
+- **账号删除的级联**:一次 ZRANGE 取得账号 ZSET 成员,一次 MGET 读取归属,随后用单个 Redis 原子 pipeline 批量删除主键、conversation 成员和 account 索引；禁止逐成员网络往返。等价于 v3 的 FK cascade + `idx_session_affinities_account`。
 - **进程内不再维护亲和映射副本**:Redis 本身就是快存,进程内再留一份只换来双写同步与重启恢复逻辑;亲和查找相对上游请求(百 ms 级)是 <1ms 的往返,可忽略。v3 的"重启恢复"步骤随之消失。
-- **禁止**承载会话历史/审计;全部键被清空只影响路由优化,不损失事实。
+- replay 是仅用于节点切换恢复的有界临时上下文,不是历史或审计事实;全部键被清空只会失去透明恢复能力,不会损失 PG 事实。
+- `identity_hmac_secret` 必须跨重启和镜像更换持久化。Docker 部署由 `/app/data` 挂载承载该文件;禁止把它放在容器可写层或每次启动重新生成。该 256-bit 密钥与账号 ID 分域派生稳定的 prompt/session/thread/window/installation 伪名,密钥变化会让全部账号身份同时漂移。
 
 ### 4B.4 模型清单缓存
 
@@ -674,7 +649,7 @@ TTL    亲和 TTL(默认 4h),EXPIREAT createdAt+ttl
 TTL    无(最新态覆盖,HSET 即替换)
 ```
 
-缓存的正确形态,可随时清空重建(丢失 = 下次按需重拉)。**禁止**当模型目录事实表用;需要 diff/审计时新建 PG 历史表。
+缓存的正确形态,可随时清空重建(丢失 = 下次按需重拉)。刷新使用原子 `DEL + HSET` 全量替换,已从上游消失的 `plan_type` field 必须同步删除,不能只覆盖仍存在的字段。**禁止**当模型目录事实表用;需要 diff/审计时新建 PG 历史表。
 
 ---
 
@@ -689,7 +664,7 @@ traffic:   request_count = success_count + error_count     ← request_time_buck
 usage:     token / 成本                                     ← usage_records 列(明细)、bucket token 列(趋势,仅成功)
 errors:    错误分布 / 排查                                   ← ops_error_logs
 按 key:    调用方用量 / 失败                                 ← usage_records / ops_error_logs 的 client_api_key_id
-调度负载:   account_usage / account_model_usage              ← 派生累计,不可重建(§2.10)
+调度负载:   account_usage                                      ← 派生累计,不可重建(§2.10)
 ```
 
 ### 5.2 写入路径与事务
@@ -704,7 +679,7 @@ errors:    错误分布 / 排查                                   ← ops_error
           同一个 PG 事务
 ```
 
-`account_usage` / `account_model_usage` 的 upsert **不在**上述事务内:它们由调度器在槽位释放 / 用量观测时点独立写入(与事实写入不在同一代码时刻),每笔 upsert 自身原子。这是对旧文档"四表同事务"的**显式修订**:强行合并需要把调度器的持久化时点搬进 dispatch 事务,复杂度换不来对账收益——两边口径本就允许亚秒级漂移,对账以事实表为准。
+`account_usage` 的 upsert **不在**上述事务内:它由调度器在槽位释放 / 用量观测时点独立写入(与事实写入不在同一代码时刻),每笔 upsert 自身原子。模型窗口分布统一从 `request_time_buckets` 查询,不再双写独立累计表。错误事件没有可信 `service_tier` 一等列,因此实时错误桶与 `rebuild-buckets` 都固定写 `__unknown__`;两条路径不得使用不同来源猜测 tier。
 
 ### 5.3 Dashboard 口径决策(钉死)
 
@@ -718,7 +693,7 @@ errors:    错误分布 / 排查                                   ← ops_error
 
 ## 6. SQLite v3 → PG 一次性搬迁
 
-引擎切换,不存在就地迁移:PG 库由 0001 基线全新建立,历史数据经**导入命令**搬入。旧文档的 0004 迁移草案(数据决策 1–4 与管理 API key 哈希回填)全部由导入命令吸收,SQLite 侧不再演进(v3 即其终版)。
+引擎切换,不存在就地迁移:PG 库由 0001 全新建立到 v1 终态,历史数据经**导入命令**搬入。旧文档的 0004 迁移草案(数据决策 1–4 与管理 API key 哈希回填)全部由导入命令吸收,SQLite 侧不再演进(v3 即其终版)。
 
 ### 6.1 导入命令
 
@@ -726,7 +701,24 @@ errors:    错误分布 / 排查                                   ← ops_error
 codex-proxy-rs import-sqlite <旧库路径.sqlite>
 ```
 
-- 前置:目标 PG 为空库(仅 0001 基线,无业务行),否则拒绝执行——导入是一次性动作,不做增量合并。
+Docker Compose 部署应先停止旧 SQLite 实例并备份源库,确认目标 PG volume 为新建空卷,
+再只启动 PG/Redis 并显式执行容器内二进制;不能先启动 `codex-proxy-rs` 服务,否则服务
+初始化的管理员与运行时设置会使目标库不再为空:
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d postgres redis
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml run --rm --no-deps \
+  -v "$(realpath /path/to/legacy.sqlite):/tmp/legacy.sqlite:ro" \
+  codex-proxy-rs codex-proxy-rs import-sqlite /tmp/legacy.sqlite
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml run --rm --no-deps \
+  codex-proxy-rs codex-proxy-rs rebuild-buckets
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d codex-proxy-rs
+```
+
+镜像入口为 `tini`,服务二进制位于镜像 `CMD`;因此 Compose `run` 覆盖命令时必须写成
+`codex-proxy-rs codex-proxy-rs import-sqlite ...`,第一个是服务名,第二个才是容器内二进制。
+
+- 前置:目标 PG 已迁移到当前版本且无业务行,否则拒绝执行——导入是一次性动作,不做增量合并。
 - 源库校验:`schema_migrations` 最高版本必须为 3,否则拒绝(未知谱系不猜)。
 - 全程单个 PG 事务:要么全部导入,要么全部回滚。源库只读打开。
 - Redis 不参与导入:v3 的运行态数据按 §6.3 显式丢弃。
@@ -740,7 +732,8 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 | `client_api_keys` | PG | `key`、`prefix` 原值搬迁；完整 key 继续作为管理端长期复制与 CCSwitch 导入的唯一事实 |
 | `runtime_settings` | PG | `admin_api_key` 明文 → 哈希落 `admin_api_key_hash`;三个 retention 列取默认值 |
 | `accounts` | PG | 布尔 0/1→boolean,时间戳→timestamptz；旧版曾落库的瞬态 `refreshing` → `expired` 并清空 `next_refresh_at`，防止迁移后自动消费 RT；其余业务状态原样 |
-| `account_usage` / `account_model_usage` | PG 原样 | 同上 |
+| `account_usage` | PG 原样 | 同上 |
+| `account_model_usage` | **不导入** | 终态无生产读者,只计入丢弃报告 |
 | `account_cookies` | PG | `expires_at` 字符串解析为 timestamptz(RFC2822/RFC3339);解析失败 → NULL(降级为会话 Cookie)并计数报告 |
 | `fingerprints` / `fingerprint_update_history` | PG 原样 | JSON text→jsonb |
 | `usage_records`(v3 混合表) | **拆分**,见 §6.3 | — |
@@ -758,6 +751,7 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 
 - 全部管理端会话(重新登录)、会话亲和(退化为重新调度)、刷新租约(自愈)、模型清单快照(按需重拉)——运行态按 §2.9 本就可丢弃;
 - v3 usage_records 中的噪音行(决策 3);
+- v3 `account_model_usage` 行(终态模型窗口直接查询 `request_time_buckets`);
 - 旧版误落库的 `accounts.status='refreshing'` 不作为业务状态保留，按 §6.2 规范化为 `expired`；
 - 历史桶中错误路径污染的 token 按旧口径保留展示、不追溯清洗;事实保留期内的窗口随后由 `rebuild-buckets` 用新口径重算覆盖。
 
@@ -776,20 +770,21 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 
 ## 7. 代码改造清单(本次交付)
 
-与导入命令同一 PR 交付,按依赖顺序。**2026-07-10 已逐项核验完成**，对应自动化验收由后端集成测试、前端构建、架构检查和 Compose 配置检查共同覆盖：
+按依赖顺序交付。**2026-07-12 终态以本节与自动化测试共同约束**，验收由后端集成测试、前端构建、架构检查和 Compose 配置检查共同覆盖：
 
-1. **连接层**(`infra/database.rs` + `infra/redis.rs`):PgPool(参数见 §1)+ 迁移框架(PG 谱系 0001 起);Redis ConnectionManager + 键前缀 + `PING` 健康检查。`Cargo.toml`:sqlx 加 `postgres`(保留 `sqlite` 仅供导入命令读源库),新增 `redis` crate。
+1. **连接层**(`infra/database.rs` + `infra/redis.rs`):PgPool(参数见 §1)+ 迁移框架(PG 谱系 0001 起,版本从末条迁移派生,严格顺序与 checksum 校验);Redis ConnectionManager + 键前缀 + `PING` 健康检查。`Cargo.toml`:sqlx 加 `postgres`(保留 `sqlite` 仅供导入命令读源库),新增 `redis` crate,删除未使用的 SQLx `uuid` feature。
 2. **配置**(`bootstrap/config.rs`、`deploy/config.example.yaml`):`database.url` 改 `postgres://…`,新增 `redis.url`。
 3. **鉴权归因**(`keys/{store,service,manage}.rs`、`api/client/auth.rs`):key 创建落唯一 `key` 列；鉴权按完整 key 做 PG unique 点查(删除进程内鉴权缓存);鉴权返回 key `id`,调用链把 `client_api_key_id` 装进请求上下文直至事件写入。管理端列表持续返回完整 key，前端长期保留复制与 CCSwitch 导入入口。
 4. **事件结构**(`telemetry/{usage,ops}`、`telemetry/recorder.rs`、`dispatch/recording.rs`):成功/失败事件携带 `client_api_key_id` 与 `provider`;token、requested/upstream_model、service_tier、first_token_ms 从 metadata 移到一等字段;metadata 不再写已提升字段;UsageRecord 删除 `level`(成功事实无等级)。
 5. **写入路径**(`telemetry/usage/store.rs`、`telemetry/ops/store.rs`、`telemetry/buckets/store.rs`):§5.2 的两条 PG 事务;错误路径对桶只 `error_count + 1`;`__unknown__` sentinel;min/max 延迟使用 nullable-safe 的 `least()`/`greatest()`;内联 trim 移除。
 6. **查询路径**(`telemetry/{usage,ops,account_usage}`、`api/admin/{usage,ops,dashboard,accounts}_routes*`):summary/分布/趋势全部走列,删除所有 `->>` 聚合与 metadata LIKE;新增 `/api/admin/ops/errors` 错误明细查询面;Dashboard 按 §5.3 只改取数来源，不改既有文案。
-7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和级联(§4B.3)。
-8. **维护命令**(`main.rs` CLI):`import-sqlite <path>`(§6);`rebuild-buckets`——删除事实保留期内的桶并从两张事实表重算(15 分钟槽对齐在 SQL 侧 `floor(epoch/900)*900`,§2.3);保留期外只读不动。范围明确**不含** `account_usage` / `account_model_usage`(§2.10,不可重建)。
-9. **清理任务**(`bootstrap/tasks/`):三张时间增长表的周期 trim(读 `runtime_settings` 三列),`account_model_usage` 每账号 100 行与 `fingerprint_update_history` 全局 100 行硬上限;cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
-10. **健康检查**(`api/router.rs`):PG `select 1` + Redis `PING`,任一失败即 503。
-11. **测试**(`backend/tests/`):support 换 PG(每测试独立数据库,`CPR_TEST_DATABASE_URL` 指定服务端)+ Redis(每测试随机键前缀,`CPR_TEST_REDIS_URL`);storage 测试断言终态 DDL、导入拆分规则(成功行迁入 / error 行转 ops / 噪音行丢弃 / 旧 `refreshing` 规范化)、两条写入事务的原子性、0ms 延迟样本可入桶、租约原子性。
-12. **部署**(`deploy/docker-compose.yml`):新增 postgres、redis 服务与健康检查依赖。
+7. **运行态改 Redis**(`auth/store.rs` 会话、`accounts/refresh/lease.rs`、`dispatch/affinity/store.rs`、`models/store.rs`):按 §4B 契约实现;删除 admin 会话/亲和清理任务与亲和重启恢复;账号删除路径挂 Redis 亲和批量级联;模型 HASH 全量替换;持久化 `identity_hmac_secret`。
+8. **账号导入**(`fleet/manage/import.rs` + `fleet/store/write.rs`):新账号身份/凭据、`next_refresh_at` 与 quota 状态由单条原子 SQL 一次提交;已有账号更新与刷新时间同样原子,任何字段校验或数据库错误都不得留下半初始化行。
+9. **维护命令**(`main.rs` CLI):`import-sqlite <path>`(§6);`rebuild-buckets`——删除事实保留期内的桶并从两张事实表重算(15 分钟槽对齐在 SQL 侧 `floor(epoch/900)*900`,§2.3);保留期外只读不动。范围明确**不含** `account_usage`(§2.10,不可重建)。
+10. **清理任务**(`bootstrap/tasks/`):三张时间增长表的周期 trim(读 `runtime_settings` 三列),`fingerprint_update_history` 全局 100 行硬上限;cookie 清理保留;admin 会话与亲和清理任务删除(TTL 接管)。
+11. **健康检查**(`api/router.rs`):PG `select 1` + Redis `PING`,任一失败即 503。
+12. **测试**(`backend/tests/`):support 使用每测试独立 PG 数据库与随机 Redis 前缀,并在测试进程前缀级清理残留;覆盖 v1 终态 schema 与 checksum 防篡改、导入原子性、回放容量/TTL/账号删除/敏感字段、账号池与 WebSocket pool 并发不变量、存储失败降级以及保留期任务。第一条真实增量迁移上线时再增加对应的 v1→v2 演进测试,不得为尚未发布的基线制造伪历史。
+13. **部署**(`deploy/docker-compose.yml`):新增 postgres、redis 服务与健康检查依赖,PG/Redis 数据卷及 `/app/data` 身份密钥目录跨镜像持久化。
 
 ---
 
@@ -801,12 +796,12 @@ codex-proxy-rs import-sqlite <旧库路径.sqlite>
 | --- | --- |
 | 多管理员 | `admin_users` 加 `username`/`role` + PG `admin_login_events` + Redis `cpr:admin:user_sessions:<user_id>` SET(踢会话索引) |
 | 按 key 限流/配额 | 新表 `client_api_key_policies (key_id FK, …)`;归因数据已在事实表就位;运行态计数走 Redis |
-| 错误运维大盘 | `ops_error_logs` 按 §4.9 预留清单增列 |
+| 错误运维大盘 | `ops_error_logs` 按 §4.8 预留清单增列 |
 | 长期趋势/年度账务 | 新表 `request_day_buckets`(由 15 分钟桶降采样归档),Dashboard 才允许出现"历史总量" |
 | 刷新历史分析 | 新表 `account_refresh_events` |
 | 模型别名审计 | `model_aliases_json` 拆 `model_aliases` 表 |
 | 凭据静态加密 / 合规 | `accounts` 拆 `account_credentials`(1:1,PK=FK),集中一个破坏窗口 |
-| 接入第二上游 provider(已规划:Cloudflare Workers AI) | 事实表与桶的 `provider` 维度已就位(§4.8–4.10),CF 首条请求落库前无需再动事实表。届时一个迁移完成:`accounts` 加 `provider` + `chatgpt_account_id/user_id` 更名 `upstream_account_id/upstream_user_id` + 唯一索引加 provider 维度;模型缓存 HASH field 改 `<provider>:<plan_type>`;billing 单价查找加 provider 参数。回填全部确定为 `'openai'` |
+| 接入第二上游 provider(已规划:Cloudflare Workers AI) | 事实表与桶的 `provider` 维度已就位(§4.7–4.9),CF 首条请求落库前无需再动事实表。届时一个迁移完成:`accounts` 加 `provider` + `chatgpt_account_id/user_id` 更名 `upstream_account_id/upstream_user_id` + 唯一索引加 provider 维度;模型缓存 HASH field 改 `<provider>:<plan_type>`;billing 单价查找加 provider 参数。回填全部确定为 `'openai'` |
 
 Cloudflare 账号对现有 schema 的适配(无需新列):静态 API key = `access_token`,`refresh_token`/`access_token_expires_at` NULL(永不过期,语义已覆盖);无套餐配额窗口 → `account_usage.window_*` 恒为初始值、窗口边界 NULL;`account_cookies` 对 CF 账号空置。**硬规则**:任何新 provider 的第一条请求落库之前,其事实行必须已携带 provider 归因——终态之后这条自动满足。
 

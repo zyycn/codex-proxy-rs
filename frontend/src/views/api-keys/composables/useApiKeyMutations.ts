@@ -1,4 +1,3 @@
-// @env browser
 import { useClipboard } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { onMounted, ref, type Ref } from 'vue'

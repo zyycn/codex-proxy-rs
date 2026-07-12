@@ -776,7 +776,7 @@ async fn execute_fresh_pooled_response_create_request(
         return Err(error.into());
     }
 
-    let now = Instant::now();
+    let now = tokio::time::Instant::now();
     let metadata = websocket_connection_metadata(&response);
     let (exchange, mut websocket, metadata, continuation, terminal) =
         match collect_websocket_response(
@@ -835,7 +835,7 @@ async fn execute_fresh_pooled_response_create_request_stream(
         return Err(error.into());
     }
 
-    let now = Instant::now();
+    let now = tokio::time::Instant::now();
     let mut metadata = websocket_connection_metadata(&response);
     let prefetched_frames = if should_prefetch_until_output_or_terminal(request) {
         match prefetch_stream_frames_until_output_or_terminal(

@@ -16,14 +16,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot},
     task::JoinHandle,
-    time::MissedTickBehavior,
+    time::{Instant, MissedTickBehavior},
 };
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 

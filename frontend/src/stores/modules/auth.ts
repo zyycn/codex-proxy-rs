@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import { getAuthStatus, login as apiLogin, logout as apiLogout } from '@/api'
+import { resetUnauthorizedHandling } from '@/api/request'
 
 export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = ref(false)
@@ -13,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const status = await getAuthStatus()
       isAuthenticated.value = status.authenticated
+      if (status.authenticated) resetUnauthorizedHandling()
       return status.authenticated
     } catch (err: any) {
       isAuthenticated.value = false
@@ -30,6 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       isAuthenticated.value = true
       sessionChecked.value = true
+      resetUnauthorizedHandling()
 
       return true
     } catch (err: any) {
@@ -52,6 +55,13 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function invalidateSession() {
+    isAuthenticated.value = false
+    sessionChecked.value = true
+    loading.value = false
+    error.value = null
+  }
+
   return {
     isAuthenticated,
     sessionChecked,
@@ -60,5 +70,6 @@ export const useAuthStore = defineStore('auth', () => {
     checkAuth,
     login,
     logout,
+    invalidateSession,
   }
 })

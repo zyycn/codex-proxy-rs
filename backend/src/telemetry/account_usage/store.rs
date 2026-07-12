@@ -1,6 +1,6 @@
 //! PostgreSQL 账号用量查询存储。
 
-use std::{collections::HashMap, num::NonZeroU32};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -8,8 +8,6 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::infra::format::nonnegative_i64_to_u64;
-
-use super::should_reset_usage_window;
 
 const RECORD_USAGE_SQL: &str = r"
 insert into account_usage (
@@ -44,19 +42,6 @@ on conflict(account_id) do update set
   window_started_at = coalesce(account_usage.window_started_at, excluded.window_started_at),
   last_used_at = excluded.last_used_at";
 
-const RECORD_MODEL_USAGE_SQL: &str = r"
-insert into account_model_usage (
-  account_id, model, request_count, error_count,
-  input_tokens, output_tokens, cached_tokens, last_used_at
-) values ($1, $2, $3, $4, $5, $6, $7, $8)
-on conflict(account_id, model) do update set
-  request_count = account_model_usage.request_count + excluded.request_count,
-  error_count = account_model_usage.error_count + excluded.error_count,
-  input_tokens = account_model_usage.input_tokens + excluded.input_tokens,
-  output_tokens = account_model_usage.output_tokens + excluded.output_tokens,
-  cached_tokens = account_model_usage.cached_tokens + excluded.cached_tokens,
-  last_used_at = excluded.last_used_at";
-
 const SYNC_RUNTIME_WINDOW_SQL: &str = r"
 insert into account_usage (
   account_id, window_request_count, window_input_tokens, window_output_tokens,
@@ -80,32 +65,41 @@ where account_usage.window_reset_at is null
   or account_usage.window_reset_at <= excluded.window_reset_at
   or account_usage.window_reset_at <= $13";
 
-const SYNC_RATE_LIMIT_WINDOW_RESET_SQL: &str = r"
-insert into account_usage (
-  account_id, window_request_count, window_input_tokens, window_output_tokens,
-  window_cached_tokens, window_image_input_tokens, window_image_output_tokens,
-  window_image_request_count, window_image_request_failed_count,
-  window_started_at, window_reset_at, limit_window_seconds
-) values ($1, 0, 0, 0, 0, 0, 0, 0, 0, $2, $3, $4)
-on conflict(account_id) do update set
-  window_request_count = 0,
-  window_input_tokens = 0,
-  window_output_tokens = 0,
-  window_cached_tokens = 0,
-  window_image_input_tokens = 0,
-  window_image_output_tokens = 0,
-  window_image_request_count = 0,
-  window_image_request_failed_count = 0,
-  window_started_at = excluded.window_started_at,
-  window_reset_at = excluded.window_reset_at,
-  limit_window_seconds = coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds)";
-
 const SYNC_RATE_LIMIT_WINDOW_SQL: &str = r"
 insert into account_usage (account_id, window_reset_at, limit_window_seconds)
 values ($1, $2, $3)
 on conflict(account_id) do update set
-  window_reset_at = excluded.window_reset_at,
-  limit_window_seconds = coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds)";
+  (
+    window_request_count, window_input_tokens, window_output_tokens, window_cached_tokens,
+    window_image_input_tokens, window_image_output_tokens,
+    window_image_request_count, window_image_request_failed_count,
+    window_started_at, window_reset_at, limit_window_seconds
+  ) = (
+    select
+      case when should_reset then 0 else account_usage.window_request_count end,
+      case when should_reset then 0 else account_usage.window_input_tokens end,
+      case when should_reset then 0 else account_usage.window_output_tokens end,
+      case when should_reset then 0 else account_usage.window_cached_tokens end,
+      case when should_reset then 0 else account_usage.window_image_input_tokens end,
+      case when should_reset then 0 else account_usage.window_image_output_tokens end,
+      case when should_reset then 0 else account_usage.window_image_request_count end,
+      case when should_reset then 0 else account_usage.window_image_request_failed_count end,
+      case when should_reset then $4 else account_usage.window_started_at end,
+      excluded.window_reset_at,
+      coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds)
+    from (
+      values (
+        account_usage.window_reset_at is not null
+        and account_usage.window_reset_at <> excluded.window_reset_at
+        and abs(extract(epoch from account_usage.window_reset_at - excluded.window_reset_at)) >=
+          case
+            when coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds, 0) > 0
+              then coalesce(excluded.limit_window_seconds, account_usage.limit_window_seconds) / 2
+            else 3600
+          end
+      )
+    ) as decision(should_reset)
+  )";
 
 const LIST_USAGE_SELECT_SQL: &str = r"
 select
@@ -192,15 +186,6 @@ pub struct AccountUsageDelta {
     pub image_request_failures: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AccountModelUsageDelta {
-    pub requests: u64,
-    pub errors: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cached_tokens: u64,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountUsageSnapshot {
     pub request_count: u64,
@@ -249,13 +234,6 @@ pub trait AccountUsageStore: Send + Sync + 'static {
         &self,
         account_id: &str,
         usage: AccountUsageDelta,
-    ) -> Result<(), AccountUsageStoreError>;
-
-    async fn record_model_usage_delta(
-        &self,
-        account_id: &str,
-        model: &str,
-        usage: AccountModelUsageDelta,
     ) -> Result<(), AccountUsageStoreError>;
 
     async fn sync_runtime_window(
@@ -378,33 +356,6 @@ impl PgAccountUsageStore {
         &self.pool
     }
 
-    /// 将每个账号的模型用量统计裁剪为最近使用的指定行数。
-    pub async fn trim_model_usage_to_limit(
-        &self,
-        max_models_per_account: NonZeroU32,
-    ) -> PgAccountUsageStoreResult<u64> {
-        let result = sqlx::query(
-            r"
-            delete from account_model_usage as target
-            using (
-              select account_id, model
-              from (
-                select account_id, model,
-                  row_number() over (partition by account_id order by last_used_at desc nulls last, model) as position
-                from account_model_usage
-              ) as ranked
-              where position > $1
-            ) as expired
-            where target.account_id = expired.account_id
-              and target.model = expired.model
-            ",
-        )
-        .bind(i64::from(max_models_per_account.get()))
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
-    }
-
     async fn load_snapshots(
         &self,
         account_ids: &[String],
@@ -480,30 +431,6 @@ where account_id in (",
         Ok(())
     }
 
-    async fn write_model_usage_delta(
-        &self,
-        account_id: &str,
-        model: &str,
-        delta: AccountModelUsageDelta,
-    ) -> PgAccountUsageStoreResult<()> {
-        let model = model.trim();
-        if model.is_empty() {
-            return Ok(());
-        }
-        sqlx::query(RECORD_MODEL_USAGE_SQL)
-            .bind(account_id)
-            .bind(model)
-            .bind(u64_to_i64_saturating(delta.requests))
-            .bind(u64_to_i64_saturating(delta.errors))
-            .bind(u64_to_i64_saturating(delta.input_tokens))
-            .bind(u64_to_i64_saturating(delta.output_tokens))
-            .bind(u64_to_i64_saturating(delta.cached_tokens))
-            .bind(Utc::now())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     async fn replace_runtime_window(
         &self,
         account_id: &str,
@@ -534,40 +461,14 @@ where account_id in (",
         reset_at: DateTime<Utc>,
         limit_window_seconds: Option<u64>,
     ) -> PgAccountUsageStoreResult<()> {
-        let existing = sqlx::query(
-            "select window_reset_at, limit_window_seconds from account_usage where account_id = $1",
-        )
-        .bind(account_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        let should_reset = existing
-            .as_ref()
-            .map(|row| {
-                should_reset_usage_window(
-                    row.get("window_reset_at"),
-                    optional_positive_i64_to_u64(row.get("limit_window_seconds")),
-                    reset_at,
-                    limit_window_seconds,
-                )
-            })
-            .unwrap_or_default();
         let limit_window_seconds = limit_window_seconds.map(u64_to_i64_saturating);
-        if should_reset {
-            sqlx::query(SYNC_RATE_LIMIT_WINDOW_RESET_SQL)
-                .bind(account_id)
-                .bind(Utc::now())
-                .bind(reset_at)
-                .bind(limit_window_seconds)
-                .execute(&self.pool)
-                .await?;
-        } else {
-            sqlx::query(SYNC_RATE_LIMIT_WINDOW_SQL)
-                .bind(account_id)
-                .bind(reset_at)
-                .bind(limit_window_seconds)
-                .execute(&self.pool)
-                .await?;
-        }
+        sqlx::query(SYNC_RATE_LIMIT_WINDOW_SQL)
+            .bind(account_id)
+            .bind(reset_at)
+            .bind(limit_window_seconds)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -627,17 +528,6 @@ impl AccountUsageStore for PgAccountUsageStore {
         usage: AccountUsageDelta,
     ) -> Result<(), AccountUsageStoreError> {
         self.write_usage_delta(account_id, usage)
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn record_model_usage_delta(
-        &self,
-        account_id: &str,
-        model: &str,
-        usage: AccountModelUsageDelta,
-    ) -> Result<(), AccountUsageStoreError> {
-        self.write_model_usage_delta(account_id, model, usage)
             .await
             .map_err(Into::into)
     }

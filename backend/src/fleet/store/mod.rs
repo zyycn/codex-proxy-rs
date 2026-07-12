@@ -94,11 +94,13 @@ pub struct AccountClaimsUpdate {
     pub status: AccountStatus,
 }
 
-/// 通过导入数据更新已有账号。
+/// 账号导入的完整原子写入数据。
 #[derive(Debug)]
-pub struct ImportedAccountUpdate {
-    /// 新建账号数据。
+pub struct ImportedAccountUpsert {
+    /// 账号身份和凭据。
     pub account: NewAccount,
+    /// 下一次刷新时间。
+    pub next_refresh_at: Option<DateTime<Utc>>,
     /// 缓存配额 JSON。
     pub quota_json: Option<String>,
     /// 配额抓取时间。

@@ -115,10 +115,10 @@ async fn model_service_should_return_builtin_catalog_when_store_is_missing() {
 async fn model_service_catalog_should_use_loaded_memory_snapshot() {
     let store = Arc::new(InMemorySnapshotStore::default());
     store
-        .replace_plan_snapshot(&ModelPlanSnapshot::from_backend_entries(
+        .replace_plan_snapshots(&[ModelPlanSnapshot::from_backend_entries(
             "plus",
             backend_models("gpt-6"),
-        ))
+        )])
         .await
         .unwrap();
     let service = ModelService::new(test_model_config(), Some(store.clone()), None);
@@ -264,14 +264,17 @@ struct InMemorySnapshotStore {
 
 #[async_trait]
 impl ModelSnapshotStore for InMemorySnapshotStore {
-    async fn replace_plan_snapshot(
+    async fn replace_plan_snapshots(
         &self,
-        snapshot: &ModelPlanSnapshot,
+        snapshots: &[ModelPlanSnapshot],
     ) -> ModelSnapshotStoreResult<()> {
-        self.snapshots
-            .lock()
-            .await
-            .insert(snapshot.plan_type.clone(), snapshot.clone());
+        let mut stored = self.snapshots.lock().await;
+        stored.clear();
+        stored.extend(
+            snapshots
+                .iter()
+                .map(|snapshot| (snapshot.plan_type.clone(), snapshot.clone())),
+        );
         Ok(())
     }
 

@@ -14,6 +14,7 @@ import {
 } from '@lucide/vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
+import { ApiError } from '@/api/request'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 
@@ -34,6 +35,7 @@ export function useDashboard(): any {
   const loading = ref(false)
   const refreshing = ref(false)
   const trendLoading = ref(false)
+  const errorMessage = ref('')
   const lastRefreshedAt = ref('')
   let trendRequestId = 0
   const { resume: startAutoRefresh } = useIntervalFn(
@@ -48,9 +50,10 @@ export function useDashboard(): any {
     if (loading.value || refreshing.value) return
     try {
       loading.value = true
+      errorMessage.value = ''
       await loadDashboardSnapshot()
     } catch (error) {
-      console.error('Failed to load dashboard data:', error)
+      errorMessage.value = dashboardErrorMessage(error, '概览加载失败')
     } finally {
       loading.value = false
     }
@@ -60,11 +63,12 @@ export function useDashboard(): any {
     if (loading.value || refreshing.value) return
     refreshing.value = true
     try {
+      errorMessage.value = ''
       await withMinimumDuration(async () => {
         await loadDashboardSnapshot()
       })
     } catch (error) {
-      console.error('Failed to refresh dashboard data:', error)
+      errorMessage.value = dashboardErrorMessage(error, '概览刷新失败')
     } finally {
       refreshing.value = false
     }
@@ -76,12 +80,13 @@ export function useDashboard(): any {
     const requestId = nextTrendRequestId()
     try {
       trendLoading.value = true
+      errorMessage.value = ''
       const trend = await getDashboardTrend({ kind: trendKind })
       if (isCurrentTrendRequest(requestId, trendKind)) {
         applyTrend(trend)
       }
     } catch (error) {
-      console.error('Failed to load dashboard trend:', error)
+      errorMessage.value = dashboardErrorMessage(error, '趋势加载失败')
     } finally {
       if (isCurrentTrendRequest(requestId, trendKind)) {
         trendLoading.value = false
@@ -420,6 +425,12 @@ export function useDashboard(): any {
     return '--cp-info'
   }
 
+  function dashboardErrorMessage(error: unknown, fallback: string) {
+    if (!(error instanceof ApiError)) return fallback
+    const requestId = error.requestId ? `（请求 ID：${error.requestId}）` : ''
+    return `${error.message || fallback}${requestId}`
+  }
+
   onMounted(() => {
     void loadDashboardData()
     startAutoRefresh()
@@ -429,6 +440,7 @@ export function useDashboard(): any {
     loading,
     refreshing,
     trendLoading,
+    errorMessage,
     activeTrendKind,
     lastRefreshedAt,
     metrics,

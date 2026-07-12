@@ -1,14 +1,10 @@
 //! Codex WebSocket 连接池。
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
 
 use super::websocket_pump::{PumpKeepalive, PumpedWebSocket};

@@ -58,6 +58,34 @@ async fn client_key_service_should_verify_by_unique_key_and_defer_last_used_flus
 }
 
 #[tokio::test]
+async fn client_key_service_should_flush_last_used_after_debounce() {
+    let (store, _dir) = client_key_store("client-keys-runtime-auto-flush").await;
+    let created = KeyManageService::new(store.clone())
+        .create("runtime-auto-flush")
+        .await
+        .unwrap();
+    let runtime = KeyVerifier::new(store.clone());
+    runtime.verify(&created.key).await.unwrap();
+
+    tokio::task::yield_now().await;
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    tokio::time::resume();
+    for _ in 0..100 {
+        if store
+            .get(&created.id)
+            .await
+            .unwrap()
+            .is_some_and(|key| key.last_used_at.is_some())
+        {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("last_used_at was not flushed after the debounce interval");
+}
+
+#[tokio::test]
 async fn client_key_service_should_not_accept_disabled_keys() {
     let (store, _dir) = client_key_store("client-keys-runtime-disabled").await;
     let created = KeyManageService::new(store.clone())
