@@ -129,22 +129,6 @@ curl http://127.0.0.1:8080/v1/responses \
   }'
 ```
 
-官方 Codex 使用自定义 provider 时，可在 `~/.codex/config.toml` 中启用 Responses WebSocket：
-
-```toml
-model_provider = "codex-proxy-rs"
-
-[model_providers.codex-proxy-rs]
-name = "Codex Proxy RS"
-base_url = "https://your-domain.example/v1"
-env_key = "CODEX_PROXY_API_KEY"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = true
-```
-
-`CODEX_PROXY_API_KEY` 的值为管理端创建的 `sk_...` 客户端 Key。HTTPS 反向代理必须转发 WebSocket 的 `Upgrade` 和 `Connection` 请求头。
-
 可用接口：
 
 | 路由 | 说明 |
