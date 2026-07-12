@@ -43,7 +43,7 @@ tokio = { version = "1.52.3", default-features = false, features = ["macros", "r
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.6.11", features = ["trace", "cors", "request-id", "timeout", "fs"] }
+tower-http = { version = "0.7.0", features = ["trace", "cors", "request-id", "timeout", "fs"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
