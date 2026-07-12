@@ -16,12 +16,6 @@
 
 # Runtime data
 /.runtime/
-*.sqlite
-*.sqlite3
-*.sqlite-*
-*.db
-*.db-shm
-*.db-wal
 *.log
 
 # Local configuration and secrets

@@ -77,7 +77,7 @@ cd backend
 cargo run -- serve
 ```
 
-`main.rs` 还提供内部维护命令 `import-sqlite` 和 `rebuild-buckets`。SQLite 导入只面向历史 schema v3，不是运行时存储路径。
+`main.rs` 还提供内部维护命令 `rebuild-buckets`，用于从保留期内的请求事实重建聚合桶。
 
 ## 存储边界
 

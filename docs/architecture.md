@@ -81,7 +81,6 @@ backend/src/
 
 - `main.rs`：命令行入口。
   - `serve` 或无参数：启动 HTTP 服务。
-  - `import-sqlite <path.sqlite>`：把 SQLite v3 历史库一次性导入空的 PostgreSQL。
   - `rebuild-buckets`：从保留期内的成功、失败事实重建请求时间桶。
 - `lib.rs`：导出后端顶层模块，供二进制和集成测试使用。
 
@@ -331,9 +330,6 @@ bootstrap/
 ├── services.rs
 ├── state.rs
 ├── shutdown.rs
-├── import_sqlite/
-│   ├── core.rs
-│   └── telemetry.rs
 └── tasks/
     ├── coordinator.rs
     ├── periodic.rs
@@ -350,7 +346,6 @@ bootstrap/
 - `services.rs`：创建存储、领域服务、上游客户端、路由和后台任务。
 - `state.rs`：进程级运行配置和 PostgreSQL/Redis 健康检查。
 - `shutdown.rs`：信号、管理端重启和进程替换协调。
-- `import_sqlite`：SQLite v3 到空 PostgreSQL 的一次性事务导入。
 - `tasks/coordinator.rs`：统一启动和关闭后台任务。
 
 ## 启动流程
