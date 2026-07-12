@@ -88,7 +88,6 @@ pub(in crate::dispatch) async fn record_response_affinity(
         } else {
             crate::upstream::openai::protocol::responses::PreviousResponseScope::ConnectionLocal
         },
-        replay: history.completed_replay(original_request, &metadata.output),
         created_at: Utc::now(),
     };
     if let Err(error) = session_affinity

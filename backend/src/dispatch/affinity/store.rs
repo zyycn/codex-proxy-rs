@@ -1,15 +1,276 @@
 //! Redis 会话亲和存储。
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Duration, Utc};
 use redis::AsyncCommands;
-use serde_json::Value;
 use thiserror::Error;
 
 use crate::infra::redis::RedisConnection;
 
 use super::types::SessionAffinityEntry;
+
+/// 单会话保留的最近响应元数据数量。
+pub const MAX_CONVERSATION_AFFINITIES: usize = 128;
+/// 单账号保留的最近响应索引数量。
+pub const MAX_ACCOUNT_AFFINITIES: usize = 16_384;
+/// Redis 全局保留的最近响应元数据数量。
+pub const MAX_GLOBAL_AFFINITIES: usize = 65_536;
+/// Redis 全局响应元数据 JSON 字节预算。
+pub const MAX_GLOBAL_AFFINITY_BYTES: u64 = 128 * 1024 * 1024;
+
+const MAX_AFFINITY_METADATA_BYTES: usize = 64 * 1024;
+const GLOBAL_STALE_CLEANUP_BATCH: usize = 256;
+const AFFINITY_VERSION: &str = "affinity:v3";
+
+const UPSERT_SCRIPT: &str = r#"
+local response_id = ARGV[1]
+local metadata_json = ARGV[2]
+local score = tonumber(ARGV[3])
+local expires_at = tonumber(ARGV[4])
+local ttl_seconds = tonumber(ARGV[5])
+local cutoff_ms = tonumber(ARGV[6])
+local response_prefix = ARGV[7]
+local conversation_prefix = ARGV[8]
+local account_prefix = ARGV[9]
+local max_conversation = tonumber(ARGV[10])
+local max_account = tonumber(ARGV[11])
+local max_global = tonumber(ARGV[12])
+local max_global_bytes = tonumber(ARGV[13])
+local stale_cleanup_batch = tonumber(ARGV[14])
+
+local current = cjson.decode(metadata_json)
+local conversation_id = current.conversationId
+local account_id = current.accountId
+
+local function decrement_bytes(size)
+  if size <= 0 then
+    return
+  end
+  local remaining = redis.call('DECRBY', KEYS[5], size)
+  if remaining <= 0 then
+    redis.call('DEL', KEYS[5])
+  end
+end
+
+local function read_info(id)
+  local raw = redis.call('HGET', KEYS[6], id)
+  if not raw then
+    return nil
+  end
+  local ok, info = pcall(cjson.decode, raw)
+  if not ok then
+    redis.call('HDEL', KEYS[6], id)
+    return nil
+  end
+  return info
+end
+
+local function remove_response(id)
+  local response_key = response_prefix .. id
+  local info = read_info(id)
+  local metadata = nil
+  local raw = redis.call('GET', response_key)
+  if raw then
+    local ok, decoded = pcall(cjson.decode, raw)
+    if ok then
+      metadata = decoded
+    end
+  end
+
+  local stored_conversation_id = info and info.conversationId or metadata and metadata.conversationId
+  local stored_account_id = info and info.accountId or metadata and metadata.accountId
+  local metadata_bytes = info and tonumber(info.metadataBytes or 0)
+    or redis.call('STRLEN', response_key)
+
+  redis.call('UNLINK', response_key)
+  redis.call('ZREM', KEYS[4], id)
+  redis.call('HDEL', KEYS[6], id)
+  redis.call('ZREM', KEYS[2], id)
+  redis.call('ZREM', KEYS[3], id)
+  decrement_bytes(metadata_bytes)
+  if stored_conversation_id then
+    redis.call('ZREM', conversation_prefix .. stored_conversation_id, id)
+  end
+  if stored_account_id then
+    redis.call('ZREM', account_prefix .. stored_account_id, id)
+  end
+end
+
+local function trim_index(key, max_members)
+  local excess = redis.call('ZCARD', key) - max_members
+  if excess <= 0 then
+    return
+  end
+  local ids = redis.call('ZRANGE', key, 0, excess - 1)
+  for _, id in ipairs(ids) do
+    remove_response(id)
+  end
+end
+
+local previous_info = read_info(response_id)
+if previous_info then
+  if previous_info.conversationId and previous_info.conversationId ~= conversation_id then
+    redis.call('ZREM', conversation_prefix .. previous_info.conversationId, response_id)
+  end
+  if previous_info.accountId and previous_info.accountId ~= account_id then
+    redis.call('ZREM', account_prefix .. previous_info.accountId, response_id)
+  end
+end
+local previous_bytes = previous_info and tonumber(previous_info.metadataBytes or 0)
+  or redis.call('STRLEN', KEYS[1])
+local metadata_bytes = string.len(metadata_json)
+
+redis.call('SET', KEYS[1], metadata_json, 'EXAT', expires_at)
+redis.call('ZADD', KEYS[2], score, response_id)
+redis.call('EXPIRE', KEYS[2], ttl_seconds)
+redis.call('ZADD', KEYS[3], score, response_id)
+redis.call('EXPIRE', KEYS[3], ttl_seconds)
+redis.call('ZADD', KEYS[4], score, response_id)
+redis.call('EXPIRE', KEYS[4], ttl_seconds)
+redis.call('INCRBY', KEYS[5], metadata_bytes - previous_bytes)
+redis.call('EXPIRE', KEYS[5], ttl_seconds)
+redis.call('HSET', KEYS[6], response_id, cjson.encode({
+  conversationId = conversation_id,
+  accountId = account_id,
+  metadataBytes = metadata_bytes,
+}))
+redis.call('EXPIRE', KEYS[6], ttl_seconds)
+
+local stale_conversation_ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', cutoff_ms)
+for _, id in ipairs(stale_conversation_ids) do
+  remove_response(id)
+end
+local stale_account_ids = redis.call(
+  'ZRANGEBYSCORE', KEYS[3], '-inf', cutoff_ms, 'LIMIT', 0, stale_cleanup_batch
+)
+for _, id in ipairs(stale_account_ids) do
+  remove_response(id)
+end
+local stale_global_ids = redis.call(
+  'ZRANGEBYSCORE', KEYS[4], '-inf', cutoff_ms, 'LIMIT', 0, stale_cleanup_batch
+)
+for _, id in ipairs(stale_global_ids) do
+  remove_response(id)
+end
+
+trim_index(KEYS[2], max_conversation)
+trim_index(KEYS[3], max_account)
+trim_index(KEYS[4], max_global)
+
+while tonumber(redis.call('GET', KEYS[5]) or '0') > max_global_bytes do
+  local oldest = redis.call('ZRANGE', KEYS[4], 0, 0)
+  if #oldest == 0 then
+    redis.call('DEL', KEYS[5])
+    break
+  end
+  remove_response(oldest[1])
+end
+
+return 1
+"#;
+
+const FORGET_SCRIPT: &str = r#"
+local response_id = ARGV[1]
+local response_prefix = ARGV[2]
+local conversation_prefix = ARGV[3]
+local account_prefix = ARGV[4]
+local response_key = response_prefix .. response_id
+local info_json = redis.call('HGET', KEYS[3], response_id)
+local metadata_json = redis.call('GET', response_key)
+if not info_json and not metadata_json then
+  return 0
+end
+
+local info = nil
+if info_json then
+  local ok, decoded = pcall(cjson.decode, info_json)
+  if ok then
+    info = decoded
+  end
+end
+local metadata = nil
+if metadata_json then
+  local ok, decoded = pcall(cjson.decode, metadata_json)
+  if ok then
+    metadata = decoded
+  end
+end
+local conversation_id = info and info.conversationId or metadata and metadata.conversationId
+local account_id = info and info.accountId or metadata and metadata.accountId
+local metadata_bytes = info and tonumber(info.metadataBytes or 0)
+  or redis.call('STRLEN', response_key)
+
+redis.call('UNLINK', response_key)
+redis.call('ZREM', KEYS[1], response_id)
+redis.call('HDEL', KEYS[3], response_id)
+if metadata_bytes > 0 then
+  local remaining = redis.call('DECRBY', KEYS[2], metadata_bytes)
+  if remaining <= 0 then
+    redis.call('DEL', KEYS[2])
+  end
+end
+if conversation_id then
+  redis.call('ZREM', conversation_prefix .. conversation_id, response_id)
+end
+if account_id then
+  redis.call('ZREM', account_prefix .. account_id, response_id)
+end
+return 1
+"#;
+
+const FORGET_ACCOUNT_SCRIPT: &str = r#"
+local account_id = ARGV[1]
+local response_prefix = ARGV[2]
+local conversation_prefix = ARGV[3]
+local account_prefix = ARGV[4]
+local account_key = account_prefix .. account_id
+local response_ids = redis.call('ZRANGE', account_key, 0, -1)
+
+local function decrement_bytes(size)
+  if size <= 0 then
+    return
+  end
+  local remaining = redis.call('DECRBY', KEYS[3], size)
+  if remaining <= 0 then
+    redis.call('DEL', KEYS[3])
+  end
+end
+
+for _, response_id in ipairs(response_ids) do
+  local response_key = response_prefix .. response_id
+  local info_json = redis.call('HGET', KEYS[4], response_id)
+  local metadata_json = redis.call('GET', response_key)
+  local info = nil
+  if info_json then
+    local ok, decoded = pcall(cjson.decode, info_json)
+    if ok then
+      info = decoded
+    end
+  end
+  local metadata = nil
+  if metadata_json then
+    local ok, decoded = pcall(cjson.decode, metadata_json)
+    if ok then
+      metadata = decoded
+    end
+  end
+  local stored_account_id = info and info.accountId or metadata and metadata.accountId
+  if stored_account_id == account_id then
+    local conversation_id = info and info.conversationId or metadata and metadata.conversationId
+    local metadata_bytes = info and tonumber(info.metadataBytes or 0)
+      or redis.call('STRLEN', response_key)
+    redis.call('UNLINK', response_key)
+    redis.call('ZREM', KEYS[2], response_id)
+    redis.call('HDEL', KEYS[4], response_id)
+    decrement_bytes(metadata_bytes)
+    if conversation_id then
+      redis.call('ZREM', conversation_prefix .. conversation_id, response_id)
+    end
+  end
+end
+
+redis.call('DEL', account_key)
+return #response_ids
+"#;
 
 /// Redis 会话亲和性存储。
 #[derive(Clone)]
@@ -24,6 +285,8 @@ pub enum RedisSessionAffinityStoreError {
     Redis(#[from] redis::RedisError),
     #[error("invalid Redis session affinity value: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("session affinity metadata is too large: {bytes} bytes exceeds {max} bytes")]
+    MetadataTooLarge { bytes: usize, max: usize },
 }
 
 pub type RedisSessionAffinityStoreResult<T> = Result<T, RedisSessionAffinityStoreError>;
@@ -39,7 +302,6 @@ impl RedisSessionAffinityStore {
         entry: &SessionAffinityEntry,
         ttl: Duration,
     ) -> RedisSessionAffinityStoreResult<()> {
-        let value = serde_json::to_string(entry)?;
         let expires_at = entry
             .created_at
             .checked_add_signed(ttl)
@@ -48,50 +310,40 @@ impl RedisSessionAffinityStore {
             return Ok(());
         }
 
-        let response_key = self.response_key(response_id);
-        let conversation_key = self.conversation_key(&entry.conversation_id);
-        let account_key = self.account_key(&entry.account_id);
+        let metadata_json = serde_json::to_string(entry)?;
+        if metadata_json.len() > MAX_AFFINITY_METADATA_BYTES {
+            return Err(RedisSessionAffinityStoreError::MetadataTooLarge {
+                bytes: metadata_json.len(),
+                max: MAX_AFFINITY_METADATA_BYTES,
+            });
+        }
+
         let ttl_seconds = ttl.num_seconds().max(1);
         let cutoff_ms = Utc::now().timestamp_millis() - ttl.num_milliseconds();
         let mut connection = self.redis.manager();
-        let mut transaction = redis::pipe();
-        transaction
-            .atomic()
-            .cmd("SET")
-            .arg(response_key)
-            .arg(value)
-            .arg("EXAT")
+        let _: i64 = redis::Script::new(UPSERT_SCRIPT)
+            .key(self.response_key(response_id))
+            .key(self.conversation_key(&entry.conversation_id))
+            .key(self.account_key(&entry.account_id))
+            .key(self.global_index_key())
+            .key(self.global_bytes_key())
+            .key(self.global_info_key())
+            .arg(response_id)
+            .arg(metadata_json)
+            .arg(entry.created_at.timestamp_millis())
             .arg(expires_at.timestamp())
-            .ignore()
-            .cmd("ZADD")
-            .arg(&conversation_key)
-            .arg(entry.created_at.timestamp_millis())
-            .arg(response_id)
-            .ignore()
-            .cmd("EXPIRE")
-            .arg(&conversation_key)
             .arg(ttl_seconds)
-            .ignore()
-            .cmd("ZADD")
-            .arg(&account_key)
-            .arg(entry.created_at.timestamp_millis())
-            .arg(response_id)
-            .ignore()
-            .cmd("EXPIRE")
-            .arg(&account_key)
-            .arg(ttl_seconds)
-            .ignore()
-            .cmd("ZREMRANGEBYSCORE")
-            .arg(conversation_key)
-            .arg("-inf")
             .arg(cutoff_ms)
-            .ignore()
-            .cmd("ZREMRANGEBYSCORE")
-            .arg(&account_key)
-            .arg("-inf")
-            .arg(cutoff_ms)
-            .ignore();
-        let _: () = transaction.query_async(&mut connection).await?;
+            .arg(self.response_key_prefix())
+            .arg(self.conversation_key_prefix())
+            .arg(self.account_key_prefix())
+            .arg(MAX_CONVERSATION_AFFINITIES)
+            .arg(MAX_ACCOUNT_AFFINITIES)
+            .arg(MAX_GLOBAL_AFFINITIES)
+            .arg(MAX_GLOBAL_AFFINITY_BYTES)
+            .arg(GLOBAL_STALE_CLEANUP_BATCH)
+            .invoke_async(&mut connection)
+            .await?;
         Ok(())
     }
 
@@ -128,163 +380,14 @@ impl RedisSessionAffinityStore {
     ) -> RedisSessionAffinityStoreResult<Option<(String, SessionAffinityEntry)>> {
         let conversation_key = self.conversation_key(conversation_id);
         let mut connection = self.redis.manager();
-        let response_ids: Vec<String> = connection.zrevrange(&conversation_key, 0, -1).await?;
-        for response_id in response_ids {
-            let Some(entry) = self.get(&response_id, now, ttl).await? else {
-                let _: usize = connection.zrem(&conversation_key, &response_id).await?;
-                continue;
-            };
-            if entry.conversation_id != conversation_id {
-                let _: usize = connection.zrem(&conversation_key, &response_id).await?;
-                continue;
-            }
-            if variant_hash.is_some_and(|expected| entry.variant_hash.as_deref() != Some(expected))
-            {
-                continue;
-            }
-            if max_age.is_some_and(|max_age| now.signed_duration_since(entry.created_at) > max_age)
-            {
-                continue;
-            }
-            return Ok(Some((response_id, entry)));
-        }
-        Ok(None)
-    }
-
-    pub async fn replay_input(
-        &self,
-        response_id: &str,
-        head: &SessionAffinityEntry,
-        now: DateTime<Utc>,
-        ttl: Duration,
-        max_depth: u16,
-        max_total_bytes: u64,
-    ) -> RedisSessionAffinityStoreResult<Option<Vec<Value>>> {
-        let Some(head_snapshot) = head.replay.as_ref() else {
-            return Ok(None);
-        };
-        if head_snapshot.depth == 0
-            || head_snapshot.depth > max_depth
-            || head_snapshot.total_bytes > max_total_bytes
-        {
-            return Ok(None);
-        }
-
-        let conversation_key = self.conversation_key(&head.conversation_id);
-        let mut connection = self.redis.manager();
-        let response_ids: Vec<String> = redis::cmd("ZREVRANGEBYSCORE")
+        let response_ids: Vec<String> = redis::cmd("ZREVRANGE")
             .arg(&conversation_key)
-            .arg(head.created_at.timestamp_millis())
-            .arg("-inf")
-            .arg("LIMIT")
             .arg(0)
-            .arg(max_depth)
+            .arg(MAX_CONVERSATION_AFFINITIES.saturating_sub(1))
             .query_async(&mut connection)
             .await?;
-        if !response_ids
-            .iter()
-            .any(|candidate| candidate == response_id)
-        {
-            return Ok(None);
-        }
-
-        let response_keys = response_ids
-            .iter()
-            .map(|candidate| self.response_key(candidate))
-            .collect::<Vec<_>>();
-        let values: Vec<Option<String>> = redis::cmd("MGET")
-            .arg(&response_keys)
-            .query_async(&mut connection)
-            .await?;
-        let mut entries = HashMap::with_capacity(values.len());
-        for (candidate, value) in response_ids.into_iter().zip(values) {
-            let Some(value) = value else {
-                continue;
-            };
-            let entry: SessionAffinityEntry = serde_json::from_str(&value)?;
-            if entry.conversation_id == head.conversation_id
-                && entry
-                    .created_at
-                    .checked_add_signed(ttl)
-                    .is_some_and(|expires_at| expires_at > now)
-            {
-                entries.insert(candidate, entry);
-            }
-        }
-
-        let mut current_id = response_id.to_string();
-        let mut expected_depth = head_snapshot.depth;
-        let mut expected_total_bytes = head_snapshot.total_bytes;
-        let mut nodes = Vec::with_capacity(usize::from(expected_depth));
-        loop {
-            let Some(entry) = entries.get(&current_id) else {
-                return Ok(None);
-            };
-            let Some(snapshot) = entry.replay.as_ref() else {
-                return Ok(None);
-            };
-            if snapshot.depth != expected_depth || snapshot.total_bytes != expected_total_bytes {
-                return Ok(None);
-            }
-            let node_bytes = replay_node_bytes(snapshot)?;
-            if node_bytes > expected_total_bytes {
-                return Ok(None);
-            }
-            nodes.push((snapshot.turn_input.clone(), snapshot.turn_output.clone()));
-
-            match snapshot.parent_response_id.as_deref() {
-                None if expected_depth == 1 && expected_total_bytes == node_bytes => break,
-                Some(parent_response_id) if expected_depth > 1 => {
-                    expected_depth -= 1;
-                    expected_total_bytes -= node_bytes;
-                    current_id = parent_response_id.to_string();
-                }
-                None | Some(_) => return Ok(None),
-            }
-        }
-
-        nodes.reverse();
-        let mut full_input = Vec::new();
-        for (mut input, mut output) in nodes {
-            full_input.append(&mut input);
-            full_input.append(&mut output);
-        }
-        Ok(Some(full_input))
-    }
-
-    pub async fn forget(&self, response_id: &str) -> RedisSessionAffinityStoreResult<bool> {
-        let response_key = self.response_key(response_id);
-        let mut connection = self.redis.manager();
-        let value: Option<String> = connection.get(&response_key).await?;
-        let Some(value) = value else {
-            return Ok(false);
-        };
-        let entry: SessionAffinityEntry = serde_json::from_str(&value)?;
-        let mut transaction = redis::pipe();
-        transaction
-            .atomic()
-            .cmd("DEL")
-            .arg(response_key)
-            .ignore()
-            .cmd("ZREM")
-            .arg(self.conversation_key(&entry.conversation_id))
-            .arg(response_id)
-            .ignore()
-            .cmd("ZREM")
-            .arg(self.account_key(&entry.account_id))
-            .arg(response_id)
-            .ignore();
-        let _: () = transaction.query_async(&mut connection).await?;
-        Ok(true)
-    }
-
-    pub async fn forget_account(&self, account_id: &str) -> RedisSessionAffinityStoreResult<u64> {
-        let account_key = self.account_key(account_id);
-        let mut connection = self.redis.manager();
-        let response_ids: Vec<String> = connection.zrange(&account_key, 0, -1).await?;
         if response_ids.is_empty() {
-            let _: usize = connection.del(account_key).await?;
-            return Ok(0);
+            return Ok(None);
         }
 
         let response_keys = response_ids
@@ -292,67 +395,105 @@ impl RedisSessionAffinityStore {
             .map(|response_id| self.response_key(response_id))
             .collect::<Vec<_>>();
         let values: Vec<Option<String>> = redis::cmd("MGET")
-            .arg(&response_keys)
+            .arg(response_keys)
             .query_async(&mut connection)
             .await?;
-        let mut conversation_members = Vec::with_capacity(response_ids.len());
-        for (response_id, value) in response_ids.iter().zip(values) {
+        let mut stale_ids = Vec::new();
+        let mut result = None;
+        for (response_id, value) in response_ids.into_iter().zip(values) {
             let Some(value) = value else {
+                stale_ids.push(response_id);
                 continue;
             };
-            match serde_json::from_str::<SessionAffinityEntry>(&value) {
-                Ok(entry) if entry.account_id == account_id => {
-                    conversation_members.push((response_id, entry.conversation_id));
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        response_id,
-                        account_id,
-                        "account affinity index points to another account"
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        response_id,
-                        account_id,
-                        error = %error,
-                        "invalid account affinity entry removed during account cleanup"
-                    );
-                }
+            let entry: SessionAffinityEntry = serde_json::from_str(&value)?;
+            if entry.conversation_id != conversation_id
+                || entry
+                    .created_at
+                    .checked_add_signed(ttl)
+                    .is_none_or(|expires_at| expires_at <= now)
+            {
+                stale_ids.push(response_id);
+                continue;
             }
+            if variant_hash.is_some_and(|expected| entry.variant_hash.as_deref() != Some(expected))
+                || max_age
+                    .is_some_and(|max_age| now.signed_duration_since(entry.created_at) > max_age)
+            {
+                continue;
+            }
+            result = Some((response_id, entry));
+            break;
         }
+        if !stale_ids.is_empty() {
+            let _: usize = connection.zrem(conversation_key, stale_ids).await?;
+        }
+        Ok(result)
+    }
 
-        let mut transaction = redis::pipe();
-        transaction.atomic().cmd("DEL").arg(&response_keys).ignore();
-        for (response_id, conversation_id) in &conversation_members {
-            transaction
-                .cmd("ZREM")
-                .arg(self.conversation_key(conversation_id))
-                .arg(response_id)
-                .ignore();
-        }
-        transaction.cmd("DEL").arg(account_key).ignore();
-        let _: () = transaction.query_async(&mut connection).await?;
-        Ok(response_ids.len() as u64)
+    pub async fn forget(&self, response_id: &str) -> RedisSessionAffinityStoreResult<bool> {
+        let mut connection = self.redis.manager();
+        let forgotten: i64 = redis::Script::new(FORGET_SCRIPT)
+            .key(self.global_index_key())
+            .key(self.global_bytes_key())
+            .key(self.global_info_key())
+            .arg(response_id)
+            .arg(self.response_key_prefix())
+            .arg(self.conversation_key_prefix())
+            .arg(self.account_key_prefix())
+            .invoke_async(&mut connection)
+            .await?;
+        Ok(forgotten > 0)
+    }
+
+    pub async fn forget_account(&self, account_id: &str) -> RedisSessionAffinityStoreResult<u64> {
+        let mut connection = self.redis.manager();
+        let forgotten: u64 = redis::Script::new(FORGET_ACCOUNT_SCRIPT)
+            .key(self.account_key(account_id))
+            .key(self.global_index_key())
+            .key(self.global_bytes_key())
+            .key(self.global_info_key())
+            .arg(account_id)
+            .arg(self.response_key_prefix())
+            .arg(self.conversation_key_prefix())
+            .arg(self.account_key_prefix())
+            .invoke_async(&mut connection)
+            .await?;
+        Ok(forgotten)
     }
 
     fn response_key(&self, response_id: &str) -> String {
-        self.redis.key(&format!("affinity:v2:resp:{response_id}"))
+        format!("{}{response_id}", self.response_key_prefix())
     }
 
     fn conversation_key(&self, conversation_id: &str) -> String {
-        self.redis
-            .key(&format!("affinity:v2:conv:{conversation_id}"))
+        format!("{}{conversation_id}", self.conversation_key_prefix())
     }
 
     fn account_key(&self, account_id: &str) -> String {
-        self.redis.key(&format!("affinity:v2:account:{account_id}"))
+        format!("{}{account_id}", self.account_key_prefix())
     }
-}
 
-fn replay_node_bytes(
-    snapshot: &super::types::ResponseReplaySnapshot,
-) -> Result<u64, serde_json::Error> {
-    serde_json::to_vec(&(&snapshot.turn_input, &snapshot.turn_output))
-        .map(|value| value.len() as u64)
+    fn global_index_key(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:global:index"))
+    }
+
+    fn global_bytes_key(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:global:bytes"))
+    }
+
+    fn global_info_key(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:global:info"))
+    }
+
+    fn response_key_prefix(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:resp:"))
+    }
+
+    fn conversation_key_prefix(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:conv:"))
+    }
+
+    fn account_key_prefix(&self) -> String {
+        self.redis.key(&format!("{AFFINITY_VERSION}:account:"))
+    }
 }

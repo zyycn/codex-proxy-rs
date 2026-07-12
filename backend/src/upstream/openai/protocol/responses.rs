@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -68,6 +68,8 @@ pub struct CodexResponsesRequest {
     pub parent_thread_id: Option<String>,
     /// 已知 previous response 的持久化范围，仅用于本地 transport 校验。
     pub previous_response_scope: Option<PreviousResponseScope>,
+    /// 当前下游 WebSocket 持有的完整历史前缀，仅用于连接内换号恢复。
+    pub local_replay_input: Option<Arc<Vec<Value>>>,
     /// 流式响应在交给下游前的本地提交策略。
     pub stream_commit_policy: StreamCommitPolicy,
 }
@@ -537,6 +539,7 @@ impl CodexResponsesRequest {
             codex_window_id: None,
             parent_thread_id: None,
             previous_response_scope: None,
+            local_replay_input: None,
             stream_commit_policy: StreamCommitPolicy::FirstForwardableEvent,
         }
     }

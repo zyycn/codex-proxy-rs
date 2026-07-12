@@ -53,8 +53,9 @@ const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 const WEBSOCKET_RECEIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const WEBSOCKET_SEND_TIMEOUT: Duration = WEBSOCKET_ACTIVE_STREAM_IDLE_TIMEOUT;
 const WEBSOCKET_STREAM_BUFFER: usize = 16;
-const WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS: usize = 2;
 /// WebSocket audit artifact 输出目录环境变量。
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
@@ -188,10 +189,9 @@ pub use frames::{
 };
 use frames::{
     WebSocketStreamPoolReturn, WebSocketTerminalKind, audit_header_value,
-    collect_websocket_response, is_initial_event_timeout,
-    prefetch_stream_frames_until_output_or_terminal, reusable_websocket_metadata,
-    reused_stream_prefetch_error, stream_websocket_response, websocket_audit_file_name,
-    websocket_connection_metadata,
+    collect_websocket_response, prefetch_stream_frames_until_output_or_terminal,
+    reusable_websocket_metadata, reused_stream_prefetch_error, stream_websocket_response,
+    websocket_audit_file_name, websocket_connection_metadata,
 };
 
 impl CodexWebSocketRequest {
@@ -327,11 +327,34 @@ async fn connect_websocket(
     let connector = super::tls::maybe_build_rustls_client_config_with_custom_ca()
         .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?
         .map(Connector::Rustls);
-    match connect_async_tls_with_config(request, Some(websocket_config()), false, connector).await {
+    let result = timeout(
+        WEBSOCKET_CONNECT_TIMEOUT,
+        connect_async_tls_with_config(request, Some(websocket_config()), false, connector),
+    )
+    .await
+    .map_err(|_| CodexWebSocketExchangeError::ConnectTimeout {
+        timeout: WEBSOCKET_CONNECT_TIMEOUT,
+    })?;
+    match result {
         Ok((websocket, response)) => Ok((websocket, response)),
         Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
         Err(error) => Err(error.into()),
     }
+}
+
+async fn send_websocket_request(
+    websocket: &PumpedWebSocket,
+    payload_text: &str,
+) -> Result<(), CodexWebSocketExchangeError> {
+    timeout(
+        WEBSOCKET_SEND_TIMEOUT,
+        websocket.send(Message::Text(payload_text.to_string().into())),
+    )
+    .await
+    .map_err(|_| CodexWebSocketExchangeError::SendTimeout {
+        timeout: WEBSOCKET_SEND_TIMEOUT,
+    })??;
+    Ok(())
 }
 
 /// 建立连接并交给后台 pump 托管；`keepalive` 决定该连接是否做主动保活。
@@ -420,9 +443,7 @@ async fn execute_fresh_response_create_request(
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
     let (websocket, response) =
         connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
-    websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await?;
+    send_websocket_request(&websocket, request.payload_text()).await?;
 
     let metadata = websocket_connection_metadata(&response);
     let (exchange, websocket, _metadata, _continuation, _terminal) = collect_websocket_response(
@@ -444,9 +465,7 @@ async fn execute_fresh_response_create_request_stream(
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let (mut websocket, response) =
         connect_pumped_websocket(request.connection(), PumpKeepalive::disabled()).await?;
-    websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await?;
+    send_websocket_request(&websocket, request.payload_text()).await?;
 
     let mut metadata = websocket_connection_metadata(&response);
     let prefetched_frames = if should_prefetch_until_output_or_terminal(request) {
@@ -475,41 +494,6 @@ async fn execute_fresh_response_create_request_stream(
     ))
 }
 
-async fn execute_fresh_response_create_request_with_retries(
-    request: &CodexWebSocketRequest,
-    started_at: Instant,
-    initial_event_timeout: Option<Duration>,
-    attempts: usize,
-) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    let attempts = attempts.max(1);
-    for attempt in 1..=attempts {
-        match execute_fresh_response_create_request(request, started_at, initial_event_timeout)
-            .await
-        {
-            Ok(exchange) => return Ok(exchange),
-            Err(error) if attempt < attempts && is_initial_event_timeout(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("fresh websocket retry loop always returns");
-}
-
-async fn execute_fresh_response_create_request_stream_with_retries(
-    request: &CodexWebSocketRequest,
-    initial_event_timeout: Option<Duration>,
-    attempts: usize,
-) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
-    let attempts = attempts.max(1);
-    for attempt in 1..=attempts {
-        match execute_fresh_response_create_request_stream(request, initial_event_timeout).await {
-            Ok(exchange) => return Ok(exchange),
-            Err(error) if attempt < attempts && is_initial_event_timeout(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("fresh websocket stream retry loop always returns");
-}
-
 // ---------------------------------------------------------------------------
 // Pool-aware execution
 // ---------------------------------------------------------------------------
@@ -526,11 +510,10 @@ pub(crate) async fn execute_response_create_request_with_pool(
                 PreviousResponseUnavailableReason::PoolUnavailable,
             ));
         }
-        return execute_fresh_response_create_request_with_retries(
+        return execute_fresh_response_create_request(
             request,
             started_at,
             fallback_initial_event_timeout,
-            WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
         )
         .await;
     };
@@ -564,11 +547,10 @@ pub(crate) async fn execute_response_create_request_with_pool(
                             PreviousResponseUnavailableReason::ReusedConnectionLost,
                         ));
                     }
-                    let mut exchange = execute_fresh_response_create_request_with_retries(
+                    let mut exchange = execute_fresh_response_create_request(
                         request,
                         started_at,
                         pool.initial_event_timeout(),
-                        WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
                     )
                     .await?;
                     exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
@@ -591,24 +573,10 @@ pub(crate) async fn execute_response_create_request_with_pool(
             let result =
                 execute_fresh_pooled_response_create_request(request, pool, lease, started_at)
                     .await;
-            match result {
-                Ok(mut exchange) => {
-                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                    Ok(exchange)
-                }
-                Err(error) if is_initial_event_timeout(&error) => {
-                    let mut exchange = execute_fresh_response_create_request_with_retries(
-                        request,
-                        started_at,
-                        pool.initial_event_timeout(),
-                        1,
-                    )
-                    .await?;
-                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                    Ok(exchange)
-                }
-                Err(error) => Err(error),
-            }
+            result.map(|mut exchange| {
+                exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                exchange
+            })
         }
         WebSocketPoolAcquire::Bypass(reason) => {
             if !request.continuation().permits_fresh_connection() {
@@ -622,11 +590,10 @@ pub(crate) async fn execute_response_create_request_with_pool(
                     }
                 }));
             }
-            let mut exchange = execute_fresh_response_create_request_with_retries(
+            let mut exchange = execute_fresh_response_create_request(
                 request,
                 started_at,
                 pool.initial_event_timeout(),
-                WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
             )
             .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
@@ -646,10 +613,9 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
                 PreviousResponseUnavailableReason::PoolUnavailable,
             ));
         }
-        return execute_fresh_response_create_request_stream_with_retries(
+        return execute_fresh_response_create_request_stream(
             request,
             fallback_initial_event_timeout,
-            WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
         )
         .await;
     };
@@ -678,10 +644,9 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
                             PreviousResponseUnavailableReason::ReusedConnectionLost,
                         ));
                     }
-                    let mut exchange = execute_fresh_response_create_request_stream_with_retries(
+                    let mut exchange = execute_fresh_response_create_request_stream(
                         request,
                         pool.initial_event_timeout(),
-                        WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
                     )
                     .await?;
                     exchange.pool_decision = Some(WebSocketPoolDecision::retry_after_stale_reuse());
@@ -703,23 +668,10 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
             }
             let result =
                 execute_fresh_pooled_response_create_request_stream(request, pool, lease).await;
-            match result {
-                Ok(mut exchange) => {
-                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                    Ok(exchange)
-                }
-                Err(error) if is_initial_event_timeout(&error) => {
-                    let mut exchange = execute_fresh_response_create_request_stream_with_retries(
-                        request,
-                        pool.initial_event_timeout(),
-                        1,
-                    )
-                    .await?;
-                    exchange.pool_decision = Some(WebSocketPoolDecision::new());
-                    Ok(exchange)
-                }
-                Err(error) => Err(error),
-            }
+            result.map(|mut exchange| {
+                exchange.pool_decision = Some(WebSocketPoolDecision::new());
+                exchange
+            })
         }
         WebSocketPoolAcquire::Bypass(reason) => {
             if !request.continuation().permits_fresh_connection() {
@@ -733,12 +685,9 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
                     }
                 }));
             }
-            let mut exchange = execute_fresh_response_create_request_stream_with_retries(
-                request,
-                pool.initial_event_timeout(),
-                WEBSOCKET_FIRST_TOKEN_FRESH_RETRY_ATTEMPTS,
-            )
-            .await?;
+            let mut exchange =
+                execute_fresh_response_create_request_stream(request, pool.initial_event_timeout())
+                    .await?;
             exchange.pool_decision = Some(WebSocketPoolDecision::bypass(reason));
             Ok(exchange)
         }
@@ -765,12 +714,9 @@ async fn execute_fresh_pooled_response_create_request(
                 return Err(error);
             }
         };
-    if let Err(error) = websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await
-    {
+    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
         lease.discard().await;
-        return Err(error.into());
+        return Err(error);
     }
 
     let now = tokio::time::Instant::now();
@@ -823,12 +769,9 @@ async fn execute_fresh_pooled_response_create_request_stream(
                 return Err(error);
             }
         };
-    if let Err(error) = websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await
-    {
+    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
         lease.discard().await;
-        return Err(error.into());
+        return Err(error);
     }
 
     let now = tokio::time::Instant::now();
@@ -871,10 +814,7 @@ async fn execute_pooled_response_create_request(
     connection: PooledWebSocketConnection,
     started_at: Instant,
 ) -> Result<CodexWebSocketExchange, CodexWebSocketExchangeError> {
-    if let Err(error) = connection
-        .websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await
+    if let Err(error) = send_websocket_request(&connection.websocket, request.payload_text()).await
     {
         lease.discard().await;
         return Err(
@@ -931,10 +871,7 @@ async fn execute_pooled_response_create_request_stream(
     let mut metadata = reusable_websocket_metadata(connection.metadata);
     let created_at = connection.created_at;
     let continuation = connection.continuation;
-    if let Err(error) = websocket
-        .send(Message::Text(request.payload_text().to_string().into()))
-        .await
-    {
+    if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
         lease.discard().await;
         return Err(
             CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput {

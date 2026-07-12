@@ -16,7 +16,7 @@ use codex_proxy_rs::{
     api::router,
     bootstrap::config::AppConfig,
     bootstrap::services::{Services, UsageRecordOptions},
-    dispatch::affinity::{ResponseReplaySnapshot, SessionAffinityEntry},
+    dispatch::affinity::SessionAffinityEntry,
     fleet::{account::AccountStatus, cookies::PgCookieStore},
     infra::identity::hash_credential,
     telemetry::usage::store::{PgUsageRecordStore, UsageRecordFilter},
@@ -61,19 +61,6 @@ fn websocket_accept_config() -> WebSocketConfig {
     let mut config = WebSocketConfig::default();
     config.extensions = extensions;
     config
-}
-
-fn replay_snapshot(turn_input: Vec<Value>, turn_output: Vec<Value>) -> ResponseReplaySnapshot {
-    let total_bytes = serde_json::to_vec(&(&turn_input, &turn_output))
-        .unwrap()
-        .len() as u64;
-    ResponseReplaySnapshot {
-        parent_response_id: None,
-        turn_input,
-        turn_output,
-        depth: 1,
-        total_bytes,
-    }
 }
 
 pub(crate) async fn accept_async(stream: TcpStream) -> Result<WebSocketStream<TcpStream>, WsError> {
@@ -287,32 +274,6 @@ pub(crate) async fn test_app_with_account(
     (router::router().with_state(state), api_key, dir)
 }
 
-async fn test_app_with_account_and_state(
-    base_url: String,
-) -> (
-    axum::Router,
-    AppState,
-    String,
-    crate::support::storage::TestDatabaseGuard,
-) {
-    let (pool, dir) = init_test_db("openai-chat-upstream-state").await;
-    let api_key = insert_client_api_key(&pool).await;
-    insert_account(&pool).await;
-    let state = test_app_state_with_pool(&test_config(test_database_url(), base_url), pool).await;
-    state
-        .services
-        .account_pool
-        .restore_from_store()
-        .await
-        .expect("account pool should restore");
-    (
-        router::router().with_state(state.clone()),
-        state,
-        api_key,
-        dir,
-    )
-}
-
 async fn test_app_with_account_and_pool(
     base_url: String,
 ) -> (
@@ -492,13 +453,6 @@ async fn test_app_with_two_accounts_and_affinity(
                 function_call_ids: Vec::new(),
                 variant_hash: None,
                 continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
-                replay: Some(replay_snapshot(
-                    vec![json!({
-                        "role": "user",
-                        "content": "Original managed history"
-                    })],
-                    Vec::new(),
-                )),
                 created_at: now,
             },
         )
@@ -511,79 +465,6 @@ async fn test_app_with_two_accounts_and_affinity(
         .await
         .expect("account pool should restore");
     (router::router().with_state(state), api_key, dir)
-}
-
-async fn test_app_with_two_accounts_and_affinity_status(
-    base_url: String,
-    affinity_account_status: &str,
-) -> (
-    axum::Router,
-    AppState,
-    String,
-    PgPool,
-    crate::support::storage::TestDatabaseGuard,
-) {
-    let (pool, dir) = init_test_db(&format!(
-        "openai-responses-affinity-{affinity_account_status}"
-    ))
-    .await;
-    let api_key = insert_client_api_key(&pool).await;
-    insert_named_account(&pool, "acct_primary", "access-primary", "chatgpt-primary").await;
-    insert_named_account(
-        &pool,
-        "acct_affinity",
-        "access-affinity",
-        "chatgpt-affinity",
-    )
-    .await;
-    sqlx::query("update accounts set status = $1 where id = $2")
-        .bind(affinity_account_status)
-        .bind("acct_affinity")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let now = Utc::now();
-    let state =
-        test_app_state_with_pool(&test_config(test_database_url(), base_url), pool.clone()).await;
-    state
-        .services
-        .session_affinity
-        .record(
-            "resp_affinity_risk".to_string(),
-            SessionAffinityEntry {
-                account_id: "acct_affinity".to_string(),
-                conversation_id: "conv_affinity_risk".to_string(),
-                turn_state: Some("turn_affinity_risk".to_string()),
-                instructions_hash: None,
-                input_tokens: None,
-                function_call_ids: Vec::new(),
-                variant_hash: None,
-                continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
-                replay: Some(replay_snapshot(
-                    vec![json!({
-                        "role": "user",
-                        "content": "Original affinity history"
-                    })],
-                    Vec::new(),
-                )),
-                created_at: now,
-            },
-        )
-        .await
-        .unwrap();
-    state
-        .services
-        .account_pool
-        .restore_from_store()
-        .await
-        .expect("account pool should restore");
-    (
-        router::router().with_state(state.clone()),
-        state,
-        api_key,
-        pool,
-        dir,
-    )
 }
 
 async fn test_app_with_two_accounts(
@@ -807,7 +688,6 @@ async fn insert_session_affinity(
                 function_call_ids: Vec::new(),
                 variant_hash: None,
                 continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
-                replay: None,
                 created_at: Utc::now(),
             },
         )

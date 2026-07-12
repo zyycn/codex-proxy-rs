@@ -1,14 +1,11 @@
 //! 调度层共享的账号级 Codex 上游调用。
 
-use std::{future::Future, time::Instant};
+use std::time::Instant;
 
 use serde_json::Value;
 
 use crate::{
-    dispatch::{
-        affinity::AccountIdentityService, errors::is_retryable_upstream_5xx_error,
-        recovery::cloudflare::CloudflareRecovery,
-    },
+    dispatch::{affinity::AccountIdentityService, recovery::cloudflare::CloudflareRecovery},
     fleet::{
         account::Account,
         pool::{AccountLease, AccountPoolService},
@@ -184,7 +181,7 @@ pub(crate) async fn create_response_with_account(
         .await
 }
 
-async fn create_response_stream_with_account(
+pub(crate) async fn create_response_stream_with_account(
     context: AccountUpstreamContext<'_>,
     request: &CodexResponsesRequest,
 ) -> Result<CodexBackendStreamingResponse, CodexClientError> {
@@ -221,98 +218,4 @@ async fn create_response_stream_with_account(
             Some(&context.account.id),
         )
         .await
-}
-
-const MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT: usize = 2;
-
-async fn retry_upstream_5xx<T, F, Fut>(
-    request_id: &str,
-    account_id: &str,
-    endpoint: Option<&str>,
-    retry_message: &'static str,
-    mut operation: F,
-) -> Result<T, CodexClientError>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<T, CodexClientError>>,
-{
-    let mut retries = 0;
-    loop {
-        let result = operation().await;
-        match result {
-            Err(error)
-                if is_retryable_upstream_5xx_error(&error)
-                    && retries < MAX_UPSTREAM_5XX_RETRIES_PER_ACCOUNT =>
-            {
-                log_upstream_retry(
-                    request_id,
-                    account_id,
-                    endpoint,
-                    retries + 1,
-                    &error,
-                    retry_message,
-                );
-                retries += 1;
-            }
-            Ok(response) => return Ok(response),
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-fn log_upstream_retry(
-    request_id: &str,
-    account_id: &str,
-    endpoint: Option<&str>,
-    retry: usize,
-    error: &CodexClientError,
-    message: &'static str,
-) {
-    if let Some(endpoint) = endpoint {
-        tracing::debug!(
-            request_id,
-            account_id = %account_id,
-            endpoint,
-            retry,
-            error = %error,
-            message
-        );
-    } else {
-        tracing::debug!(
-            request_id,
-            account_id = %account_id,
-            retry,
-            error = %error,
-            message
-        );
-    }
-}
-
-pub(crate) async fn create_response_with_account_retrying_5xx(
-    context: AccountUpstreamContext<'_>,
-    request: &CodexResponsesRequest,
-    started_at: Instant,
-) -> Result<CodexBackendResponse, CodexClientError> {
-    retry_upstream_5xx(
-        context.request_id,
-        &context.account.id,
-        None,
-        "upstream response request failed with retryable 5xx",
-        || create_response_with_account(context, request, started_at),
-    )
-    .await
-}
-
-pub(crate) async fn create_response_stream_with_account_retrying_5xx(
-    context: AccountUpstreamContext<'_>,
-    request: &CodexResponsesRequest,
-) -> Result<CodexBackendStreamingResponse, CodexClientError> {
-    retry_upstream_5xx(
-        context.request_id,
-        &context.account.id,
-        None,
-        "upstream response stream request failed with retryable 5xx",
-        || create_response_stream_with_account(context, request),
-    )
-    .await
 }

@@ -122,6 +122,82 @@ async fn responses_websocket_should_forward_multiple_response_create_requests_on
 }
 
 #[tokio::test]
+async fn responses_websocket_should_replay_connection_history_after_previous_response_not_found() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let (first_stream, _) = upstream_listener.accept().await.unwrap();
+        let mut first = accept_upstream_websocket(first_stream).await.unwrap();
+        let initial = receive_upstream_request(&mut first).await;
+        send_upstream_response(&mut first, "resp_first", "first answer").await;
+
+        let continued = receive_upstream_request(&mut first).await;
+        first
+            .send(Message::Text(
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "resp_missing",
+                        "status": "failed",
+                        "error": {
+                            "code": "previous_response_not_found",
+                            "message": "Previous response with id resp_first was not found",
+                        },
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        first.close(None).await.unwrap();
+
+        let (replay_stream, _) = upstream_listener.accept().await.unwrap();
+        let mut replay = accept_upstream_websocket(replay_stream).await.unwrap();
+        let replayed = receive_upstream_request(&mut replay).await;
+        send_upstream_response(&mut replay, "resp_recovered", "recovered").await;
+        (initial, continued, replayed)
+    });
+    let (app, api_key, _dir) =
+        crate::dispatch::service::test_app_with_account(upstream_base_url).await;
+    let server = spawn_app(app).await;
+    let mut websocket = connect_responses_websocket(server.address, &api_key).await;
+
+    let mut first_payload: Value = serde_json::from_str(&response_create_payload("first")).unwrap();
+    first_payload["input"][0]["id"] = json!("client_input_id");
+    first_payload["input"][0]["encrypted_content"] = json!("client_secret");
+    websocket
+        .send(Message::Text(first_payload.to_string().into()))
+        .await
+        .unwrap();
+    let first = receive_response(&mut websocket).await;
+    assert_eq!(first.last().unwrap()["response"]["id"], "resp_first");
+
+    let mut second_payload: Value =
+        serde_json::from_str(&response_create_payload("second")).unwrap();
+    second_payload["previous_response_id"] = json!("resp_first");
+    websocket
+        .send(Message::Text(second_payload.to_string().into()))
+        .await
+        .unwrap();
+    let second = receive_response(&mut websocket).await;
+    let (initial, continued, replayed) = upstream.await.unwrap();
+
+    assert_eq!(second.last().unwrap()["response"]["id"], "resp_recovered");
+    assert_eq!(initial["input"][0]["content"], "first");
+    assert_eq!(continued["previous_response_id"], "resp_first");
+    assert_eq!(continued["input"][0]["content"], "second");
+    assert!(replayed.get("previous_response_id").is_none());
+    assert_eq!(replayed["input"][0]["content"], "first");
+    assert_eq!(replayed["input"][1]["role"], "assistant");
+    assert_eq!(replayed["input"][2]["content"], "second");
+    let replayed_json = replayed.to_string();
+    assert!(!replayed_json.contains("client_input_id"));
+    assert!(!replayed_json.contains("client_secret"));
+    assert!(!replayed_json.contains("assistant_output_resp_first"));
+}
+
+#[tokio::test]
 async fn responses_websocket_should_allow_official_retry_after_midstream_upstream_disconnect() {
     let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_base_url = format!("http://{}", upstream_listener.local_addr().unwrap());
@@ -237,6 +313,12 @@ async fn send_upstream_response(
                 "id": response_id,
                 "object": "response",
                 "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "id": format!("assistant_output_{response_id}"),
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                }],
                 "usage": {
                     "input_tokens": 3,
                     "output_tokens": 1,
@@ -250,6 +332,11 @@ async fn send_upstream_response(
             .await
             .unwrap();
     }
+}
+
+async fn receive_upstream_request(websocket: &mut WebSocketStream<tokio::net::TcpStream>) -> Value {
+    let request = websocket.next().await.unwrap().unwrap();
+    serde_json::from_str(&request.into_text().unwrap()).unwrap()
 }
 
 async fn receive_response<S>(websocket: &mut WebSocketStream<S>) -> Vec<Value>

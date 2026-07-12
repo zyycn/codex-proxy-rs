@@ -17,6 +17,7 @@ const OPENAI_OAUTH_AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/aut
 const OPENAI_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_OAUTH_SCOPE: &str = "openid profile email offline_access";
 const OAUTH_SESSION_TTL_MINUTES: i64 = 30;
+const MAX_PENDING_OAUTH_SESSIONS: usize = 1_024;
 
 #[derive(Clone)]
 pub struct AccountOAuthService {
@@ -51,6 +52,14 @@ impl AccountOAuthService {
 
         let mut sessions = self.sessions.lock().await;
         sessions.retain(|_, session| session.expires_at > now);
+        if sessions.len() >= MAX_PENDING_OAUTH_SESSIONS
+            && let Some(oldest_id) = sessions
+                .iter()
+                .min_by_key(|(_, session)| session.expires_at)
+                .map(|(session_id, _)| session_id.clone())
+        {
+            sessions.remove(&oldest_id);
+        }
         sessions.insert(session_id.clone(), session);
         drop(sessions);
 

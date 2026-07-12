@@ -212,6 +212,49 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
     assert_eq!(retry_after_seconds, Some(12));
 }
 
+#[tokio::test(start_paused = true)]
+async fn codex_backend_http_sse_should_fail_after_five_minutes_without_stream_data() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _request = read_http_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        std::future::pending::<()>().await;
+    });
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    );
+    let mut request =
+        codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest::new_http_sse(
+            "gpt-5.5",
+            "",
+            Vec::new(),
+        );
+    request.force_http_sse = true;
+
+    let mut response = client
+        .create_response_stream(&request, request_context("req_http_idle", Some("acct")))
+        .await
+        .unwrap();
+    let next = tokio::spawn(async move { response.body.next().await });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5 * 60)).await;
+
+    let Some(Err(CodexClientError::StreamIdleTimeout { timeout })) = next.await.unwrap() else {
+        panic!("expected HTTP/SSE idle timeout");
+    };
+    assert_eq!(timeout, Duration::from_secs(5 * 60));
+    server.abort();
+}
+
 #[tokio::test]
 async fn codex_backend_client_should_capture_only_safe_response_metadata() {
     let server = wiremock::MockServer::start().await;

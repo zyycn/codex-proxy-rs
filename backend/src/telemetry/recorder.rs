@@ -20,6 +20,8 @@ use crate::{
     upstream::openai::protocol::responses::CodexResponsesRequest,
 };
 
+const MAX_CAPTURED_BODY_BYTES: usize = 4 * 1024;
+
 /// 成功与失败事实的唯一写入入口。
 #[derive(Clone)]
 pub struct Recorder {
@@ -82,6 +84,10 @@ impl Recorder {
         apply_error_capture_body_policy(&mut event, self.capture_body);
         self.ops_errors.append(&event).await?;
         Ok(())
+    }
+
+    pub(crate) fn captures_body(&self) -> bool {
+        self.capture_body
     }
 }
 
@@ -175,25 +181,53 @@ fn is_usage_fact(event: &UsageRecord) -> bool {
 }
 
 fn apply_success_capture_body_policy(event: &mut UsageRecord, capture_body: bool) {
-    if capture_body {
-        return;
+    if !capture_body {
+        remove_body_fields(&mut event.metadata);
+    } else {
+        limit_body_fields(&mut event.metadata);
     }
-    remove_body_fields(&mut event.metadata);
 }
 
 fn apply_error_capture_body_policy(event: &mut OpsErrorLog, capture_body: bool) {
-    let Some(metadata) = event.metadata.as_object_mut() else {
+    if !capture_body {
+        remove_body_fields(&mut event.metadata);
+    } else {
+        limit_body_fields(&mut event.metadata);
+    }
+}
+
+fn limit_body_fields(metadata: &mut Value) {
+    let Some(metadata) = metadata.as_object_mut() else {
         return;
     };
     for key in body_fields() {
-        if capture_body {
-            if let Some(Value::String(value)) = metadata.get_mut(key) {
-                value.truncate(4096);
+        let Some(value) = metadata.get_mut(key) else {
+            continue;
+        };
+        match value {
+            Value::String(value) => truncate_utf8(value, MAX_CAPTURED_BODY_BYTES),
+            value => {
+                let Ok(mut encoded) = serde_json::to_string(value) else {
+                    continue;
+                };
+                if encoded.len() > MAX_CAPTURED_BODY_BYTES {
+                    truncate_utf8(&mut encoded, MAX_CAPTURED_BODY_BYTES);
+                    *value = Value::String(encoded);
+                }
             }
-        } else {
-            metadata.remove(key);
         }
     }
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) {
+    if value.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
 }
 
 fn remove_body_fields(metadata: &mut Value) {

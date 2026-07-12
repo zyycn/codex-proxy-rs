@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use reqwest::{
     Client, Response as ReqwestResponse, StatusCode,
     header::{
@@ -53,6 +53,8 @@ use super::websocket_pool::{
 // ---------------------------------------------------------------------------
 
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 type ReqwestClientCacheKey = (bool, Option<String>);
@@ -75,6 +77,7 @@ pub fn build_reqwest_client(force_http11: bool) -> Result<Client, CustomCaError>
         .use_rustls_tls()
         .no_proxy()
         .pool_max_idle_per_host(4)
+        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
         .tcp_keepalive(Duration::from_secs(30))
         .gzip(true)
         .brotli(true)
@@ -114,6 +117,12 @@ pub enum CodexClientError {
     /// SSE 响应解析失败。
     #[error("invalid upstream SSE response: {0}")]
     InvalidSse(#[from] SseError),
+    /// HTTP/SSE 上游在空闲窗口内没有发送任何数据。
+    #[error("upstream HTTP/SSE stream idle for {timeout:?}")]
+    StreamIdleTimeout {
+        /// 相邻数据块允许的最大空闲时间。
+        timeout: Duration,
+    },
     /// WebSocket 请求编码失败。
     #[error("failed to encode websocket request: {0}")]
     WebSocketEncode(#[source] serde_json::Error),

@@ -73,7 +73,7 @@ async fn responses_should_succeed_when_redis_affinity_write_fails() {
         .unwrap();
     let mut connection = redis.manager();
     let _: () = redis::cmd("SET")
-        .arg(redis.key("affinity:v2:account:acct_chat"))
+        .arg(redis.key("affinity:v3:account:acct_chat"))
         .arg("wrong-type")
         .query_async(&mut connection)
         .await
@@ -908,7 +908,7 @@ async fn responses_stream_should_not_record_first_token_when_metadata_only_prefi
 }
 
 #[tokio::test]
-async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() {
+async fn responses_should_record_one_request_when_single_account_returns_5xx() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -950,7 +950,7 @@ async fn responses_should_record_request_count_when_5xx_retries_are_exhausted() 
             .unwrap();
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(authorizations.len(), 3, "requests: {authorizations:?}");
+    assert_eq!(authorizations.len(), 1, "requests: {authorizations:?}");
     assert_eq!(failed_usage.map(|row| row.0).unwrap_or_default(), 1);
     let event = latest_response_upstream_ops_error_log(&pool).await;
     let metadata: Value = serde_json::from_str(&event.metadata_json).unwrap();
@@ -976,7 +976,7 @@ async fn responses_should_record_attempt_trace_after_retrying_another_account() 
         .respond_with(ResponseTemplate::new(500).set_body_json(json!({
             "error": {"message": "secondary failed"}
         })))
-        .expect(3)
+        .expect(1)
         .mount(&server)
         .await;
 

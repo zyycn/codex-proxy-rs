@@ -1194,7 +1194,7 @@ async fn responses_external_previous_response_not_found_should_return_exact_upst
 }
 
 #[tokio::test]
-async fn responses_managed_history_should_rebuild_full_replay_for_next_configured_candidate() {
+async fn responses_managed_history_without_local_transcript_should_not_fan_out() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -1202,17 +1202,6 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
         .respond_with(ResponseTemplate::new(401).set_body_json(json!({
             "error": {"code": "token_revoked", "message": "token revoked"}
         })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/codex/responses"))
-        .and(header("authorization", "Bearer access-secondary"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(RESPONSES_SUCCESS_SSE),
-        )
         .expect(1)
         .mount(&server)
         .await;
@@ -1232,18 +1221,6 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
                 function_call_ids: Vec::new(),
                 variant_hash: None,
                 continuation_scope: codex_proxy_rs::upstream::openai::protocol::responses::PreviousResponseScope::Persisted,
-                replay: Some(replay_snapshot(
-                    vec![
-                        json!({"role": "user", "content": "Earlier question"}),
-                        json!({
-                            "type": "reasoning",
-                            "id": "reasoning-old",
-                            "encrypted_content": "account-bound-secret",
-                            "summary": []
-                        }),
-                    ],
-                    Vec::new(),
-                )),
                 created_at: Utc::now(),
             },
         )
@@ -1272,26 +1249,19 @@ async fn responses_managed_history_should_rebuild_full_replay_for_next_configure
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     let requests = server.received_requests().await.unwrap();
-    let secondary = requests
-        .iter()
-        .find(|request| {
-            request
-                .headers
-                .get("authorization")
-                .and_then(|value| value.to_str().ok())
-                == Some("Bearer access-secondary")
-        })
-        .expect("secondary request");
-    let body: Value = serde_json::from_slice(&secondary.body).unwrap();
-    assert!(body.get("previous_response_id").is_none());
-    assert_eq!(body["input"][0]["content"], "Earlier question");
-    assert!(body["input"][1].get("id").is_none());
-    assert!(body["input"][1].get("encrypted_content").is_none());
-    assert_eq!(body["input"][2]["content"], "Current question");
-    assert!(secondary.headers.get("x-codex-turn-state").is_none());
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer access-primary")
+    );
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["previous_response_id"], "resp_managed");
 }
 
 #[tokio::test]
@@ -1956,7 +1926,7 @@ async fn responses_stream_should_return_cloudflare_path_block_error_when_404_fal
 }
 
 #[tokio::test]
-async fn responses_should_retry_same_account_after_5xx_before_fallback() {
+async fn responses_should_rotate_account_after_5xx_without_same_account_retry() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -1964,12 +1934,12 @@ async fn responses_should_retry_same_account_after_5xx_before_fallback() {
         .respond_with(ResponseTemplate::new(500).set_body_json(json!({
             "error": {"message": "temporary upstream failure"}
         })))
-        .up_to_n_times(2)
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
-        .and(header("authorization", "Bearer access-primary"))
+        .and(header("authorization", "Bearer access-secondary"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -2014,8 +1984,8 @@ async fn responses_should_retry_same_account_after_5xx_before_fallback() {
 
     assert_eq!(status, StatusCode::OK, "requests: {authorizations:?}");
     assert_eq!(body["id"], "resp_after_5xx_retry");
-    assert_eq!(primary_requests, 3, "requests: {authorizations:?}");
-    assert_eq!(secondary_requests, 0, "requests: {authorizations:?}");
+    assert_eq!(primary_requests, 1, "requests: {authorizations:?}");
+    assert_eq!(secondary_requests, 1, "requests: {authorizations:?}");
 }
 
 #[tokio::test]
@@ -2075,7 +2045,7 @@ async fn responses_should_traverse_all_configured_strategy_candidates_without_fi
 }
 
 #[tokio::test]
-async fn responses_stream_should_retry_same_account_after_5xx_before_fallback() {
+async fn responses_stream_should_rotate_account_after_5xx_without_same_account_retry() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
@@ -2083,12 +2053,12 @@ async fn responses_stream_should_retry_same_account_after_5xx_before_fallback() 
         .respond_with(ResponseTemplate::new(500).set_body_json(json!({
             "error": {"message": "temporary upstream failure"}
         })))
-        .up_to_n_times(2)
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
-        .and(header("authorization", "Bearer access-primary"))
+        .and(header("authorization", "Bearer access-secondary"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -2140,8 +2110,8 @@ async fn responses_stream_should_retry_same_account_after_5xx_before_fallback() 
     assert_eq!(status, StatusCode::OK, "requests: {authorizations:?}");
     assert!(content_type.starts_with("text/event-stream"));
     assert!(body.contains("resp_stream_after_5xx_retry"));
-    assert_eq!(primary_requests, 3, "requests: {authorizations:?}");
-    assert_eq!(secondary_requests, 0, "requests: {authorizations:?}");
+    assert_eq!(primary_requests, 1, "requests: {authorizations:?}");
+    assert_eq!(secondary_requests, 1, "requests: {authorizations:?}");
 }
 
 #[tokio::test]

@@ -244,11 +244,11 @@ dispatch/
 
 - `service.rs`：非流式 Responses 主循环。
 - `stream/lifecycle.rs`：流式 Responses 主循环。
-- `upstream_call.rs`：把账号凭据、账号作用域身份和 Cookie 交给上游客户端，处理单账号有限重试。
+- `upstream_call.rs`：把账号凭据、账号作用域身份和 Cookie 交给上游客户端。
 - `attempts.rs`：在请求开始时冻结完整候选顺序，记录已尝试、忙碌和状态排除的账号。
 - `errors.rs`：错误分类与客户端错误映射。
 - `recording.rs`：把调度轨迹和上游诊断写入 `telemetry::Recorder`。
-- `affinity`：会话亲和、账号作用域身份、Redis 索引和响应历史快照。
+- `affinity`：会话亲和、账号作用域身份和 Redis 响应归属索引。
 - `recovery`：账号风险隔离、Cloudflare 冷却、候选耗尽和 previous response 恢复。
 - `stream`：首段预取、SSE 失败识别、下游流转发和结束时结算。
 
@@ -378,7 +378,7 @@ bootstrap/
 5. `AccountAttemptLedger` 按当前调度策略冻结完整候选顺序。会话亲和账号可以排在前面，但不会绕过可用性检查。
 6. 账号池租用并发槽位，必要时先刷新 quota；请求间隔在发送上游前执行。
 7. `upstream_call` 注入账号 token、`chatgpt-account-id`、账号作用域身份、指纹请求头和 Cookie。
-8. 上游通过 HTTP/SSE 或 WebSocket 返回结果。单账号可重试的 5xx 最多额外重试两次。
+8. 上游通过 HTTP/SSE 或 WebSocket 返回结果。建连最长等待 15 秒；WebSocket 发送后 20 秒没有任何上游事件时放弃异常连接，收到首个事件后与 HTTP/SSE 一样使用 5 分钟流空闲窗口。账号级 5xx 和传输故障回到候选账本，不在同一账号内叠加重试。
 9. 在结果尚未提交给客户端时，账号级失败可继续尝试候选账本中的下一个账号。
 10. 完成后更新账号用量、会话亲和、调度反馈和遥测事实，并释放账号槽位。
 
@@ -391,7 +391,7 @@ bootstrap/
 - `scheduler::candidates` 过滤非 active、配额不可用、模型不匹配、处于 Cloudflare 冷却或明确排除的账号。
 - 当前 `rotation_strategy` 对剩余账号排序。请求级快照保留所有符合条件的层级，层级只影响顺序，不缩小 failover 边界。
 
-单个请求的候选顺序在开始时冻结。瞬时并发槽位占满的账号进入 busy 队列，等待槽位变化后再判断；状态已经变化的账号被排除。候选账本不会重复取出同一个账号。单账号内部的 5xx 重试，以及 previous response 失效后在原账号执行的完整重放，是账本之外的明确重试。
+单个请求的候选顺序在开始时冻结。瞬时并发槽位占满的账号进入 busy 队列，最多等待 10 秒；状态已经变化的账号被排除。候选账本不会重复取出同一个账号。复用的 WebSocket 已失效时允许新建一次连接；当前下游 WebSocket 持有完整历史时，previous response 恢复可以在同账号或后续候选账号上重放。
 
 会触发账号隔离或换号的典型情况：
 
@@ -408,21 +408,17 @@ bootstrap/
 
 ## previous response 与流式恢复
 
-成功响应写入 Redis 亲和记录，保存响应 ID、账号 ID、会话 ID、turn state、变体哈希和受限的 replay 节点。
+成功响应写入 Redis 亲和记录，保存响应 ID、账号 ID、会话 ID、turn state 和变体哈希。Redis 不保存请求正文、响应正文或完整对话历史。
 
-previous response 分两类处理：
+完整历史只保存在当前下游 Responses WebSocket 的连接状态中。每次 `response.completed` 后，将本轮输入和上游输出追加到该连接的 transcript；写入前递归删除对象 `id` 和 `encrypted_content`，保留工具续接所需的 `call_id`。连接关闭时 transcript 随处理任务一并释放，不写入 Redis，也没有进程级共享 transcript 缓存。
 
-- 受管历史：Redis 能找到响应归属。先使用原账号和原 previous response；若上游返回 `previous_response_not_found`、连接续接忙碌或原连接不可复用，先在原账号执行完整历史重放。需要换号且 replay 完整时，其他账号也使用完整历史重放。
-- 外部未知历史：Redis 没有该响应。只能在第一个账号原样尝试一次，因为服务端没有足够历史安全地转移到其他账号；失败时保留上游错误。
+previous response 按历史来源处理：
 
-replay 按轮保存增量输入和输出，不保存每一轮累计的完整输入。写入前递归删除对象 ID 和 `encrypted_content`。容量边界：
+- 当前下游 WebSocket 有完整 transcript：先使用亲和账号和原 previous response。若上游返回 `previous_response_not_found`、连接忙碌或原连接失效，去掉 previous ID 后用完整 transcript 重放。账号级失败需要换号时，后续账号仍由当前调度策略选出，并接收同一份完整 transcript。
+- Redis 能找到归属但当前连接没有 transcript：只允许原账号按原请求续接；失败后不能把不完整上下文发给其他账号。
+- Redis 没有归属且当前连接也没有 transcript：在首个候选账号原样尝试一次，失败时保留上游错误。
 
-- 单轮 snapshot：2 MiB
-- 单会话累计 replay：16 MiB
-- 最大深度：128 轮
-- Redis TTL：4 小时
-
-超过任一边界时不再生成新的 replay 节点，正常代理响应不因此失败。
+新的下游 WebSocket 不继承上一条连接的 transcript。官方 Codex 客户端收到可重试断流后，从本地 Session 重新组装完整历史并建立新请求；该请求重新进入账号池调度。客户端单条 HTTP 请求或 WebSocket 文本帧上限为 16 MiB。
 
 流式请求只有在响应尚未提交给客户端时才能透明恢复或换号。首段预取会识别终止事件和账号级失败；一旦真实输出已经发给客户端，代理会用 `response.failed` 结束当前 SSE 或 WebSocket response，不能在另一账号上重放后拼接到已有输出。
 
@@ -483,11 +479,14 @@ Redis 使用统一的 `cpr:` 前缀。
 | `cpr:admin:session:<hash>` | 管理员登录会话 | `admin.session_ttl_minutes` |
 | `cpr:lease:refresh:<account_id>` | token 刷新租约 | 租约 PX TTL |
 | `cpr:models:plan_snapshots` | 各订阅计划模型快照 HASH | 下一次完整刷新替换 |
-| `cpr:affinity:v2:resp:<response_id>` | 响应归属和 replay 节点 | 4 小时 |
-| `cpr:affinity:v2:conv:<conversation_id>` | 会话响应 ZSET 索引 | 4 小时 |
-| `cpr:affinity:v2:account:<account_id>` | 账号响应 ZSET 索引 | 4 小时 |
+| `cpr:affinity:v3:resp:<response_id>` | 响应归属元数据 | 4 小时 |
+| `cpr:affinity:v3:conv:<conversation_id>` | 会话响应 ZSET 索引，最多 128 项 | 4 小时 |
+| `cpr:affinity:v3:account:<account_id>` | 账号响应 ZSET 索引，最多 16384 项 | 4 小时 |
+| `cpr:affinity:v3:global:index` | 全局响应 ZSET 索引，最多 65536 项 | 4 小时 |
+| `cpr:affinity:v3:global:bytes` | 亲和元数据总字节数 | 4 小时 |
+| `cpr:affinity:v3:global:info` | 亲和索引清理所需的归属与字节信息 | 4 小时 |
 
-账号删除时会批量删除该账号的亲和响应并清理会话索引。Redis 写入失败不应改变已经得到的上游响应语义，但会失去对应的会话恢复、模型缓存或分布式协调能力。
+亲和元数据单条不超过 64 KiB，全局最多 128 MiB。写入时惰性清理过期成员并执行会话、账号和全局裁剪。账号删除使用一段 Redis Lua 操作批量删除该账号的响应归属并清理会话索引。Redis 写入失败不改变已经得到的上游响应语义，但会失去对应的账号亲和、模型缓存或分布式协调能力。
 
 ### 本地文件
 
