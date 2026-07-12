@@ -474,7 +474,8 @@ where
     }
 
     async fn clear_scheduled_timer(&self, account_id: &str) -> bool {
-        if let Some(timer) = self.timers.lock().await.remove(account_id) {
+        let timer = self.timers.lock().await.remove(account_id);
+        if let Some(timer) = timer {
             timer.handle.abort();
             true
         } else {

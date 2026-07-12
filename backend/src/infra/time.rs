@@ -17,13 +17,6 @@ pub fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>, chrono::ParseErro
     Ok(DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc))
 }
 
-/// 将可选 RFC3339 字符串解析为 UTC 时间。
-pub fn parse_optional_rfc3339_utc(
-    value: Option<&str>,
-) -> Result<Option<DateTime<Utc>>, chrono::ParseError> {
-    value.map(parse_rfc3339_utc).transpose()
-}
-
 /// 返回从起点到当前的毫秒数，并在超过 i64 上限时饱和。
 pub fn elapsed_millis_i64(started_at: Instant) -> i64 {
     started_at.elapsed().as_millis().min(i64::MAX as u128) as i64

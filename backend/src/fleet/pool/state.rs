@@ -524,11 +524,6 @@ impl AccountPool {
         self.release_slot(&acquired.account.id, acquired.slot_id, true)
     }
 
-    /// 释放模型目录刷新选择的账号，不累计客户端请求用量。
-    pub fn release_distinct_plan_account(&mut self, selected: &DistinctPlanAccount) -> bool {
-        self.release_slot(&selected.account.id, selected.slot_id, false)
-    }
-
     pub(super) fn release_slot(
         &mut self,
         account_id: &str,

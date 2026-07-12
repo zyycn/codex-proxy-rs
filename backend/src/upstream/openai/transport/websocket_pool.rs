@@ -180,7 +180,7 @@ impl CodexWebSocketPool {
                 None => {}
             }
 
-            if self.config.max_per_account == 0
+            let acquire = if self.config.max_per_account == 0
                 || account_slot_count(&state.slots, key.account_id()) >= self.config.max_per_account
             {
                 WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
@@ -190,7 +190,9 @@ impl CodexWebSocketPool {
                     .slots
                     .insert(key.clone(), WebSocketPoolSlot::Busy(lease.reservation));
                 WebSocketPoolAcquire::FreshReserved(lease)
-            }
+            };
+            drop(state);
+            acquire
         };
 
         if let Some(connection) = expired_connection {
@@ -584,7 +586,7 @@ fn account_slot_count(
         .count()
 }
 
-async fn close_pooled_connection(mut connection: PooledWebSocketConnection) {
+async fn close_pooled_connection(connection: PooledWebSocketConnection) {
     connection.websocket.close().await;
 }
 

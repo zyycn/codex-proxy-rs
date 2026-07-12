@@ -20,7 +20,7 @@ pub enum UsageRecordLevel {
 }
 
 /// 结构化使用记录。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecord {
     /// 事件 ID。

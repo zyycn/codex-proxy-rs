@@ -375,18 +375,23 @@ impl CloudflareChallengeCooldownTracker {
         account_id: &str,
         now: DateTime<Utc>,
     ) -> CloudflareChallengeCooldown {
-        let mut states = self.states.write().await;
-        let challenge_count = states
-            .get(account_id)
-            .filter(|state| now.signed_duration_since(state.updated_at) <= CHALLENGE_STALE_AFTER)
-            .map_or(1, |state| state.challenge_count.saturating_add(1));
-        states.insert(
-            account_id.to_string(),
-            ChallengeCooldownState {
-                challenge_count,
-                updated_at: now,
-            },
-        );
+        let challenge_count = {
+            let mut states = self.states.write().await;
+            let challenge_count = states
+                .get(account_id)
+                .filter(|state| {
+                    now.signed_duration_since(state.updated_at) <= CHALLENGE_STALE_AFTER
+                })
+                .map_or(1, |state| state.challenge_count.saturating_add(1));
+            states.insert(
+                account_id.to_string(),
+                ChallengeCooldownState {
+                    challenge_count,
+                    updated_at: now,
+                },
+            );
+            challenge_count
+        };
         let delay_seconds = challenge_delay_seconds(challenge_count);
         CloudflareChallengeCooldown {
             challenge_count,

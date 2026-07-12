@@ -63,11 +63,6 @@ pub fn sse_body_has_done(body: &str) -> bool {
         .ends_with(DONE_SSE_FRAME.trim_end_matches(['\r', '\n']))
 }
 
-/// 返回下一个完整 SSE 帧分隔符位置与长度。
-pub fn sse_frame_separator(input: &str) -> Option<(usize, usize)> {
-    sse_frame_separator_bytes(input.as_bytes())
-}
-
 /// 返回下一个完整 SSE 帧结束位置（含分隔符）。
 pub fn sse_frame_end(bytes: &[u8]) -> Option<usize> {
     sse_frame_separator_bytes(bytes).map(|(position, separator_len)| position + separator_len)

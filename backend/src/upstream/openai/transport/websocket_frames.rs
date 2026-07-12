@@ -764,7 +764,7 @@ async fn next_websocket_message(
 }
 
 async fn finish_stream_websocket(
-    mut websocket: PumpedWebSocket,
+    websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     continuation: WebSocketContinuationState,
     pool_return: Option<WebSocketStreamPoolReturn>,
@@ -785,7 +785,7 @@ async fn finish_stream_websocket(
 }
 
 async fn discard_stream_websocket(
-    mut websocket: PumpedWebSocket,
+    websocket: PumpedWebSocket,
     pool_return: Option<WebSocketStreamPoolReturn>,
     reason: StreamWebSocketDiscardReason,
 ) {

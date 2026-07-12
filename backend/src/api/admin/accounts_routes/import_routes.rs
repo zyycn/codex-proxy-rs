@@ -1,7 +1,7 @@
 use super::*;
 
 /// `POST /api/admin/accounts/import`
-pub(crate) async fn import_accounts(
+pub async fn import_accounts(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<Value>,

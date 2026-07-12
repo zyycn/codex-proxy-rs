@@ -41,28 +41,6 @@ impl SessionAffinityService {
         Ok(self.store.upsert(&response_id, &entry, self.ttl).await?)
     }
 
-    pub async fn lookup_account(&self, response_id: &str, now: DateTime<Utc>) -> Option<String> {
-        self.entry(response_id, now)
-            .await
-            .map(|entry| entry.account_id)
-    }
-
-    pub async fn lookup_conversation_id(
-        &self,
-        response_id: &str,
-        now: DateTime<Utc>,
-    ) -> Option<String> {
-        self.entry(response_id, now)
-            .await
-            .map(|entry| entry.conversation_id)
-    }
-
-    pub async fn lookup_turn_state(&self, response_id: &str, now: DateTime<Utc>) -> Option<String> {
-        self.entry(response_id, now)
-            .await
-            .and_then(|entry| entry.turn_state)
-    }
-
     pub async fn lookup(
         &self,
         response_id: &str,
@@ -99,39 +77,6 @@ impl SessionAffinityService {
                 None
             }
         }
-    }
-
-    pub async fn lookup_instructions_hash(
-        &self,
-        response_id: &str,
-        now: DateTime<Utc>,
-    ) -> Option<String> {
-        self.entry(response_id, now)
-            .await
-            .and_then(|entry| entry.instructions_hash)
-    }
-
-    pub async fn lookup_function_call_ids(
-        &self,
-        response_id: &str,
-        now: DateTime<Utc>,
-    ) -> Vec<String> {
-        self.entry(response_id, now)
-            .await
-            .map(|entry| entry.function_call_ids)
-            .unwrap_or_default()
-    }
-
-    pub async fn lookup_latest_response_by_conversation(
-        &self,
-        conversation_id: &str,
-        max_age: Option<Duration>,
-        variant_hash: Option<&str>,
-        now: DateTime<Utc>,
-    ) -> Option<String> {
-        self.latest(conversation_id, max_age, variant_hash, now)
-            .await
-            .map(|(response_id, _)| response_id)
     }
 
     pub async fn lookup_latest_account_by_conversation(

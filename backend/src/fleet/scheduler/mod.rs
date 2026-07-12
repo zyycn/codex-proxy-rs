@@ -97,11 +97,6 @@ impl AccountScheduler {
         }
     }
 
-    /// 替换打分权重（策略切换或热更时调用）。
-    pub fn set_weights(&mut self, weights: ScoreWeights) {
-        self.weights = weights;
-    }
-
     /// 重置轮转游标（策略切换时调用，保证轮转从头开始）。
     pub fn reset_cursor(&self) {
         *self.lock_cursor() = 0;

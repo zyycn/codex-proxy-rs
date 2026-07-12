@@ -1,7 +1,7 @@
 use super::*;
 
 /// `GET /api/admin/accounts/export`
-pub(crate) async fn export_accounts(
+pub async fn export_accounts(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Query(query): Query<AccountExportQuery>,

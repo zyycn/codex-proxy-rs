@@ -253,26 +253,6 @@ where id = $4",
         Ok(result.rows_affected() > 0)
     }
 
-    /// 更新配额 JSON。
-    pub async fn update_quota_json(
-        &self,
-        account_id: &str,
-        quota_json: &str,
-    ) -> PgAccountStoreResult<bool> {
-        let now = Utc::now();
-        let plan_type = quota_plan_type(quota_json);
-        let quota_json = sqlx::types::Json(serde_json::from_str::<Value>(quota_json)?);
-        let result = sqlx::query(UPDATE_QUOTA_JSON_SQL)
-            .bind(quota_json)
-            .bind(now)
-            .bind(&plan_type)
-            .bind(now)
-            .bind(account_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
     /// 应用配额快照。
     pub async fn apply_quota_snapshot(
         &self,

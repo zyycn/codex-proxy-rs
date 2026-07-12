@@ -158,14 +158,12 @@ pub(super) fn quota_plan_type(quota_json: &str) -> Option<String> {
 pub(super) fn quota_snapshot_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> PgAccountStoreResult<AccountQuotaSnapshot> {
+    let quota_json = row.try_get::<sqlx::types::Json<Value>, _>("quota_json")?;
     Ok(AccountQuotaSnapshot {
-        account_id: row.get("id"),
-        email: row.get("email"),
-        quota_json: row
-            .get::<sqlx::types::Json<Value>, _>("quota_json")
-            .0
-            .to_string(),
-        quota_fetched_at: row.get("quota_fetched_at"),
+        account_id: row.try_get("id")?,
+        email: row.try_get("email")?,
+        quota_json: quota_json.0.to_string(),
+        quota_fetched_at: row.try_get("quota_fetched_at")?,
     })
 }
 

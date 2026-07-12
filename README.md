@@ -1,245 +1,226 @@
-<h1 align="center">Codex Proxy RS</h1>
+<div align="center">
+  <h1>Codex Proxy RS</h1>
+  <p>OpenAI Responses 兼容的 Codex 多账号网关</p>
+  <p>
+    <a href="https://www.rust-lang.org/"><img alt="Rust 1.95" src="https://img.shields.io/badge/Rust-1.95-000?style=flat-square&amp;logo=rust" /></a>
+    <a href="https://github.com/tokio-rs/axum"><img alt="Axum 0.8" src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" /></a>
+    <a href="https://vuejs.org/"><img alt="Vue 3.5" src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&amp;logo=vuedotjs&amp;logoColor=white" /></a>
+    <a href="https://vite.dev/"><img alt="Vite 8" src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&amp;logo=vite&amp;logoColor=white" /></a>
+    <a href="https://www.postgresql.org/"><img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-4169e1?style=flat-square&amp;logo=postgresql&amp;logoColor=white" /></a>
+    <a href="https://redis.io/"><img alt="Redis 8" src="https://img.shields.io/badge/Redis-8-ff4438?style=flat-square&amp;logo=redis&amp;logoColor=white" /></a>
+    <a href="https://opensource.org/license/mit"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" /></a>
+  </p>
+  <p>
+    <a href="#快速部署">快速部署</a>
+    ·
+    <a href="#客户端接入">客户端接入</a>
+    ·
+    <a href="docs/architecture.md">架构说明</a>
+  </p>
+</div>
 
-<p align="center">
-  OpenAI 兼容的 ChatGPT / Codex 多账号代理网关
-</p>
+Codex Proxy RS 为多个 Codex 账号提供统一的 Responses API。客户端使用同一个服务地址和 API Key；账号调度、并发限制、额度检查、故障换号和会话续接都在服务端完成。
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Rust-1.95-000?style=flat-square&logo=rust" />
-  <img src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" />
-  <img src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vuedotjs&logoColor=white" />
-  <img src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white" />
-  <img src="https://img.shields.io/badge/PostgreSQL-18-4169e1?style=flat-square&logo=postgresql&logoColor=white" />
-  <img src="https://img.shields.io/badge/Redis-8-ff4438?style=flat-square&logo=redis&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" />
-</p>
+## 功能
 
-## 概览
+- 兼容 `/v1/responses`、SSE 流式响应、Review、Compact 和模型查询。
+- 支持 HTTP/SSE 与 WebSocket 上游连接。
+- 提供 `smart`、额度重置优先、轮询和粘性四种账号调度策略。
+- 单个账号发生额度、认证、模型或传输故障时，继续使用账号池中的其他可用账号。
+- 使用会话亲和和受限历史重放处理 `previous_response_not_found` 与跨账号续接。
+- 为每个账号派生稳定且隔离的 installation、session、thread、turn 和 cache 标识。
+- 提供账号、API Key、模型映射、运行参数、用量、错误记录和系统更新管理界面。
+- 使用 PostgreSQL 保存权威业务数据，使用 Redis 保存会话、租约、模型快照和会话亲和数据。
+- 内置日志轮转、遥测保留期清理和 PostgreSQL/Redis 健康检查。
 
-Codex Proxy RS 是一个单进程网关：
+代理只补充账号凭据、上游请求头和账号作用域身份，并在必要时执行会话恢复；其余请求与响应尽量保持上游语义。
 
-- Rust/Axum 后端提供 Responses 兼容代理、管理端 API、PostgreSQL 持久化、Redis 运行态存储和静态前端托管。
-- Vue 管理端负责账号导入、API Key、用量统计、请求记录、运行参数、模型映射和系统更新。
-- 应用本地文件默认写入仓库 `.runtime/`；PostgreSQL 与 Redis 数据由各自服务管理。
+## 快速部署
 
-## 环境
+需要 Docker Engine 和 Docker Compose Plugin。下面的 Compose 默认使用：
 
-- Rust 1.95
-- Node 24 或兼容版本，pnpm 11（只在开发前端或构建镜像时需要）
-- PostgreSQL 18、Redis 8
-- Docker / Docker Compose（推荐用于启动依赖、部署或验证镜像）
+- 应用镜像：`ghcr.io/zyycn/codex-proxy-rs:latest`
+- PostgreSQL 18
+- Redis 8
+- 管理端地址：`http://127.0.0.1:8080`
 
-## 本地运行
-
-本地直接运行后端时，配置文件由 `CPR_CONFIG_FILE` 指定；未指定时读取当前工作目录下的 `config.yaml`。
-
-```bash
-cp deploy/config.example.yaml .runtime/config.yaml
-```
-
-如果直接用本地二进制而不是 Docker，确保 `.runtime/config.yaml` 使用宿主机可访问的连接地址与日志路径：
-
-```yaml
-database:
-  url: 'postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy'
-
-redis:
-  url: 'redis://127.0.0.1:6379/'
-
-logging:
-  level: info
-  stdout: true
-  file:
-    enabled: true
-    directory: .runtime/logs
-    retention_days: 14
-    max_file_size_mb: 20
-    max_files: 20
-
-telemetry:
-  enabled: true
-
-admin:
-  default_password: '<set-a-long-random-password>'
-```
-
-启动：
+### 1. 获取项目
 
 ```bash
-mkdir -p .runtime/data .runtime/logs
-CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
+git clone https://github.com/zyycn/codex-proxy-rs.git
+cd codex-proxy-rs
 ```
 
-服务默认监听 `0.0.0.0:8080`。本机访问通常使用 `http://127.0.0.1:8080`。
-
-## Docker 部署
-
-Compose 同时启动 PostgreSQL、Redis 和主服务。主服务默认把宿主机 `.runtime` 映射进容器：
-
-- `.runtime/config.yaml` -> `/app/config.yaml`
-- `.runtime/data` -> `/app/data`（installation id 与在线更新状态，不含数据库）
-- `.runtime/logs` -> `/app/logs`
-
-PostgreSQL 与 Redis 分别使用 `postgres-data`、`redis-data` 命名卷。
-
-初始化配置：
+### 2. 创建配置
 
 ```bash
 mkdir -p .runtime/data .runtime/logs
 cp deploy/config.example.yaml .runtime/config.yaml
+cp deploy/.env.example deploy/.env
+chmod 0600 deploy/.env
+```
+
+编辑 `deploy/.env`：
+
+```dotenv
+CPR_ADMIN_DEFAULT_PASSWORD='<管理员密码，至少 12 个字符>'
+CPR_POSTGRES_PASSWORD='<PostgreSQL 密码>'
+CPR_REDIS_PASSWORD='<Redis 密码>'
+```
+
+`deploy/.env` 已被 Git 忽略。应用会安全地把 PostgreSQL 和 Redis 密码写入运行时连接 URL，不需要把真实密码填入 `.runtime/config.yaml`。
+
+Linux 宿主机需要保证容器用户 `10001:10001` 可以读写数据和日志目录：
+
+```bash
 sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
 chmod 0770 .runtime/data .runtime/logs
 sudo chown "$(id -u):10001" .runtime/config.yaml
 chmod 0640 .runtime/config.yaml
-cp deploy/.env.example deploy/.env
-chmod 0600 deploy/.env
-# 编辑 deploy/.env，设置管理员、PostgreSQL 与 Redis 密码
 ```
 
-`deploy/.env` 是 Docker 部署的密钥配置文件，已被 Git 忽略。Compose 要求其中三项密码均为非空；
-应用会用管理员密码覆盖 `admin.default_password`，并安全覆盖数据库 URL 的密码部分，不需要手工编码或
-同步连接串。编辑密码时保留示例中的单引号。
-
-Docker 配置文件里路径保持容器路径：
-
-```yaml
-database:
-  url: 'postgres://codex_proxy:codex_proxy@postgres:5432/codex_proxy'
-
-redis:
-  url: 'redis://:codex_proxy@redis:6379/'
-
-logging:
-  level: info
-  stdout: true
-  file:
-    enabled: true
-    directory: /app/logs
-    retention_days: 14
-    max_file_size_mb: 20
-    max_files: 20
-
-telemetry:
-  enabled: true
-```
-
-构建并启动：
+### 3. 启动
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --no-build
+```
+
+检查服务：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+curl -i http://127.0.0.1:8080/healthz
+```
+
+`/healthz` 正常时返回 `204 No Content`。随后打开 <http://127.0.0.1:8080>：
+
+- 用户名：`admin@cpr.local`
+- 密码：`deploy/.env` 中的 `CPR_ADMIN_DEFAULT_PASSWORD`
+
+首次登录后导入账号，在“API 密钥”页面创建客户端 Key。
+
+### 本地构建镜像
+
+需要验证当前源码时，不拉取 GHCR 镜像，直接构建：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml build codex-proxy-rs
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
-默认只绑定宿主机 `127.0.0.1:8080`。如需覆盖路径：
+## 客户端接入
 
-```bash
-CPR_CONFIG_FILE=/path/to/config.yaml \
-CPR_DATA_DIR=/path/to/data \
-CPR_LOG_DIR=/path/to/logs \
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
-```
+OpenAI 兼容客户端填写：
 
-## API
+- Base URL：`http://127.0.0.1:8080/v1`
+- API Key：管理端创建的 `sk_...` 客户端 Key
 
-客户端 API Key 在管理端创建。OpenAI 兼容接口通过 `Authorization: Bearer <key>` 鉴权。
-
-| 端点 | 说明 |
-| --- | --- |
-| `POST /v1/responses` | OpenAI Responses 兼容接口 |
-| `POST /v1/responses/review` | Review 模型请求入口 |
-| `POST /v1/responses/compact` | Compact 请求入口 |
-| `GET /v1/models` | 模型列表 |
-| `GET /v1/models/{id}` | 模型详情 |
-| `GET /v1/models/{id}/info` | 模型运行信息 |
-| `GET /v1/models/catalog` | 管理端可见模型目录 |
-| `/api/admin/*` | 管理端 API |
-
-示例：
+Responses 请求示例：
 
 ```bash
 curl http://127.0.0.1:8080/v1/responses \
-  -H 'Authorization: Bearer <your-api-key>' \
+  -H 'Authorization: Bearer <client-api-key>' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"gpt-5.5","input":"Say hello","stream":true}'
+  -d '{
+    "model": "<model-id>",
+    "input": "Reply with pong.",
+    "stream": false
+  }'
 ```
+
+可用接口：
+
+| 路由 | 说明 |
+| --- | --- |
+| `POST /v1/responses` | Responses 非流式或 SSE 流式请求 |
+| `POST /v1/responses/review` | Review 请求 |
+| `POST /v1/responses/compact` | Compact 请求 |
+| `GET /v1/models` | 模型列表 |
+| `GET /v1/models/catalog` | 模型目录 |
+| `GET /v1/models/{model_id}` | 模型详情 |
+| `GET /v1/models/{model_id}/info` | 模型运行信息 |
+
+Compose 默认只监听宿主机 `127.0.0.1`。需要从其他设备访问时，应在前面配置 HTTPS 反向代理，不要直接暴露 PostgreSQL 和 Redis 端口。
 
 ## 管理端
 
-生产环境前端由后端直接托管，不需要单独 Node 服务。开发前端时：
+管理端提供以下页面：
+
+- Dashboard：请求趋势、服务状态、账号概览和最近请求。
+- 账号：导入、导出、OAuth、连接测试、quota 和 token 刷新。
+- API 密钥：创建、停用、删除和客户端接入信息。
+- 用量：请求记录、token、延迟、模型分布和运维错误。
+- 设置：模型别名、账号调度策略、单账号并发、请求间隔和刷新参数。
+- 系统：版本检查、更新、重启和回滚。
+
+管理端登录会话保存在 Redis，并按 `admin.session_ttl_minutes` 自动过期。
+
+## 配置
+
+启动配置位于 `.runtime/config.yaml`，模板见 [deploy/config.example.yaml](deploy/config.example.yaml)。
+
+| 配置段 | 用途 |
+| --- | --- |
+| `server` | HTTP 监听地址和端口 |
+| `api` | Codex 上游地址 |
+| `database`、`redis` | PostgreSQL 与 Redis 连接 |
+| `quota` | quota 刷新周期和耗尽账号过滤 |
+| `tls` | 上游 HTTP 协议偏好 |
+| `ws_pool` | WebSocket 连接池与首事件超时 |
+| `fingerprint` | Codex Desktop 请求指纹 |
+| `admin` | 默认管理员和登录会话 TTL |
+| `logging` | 日志级别、目录、大小和保留期 |
+| `telemetry` | 请求事实记录开关 |
+
+模型别名、调度策略、单账号并发、请求间隔和刷新参数由管理端保存到 PostgreSQL，可在运行中更新。请求事实、运维错误和聚合时间桶由后台任务按各自保留期自动清理。
+
+## 数据与升级
+
+| 数据 | 默认位置 |
+| --- | --- |
+| 账号、API Key、设置、用量和错误记录 | Compose 命名卷 `postgres-data` |
+| 管理会话、租约、模型快照和会话亲和 | Compose 命名卷 `redis-data` |
+| 身份派生密钥和更新状态 | `.runtime/data` |
+| 文件日志 | `.runtime/logs` |
+| 启动配置 | `.runtime/config.yaml` |
+| Docker 密钥 | `deploy/.env` |
+
+普通升级只替换应用镜像：
 
 ```bash
-pnpm --dir frontend install
-pnpm --dir frontend dev
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull codex-proxy-rs
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --no-build
 ```
 
-生产构建：
+更新镜像不会删除数据库卷，但仍应在升级前备份 PostgreSQL 和 `.runtime/data`。
+
+不要使用 `docker compose down -v` 做普通升级，该命令会删除 PostgreSQL 与 Redis 命名卷。
+
+`.runtime/data/identity_hmac_secret` 必须长期保留。丢失该文件会改变全部账号的 installation ID 和账号作用域身份。
+
+## 查看状态
 
 ```bash
-pnpm --dir frontend build
-CPR_CONFIG_FILE=.runtime/config.yaml cargo run --manifest-path backend/Cargo.toml
-```
+# 容器状态
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 
-管理端功能：
+# 应用日志
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f codex-proxy-rs
 
-- 账号导入、OAuth 授权、连接测试、quota 刷新、token 刷新。
-- 客户端 API Key 管理，完整 Key 可长期复制并导入 CCSwitch。
-- Dashboard、请求记录、Token 用量、模型用量和账号额度。
-- 运行参数、模型别名、账号选择策略。
-- 版本检查、在线更新、更新日志、重启和回滚。
+# PostgreSQL 和 Redis 日志
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs postgres redis
 
-## 配置与运行数据
-
-配置文件只承载启动必需项。账号、API Key、模型映射、账号选择策略和多数运行参数由管理端写入 PostgreSQL；管理会话、刷新租约、会话亲和与模型缓存位于 Redis。
-
-`.runtime` 约定：
-
-```text
-.runtime/config.yaml                # 本地或 Docker 启动配置，路径按运行环境写
-.runtime/data/installation_id       # 上游 installation id
-.runtime/data/update-state.json     # 在线更新状态
-.runtime/data/update.lock           # 在线更新锁
-.runtime/logs/                      # 日志
-```
-
-## 发布与更新
-
-当前版本记录在 `release/version.yaml`，发布平台记录在 `release/platforms.yaml`。
-
-发布命令：
-
-```bash
-release/publish 1.0.4
-```
-
-该命令会更新版本文件、生成版本提交、创建 `v<version>` tag 并推送。GitHub Actions 随后构建 Release 归档和 GHCR 多平台镜像。
-
-在线更新由主服务处理，管理端调用 `/api/admin/system/*`：
-
-- 查询 GitHub Release。
-- 下载当前平台对应的归档和 `checksums.txt`。
-- 校验 checksum 后替换二进制和 `web/dist`。
-- 重启时，Docker 模式依赖 `restart: unless-stopped` 拉起新容器进程；非 Docker 模式会先安排新进程延迟启动，再关闭当前进程。
-
-## 项目结构
-
-```text
-backend/       Rust/Axum 后端、PostgreSQL migration、SQLite 导入工具、集成测试
-frontend/      Vue 3 管理端
-deploy/        Dockerfile、Compose、部署配置模板
-docs/          架构和维护文档
-release/       版本、平台和发布脚本
-skills/        项目本地 Codex skill
-```
-
-## 开发检查
-
-```bash
-cargo fmt --manifest-path backend/Cargo.toml --check
-cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path backend/Cargo.toml --test main --locked
-pnpm --dir frontend build
+# 展开并检查最终 Compose 配置
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
 ```
+
+`/healthz` 返回 `503` 时，先检查 PostgreSQL 和 Redis 的健康状态。容器反复重启时，再检查 `.runtime/config.yaml`、`deploy/.env` 和 `.runtime/data`、`.runtime/logs` 的权限。
+
+## 架构
+
+模块边界、请求链路、换号条件、previous response 恢复、存储归属和后台任务见 [架构说明](docs/architecture.md)。
 
 ## License
 

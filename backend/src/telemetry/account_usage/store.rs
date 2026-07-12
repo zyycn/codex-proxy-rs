@@ -555,32 +555,33 @@ impl AccountUsageStore for PgAccountUsageStore {
 }
 
 fn usage_list_from_row(row: &PgRow) -> PgAccountUsageStoreResult<UsageListRecord> {
+    let limit_window_seconds = row
+        .try_get::<Option<i64>, _>("limit_window_seconds")?
+        .and_then(|value| u64::try_from(value).ok());
     Ok(UsageListRecord {
-        account_id: row.get("account_id"),
-        email: row.get("email"),
-        label: row.get("label"),
-        plan_type: row.get("plan_type"),
-        request_count: row.get("request_count"),
-        empty_response_count: row.get("empty_response_count"),
-        input_tokens: row.get("input_tokens"),
-        output_tokens: row.get("output_tokens"),
-        cached_tokens: row.get("cached_tokens"),
-        reasoning_tokens: row.get("reasoning_tokens"),
-        total_tokens: row.get("total_tokens"),
-        image_input_tokens: row.get("image_input_tokens"),
-        image_output_tokens: row.get("image_output_tokens"),
-        image_request_count: row.get("image_request_count"),
-        image_request_failed_count: row.get("image_request_failed_count"),
-        window_request_count: row.get("window_request_count"),
-        window_input_tokens: row.get("window_input_tokens"),
-        window_output_tokens: row.get("window_output_tokens"),
-        window_cached_tokens: row.get("window_cached_tokens"),
-        window_started_at: row.get("window_started_at"),
-        window_reset_at: row.get("window_reset_at"),
-        limit_window_seconds: row
-            .get::<Option<i64>, _>("limit_window_seconds")
-            .and_then(|value| u64::try_from(value).ok()),
-        last_used_at: row.get("last_used_at"),
+        account_id: row.try_get("account_id")?,
+        email: row.try_get("email")?,
+        label: row.try_get("label")?,
+        plan_type: row.try_get("plan_type")?,
+        request_count: row.try_get("request_count")?,
+        empty_response_count: row.try_get("empty_response_count")?,
+        input_tokens: row.try_get("input_tokens")?,
+        output_tokens: row.try_get("output_tokens")?,
+        cached_tokens: row.try_get("cached_tokens")?,
+        reasoning_tokens: row.try_get("reasoning_tokens")?,
+        total_tokens: row.try_get("total_tokens")?,
+        image_input_tokens: row.try_get("image_input_tokens")?,
+        image_output_tokens: row.try_get("image_output_tokens")?,
+        image_request_count: row.try_get("image_request_count")?,
+        image_request_failed_count: row.try_get("image_request_failed_count")?,
+        window_request_count: row.try_get("window_request_count")?,
+        window_input_tokens: row.try_get("window_input_tokens")?,
+        window_output_tokens: row.try_get("window_output_tokens")?,
+        window_cached_tokens: row.try_get("window_cached_tokens")?,
+        window_started_at: row.try_get("window_started_at")?,
+        window_reset_at: row.try_get("window_reset_at")?,
+        limit_window_seconds,
+        last_used_at: row.try_get("last_used_at")?,
     })
 }
 

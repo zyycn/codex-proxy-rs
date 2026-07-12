@@ -439,7 +439,7 @@ from usage_records",
         grouped
             .entry(name.clone())
             .or_insert_with(|| BreakdownAccumulator::new(name))
-            .push(
+            .push(BreakdownSample {
                 request_count,
                 input_tokens,
                 output_tokens,
@@ -447,7 +447,7 @@ from usage_records",
                 cost,
                 latency_sum,
                 latency_count,
-            );
+            });
     }
     let mut items = grouped
         .into_values()
@@ -575,6 +575,16 @@ struct BreakdownAccumulator {
     latency_count: u64,
 }
 
+struct BreakdownSample {
+    request_count: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    cost: f64,
+    latency_sum: u64,
+    latency_count: u64,
+}
+
 impl BreakdownAccumulator {
     fn new(name: String) -> Self {
         Self {
@@ -587,27 +597,17 @@ impl BreakdownAccumulator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn push(
-        &mut self,
-        requests: u64,
-        input: u64,
-        output: u64,
-        cached: u64,
-        cost: f64,
-        latency_sum: u64,
-        latency_count: u64,
-    ) {
-        self.item.request_count += requests;
-        self.item.input_tokens += input;
-        self.item.output_tokens += output;
-        self.item.cached_tokens += cached;
-        self.item.total_tokens += input + output;
-        self.item.cost += cost;
-        self.item.actual_cost += cost;
-        self.item.account_cost += cost;
-        self.latency_sum += latency_sum;
-        self.latency_count += latency_count;
+    fn push(&mut self, sample: BreakdownSample) {
+        self.item.request_count += sample.request_count;
+        self.item.input_tokens += sample.input_tokens;
+        self.item.output_tokens += sample.output_tokens;
+        self.item.cached_tokens += sample.cached_tokens;
+        self.item.total_tokens += sample.input_tokens + sample.output_tokens;
+        self.item.cost += sample.cost;
+        self.item.actual_cost += sample.cost;
+        self.item.account_cost += sample.cost;
+        self.latency_sum += sample.latency_sum;
+        self.latency_count += sample.latency_count;
     }
 
     fn finish(mut self) -> UsageRecordBreakdown {

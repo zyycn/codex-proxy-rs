@@ -131,13 +131,15 @@ impl SessionService {
 
     async fn ensure_login_allowed(&self, source: &str) -> Result<(), SessionError> {
         let now = Utc::now();
-        let mut failures = self.login_failures.lock().await;
-        retain_active_login_failures(&mut failures, now);
-        if failures
-            .get(source)
-            .and_then(|state| state.locked_until)
-            .is_some_and(|locked_until| locked_until > now)
-        {
+        let login_locked = {
+            let mut failures = self.login_failures.lock().await;
+            retain_active_login_failures(&mut failures, now);
+            failures
+                .get(source)
+                .and_then(|state| state.locked_until)
+                .is_some_and(|locked_until| locked_until > now)
+        };
+        if login_locked {
             return Err(SessionError::LoginThrottled);
         }
         Ok(())
@@ -163,6 +165,7 @@ impl SessionService {
         if state.failures >= LOGIN_MAX_FAILURES {
             state.locked_until = Some(now + LOGIN_LOCK_DURATION);
         }
+        drop(failures);
     }
 
     async fn clear_failed_login(&self, source: &str) {

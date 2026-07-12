@@ -53,6 +53,42 @@ async fn dashboard_summary_should_render_dash_when_fingerprint_updated_at_is_mis
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_report_database_failure() {
+    let (app, _store, pool, _dir) = dashboard_test_app(
+        "dashboard-summary-database-failure",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    pool.close().await;
+
+    let response = dashboard_response(app, "/api/admin/dashboard/summary").await;
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body["code"], 50001);
+    assert_eq!(body["message"], "Failed to load dashboard data");
+}
+
+#[tokio::test]
+async fn dashboard_trend_should_report_database_failure() {
+    let (app, _store, pool, _dir) = dashboard_test_app(
+        "dashboard-trend-database-failure",
+        crate::support::fingerprint::test_fingerprint(),
+    )
+    .await;
+    pool.close().await;
+
+    let response = dashboard_response(app, "/api/admin/dashboard/trend?kind=usage").await;
+    let status = response.status();
+    let body = response_json(response).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body["code"], 50001);
+    assert_eq!(body["message"], "Failed to load dashboard data");
+}
+
+#[tokio::test]
 async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets(
 ) {
     let (app, store, pool, _dir) = dashboard_test_app(
@@ -667,20 +703,23 @@ async fn dashboard_summary_with_kind(app: axum::Router, kind: &str) -> Value {
 }
 
 async fn dashboard_summary_uri(app: axum::Router, uri: &str) -> Value {
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(uri)
-                .header("cookie", "cpr_admin_session=session_1")
-                .header("x-request-id", "req_dashboard_summary")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = dashboard_response(app, uri).await;
     assert_eq!(response.status(), StatusCode::OK);
     response_json(response).await
+}
+
+async fn dashboard_response(app: axum::Router, uri: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("cookie", "cpr_admin_session=session_1")
+            .header("x-request-id", "req_dashboard_summary")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 async fn dashboard_trend(app: axum::Router, kind: &str) -> Value {

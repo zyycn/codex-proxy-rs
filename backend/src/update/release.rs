@@ -225,12 +225,16 @@ pub(super) fn select_release_archive<'a>(
 }
 
 async fn cached_release_info(cache_key: &str) -> Option<UpdateInfoData> {
-    let cache = RELEASE_CACHE.lock().await;
-    let cached = cache.as_ref()?;
-    if cached.key != cache_key || cached.cached_at.elapsed() > UPDATE_CACHE_TTL {
-        return None;
-    }
-    let mut info = cached.info.clone();
+    let mut info = {
+        let cache = RELEASE_CACHE.lock().await;
+        let cached = cache.as_ref()?;
+        if cached.key != cache_key || cached.cached_at.elapsed() > UPDATE_CACHE_TTL {
+            return None;
+        }
+        let info = cached.info.clone();
+        drop(cache);
+        info
+    };
     info.cached = true;
     Some(info)
 }

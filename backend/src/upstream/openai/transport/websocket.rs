@@ -425,16 +425,15 @@ async fn execute_fresh_response_create_request(
         .await?;
 
     let metadata = websocket_connection_metadata(&response);
-    let (exchange, mut websocket, _metadata, _continuation, _terminal) =
-        collect_websocket_response(
-            websocket,
-            metadata,
-            WebSocketContinuationState::default(),
-            false,
-            started_at,
-            initial_event_timeout,
-        )
-        .await?;
+    let (exchange, websocket, _metadata, _continuation, _terminal) = collect_websocket_response(
+        websocket,
+        metadata,
+        WebSocketContinuationState::default(),
+        false,
+        started_at,
+        initial_event_timeout,
+    )
+    .await?;
     websocket.close().await;
     Ok(exchange)
 }
@@ -778,23 +777,22 @@ async fn execute_fresh_pooled_response_create_request(
 
     let now = tokio::time::Instant::now();
     let metadata = websocket_connection_metadata(&response);
-    let (exchange, mut websocket, metadata, continuation, terminal) =
-        match collect_websocket_response(
-            websocket,
-            metadata,
-            WebSocketContinuationState::default(),
-            false,
-            started_at,
-            pool.initial_event_timeout(),
-        )
-        .await
-        {
-            Ok(exchange) => exchange,
-            Err(error) => {
-                lease.discard().await;
-                return Err(error);
-            }
-        };
+    let (exchange, websocket, metadata, continuation, terminal) = match collect_websocket_response(
+        websocket,
+        metadata,
+        WebSocketContinuationState::default(),
+        false,
+        started_at,
+        pool.initial_event_timeout(),
+    )
+    .await
+    {
+        Ok(exchange) => exchange,
+        Err(error) => {
+            lease.discard().await;
+            return Err(error);
+        }
+    };
     match terminal {
         WebSocketTerminalKind::Completed => {
             lease
@@ -899,7 +897,7 @@ async fn execute_pooled_response_create_request(
     )
     .await
     {
-        Ok((exchange, mut websocket, metadata, continuation, terminal)) => {
+        Ok((exchange, websocket, metadata, continuation, terminal)) => {
             match terminal {
                 WebSocketTerminalKind::Completed => {
                     lease

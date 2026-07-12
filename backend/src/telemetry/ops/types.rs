@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 /// 结构化运维错误事件。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpsErrorLog {
     /// 事件 ID。
