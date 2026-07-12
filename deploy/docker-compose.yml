@@ -10,7 +10,16 @@ services:
   postgres:
     image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
     restart: unless-stopped
+    command:
+      [
+        "postgres",
+        "-c",
+        "timezone=Asia/Shanghai",
+        "-c",
+        "log_timezone=Asia/Shanghai",
+      ]
     environment:
+      TZ: Asia/Shanghai
       POSTGRES_DB: codex_proxy
       POSTGRES_USER: codex_proxy
       POSTGRES_PASSWORD: ${CPR_POSTGRES_PASSWORD:?CPR_POSTGRES_PASSWORD must be set in deploy/.env}

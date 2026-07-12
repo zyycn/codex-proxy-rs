@@ -26,6 +26,9 @@ chmod 0600 deploy/.env
 应用日志同时写入 `docker logs` 与 `.runtime/logs`。Compose 对应用、PostgreSQL、Redis
 统一启用 `json-file` 的 `10m × 5` 轮转；应用文件日志还受配置中的自然日、单文件大小和文件总数限制。
 
+Runtime 镜像和 PostgreSQL 的显示、日志时区固定为 `Asia/Shanghai`。PostgreSQL 时间列仍使用
+`timestamptz` 保存绝对时间点，修改时区只影响查询与日志的显示，不需要迁移或改写已有数据。
+
 `deploy/.env` 是 Docker 部署的密钥配置文件，已被 Git 忽略且必须保持 mode `0600`。其中
 `CPR_ADMIN_DEFAULT_PASSWORD`、`CPR_POSTGRES_PASSWORD`、`CPR_REDIS_PASSWORD` 三项均为必填，
 留空时 Compose 会在启动前失败。管理员密码必须至少 12 位且不能是常见弱口令。

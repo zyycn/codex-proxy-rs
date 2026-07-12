@@ -51,8 +51,12 @@ COPY --from=release-asset-builder /out /
 
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime-base
 
+ENV TZ=Asia/Shanghai
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl tzdata \
+    && ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
+    && printf '%s\n' "${TZ}" > /etc/timezone \
     && groupadd --system --gid 10001 cpr \
     && useradd --system --uid 10001 --gid cpr --home-dir /app --shell /usr/sbin/nologin cpr \
     && install -d -o cpr -g cpr /app/bin /app/data /app/logs /app/web \
