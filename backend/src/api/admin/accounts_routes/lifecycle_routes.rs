@@ -1,7 +1,7 @@
 use super::*;
 
 /// `POST /api/admin/accounts/refresh`
-pub(crate) async fn refresh_account(
+pub async fn refresh_account(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<AccountActionRequest>,
@@ -22,7 +22,7 @@ pub(crate) async fn refresh_account(
 }
 
 /// `POST /api/admin/accounts/health-check`
-pub(crate) async fn health_check_accounts(
+pub async fn health_check_accounts(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<AccountHealthCheckRequest>,
@@ -55,7 +55,7 @@ pub(crate) async fn health_check_accounts(
 }
 
 /// `POST /api/admin/accounts/delete`
-pub(crate) async fn batch_delete_accounts(
+pub async fn batch_delete_accounts(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<BatchDeleteAccountsRequest>,
@@ -87,7 +87,7 @@ pub(crate) async fn batch_delete_accounts(
 }
 
 /// `POST /api/admin/accounts/update`
-pub(crate) async fn update_account(
+pub async fn update_account(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<Value>,

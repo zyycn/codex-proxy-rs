@@ -615,43 +615,6 @@ async fn account_store_should_restore_quota_verify_required_into_runtime_pool_ac
 }
 
 #[tokio::test]
-async fn account_store_should_update_quota_json_and_fetched_at() {
-    let (pool, _dir) = account_store_parts("accounts", 36).await;
-    let repo = PgAccountStore::new(pool.clone());
-    seed_repo_account(&pool, "acct_a", "2026-06-11T00:00:00Z").await;
-
-    let updated = repo
-        .update_quota_json(
-            "acct_a",
-            r#"{"plan_type":"free","rate_limit":{"limit_reached":false}}"#,
-        )
-        .await
-        .unwrap();
-    let missing_updated = repo
-        .update_quota_json("missing", r#"{"rate_limit":null}"#)
-        .await
-        .unwrap();
-    let row: (serde_json::Value, Option<DateTime<Utc>>, Option<String>) = sqlx::query_as(
-        "select quota_json, quota_fetched_at, plan_type from accounts where id = $1",
-    )
-    .bind("acct_a")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        (updated, missing_updated, row.0, row.1.is_some(), row.2),
-        (
-            true,
-            false,
-            json!({"plan_type":"free","rate_limit":{"limit_reached":false}}),
-            true,
-            Some("free".to_string())
-        )
-    );
-}
-
-#[tokio::test]
 async fn account_store_should_map_quota_snapshot_to_account_status() {
     let (pool, _dir) = account_store_parts("accounts", 37).await;
     let repo = PgAccountStore::new(pool.clone());

@@ -124,7 +124,7 @@ impl PumpedWebSocket {
     }
 
     /// 主动关闭连接（best-effort 发送 Close 帧）。
-    pub(crate) async fn close(&mut self) {
+    pub(crate) async fn close(&self) {
         let _ = self.send(Message::Close(None)).await;
     }
 }

@@ -337,7 +337,7 @@ pub struct CodexBackendStreamingResponse {
 }
 
 /// Codex compact 端点响应。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexCompactResponse {
     /// 上游返回的 JSON。
     pub body: Value,

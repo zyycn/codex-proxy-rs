@@ -108,9 +108,11 @@ impl UpdateChecker {
 
         let updated_fingerprint = self.apply_version_update(version, build).await?;
 
-        let mut state = self.state.lock().await;
-        state.current_version = version.to_string();
-        state.current_build = build.to_string();
+        {
+            let mut state = self.state.lock().await;
+            state.current_version = version.to_string();
+            state.current_build = build.to_string();
+        }
 
         Ok(Some(updated_fingerprint))
     }

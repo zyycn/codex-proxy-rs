@@ -18,7 +18,6 @@ use crate::{
     telemetry::{buckets::store::PgRequestBucketStore, usage::types::UsageRecord},
 };
 
-pub const USAGE_RECORD_RETENTION_DAYS: i64 = 30;
 pub const DEFAULT_USAGE_RECORD_CAPTURE_BODY: bool = false;
 
 const USAGE_RECORD_SELECT_SQL: &str = r"

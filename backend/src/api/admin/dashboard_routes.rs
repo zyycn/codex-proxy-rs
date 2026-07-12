@@ -197,25 +197,30 @@ pub(crate) async fn dashboard_summary(
         .accounts
         .list_pool_accounts()
         .await
-        .unwrap_or_default();
+        .map_err(|error| dashboard_data_error("accounts", &error))?;
     let capacity = state.services.account_pool.capacity_summary_now().await;
     let now = Utc::now();
     let today_filter = today_usage_record_filter(now);
-    let lifetime_usage = state.services.usage.summary().await.unwrap_or_default();
+    let lifetime_usage = state
+        .services
+        .usage
+        .summary()
+        .await
+        .map_err(|error| dashboard_data_error("account usage summary", &error))?;
     let account_usage_records = state
         .services
         .usage_records
         .account_usage(today_filter.clone(), DASHBOARD_ACCOUNT_USAGE_LIMIT)
         .await
-        .unwrap_or_default();
+        .map_err(|error| dashboard_data_error("account usage ranking", &error))?;
     let recent_events = state
         .services
         .usage_records
         .list_recent(DASHBOARD_USAGE_RECORD_LIMIT, today_filter)
         .await
-        .unwrap_or_default();
+        .map_err(|error| dashboard_data_error("recent usage records", &error))?;
 
-    let time_buckets = dashboard_time_buckets(&state, now).await;
+    let time_buckets = dashboard_time_buckets(&state, now).await?;
     let account_ids = accounts
         .iter()
         .map(|account| account.id.clone())
@@ -225,11 +230,11 @@ pub(crate) async fn dashboard_summary(
         .token_refresh
         .refreshing_account_ids(&account_ids, now)
         .await
-        .map_err(|error| AdminError::internal(error.to_string()))?;
+        .map_err(|error| dashboard_data_error("refreshing accounts", &error))?;
     let pool_summary = account_pool_summary(&accounts, &refreshing_account_ids);
     let trend = dashboard_trend_data(&time_buckets, query.kind.unwrap_or_default());
     let quota_used_by_account =
-        account_quota_used_percent_by_id(&state, &account_usage_records).await;
+        account_quota_used_percent_by_id(&state, &account_usage_records).await?;
     let settings = state.services.settings.current();
     let recent_usage_records = recent_events;
     let account_emails = state
@@ -280,7 +285,7 @@ pub(crate) async fn dashboard_trend(
     _auth: AdminAuth,
     Query(query): Query<DashboardTrendQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let time_buckets = dashboard_time_buckets(&state, Utc::now()).await;
+    let time_buckets = dashboard_time_buckets(&state, Utc::now()).await?;
 
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -294,7 +299,7 @@ pub(crate) async fn dashboard_trend(
 async fn dashboard_time_buckets(
     state: &AppState,
     now: DateTime<Utc>,
-) -> Vec<AccountUsageTimeBucket> {
+) -> Result<Vec<AccountUsageTimeBucket>, AdminError> {
     let current_slot = china_quarter_hour_start(now);
     let start = current_slot
         - Duration::minutes(DASHBOARD_TIME_BUCKET_MINUTES * (DASHBOARD_TIME_BUCKET_SLOTS - 1));
@@ -303,7 +308,7 @@ async fn dashboard_time_buckets(
         .usage
         .time_buckets(start, now)
         .await
-        .unwrap_or_default()
+        .map_err(|error| dashboard_data_error("time buckets", &error))
 }
 
 fn dashboard_account_counts(accounts: &[Account]) -> DashboardAccountCounts {
@@ -390,22 +395,28 @@ fn account_usage_data(
 async fn account_quota_used_percent_by_id(
     state: &AppState,
     usage_records: &[UsageRecordAccountUsage],
-) -> HashMap<String, f64> {
+) -> Result<HashMap<String, f64>, AdminError> {
     let mut quota_used_by_account = HashMap::with_capacity(usage_records.len());
     for usage in usage_records {
-        let Ok(Some(quota_json)) = state
+        let quota_json = state
             .services
             .accounts
             .get_quota_json(&usage.account_id)
             .await
-        else {
+            .map_err(|error| dashboard_data_error("account quota", &error))?;
+        let Some(quota_json) = quota_json else {
             continue;
         };
         if let Some(used_percent) = quota_used_percent(&quota_json) {
             quota_used_by_account.insert(usage.account_id.clone(), used_percent);
         }
     }
-    quota_used_by_account
+    Ok(quota_used_by_account)
+}
+
+fn dashboard_data_error(source: &'static str, error: &impl std::fmt::Display) -> AdminError {
+    tracing::error!(source, error = %error, "failed to load dashboard data");
+    AdminError::internal("Failed to load dashboard data")
 }
 
 fn quota_used_percent(quota_json: &str) -> Option<f64> {

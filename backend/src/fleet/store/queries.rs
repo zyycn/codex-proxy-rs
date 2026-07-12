@@ -138,15 +138,6 @@ from accounts
 where quota_json is not null
 order by quota_fetched_at desc nulls last, id desc";
 
-pub(super) const UPDATE_QUOTA_JSON_SQL: &str = r"
-update accounts
-set
-  quota_json = $1,
-  quota_fetched_at = $2,
-  plan_type = coalesce($3, plan_type),
-  updated_at = $4
-where id = $5";
-
 pub(super) const APPLY_QUOTA_SNAPSHOT_SQL: &str = r"
 update accounts
 set

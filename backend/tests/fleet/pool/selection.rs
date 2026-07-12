@@ -458,7 +458,6 @@ fn account_pool_distinct_plan_accounts_should_filter_like_model_refresh() {
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].plan_type, "plus");
     assert_eq!(selected[0].account.id, "plus-ok");
-    assert!(pool.release_distinct_plan_account(&selected[0]));
 }
 
 #[test]

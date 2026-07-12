@@ -1,7 +1,7 @@
 use super::*;
 
 /// `GET /api/admin/accounts/test?id=...&modelId=...`
-pub(crate) async fn test_account_connection(
+pub async fn test_account_connection(
     State(state): State<AppState>,
     Query(query): Query<AccountTestQuery>,
     _auth: AdminAuth,
@@ -33,7 +33,7 @@ pub(crate) async fn test_account_connection(
 }
 
 /// `GET /api/admin/accounts/models?id=...`
-pub(crate) async fn account_models(
+pub async fn account_models(
     State(state): State<AppState>,
     Query(query): Query<AccountIdQuery>,
     _auth: AdminAuth,

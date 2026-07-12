@@ -203,20 +203,20 @@ impl PgFingerprintStore {
 
 fn fingerprint_from_row(row: &sqlx::postgres::PgRow) -> Result<Fingerprint, sqlx::Error> {
     let default_headers = row
-        .get::<sqlx::types::Json<Vec<StoredHeader>>, _>("default_headers_json")
+        .try_get::<sqlx::types::Json<Vec<StoredHeader>>, _>("default_headers_json")?
         .0;
     let header_order = row
-        .get::<sqlx::types::Json<Vec<String>>, _>("header_order_json")
+        .try_get::<sqlx::types::Json<Vec<String>>, _>("header_order_json")?
         .0;
-    let updated_at = row.get::<DateTime<Utc>, _>("updated_at");
+    let updated_at = row.try_get::<DateTime<Utc>, _>("updated_at")?;
     Ok(Fingerprint {
-        originator: row.get("originator"),
-        app_version: row.get("app_version"),
-        build_number: row.get("build_number"),
-        platform: row.get("platform"),
-        arch: row.get("arch"),
-        chromium_version: row.get("chromium_version"),
-        user_agent_template: row.get("user_agent_template"),
+        originator: row.try_get("originator")?,
+        app_version: row.try_get("app_version")?,
+        build_number: row.try_get("build_number")?,
+        platform: row.try_get("platform")?,
+        arch: row.try_get("arch")?,
+        chromium_version: row.try_get("chromium_version")?,
+        user_agent_template: row.try_get("user_agent_template")?,
         default_headers: decode_default_headers(default_headers),
         header_order,
         updated_at: Some(updated_at.to_rfc3339()),

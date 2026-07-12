@@ -27,7 +27,7 @@ use super::{
         responses_dispatch_error_response_ref, responses_stream_dispatch_failed_sse_event,
     },
     models::model_catalog_for_state,
-    sse::{done_sse_frame, event_stream_response as sse_event_stream_response, SseResponseOptions},
+    sse::{done_sse_frame, event_stream_response as sse_event_stream_response},
 };
 
 const OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
@@ -257,7 +257,7 @@ pub async fn responses(
     handle_responses(
         state,
         request_id,
-        client_ip_string(client_ip),
+        client_ip.map(|Extension(client_ip)| client_ip.as_str().to_string()),
         headers,
         body,
         "/v1/responses",
@@ -277,7 +277,7 @@ pub async fn review_responses(
     handle_responses(
         state,
         request_id,
-        client_ip_string(client_ip),
+        client_ip.map(|Extension(client_ip)| client_ip.as_str().to_string()),
         headers,
         body,
         "/v1/responses/review",
@@ -297,16 +297,11 @@ pub async fn compact_responses(
     handle_compact_responses(
         state,
         request_id,
-        client_ip_string(client_ip),
+        client_ip.map(|Extension(client_ip)| client_ip.as_str().to_string()),
         headers,
         body,
     )
     .await
-}
-
-/// 从可选的 `ClientIp` extension 提取 IP 字符串。
-fn client_ip_string(client_ip: Option<Extension<ClientIp>>) -> Option<String> {
-    client_ip.map(|Extension(client_ip)| client_ip.as_str().to_string())
 }
 
 async fn handle_responses(
@@ -477,12 +472,11 @@ fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn event_stream_response(mut body: String) -> Response {
     ensure_done_sse_frame(&mut body);
-    sse_event_stream_response(Body::from(body), SseResponseOptions::BASIC)
+    sse_event_stream_response(Body::from(body))
 }
 
 fn live_event_stream_response(stream: ResponseDispatchStream) -> Response {
-    let response =
-        sse_event_stream_response(Body::from_stream(stream.body), SseResponseOptions::BASIC);
+    let response = sse_event_stream_response(Body::from_stream(stream.body));
     apply_safe_response_headers(response, stream.response_headers)
 }
 

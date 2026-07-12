@@ -152,7 +152,11 @@ fn parse_cpr_payload(payload: &Value) -> Result<ParsedAccountImport, &'static st
 fn parse_sub2api_payload(payload: &Value) -> Result<ParsedAccountImport, &'static str> {
     Ok(ParsedAccountImport {
         source: AccountImportSource::Sub2Api,
-        entries: parse_account_entries(payload, sub2api_account_import_entry_from_value, None)?,
+        entries: parse_account_entries(
+            payload,
+            |value| Ok(sub2api_account_import_entry_from_value(value)),
+            None,
+        )?,
     })
 }
 
@@ -161,7 +165,7 @@ fn parse_cli_proxy_api_payload(payload: &Value) -> Result<ParsedAccountImport, &
         source: AccountImportSource::CliProxyApi,
         entries: parse_account_entries(
             payload,
-            cli_proxy_api_account_import_entry_from_value,
+            |value| Ok(cli_proxy_api_account_import_entry_from_value(value)),
             None,
         )?,
     })
@@ -243,13 +247,11 @@ fn cpr_account_import_entry_from_value(
     }))
 }
 
-fn sub2api_account_import_entry_from_value(
-    value: &Value,
-) -> Result<Option<AccountImportEntry>, &'static str> {
+fn sub2api_account_import_entry_from_value(value: &Value) -> Option<AccountImportEntry> {
     if sub2api_account_backup_entry(value) {
-        return Ok(sub2api_backup_account_entry(value));
+        return sub2api_backup_account_entry(value);
     }
-    Ok(sub2api_codex_session_or_flat_entry(value))
+    sub2api_codex_session_or_flat_entry(value)
 }
 
 fn sub2api_backup_account_entry(value: &Value) -> Option<AccountImportEntry> {
@@ -408,14 +410,10 @@ fn sub2api_codex_session_or_flat_entry(value: &Value) -> Option<AccountImportEnt
     })
 }
 
-fn cli_proxy_api_account_import_entry_from_value(
-    value: &Value,
-) -> Result<Option<AccountImportEntry>, &'static str> {
-    let Some(account) = value.as_object() else {
-        return Ok(None);
-    };
+fn cli_proxy_api_account_import_entry_from_value(value: &Value) -> Option<AccountImportEntry> {
+    let account = value.as_object()?;
     if !cli_proxy_api_provider_is_codex(account) {
-        return Ok(None);
+        return None;
     }
 
     let token = first_path_string(
@@ -442,10 +440,10 @@ fn cli_proxy_api_account_import_entry_from_value(
         ],
     );
     if token.is_none() && refresh_token.is_none() {
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(AccountImportEntry {
+    Some(AccountImportEntry {
         id: None,
         email: first_string(value, &["email"]),
         account_id: first_string(
@@ -478,7 +476,7 @@ fn cli_proxy_api_account_import_entry_from_value(
         cached_quota: None,
         quota_fetched_at: None,
         quota_verify_required: None,
-    }))
+    })
 }
 
 fn ensure_account_import_keys(value: &Value, allowed_keys: &[&str]) -> Result<(), &'static str> {

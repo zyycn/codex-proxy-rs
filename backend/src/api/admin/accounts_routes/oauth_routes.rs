@@ -1,7 +1,7 @@
 use super::*;
 
 /// `POST /api/admin/accounts/oauth/authorize`
-pub(crate) async fn oauth_authorize_account(
+pub async fn oauth_authorize_account(
     State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
@@ -20,7 +20,7 @@ pub(crate) async fn oauth_authorize_account(
 }
 
 /// `POST /api/admin/accounts/oauth/exchange`
-pub(crate) async fn oauth_exchange_account(
+pub async fn oauth_exchange_account(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(payload): Json<AccountOAuthExchangeRequest>,

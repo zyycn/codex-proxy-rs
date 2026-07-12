@@ -1,7 +1,7 @@
 use super::*;
 
 /// `GET /api/admin/accounts/quota`
-pub(crate) async fn account_quota(
+pub async fn account_quota(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Query(query): Query<AccountIdQuery>,

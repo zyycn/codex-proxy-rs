@@ -575,7 +575,7 @@ impl From<UsageRecordSummary> for UsageRecordSummaryData {
 
 impl From<UsageRecordBreakdown> for UsageRecordBreakdownData {
     fn from(item: UsageRecordBreakdown) -> Self {
-        UsageRecordBreakdownData::from_item(item, 0)
+        Self::from_item(item, 0)
     }
 }
 

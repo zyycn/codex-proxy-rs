@@ -21,18 +21,12 @@ use crate::{
         attempts::AccountAttemptLedger,
         errors::{
             backend_transport_name, is_continuation_busy_error, is_history_recovery_upstream_error,
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, is_retryable_account_transport_error,
-            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            is_retryable_account_transport_error, upstream_error_body,
             upstream_error_set_cookie_headers,
         },
         recovery::{
-            auth::{auth_failure_account_status, is_auth_upstream_error},
-            cloudflare::{
-                cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-                is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-                CloudflareRecovery,
-            },
+            account_failure::{isolate_rotatable_account_failure, isolate_sse_account_failure},
+            cloudflare::CloudflareRecovery,
             exhaustion::AccountExhaustionTracker,
             history::HistoryRecoveryPlan,
         },
@@ -43,7 +37,7 @@ use crate::{
         },
     },
     fleet::{
-        account::{Account, AccountStatus},
+        account::Account,
         pool::{AccountAcquireRequest, AccountPoolService},
     },
     models::service::ModelService,
@@ -57,8 +51,7 @@ use crate::{
             responses::{response_from_codex_sse, CodexResponsesRequest, CollectedResponse},
         },
         transport::{
-            backend_transport_for_response_request, is_banned_upstream_error, CodexBackendClient,
-            CodexBackendResponse,
+            backend_transport_for_response_request, CodexBackendClient, CodexBackendResponse,
         },
     },
 };
@@ -73,11 +66,7 @@ use super::{
         ResponseUpstreamErrorEventRecord,
     },
     stream::{
-        sse_failure::{
-            auth_sse_failure_account_status, is_auth_sse_failure, is_history_recovery_sse_failure,
-            is_model_unsupported_sse_failure, is_quota_exhausted_sse_failure,
-            sse_failure_error_body, stream_failure_http_status,
-        },
+        sse_failure::is_history_recovery_sse_failure,
         trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },
 };
@@ -352,42 +341,14 @@ impl ResponseDispatchService {
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
-                        if is_model_unsupported_sse_failure(failure) {
-                            let upstream_error = sse_failure_error_body(failure);
-                            exhausted_accounts.record_model_unsupported(
-                                Some(&release_account_id),
-                                upstream_error,
-                            );
-                            if !history.can_failover() {
-                                break (account, response, collected_response, attempt);
-                            }
-                            continue;
-                        }
-                        if is_quota_exhausted_sse_failure(failure) {
-                            exhausted_accounts.record_quota_exhausted(
-                                Some(&release_account_id),
-                                failure.message.clone(),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, AccountStatus::QuotaExhausted)
-                                .await;
-                            if !history.can_failover() {
-                                break (account, response, collected_response, attempt);
-                            }
-                            continue;
-                        }
-                        if is_auth_sse_failure(failure) {
-                            let upstream_error = sse_failure_error_body(failure);
-                            let account_status = auth_sse_failure_account_status(failure);
-                            exhausted_accounts.record_auth_failure(
-                                Some(&release_account_id),
-                                account_status,
-                                upstream_error,
-                                Some(stream_failure_http_status(failure)),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, account_status)
-                                .await;
+                        if isolate_sse_account_failure(
+                            self.account_pool.as_ref(),
+                            &mut exhausted_accounts,
+                            &release_account_id,
+                            failure,
+                        )
+                        .await
+                        {
                             if !history.can_failover() {
                                 break (account, response, collected_response, attempt);
                             }
@@ -396,94 +357,21 @@ impl ResponseDispatchService {
                     }
                     break (account, response, collected_response, attempt);
                 }
-                Err(error) if is_rate_limit_upstream_error(&error) => {
-                    exhausted_accounts.record_rate_limited(
-                        Some(&release_account_id),
-                        upstream_error_body(&error),
-                    );
-                    let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
-                    self.account_pool
-                        .mark_quota_limited_until(&release_account_id, cooldown_until)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    exhausted_accounts.record_quota_exhausted(
-                        Some(&release_account_id),
-                        upstream_error_body(&error),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, AccountStatus::QuotaExhausted)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_auth_upstream_error(&error) => {
-                    let upstream_error = upstream_error_body(&error);
-                    let account_status = auth_failure_account_status(&error);
-                    exhausted_accounts.record_auth_failure(
-                        Some(&release_account_id),
-                        account_status,
-                        upstream_error,
-                        Some(upstream_error_http_status(&error)),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, account_status)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    exhausted_accounts.record_cloudflare_challenge(
-                        Some(&release_account_id),
-                        cloudflare_challenge_error_message(),
-                    );
-                    self.cloudflare
-                        .apply_challenge(self.account_pool.as_ref(), &release_account_id)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    exhausted_accounts.record_cloudflare_path_blocked(
-                        Some(&release_account_id),
-                        cloudflare_path_block_error_message(),
-                    );
-                    self.cloudflare
-                        .apply_path_block(self.account_pool.as_ref(), &release_account_id)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_model_unsupported_upstream_error(&error) => {
-                    let upstream_error = upstream_error_body(&error);
-                    exhausted_accounts
-                        .record_model_unsupported(Some(&release_account_id), upstream_error);
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
-                Err(error) if is_banned_upstream_error(&error) => {
-                    exhausted_accounts.record_auth_failure(
-                        Some(&release_account_id),
-                        AccountStatus::Banned,
-                        upstream_error_body(&error),
-                        Some(upstream_error_http_status(&error)),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, AccountStatus::Banned)
-                        .await;
-                    if !history.can_failover() {
-                        return Err(ResponseDispatchError::Upstream(error));
-                    }
-                }
                 Err(error) => {
+                    if isolate_rotatable_account_failure(
+                        self.account_pool.as_ref(),
+                        &self.cloudflare,
+                        &mut exhausted_accounts,
+                        &release_account_id,
+                        &error,
+                    )
+                    .await
+                    {
+                        if !history.can_failover() {
+                            return Err(ResponseDispatchError::Upstream(error));
+                        }
+                        continue;
+                    }
                     if is_continuation_busy_error(&error) {
                         if history.recover_managed_history(&release_account_id) {
                             next_required_account_id = Some(release_account_id);

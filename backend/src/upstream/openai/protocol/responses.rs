@@ -208,7 +208,7 @@ fn complete_sse_body_prefix(body: &str) -> Option<&str> {
 }
 
 /// 从 Codex SSE 收集出的非流式 Responses 结果。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectedResponse {
     /// 收集到 `response.completed`。
     Completed(Value),
@@ -244,7 +244,7 @@ impl ResponsesSseFailure {
 }
 
 /// 从完成 SSE 中提取会话亲和性和 replay 元数据。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletedResponseMetadata {
     /// 上游 response id。
     pub response_id: String,
@@ -636,19 +636,6 @@ impl CodexResponsesRequest {
     /// service tier（透传原值）。
     pub fn service_tier(&self) -> Option<&str> {
         self.body.get("service_tier").and_then(Value::as_str)
-    }
-
-    /// 设置 service tier（模型后缀路由 / 归一）。
-    pub fn set_service_tier(&mut self, service_tier: Option<String>) {
-        match service_tier {
-            Some(value) => {
-                self.body
-                    .insert("service_tier".to_string(), Value::String(value));
-            }
-            None => {
-                self.body.remove("service_tier");
-            }
-        }
     }
 
     /// 前一个 response ID。

@@ -8,9 +8,7 @@ use crate::{
         attempts::AccountAttemptLedger,
         errors::{
             backend_transport_name, is_continuation_busy_error, is_history_recovery_upstream_error,
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, is_retryable_account_transport_error,
-            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            is_retryable_account_transport_error, upstream_error_body,
             upstream_error_set_cookie_headers, ResponseDispatchError,
         },
         recording::{
@@ -19,11 +17,7 @@ use crate::{
             ResponseUpstreamErrorEventRecord,
         },
         recovery::{
-            auth::{auth_failure_account_status, is_auth_upstream_error},
-            cloudflare::{
-                cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-                is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-            },
+            account_failure::{isolate_rotatable_account_failure, isolate_sse_account_failure},
             exhaustion::AccountExhaustionTracker,
             history::HistoryRecoveryPlan,
         },
@@ -32,9 +26,7 @@ use crate::{
             live::{spawn_live_response_stream, LiveResponseStreamContext},
             prefetch::prefetch_first_sse_chunk,
             sse_failure::{
-                auth_sse_failure_account_status, first_sse_failure, is_auth_sse_failure,
-                is_history_recovery_sse_failure, is_model_unsupported_sse_failure,
-                is_quota_exhausted_sse_failure, sse_failure_error_body, stream_failure_http_status,
+                first_sse_failure, is_history_recovery_sse_failure, sse_failure_error_body,
             },
             trace::ResponseDispatchTrace,
         },
@@ -44,10 +36,10 @@ use crate::{
             QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
         },
     },
-    fleet::{account::AccountStatus, pool::AccountAcquireRequest},
+    fleet::pool::AccountAcquireRequest,
     upstream::openai::{
         protocol::responses::CodexResponsesRequest,
-        transport::{backend_transport_for_response_request, is_banned_upstream_error},
+        transport::backend_transport_for_response_request,
     },
 };
 
@@ -230,211 +222,84 @@ impl ResponseDispatchService {
                         .await;
                     let (prefetched, body) = match prefetch_first_sse_chunk(response.body).await {
                         Ok(prefetched) => prefetched,
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_rate_limit_upstream_error(&error) =>
-                        {
+                        Err(ResponseDispatchError::Upstream(error)) => {
                             acquired.complete().await;
-                            exhausted_accounts.record_rate_limited(
-                                Some(&release_account_id),
-                                upstream_error_body(&error),
-                            );
-                            let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
-                            self.account_pool
-                                .mark_quota_limited_until(&release_account_id, cooldown_until)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_quota_exhausted_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            exhausted_accounts.record_quota_exhausted(
-                                Some(&release_account_id),
-                                upstream_error_body(&error),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, AccountStatus::QuotaExhausted)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_auth_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            let upstream_error = upstream_error_body(&error);
-                            let account_status = auth_failure_account_status(&error);
-                            exhausted_accounts.record_auth_failure(
-                                Some(&release_account_id),
-                                account_status,
-                                upstream_error,
-                                Some(upstream_error_http_status(&error)),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, account_status)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_cloudflare_challenge_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            exhausted_accounts.record_cloudflare_challenge(
-                                Some(&release_account_id),
-                                cloudflare_challenge_error_message(),
-                            );
-                            self.cloudflare
-                                .apply_challenge(self.account_pool.as_ref(), &release_account_id)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_cloudflare_path_block_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            exhausted_accounts.record_cloudflare_path_blocked(
-                                Some(&release_account_id),
-                                cloudflare_path_block_error_message(),
-                            );
-                            self.cloudflare
-                                .apply_path_block(self.account_pool.as_ref(), &release_account_id)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_model_unsupported_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            let upstream_error = upstream_error_body(&error);
-                            exhausted_accounts.record_model_unsupported(
-                                Some(&release_account_id),
-                                upstream_error,
-                            );
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(ResponseDispatchError::Upstream(error))
-                            if is_banned_upstream_error(&error) =>
-                        {
-                            acquired.complete().await;
-                            exhausted_accounts.record_auth_failure(
-                                Some(&release_account_id),
-                                AccountStatus::Banned,
-                                upstream_error_body(&error),
-                                Some(upstream_error_http_status(&error)),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, AccountStatus::Banned)
-                                .await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Upstream(error),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        Err(error) => {
-                            acquired.complete().await;
-                            if let ResponseDispatchError::Upstream(upstream_error) = &error {
-                                if is_continuation_busy_error(upstream_error) {
-                                    if history.recover_managed_history(&release_account_id) {
-                                        next_required_account_id = Some(release_account_id);
-                                        continue;
-                                    }
+                            if isolate_rotatable_account_failure(
+                                self.account_pool.as_ref(),
+                                &self.cloudflare,
+                                &mut exhausted_accounts,
+                                &release_account_id,
+                                &error,
+                            )
+                            .await
+                            {
+                                if history.is_external_unknown() {
                                     return_stream_dispatch_error!(
-                                        ResponseDispatchError::ContinuationBusy,
+                                        ResponseDispatchError::Upstream(error),
                                         account_id: Some(&release_account_id),
                                         transport: Some(backend_transport_name(transport))
                                     );
                                 }
-                                let history_unavailable =
-                                    is_history_recovery_upstream_error(upstream_error);
-                                if history_unavailable
-                                    && history.recover_managed_history(&release_account_id)
-                                {
+                                continue;
+                            }
+                            if is_continuation_busy_error(&error) {
+                                if history.recover_managed_history(&release_account_id) {
                                     next_required_account_id = Some(release_account_id);
                                     continue;
                                 }
-                                record_response_upstream_error_event(
-                                    ResponseUpstreamErrorEventRecord {
-                                        recorder: &self.recorder,
-                                        request_id,
-                                        account_id: &release_account_id,
-                                        account_email: account.email.as_deref(),
-                                        route,
-                                        model: requested_model,
-                                        started_at,
-                                        stream: true,
-                                        transport,
-                                        request: &attempt_request,
-                                        error: upstream_error,
-                                        trace: &trace,
-                                        attempt: Some(&attempt),
-                                    },
-                                )
-                                .await;
-                                if is_retryable_account_transport_error(upstream_error) {
-                                    exhausted_accounts.record_upstream_unavailable(
-                                        Some(&release_account_id),
-                                        upstream_error_body(upstream_error),
-                                    );
-                                    if history.is_external_unknown() {
-                                        return Err(error);
-                                    }
-                                    continue;
-                                }
-                                if history_unavailable {
-                                    if history.is_external_unknown() {
-                                        return Err(error);
-                                    }
-                                    return Err(ResponseDispatchError::HistoryUnavailable {
-                                        upstream_error: upstream_error_body(upstream_error),
-                                    });
-                                }
-                                return Err(error);
+                                return_stream_dispatch_error!(
+                                    ResponseDispatchError::ContinuationBusy,
+                                    account_id: Some(&release_account_id),
+                                    transport: Some(backend_transport_name(transport))
+                                );
                             }
+                            let history_unavailable = is_history_recovery_upstream_error(&error);
+                            if history_unavailable
+                                && history.recover_managed_history(&release_account_id)
+                            {
+                                next_required_account_id = Some(release_account_id);
+                                continue;
+                            }
+                            record_response_upstream_error_event(
+                                ResponseUpstreamErrorEventRecord {
+                                    recorder: &self.recorder,
+                                    request_id,
+                                    account_id: &release_account_id,
+                                    account_email: account.email.as_deref(),
+                                    route,
+                                    model: requested_model,
+                                    started_at,
+                                    stream: true,
+                                    transport,
+                                    request: &attempt_request,
+                                    error: &error,
+                                    trace: &trace,
+                                    attempt: Some(&attempt),
+                                },
+                            )
+                            .await;
+                            if is_retryable_account_transport_error(&error) {
+                                exhausted_accounts.record_upstream_unavailable(
+                                    Some(&release_account_id),
+                                    upstream_error_body(&error),
+                                );
+                                if history.is_external_unknown() {
+                                    return Err(ResponseDispatchError::Upstream(error));
+                                }
+                                continue;
+                            }
+                            if history_unavailable {
+                                if history.is_external_unknown() {
+                                    return Err(ResponseDispatchError::Upstream(error));
+                                }
+                                return Err(ResponseDispatchError::HistoryUnavailable {
+                                    upstream_error: upstream_error_body(&error),
+                                });
+                            }
+                            return Err(ResponseDispatchError::Upstream(error));
+                        }
+                        Err(error) => {
+                            acquired.complete().await;
                             return_stream_dispatch_error!(
                                 error,
                                 account_id: Some(&release_account_id),
@@ -461,52 +326,14 @@ impl ResponseDispatchService {
                             next_required_account_id = Some(release_account_id);
                             continue;
                         }
-                        if is_model_unsupported_sse_failure(&failure) {
-                            let upstream_error = sse_failure_error_body(&failure);
-                            exhausted_accounts.record_model_unsupported(
-                                Some(&release_account_id),
-                                upstream_error,
-                            );
-                            acquired.complete().await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Failed(failure),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        if is_quota_exhausted_sse_failure(&failure) {
-                            exhausted_accounts.record_quota_exhausted(
-                                Some(&release_account_id),
-                                failure.message.clone(),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, AccountStatus::QuotaExhausted)
-                                .await;
-                            acquired.complete().await;
-                            if history.is_external_unknown() {
-                                return_stream_dispatch_error!(
-                                    ResponseDispatchError::Failed(failure),
-                                    account_id: Some(&release_account_id),
-                                    transport: Some(backend_transport_name(transport))
-                                );
-                            }
-                            continue;
-                        }
-                        if is_auth_sse_failure(&failure) {
-                            let upstream_error = sse_failure_error_body(&failure);
-                            let account_status = auth_sse_failure_account_status(&failure);
-                            exhausted_accounts.record_auth_failure(
-                                Some(&release_account_id),
-                                account_status,
-                                upstream_error,
-                                Some(stream_failure_http_status(&failure)),
-                            );
-                            self.account_pool
-                                .set_status(&release_account_id, account_status)
-                                .await;
+                        if isolate_sse_account_failure(
+                            self.account_pool.as_ref(),
+                            &mut exhausted_accounts,
+                            &release_account_id,
+                            &failure,
+                        )
+                        .await
+                        {
                             acquired.complete().await;
                             if history.is_external_unknown() {
                                 return_stream_dispatch_error!(
@@ -580,144 +407,28 @@ impl ResponseDispatchService {
                     };
                     return Ok(spawn_live_response_stream(context, prefetched, body));
                 }
-                Err(error) if is_rate_limit_upstream_error(&error) => {
-                    acquired.complete().await;
-                    exhausted_accounts.record_rate_limited(
-                        Some(&release_account_id),
-                        upstream_error_body(&error),
-                    );
-                    let cooldown_until = rate_limit_cooldown_until(&error, Utc::now());
-                    self.account_pool
-                        .mark_quota_limited_until(&release_account_id, cooldown_until)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_quota_exhausted_upstream_error(&error) => {
-                    acquired.complete().await;
-                    exhausted_accounts.record_quota_exhausted(
-                        Some(&release_account_id),
-                        upstream_error_body(&error),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, AccountStatus::QuotaExhausted)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_auth_upstream_error(&error) => {
-                    acquired.complete().await;
-                    let upstream_error = upstream_error_body(&error);
-                    let account_status = auth_failure_account_status(&error);
-                    exhausted_accounts.record_auth_failure(
-                        Some(&release_account_id),
-                        account_status,
-                        upstream_error,
-                        Some(upstream_error_http_status(&error)),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, account_status)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_cloudflare_challenge_upstream_error(&error) => {
-                    acquired.complete().await;
-                    exhausted_accounts.record_cloudflare_challenge(
-                        Some(&release_account_id),
-                        cloudflare_challenge_error_message(),
-                    );
-                    self.cloudflare
-                        .apply_challenge(self.account_pool.as_ref(), &release_account_id)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_cloudflare_path_block_upstream_error(&error) => {
-                    acquired.complete().await;
-                    exhausted_accounts.record_cloudflare_path_blocked(
-                        Some(&release_account_id),
-                        cloudflare_path_block_error_message(),
-                    );
-                    self.cloudflare
-                        .apply_path_block(self.account_pool.as_ref(), &release_account_id)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_model_unsupported_upstream_error(&error) => {
-                    acquired.complete().await;
-                    let upstream_error = upstream_error_body(&error);
-                    exhausted_accounts
-                        .record_model_unsupported(Some(&release_account_id), upstream_error);
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
-                Err(error) if is_banned_upstream_error(&error) => {
-                    acquired.complete().await;
-                    exhausted_accounts.record_auth_failure(
-                        Some(&release_account_id),
-                        AccountStatus::Banned,
-                        upstream_error_body(&error),
-                        Some(upstream_error_http_status(&error)),
-                    );
-                    self.account_pool
-                        .set_status(&release_account_id, AccountStatus::Banned)
-                        .await;
-                    if history.is_external_unknown() {
-                        return_stream_dispatch_error!(
-                            ResponseDispatchError::Upstream(error),
-                            account_id: Some(&release_account_id),
-                            transport: Some(backend_transport_name(
-                                backend_transport_for_response_request(&attempt_request)
-                            ))
-                        );
-                    }
-                }
                 Err(error) => {
                     acquired.complete().await;
+                    if isolate_rotatable_account_failure(
+                        self.account_pool.as_ref(),
+                        &self.cloudflare,
+                        &mut exhausted_accounts,
+                        &release_account_id,
+                        &error,
+                    )
+                    .await
+                    {
+                        if history.is_external_unknown() {
+                            return_stream_dispatch_error!(
+                                ResponseDispatchError::Upstream(error),
+                                account_id: Some(&release_account_id),
+                                transport: Some(backend_transport_name(
+                                    backend_transport_for_response_request(&attempt_request)
+                                ))
+                            );
+                        }
+                        continue;
+                    }
                     if is_continuation_busy_error(&error) {
                         if history.recover_managed_history(&release_account_id) {
                             next_required_account_id = Some(release_account_id);

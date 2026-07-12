@@ -204,10 +204,12 @@ impl AccountPoolService {
 
     /// 更新账号池运行参数。
     pub async fn apply_options(&self, mut options: AccountPoolOptions, request_interval_ms: u64) {
-        let mut pool = self.pool.lock().await;
-        options.model_plan_allowlist = pool.options.model_plan_allowlist.clone();
-        options.fetched_model_plan_types = pool.options.fetched_model_plan_types.clone();
-        pool.set_options(options);
+        {
+            let mut pool = self.pool.lock().await;
+            options.model_plan_allowlist = pool.options.model_plan_allowlist.clone();
+            options.fetched_model_plan_types = pool.options.fetched_model_plan_types.clone();
+            pool.set_options(options);
+        }
         *self
             .request_interval
             .write()
@@ -264,10 +266,12 @@ impl AccountPoolService {
             }
         }
         let count = accounts.len();
-        let mut pool = self.pool.lock().await;
-        pool.clear();
-        for account in accounts {
-            pool.insert(account);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.clear();
+            for account in accounts {
+                pool.insert(account);
+            }
         }
         Ok(count)
     }
@@ -611,11 +615,6 @@ impl AccountPoolService {
         };
         let quota = rate_limit_quota(&rate_limits, plan_type, existing_quota.as_ref());
         self.apply_quota_snapshot(account_id, &quota).await;
-    }
-
-    /// 读取运行时账号快照。
-    pub async fn account_snapshot(&self, account_id: &str) -> Option<Account> {
-        self.pool.lock().await.get(account_id)
     }
 
     /// 应用 quota 快照到持久化存储和运行时账号池。

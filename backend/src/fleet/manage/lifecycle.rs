@@ -432,7 +432,7 @@ fn stable_jittered_millis(account_id: &str, base_millis: u64, variance: f64) -> 
     account_id.hash(&mut hasher);
     "health-check-stagger".hash(&mut hasher);
     let unit = hasher.finish() as f64 / u64::MAX as f64;
-    let factor = (1.0 - variance) + unit * variance * 2.0;
+    let factor = (unit * variance).mul_add(2.0, 1.0 - variance);
     (base_millis as f64 * factor)
         .round()
         .clamp(0.0, u64::MAX as f64) as u64

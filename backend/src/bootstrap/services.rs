@@ -228,14 +228,15 @@ impl Services {
             usage_record_options.capture_body,
         ));
         let settings_snapshot = settings_snapshot_from_config(config);
+        let account_pool_options = account_pool_options_from_config(config);
         let account_pool_static = AccountPoolStaticSettings {
-            skip_quota_limited: config.quota.skip_exhausted,
-            tier_priority: config.auth.tier_priority.clone(),
+            skip_quota_limited: account_pool_options.skip_quota_limited,
+            tier_priority: account_pool_options.tier_priority.clone(),
         };
         let account_pool = Arc::new(AccountPoolService::new(
             account_store.clone(),
             account_usage_store_trait,
-            account_pool_static.pool_options(&settings_snapshot),
+            account_pool_options,
             settings_snapshot.request_interval_ms,
         ));
         let refresh_policy = RuntimeRefreshPolicy::new(RefreshPolicy {
