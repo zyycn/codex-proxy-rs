@@ -17,6 +17,7 @@ use super::{
 const LOGIN_FAILURE_WINDOW: Duration = Duration::minutes(15);
 const LOGIN_LOCK_DURATION: Duration = Duration::minutes(15);
 const LOGIN_MAX_FAILURES: u32 = 5;
+const LOGIN_FAILURE_SOURCE_LIMIT: usize = 10_000;
 
 /// 管理员会话服务。
 #[derive(Clone)]
@@ -134,6 +135,9 @@ impl SessionService {
         let login_locked = {
             let mut failures = self.login_failures.lock().await;
             retain_active_login_failures(&mut failures, now);
+            if !failures.contains_key(source) && failures.len() >= LOGIN_FAILURE_SOURCE_LIMIT {
+                return Err(SessionError::LoginThrottled);
+            }
             failures
                 .get(source)
                 .and_then(|state| state.locked_until)

@@ -85,7 +85,7 @@ pub struct CodexWebSocketPoolConfig {
     pub ping_timeout: Duration,
     /// idle socket 无活动多久后视为失活。
     pub liveness_timeout: Option<Duration>,
-    /// 首个上游事件到达前的超时；`None` 表示禁用首事件超时。
+    /// 建连并发送后首个上游事件到达前的超时；`None` 表示禁用。
     pub initial_event_timeout: Option<Duration>,
 }
 
@@ -144,7 +144,7 @@ impl CodexWebSocketPool {
         self.config.keepalive()
     }
 
-    /// 首个上游事件到达前的超时；`None` 表示禁用首事件超时。
+    /// 建连并发送后首个上游事件到达前的超时；`None` 表示禁用。
     pub(crate) fn initial_event_timeout(&self) -> Option<Duration> {
         self.config.initial_event_timeout
     }

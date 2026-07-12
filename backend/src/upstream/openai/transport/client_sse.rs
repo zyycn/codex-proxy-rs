@@ -72,7 +72,7 @@ impl CodexBackendClient {
 
         let mut body_bytes = Vec::new();
         let mut first_token_ms = None;
-        let mut stream = response.bytes_stream();
+        let mut stream = http_sse_stream(response);
         while let Some(chunk) = stream.try_next().await? {
             body_bytes.extend_from_slice(&chunk);
             response_meta::update_first_token_ms(started_at, &body_bytes, &mut first_token_ms);
@@ -128,7 +128,7 @@ impl CodexBackendClient {
         }
 
         Ok(CodexBackendStreamingResponse {
-            body: Box::pin(response.bytes_stream().map_err(CodexClientError::Http)),
+            body: http_sse_stream(response),
             transport: CodexBackendTransport::HttpSse,
             turn_state,
             set_cookie_headers,
@@ -589,4 +589,22 @@ impl CodexBackendClient {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         Ok(headers)
     }
+}
+
+fn http_sse_stream(response: ReqwestResponse) -> CodexBackendSseStream {
+    let stream: CodexBackendSseStream =
+        Box::pin(response.bytes_stream().map_err(CodexClientError::Http));
+    Box::pin(futures::stream::unfold(Some(stream), |stream| async move {
+        let mut stream = stream?;
+        match tokio::time::timeout(UPSTREAM_STREAM_IDLE_TIMEOUT, stream.next()).await {
+            Ok(Some(chunk)) => Some((chunk, Some(stream))),
+            Ok(None) => None,
+            Err(_) => Some((
+                Err(CodexClientError::StreamIdleTimeout {
+                    timeout: UPSTREAM_STREAM_IDLE_TIMEOUT,
+                }),
+                None,
+            )),
+        }
+    }))
 }

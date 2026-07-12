@@ -32,7 +32,7 @@ use crate::{
         },
         upstream_call::{
             AccountUpstreamContext, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE, QuotaVerificationContext,
-            QuotaVerificationDecision, create_response_with_account_retrying_5xx,
+            QuotaVerificationDecision, create_response_with_account,
             verify_acquired_quota_if_required,
         },
     },
@@ -266,7 +266,7 @@ impl ResponseDispatchService {
             let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
-            let response_result = create_response_with_account_retrying_5xx(
+            let response_result = create_response_with_account(
                 AccountUpstreamContext {
                     codex: &self.codex,
                     account_identity: &self.account_identity,

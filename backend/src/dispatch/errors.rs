@@ -206,8 +206,11 @@ pub(crate) fn is_retryable_upstream_5xx_error(error: &CodexClientError) -> bool 
 pub(crate) fn is_retryable_account_transport_error(error: &CodexClientError) -> bool {
     match error {
         CodexClientError::Http(error) => error.is_connect() || error.is_timeout(),
+        CodexClientError::StreamIdleTimeout { .. } => true,
         CodexClientError::WebSocket(
             crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::Transport(_)
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ConnectTimeout { .. }
+            | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::SendTimeout { .. }
             | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ClosedBeforeTerminal
             | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
             | crate::upstream::openai::transport::websocket::CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstOutput { .. }

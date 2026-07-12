@@ -73,6 +73,18 @@ pub enum CodexWebSocketExchangeError {
     /// WebSocket 传输失败。
     #[error("websocket transport error: {0}")]
     Transport(#[from] tungstenite::Error),
+    /// DNS、TCP、TLS 或 WebSocket upgrade 未在限定时间内完成。
+    #[error("websocket connect timed out after {timeout:?}")]
+    ConnectTimeout {
+        /// 建连超时时长。
+        timeout: Duration,
+    },
+    /// 请求帧未在限定时间内写入上游连接。
+    #[error("websocket request send timed out after {timeout:?}")]
+    SendTimeout {
+        /// 发送超时时长。
+        timeout: Duration,
+    },
     /// SSE 聚合结果无法解析。
     #[error("invalid websocket SSE response: {0}")]
     InvalidSse(#[from] SseError),
@@ -102,14 +114,14 @@ pub enum CodexWebSocketExchangeError {
     /// 上游返回非文本事件帧。
     #[error("unexpected binary websocket event")]
     UnexpectedBinaryEvent,
-    /// 复用的池连接在首个真实输出前失效。
-    #[error("reused websocket connection died before first output: {message}")]
+    /// 复用的池连接在收到首个上游事件前失效。
+    #[error("reused websocket connection died before first upstream event: {message}")]
     ReusedConnectionDiedBeforeFirstOutput {
         /// 底层失效原因。
         message: String,
     },
-    /// 首个真实输出在配置的绝对超时内未到达（连接落到病态上游后端）。
-    #[error("websocket first output not received within {timeout:?}")]
+    /// 建连并发送后，上游在配置时间内没有产生任何事件。
+    #[error("websocket first upstream event not received within {timeout:?}")]
     InitialEventTimeout {
         /// 首个上游事件超时时长。
         timeout: Duration,
@@ -746,13 +758,6 @@ fn receive_idle_timeout(
             .filter(|timeout| !timeout.is_zero())
             .unwrap_or(WEBSOCKET_RECEIVE_IDLE_TIMEOUT)
     }
-}
-
-pub(super) fn is_initial_event_timeout(error: &CodexWebSocketExchangeError) -> bool {
-    matches!(
-        error,
-        CodexWebSocketExchangeError::InitialEventTimeout { .. }
-    )
 }
 
 async fn next_websocket_message(

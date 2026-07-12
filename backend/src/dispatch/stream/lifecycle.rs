@@ -32,7 +32,7 @@ use crate::{
         },
         upstream_call::{
             AccountUpstreamContext, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE, QuotaVerificationContext,
-            QuotaVerificationDecision, create_response_stream_with_account_retrying_5xx,
+            QuotaVerificationDecision, create_response_stream_with_account,
             verify_acquired_quota_if_required,
         },
     },
@@ -182,7 +182,7 @@ impl ResponseDispatchService {
             let account = acquired.account.clone();
             let release_account_id = account.id.clone();
             let attempt = trace.start_attempt(&release_account_id);
-            let response_result = create_response_stream_with_account_retrying_5xx(
+            let response_result = create_response_stream_with_account(
                 AccountUpstreamContext {
                     codex: &self.codex,
                     account_identity: &self.account_identity,
@@ -215,12 +215,6 @@ impl ResponseDispatchService {
                     let response_metadata = response.response_metadata;
                     self.models
                         .observe_models_etag(response_metadata.models_etag.as_deref());
-                    self.cloudflare
-                        .capture_set_cookie_headers(&release_account_id, &set_cookie_headers)
-                        .await;
-                    self.account_pool
-                        .sync_passive_rate_limit_headers(&account, &rate_limit_headers)
-                        .await;
                     let (prefetched, body) = match prefetch_first_sse_chunk(response.body).await {
                         Ok(prefetched) => prefetched,
                         Err(ResponseDispatchError::Upstream(error)) => {
@@ -395,6 +389,7 @@ impl ResponseDispatchService {
                         request,
                         tuple_schema,
                         transport,
+                        set_cookie_headers,
                         rate_limit_headers,
                         rate_limit_header_updates,
                         turn_state_update,

@@ -1,5 +1,7 @@
 //! 官方 Responses WebSocket 入站协议。
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -22,7 +24,7 @@ use tokio_tungstenite::{
 
 use crate::{
     api::{AppState, middleware::request_id::RequestId},
-    dispatch::service::ResponseDispatchStream,
+    dispatch::{recovery::history::sanitize_replay_items, service::ResponseDispatchStream},
     upstream::openai::protocol::{
         sse::{SseEvent, SseEventDecoder},
         websocket::{is_terminal_websocket_event, websocket_event_type},
@@ -131,6 +133,135 @@ struct ResponsesWebSocketSession {
     connection_id: String,
 }
 
+struct ConnectionReplayState {
+    last_response_id: Option<String>,
+    input: Option<Arc<Vec<Value>>>,
+}
+
+enum PendingReplayUpdate {
+    Replace(Vec<Value>),
+    Append(Vec<Value>),
+    Unavailable,
+}
+
+struct CompletedTurn {
+    response_id: String,
+    output: Vec<Value>,
+}
+
+#[derive(Default)]
+struct CompletedTurnCollector {
+    completed_items: Vec<Value>,
+    completed: Option<CompletedTurn>,
+}
+
+enum ForwardDispatchOutcome {
+    Continue(Option<CompletedTurn>),
+    Disconnect,
+}
+
+impl ConnectionReplayState {
+    fn new() -> Self {
+        Self {
+            last_response_id: None,
+            input: None,
+        }
+    }
+
+    fn prepare(
+        &self,
+        request: &mut crate::upstream::openai::protocol::responses::CodexResponsesRequest,
+    ) -> PendingReplayUpdate {
+        let turn_input = request.input().to_vec();
+        match request.previous_response_id() {
+            None => {
+                request.local_replay_input = None;
+                PendingReplayUpdate::Replace(turn_input)
+            }
+            Some(previous_response_id)
+                if self.last_response_id.as_deref() == Some(previous_response_id)
+                    && self.input.is_some() =>
+            {
+                request.local_replay_input.clone_from(&self.input);
+                PendingReplayUpdate::Append(turn_input)
+            }
+            Some(_) => {
+                request.local_replay_input = None;
+                PendingReplayUpdate::Unavailable
+            }
+        }
+    }
+
+    fn commit(&mut self, pending: PendingReplayUpdate, completed: CompletedTurn) {
+        self.last_response_id = Some(completed.response_id);
+        match pending {
+            PendingReplayUpdate::Replace(input) => self.replace(input, completed.output),
+            PendingReplayUpdate::Append(input) => self.append(input, completed.output),
+            PendingReplayUpdate::Unavailable => self.clear_input(),
+        }
+    }
+
+    fn replace(&mut self, mut input: Vec<Value>, mut output: Vec<Value>) {
+        sanitize_replay_items(&mut input);
+        sanitize_replay_items(&mut output);
+        input.append(&mut output);
+        self.input = Some(Arc::new(input));
+    }
+
+    fn append(&mut self, mut input: Vec<Value>, mut output: Vec<Value>) {
+        sanitize_replay_items(&mut input);
+        sanitize_replay_items(&mut output);
+        input.append(&mut output);
+        let Some(history) = self.input.as_mut() else {
+            return;
+        };
+        Arc::make_mut(history).append(&mut input);
+    }
+
+    fn clear_input(&mut self) {
+        self.input = None;
+    }
+}
+
+impl CompletedTurnCollector {
+    fn observe(&mut self, event: &SseEvent) {
+        let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            return;
+        };
+        let event_type = event
+            .event
+            .as_deref()
+            .or_else(|| value.get("type").and_then(Value::as_str));
+        match event_type {
+            Some("response.output_item.done") => {
+                if let Some(item) = value.get("item") {
+                    self.completed_items.push(item.clone());
+                }
+            }
+            Some("response.completed") => {
+                let Some(response_id) = value
+                    .pointer("/response/id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                else {
+                    return;
+                };
+                let output = value
+                    .pointer("/response/output")
+                    .and_then(Value::as_array)
+                    .filter(|output| !output.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| self.completed_items.clone());
+                self.completed = Some(CompletedTurn {
+                    response_id,
+                    output,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
 async fn serve_responses_websocket(
     mut socket: ResponsesWebSocket,
     session: ResponsesWebSocketSession,
@@ -140,6 +271,7 @@ async fn serve_responses_websocket(
         "Responses WebSocket connected"
     );
     let mut request_count = 0u64;
+    let mut replay_state = ConnectionReplayState::new();
 
     while let Some(message) = socket.next().await {
         let payload = match message {
@@ -190,7 +322,7 @@ async fn serve_responses_websocket(
                 continue;
             }
         };
-        let prepared = match prepare_responses_request(
+        let mut prepared = match prepare_responses_request(
             &session.state,
             body,
             &session.headers,
@@ -229,9 +361,14 @@ async fn serve_responses_websocket(
                 continue;
             }
         };
+        let pending_replay = replay_state.prepare(&mut prepared.request);
 
-        if !dispatch_response_create(&mut socket, &session, request_id, prepared).await {
-            break;
+        match dispatch_response_create(&mut socket, &session, request_id, prepared).await {
+            ForwardDispatchOutcome::Continue(Some(completed)) => {
+                replay_state.commit(pending_replay, completed);
+            }
+            ForwardDispatchOutcome::Continue(None) => {}
+            ForwardDispatchOutcome::Disconnect => break,
         }
     }
 
@@ -247,7 +384,7 @@ async fn dispatch_response_create(
     session: &ResponsesWebSocketSession,
     request_id: RequestId,
     prepared: PreparedResponsesRequest,
-) -> bool {
+) -> ForwardDispatchOutcome {
     let PreparedResponsesRequest {
         mut request,
         requested_model,
@@ -270,7 +407,11 @@ async fn dispatch_response_create(
         Ok(stream) => stream,
         Err(error) => {
             let event = responses_websocket_dispatch_error_event(&error, request_id.as_str());
-            return send_text(socket, event).await;
+            return if send_text(socket, event).await {
+                ForwardDispatchOutcome::Continue(None)
+            } else {
+                ForwardDispatchOutcome::Disconnect
+            };
         }
     };
     forward_dispatch_stream(socket, stream, request_id.as_str()).await
@@ -280,7 +421,7 @@ async fn forward_dispatch_stream(
     socket: &mut ResponsesWebSocket,
     stream: ResponseDispatchStream,
     request_id: &str,
-) -> bool {
+) -> ForwardDispatchOutcome {
     let ResponseDispatchStream {
         body,
         response_headers,
@@ -291,12 +432,13 @@ async fn forward_dispatch_stream(
     )
     .await
     {
-        return false;
+        return ForwardDispatchOutcome::Disconnect;
     }
 
     let mut body = body;
     let mut decoder = SseEventDecoder::default();
     let mut terminal_sent = false;
+    let mut completed = CompletedTurnCollector::default();
     loop {
         let next = if terminal_sent {
             ActiveResponseInput::Upstream(body.next().await)
@@ -322,19 +464,31 @@ async fn forward_dispatch_stream(
                         )
                         .await;
                         drop(body);
-                        return sent;
+                        return if sent {
+                            ForwardDispatchOutcome::Continue(None)
+                        } else {
+                            ForwardDispatchOutcome::Disconnect
+                        };
                     }
                 };
-                if !forward_sse_events(socket, events, request_id, &mut terminal_sent).await {
-                    return false;
+                if !forward_sse_events(
+                    socket,
+                    events,
+                    request_id,
+                    &mut terminal_sent,
+                    &mut completed,
+                )
+                .await
+                {
+                    return ForwardDispatchOutcome::Disconnect;
                 }
             }
             ActiveResponseInput::Upstream(Some(Err(error))) => {
                 tracing::warn!(request_id, error = %error, "Responses dispatch stream failed");
                 if terminal_sent {
-                    return true;
+                    return ForwardDispatchOutcome::Continue(completed.completed);
                 }
-                return send_error(
+                return if send_error(
                     socket,
                     StatusCode::BAD_GATEWAY,
                     "server_error",
@@ -342,14 +496,19 @@ async fn forward_dispatch_stream(
                     STREAM_DISCONNECTED_MESSAGE,
                     request_id,
                 )
-                .await;
+                .await
+                {
+                    ForwardDispatchOutcome::Continue(None)
+                } else {
+                    ForwardDispatchOutcome::Disconnect
+                };
             }
             ActiveResponseInput::Upstream(None) => {
                 let events = match decoder.finish() {
                     Ok(events) => events,
                     Err(error) => {
                         tracing::warn!(request_id, error = %error, "failed to finish Responses SSE decoding");
-                        return send_error(
+                        return if send_error(
                             socket,
                             StatusCode::BAD_GATEWAY,
                             "server_error",
@@ -357,16 +516,29 @@ async fn forward_dispatch_stream(
                             INVALID_UPSTREAM_EVENT_MESSAGE,
                             request_id,
                         )
-                        .await;
+                        .await
+                        {
+                            ForwardDispatchOutcome::Continue(None)
+                        } else {
+                            ForwardDispatchOutcome::Disconnect
+                        };
                     }
                 };
-                if !forward_sse_events(socket, events, request_id, &mut terminal_sent).await {
-                    return false;
+                if !forward_sse_events(
+                    socket,
+                    events,
+                    request_id,
+                    &mut terminal_sent,
+                    &mut completed,
+                )
+                .await
+                {
+                    return ForwardDispatchOutcome::Disconnect;
                 }
                 if terminal_sent {
-                    return true;
+                    return ForwardDispatchOutcome::Continue(completed.completed);
                 }
-                return send_error(
+                return if send_error(
                     socket,
                     StatusCode::BAD_GATEWAY,
                     "server_error",
@@ -374,23 +546,30 @@ async fn forward_dispatch_stream(
                     STREAM_DISCONNECTED_MESSAGE,
                     request_id,
                 )
-                .await;
+                .await
+                {
+                    ForwardDispatchOutcome::Continue(None)
+                } else {
+                    ForwardDispatchOutcome::Disconnect
+                };
             }
             ActiveResponseInput::Downstream(Some(Ok(
                 Message::Ping(_) | Message::Pong(_) | Message::Frame(_),
             ))) => {}
-            ActiveResponseInput::Downstream(Some(Ok(Message::Close(_))) | None) => return false,
+            ActiveResponseInput::Downstream(Some(Ok(Message::Close(_))) | None) => {
+                return ForwardDispatchOutcome::Disconnect;
+            }
             ActiveResponseInput::Downstream(Some(Ok(Message::Text(_) | Message::Binary(_)))) => {
                 close_for_protocol_violation(
                     socket,
                     "Only one response.create may be active per connection",
                 )
                 .await;
-                return false;
+                return ForwardDispatchOutcome::Disconnect;
             }
             ActiveResponseInput::Downstream(Some(Err(error))) => {
                 tracing::info!(request_id, error = %error, "Responses WebSocket client disconnected during response");
-                return false;
+                return ForwardDispatchOutcome::Disconnect;
             }
         }
     }
@@ -406,6 +585,7 @@ async fn forward_sse_events(
     events: Vec<SseEvent>,
     request_id: &str,
     terminal_sent: &mut bool,
+    completed: &mut CompletedTurnCollector,
 ) -> bool {
     for event in events {
         let Some(event_type) = websocket_event_type(&event.data) else {
@@ -424,6 +604,7 @@ async fn forward_sse_events(
             .await;
             return false;
         };
+        completed.observe(&event);
         if !send_text(socket, event.data).await {
             return false;
         }

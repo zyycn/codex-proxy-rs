@@ -204,11 +204,13 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
             diagnostics_status_code(record.diagnostics),
         );
         insert_response_request_summary_object(object, record.request, record.transport);
-        object.insert("requestBody".to_string(), json!(record.request));
-        object.insert(
-            "responseBody".to_string(),
-            Value::String(String::from_utf8_lossy(record.prefetched).to_string()),
-        );
+        if record.recorder.captures_body() {
+            object.insert("requestBody".to_string(), json!(record.request));
+            object.insert(
+                "responseBody".to_string(),
+                Value::String(String::from_utf8_lossy(record.prefetched).to_string()),
+            );
+        }
         insert_upstream_diagnostics_metadata(object, record.diagnostics);
         insert_response_trace_metadata_object(
             object,
@@ -295,12 +297,14 @@ fn enrich_live_response_stream_metadata(
     insert_response_request_summary_object(object, &context.request, context.transport);
     insert_upstream_diagnostics_metadata(object, &context.diagnostics);
     insert_response_trace_metadata_object(object, &context.attempts, Some(&context.attempt));
-    object
-        .entry("requestBody".to_string())
-        .or_insert_with(|| serde_json::json!(context.request));
-    object
-        .entry("responseBody".to_string())
-        .or_insert_with(|| Value::String(body.to_string()));
+    if context.recorder.captures_body() {
+        object
+            .entry("requestBody".to_string())
+            .or_insert_with(|| serde_json::json!(context.request));
+        object
+            .entry("responseBody".to_string())
+            .or_insert_with(|| Value::String(body.to_string()));
+    }
 }
 
 pub(super) fn insert_response_upstream_diagnostics(

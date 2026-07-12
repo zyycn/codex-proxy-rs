@@ -1,6 +1,10 @@
 //! 运行时 quota refresh 业务服务。
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use chrono::Utc;
 use thiserror::Error;
@@ -8,7 +12,7 @@ use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 use crate::fleet::{
-    account::AccountStatus,
+    account::{Account, AccountStatus},
     pool::AccountPoolService,
     quota::{
         quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
@@ -120,13 +124,16 @@ impl QuotaRefreshService {
         let now = Instant::now();
         let now_utc = Utc::now();
 
+        let candidate_ids = accounts
+            .iter()
+            .filter(|account| quota_refresh_candidate(account))
+            .map(|account| account.id.as_str())
+            .collect::<HashSet<_>>();
+        last_refreshed.retain(|account_id, _| candidate_ids.contains(account_id.as_str()));
+
         let mut candidates = accounts
             .into_iter()
-            .filter(|account| {
-                account.status == AccountStatus::QuotaExhausted
-                    || (account.status == AccountStatus::Active
-                        && (account.quota_limit_reached || account.quota_verify_required))
-            })
+            .filter(quota_refresh_candidate)
             .peekable();
 
         while let Some(account) = candidates.next() {
@@ -243,6 +250,12 @@ impl QuotaRefreshService {
             );
         }
     }
+}
+
+fn quota_refresh_candidate(account: &Account) -> bool {
+    account.status == AccountStatus::QuotaExhausted
+        || (account.status == AccountStatus::Active
+            && (account.quota_limit_reached || account.quota_verify_required))
 }
 
 fn quota_cooldown_ready(cooldown_until: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> bool {

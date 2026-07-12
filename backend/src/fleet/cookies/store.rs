@@ -321,6 +321,8 @@ impl CloudflarePathBlockTracker {
     /// 记录一次 path-block 失败，并返回当前未过期次数。
     pub async fn record_path_block(&self, account_id: &str, now: DateTime<Utc>) -> u32 {
         let mut counts = self.counts.write().await;
+        counts
+            .retain(|_, state| now.signed_duration_since(state.last_at) <= PATH_BLOCK_STALE_AFTER);
         let count = counts
             .get(account_id)
             .filter(|state| now.signed_duration_since(state.last_at) <= PATH_BLOCK_STALE_AFTER)
@@ -377,6 +379,9 @@ impl CloudflareChallengeCooldownTracker {
     ) -> CloudflareChallengeCooldown {
         let challenge_count = {
             let mut states = self.states.write().await;
+            states.retain(|_, state| {
+                now.signed_duration_since(state.updated_at) <= CHALLENGE_STALE_AFTER
+            });
             let challenge_count = states
                 .get(account_id)
                 .filter(|state| {

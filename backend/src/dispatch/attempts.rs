@@ -3,10 +3,13 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use chrono::Utc;
+use tokio::time::{Duration, Instant, timeout_at};
 
 use crate::fleet::pool::{
     AccountAcquireRequest, AccountCandidateLease, AccountLease, AccountPoolService,
 };
+
+const ACCOUNT_CANDIDATE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 请求开始时冻结的完整候选集，以及候选的最终处理状态。
 pub(in crate::dispatch) struct AccountAttemptLedger {
@@ -16,6 +19,7 @@ pub(in crate::dispatch) struct AccountAttemptLedger {
     busy: VecDeque<String>,
     attempted: BTreeSet<String>,
     state_excluded: BTreeSet<String>,
+    busy_wait_deadline: Instant,
 }
 
 impl AccountAttemptLedger {
@@ -31,6 +35,7 @@ impl AccountAttemptLedger {
             busy: VecDeque::new(),
             attempted: BTreeSet::new(),
             state_excluded: BTreeSet::new(),
+            busy_wait_deadline: Instant::now() + ACCOUNT_CANDIDATE_WAIT_TIMEOUT,
         }
     }
 
@@ -63,7 +68,22 @@ impl AccountAttemptLedger {
                 return None;
             }
 
-            account_pool.wait_for_candidate_change().await;
+            if timeout_at(
+                self.busy_wait_deadline,
+                account_pool.wait_for_candidate_change(),
+            )
+            .await
+            .is_err()
+            {
+                tracing::warn!(
+                    candidate_count = self.candidate_ids.len(),
+                    attempted_count = self.attempted.len(),
+                    busy_count = self.busy.len(),
+                    timeout_ms = ACCOUNT_CANDIDATE_WAIT_TIMEOUT.as_millis(),
+                    "timed out waiting for a busy account candidate"
+                );
+                return None;
+            }
             std::mem::swap(&mut self.pending, &mut self.busy);
         }
     }
