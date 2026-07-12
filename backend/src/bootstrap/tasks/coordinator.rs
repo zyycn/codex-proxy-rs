@@ -7,8 +7,8 @@ use tokio::task::JoinHandle;
 use super::{
     cookie_cleanup::CookieCleanupTask,
     fingerprint_update::{
-        start_fingerprint_update_task, CODEX_DESKTOP_APPCAST_URL,
-        DEFAULT_EXTRACTED_FINGERPRINT_PATH,
+        CODEX_DESKTOP_APPCAST_URL, DEFAULT_EXTRACTED_FINGERPRINT_PATH,
+        start_fingerprint_update_task,
     },
     model_refresh::ModelRefreshTask,
     quota_refresh::QuotaRefreshTask,

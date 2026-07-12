@@ -10,7 +10,7 @@ use crate::upstream::openai::token_client::TokenRefresher;
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, spawn_periodic_task},
 };
 
 const DEFAULT_INTERVAL_SECS: u64 = 60;

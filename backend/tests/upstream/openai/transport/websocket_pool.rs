@@ -719,9 +719,11 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
         .await
         .expect("stream should yield an initial chunk")
         .expect("stream chunk should be valid");
-    assert!(std::str::from_utf8(&first_chunk)
-        .unwrap()
-        .contains("streaming has begun"));
+    assert!(
+        std::str::from_utf8(&first_chunk)
+            .unwrap()
+            .contains("streaming has begun")
+    );
 
     // 客户端断开：drop stream → rx 被 drop → tx.closed() 完成 →
     // 代理丢弃上游连接并释放 slot（不再等 idle 超时）。
@@ -927,7 +929,7 @@ async fn websocket_pool_should_gc_expired_idle_connections() {
             .expect("gc sweep should close the expired idle websocket")
             .expect("gc sweep should send a close frame")
             .expect("close frame should be valid");
-        assert!(matches!(close, Message::Close(_)));
+        std::assert_matches!(close, Message::Close(_));
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1128,7 +1130,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_when_account_is
             .expect("evict_account should close the idle websocket")
             .expect("evict_account should send a close frame")
             .expect("close frame should be valid");
-        assert!(matches!(close, Message::Close(_)));
+        std::assert_matches!(close, Message::Close(_));
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1233,7 +1235,7 @@ async fn codex_backend_client_should_stop_reusing_pooled_websockets_after_shutdo
             .expect("shutdown should close the idle websocket")
             .expect("shutdown should send a close frame")
             .expect("close frame should be valid");
-        assert!(matches!(close, Message::Close(_)));
+        std::assert_matches!(close, Message::Close(_));
 
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
@@ -1339,7 +1341,7 @@ async fn codex_backend_client_should_close_idle_pooled_websocket_after_liveness_
             .expect("liveness timeout should close the idle websocket")
             .expect("liveness timeout should send a close frame")
             .expect("close frame should be valid");
-        assert!(matches!(close, Message::Close(_)));
+        std::assert_matches!(close, Message::Close(_));
         liveness_closed_tx.send(()).unwrap();
 
         let (second_stream, _) = listener.accept().await.unwrap();

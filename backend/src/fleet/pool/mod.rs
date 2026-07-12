@@ -13,10 +13,10 @@ use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::fleet::quota::{quota_snapshot_limit_reached, quota_snapshot_reset_at};
-use crate::fleet::refresh::{jwt_expiry, JwtExpiry};
+use crate::fleet::refresh::{JwtExpiry, jwt_expiry};
 use crate::fleet::scheduler::{
-    candidates::{self, CandidateFilter, CandidateRequest},
     AccountScheduler, ScoreWeights,
+    candidates::{self, CandidateFilter, CandidateRequest},
 };
 use crate::fleet::store::AccountStore;
 use crate::fleet::{
@@ -27,7 +27,7 @@ use crate::telemetry::account_usage::store::{
     AccountUsageDelta, AccountUsageSnapshot, AccountUsageStore, AccountUsageWindow,
 };
 use crate::upstream::openai::protocol::events::{
-    parse_rate_limit_headers, rate_limit_quota, TokenUsage as CodexTokenUsage,
+    TokenUsage as CodexTokenUsage, parse_rate_limit_headers, rate_limit_quota,
 };
 
 pub use crate::fleet::scheduler::RotationStrategy;
@@ -457,21 +457,20 @@ impl AccountPoolService {
                     "failed to persist refreshed runtime account state"
                 );
             }
-            if refreshed.sync_usage_window {
-                if let Err(error) = self
+            if refreshed.sync_usage_window
+                && let Err(error) = self
                     .usage_store
                     .sync_runtime_window(
                         &refreshed.account.id,
                         account_usage_window(&refreshed.account),
                     )
                     .await
-                {
-                    tracing::error!(
-                        account_id = %refreshed.account.id,
-                        error = %error,
-                        "failed to persist refreshed runtime account usage window"
-                    );
-                }
+            {
+                tracing::error!(
+                    account_id = %refreshed.account.id,
+                    error = %error,
+                    "failed to persist refreshed runtime account usage window"
+                );
             }
         }
     }
@@ -641,18 +640,17 @@ impl AccountPoolService {
             }
         };
 
-        if let Some(reset_at) = reset_at {
-            if let Err(error) = self
+        if let Some(reset_at) = reset_at
+            && let Err(error) = self
                 .usage_store
                 .sync_rate_limit_window(account_id, reset_at, limit_window_seconds)
                 .await
-            {
-                tracing::error!(
-                    account_id,
-                    error = %error,
-                    "failed to persist verified quota window"
-                );
-            }
+        {
+            tracing::error!(
+                account_id,
+                error = %error,
+                "failed to persist verified quota window"
+            );
         }
 
         let in_memory = {

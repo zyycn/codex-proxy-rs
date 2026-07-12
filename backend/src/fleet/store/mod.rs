@@ -8,7 +8,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::fleet::account::{Account, AccountStatus};
-use crate::infra::json::{page_offset, NumberedPage};
+use crate::infra::json::{NumberedPage, page_offset};
 
 mod queries;
 mod rows;
@@ -249,7 +249,7 @@ pub trait AccountStore: Send + Sync + 'static {
 
     /// 更新账号状态。
     async fn set_status(&self, account_id: &str, status: AccountStatus)
-        -> AccountStoreResult<bool>;
+    -> AccountStoreResult<bool>;
 
     /// 读取账号当前配额 JSON。
     async fn get_quota_json(&self, account_id: &str) -> AccountStoreResult<Option<String>>;

@@ -5,7 +5,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::{
-    infra::json::{page_offset, NumberedPage},
+    infra::json::{NumberedPage, page_offset},
     telemetry::{buckets::store::PgRequestBucketStore, ops::types::OpsErrorLog},
 };
 

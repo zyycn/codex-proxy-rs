@@ -6,14 +6,14 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{stream::Stream, StreamExt};
+use futures::{StreamExt, stream::Stream};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     dispatch::{
-        affinity::{resolve::record_response_affinity, SessionAffinityService},
-        errors::{backend_transport_name, ResponseDispatchStreamError},
+        affinity::{SessionAffinityService, resolve::record_response_affinity},
+        errors::{ResponseDispatchStreamError, backend_transport_name},
         recording::{
             insert_first_token_ms, live_response_rate_limit_headers, live_response_turn_state,
             record_live_response_stream_event,
@@ -28,13 +28,13 @@ use crate::{
         protocol::{
             events::extract_sse_usage,
             responses::{
+                CodexResponsesRequest, CollectedResponse,
                 reconvert_responses_sse_event_tuple_values, response_from_codex_sse,
                 response_sse_event_is_terminal, update_first_response_output_ms,
-                CodexResponsesRequest, CollectedResponse,
             },
             sse::{
-                encode_sse_event, parse_sse_events, response_failed_sse_event_with_id,
-                sse_body_has_done, sse_frame_end, DONE_SSE_FRAME,
+                DONE_SSE_FRAME, encode_sse_event, parse_sse_events,
+                response_failed_sse_event_with_id, sse_body_has_done, sse_frame_end,
             },
         },
         transport::{
@@ -47,9 +47,8 @@ use crate::{
 
 use super::{
     sse_failure::{
-        status_code_for_stream_failure, stream_failure_metadata, stream_failure_source,
-        synthetic_stream_disconnected_detail, STREAM_DISCONNECTED_CODE,
-        STREAM_DISCONNECTED_MESSAGE,
+        STREAM_DISCONNECTED_CODE, STREAM_DISCONNECTED_MESSAGE, status_code_for_stream_failure,
+        stream_failure_metadata, stream_failure_source, synthetic_stream_disconnected_detail,
     },
     trace::ResponseDispatchAttempt,
 };

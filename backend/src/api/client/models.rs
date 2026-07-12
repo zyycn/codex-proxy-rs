@@ -1,15 +1,15 @@
 //! OpenAI 模型列表以及模型处理器。
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
-    api::client::auth::authorize_client_api_key, api::AppState, models::catalog::ModelCatalog,
+    api::AppState, api::client::auth::authorize_client_api_key, models::catalog::ModelCatalog,
 };
 
 use super::errors::{missing_client_api_key_response, model_not_found_response};

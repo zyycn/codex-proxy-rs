@@ -2,12 +2,12 @@ use chrono::Utc;
 use secrecy::SecretString;
 
 use super::{
-    types::{
-        import_quota_plan_type, import_status_from_usage_error, import_usage_plan_type,
-        import_usage_string, AccountManageError, ImportSupplementalAccountInfo,
-        ImportSupplementalNeeds, ImportedAccountState, ImportedAccounts, ResolvedImportTokens,
-    },
     AccountManageService,
+    types::{
+        AccountManageError, ImportSupplementalAccountInfo, ImportSupplementalNeeds,
+        ImportedAccountState, ImportedAccounts, ResolvedImportTokens, import_quota_plan_type,
+        import_status_from_usage_error, import_usage_plan_type, import_usage_string,
+    },
 };
 
 impl AccountManageService {
@@ -304,15 +304,14 @@ impl AccountManageService {
 
         let chatgpt_account_id = crate::fleet::import::normalize_nonempty_str(account_id);
         let chatgpt_user_id = crate::fleet::import::normalize_nonempty_str(user_id);
-        if let Some(chatgpt_account_id) = chatgpt_account_id {
-            if let Some(existing) = self
+        if let Some(chatgpt_account_id) = chatgpt_account_id
+            && let Some(existing) = self
                 .store
                 .find_by_chatgpt_identity(chatgpt_account_id, chatgpt_user_id)
                 .await
                 .map_err(|_| AccountManageError::Inspect)?
-            {
-                return Ok(existing.id);
-            }
+        {
+            return Ok(existing.id);
         }
 
         Ok(provided_id.unwrap_or_else(|| crate::fleet::import::normalized_account_id(None)))

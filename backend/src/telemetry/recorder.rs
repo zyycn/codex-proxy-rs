@@ -12,8 +12,8 @@ use crate::{
         usage::{
             store::{PgUsageRecordStore, PgUsageRecordStoreError},
             types::{
-                metadata_i64, metadata_service_tier, metadata_string as metadata_string_any,
-                ResponseUsageRecord, UsageRecord,
+                ResponseUsageRecord, UsageRecord, metadata_i64, metadata_service_tier,
+                metadata_string as metadata_string_any,
             },
         },
     },
@@ -150,13 +150,13 @@ pub(crate) async fn record_response_event(record: ResponseUsageRecord<'_>) {
         record.reasoning_effort,
         record.service_tier,
     );
-    if !record.rate_limit_headers.is_empty() {
-        if let Some(object) = metadata.as_object_mut() {
-            object.insert(
-                "rateLimitHeaders".to_string(),
-                serde_json::json!(record.rate_limit_headers),
-            );
-        }
+    if !record.rate_limit_headers.is_empty()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            "rateLimitHeaders".to_string(),
+            serde_json::json!(record.rate_limit_headers),
+        );
     }
 
     lift_success_fact_fields(&mut event, &mut metadata);

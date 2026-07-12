@@ -1,6 +1,6 @@
 use secrecy::ExposeSecret;
 
-use super::{types::AccountManageError, AccountManageService};
+use super::{AccountManageService, types::AccountManageError};
 
 impl AccountManageService {
     async fn usage_cookie_header(&self, account_id: &str) -> Option<String> {

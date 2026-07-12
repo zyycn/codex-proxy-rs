@@ -2,10 +2,10 @@
 
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, HeaderMap},
+    http::{HeaderMap, request::Parts},
 };
 
-use crate::api::{admin::response::AdminError, AppState};
+use crate::api::{AppState, admin::response::AdminError};
 
 pub(super) const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
 

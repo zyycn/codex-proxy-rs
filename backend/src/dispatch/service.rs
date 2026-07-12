@@ -12,7 +12,7 @@ use std::{pin::Pin, sync::Arc, time::Instant};
 use bytes::Bytes;
 use chrono::Utc;
 use futures::stream::Stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     dispatch::{
@@ -31,9 +31,9 @@ use crate::{
             history::HistoryRecoveryPlan,
         },
         upstream_call::{
-            create_response_with_account_retrying_5xx, verify_acquired_quota_if_required,
-            AccountUpstreamContext, QuotaVerificationContext, QuotaVerificationDecision,
-            QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+            AccountUpstreamContext, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE, QuotaVerificationContext,
+            QuotaVerificationDecision, create_response_with_account_retrying_5xx,
+            verify_acquired_quota_if_required,
         },
     },
     fleet::{
@@ -42,16 +42,16 @@ use crate::{
     },
     models::service::ModelService,
     telemetry::{
-        recorder::{reasoning_effort_from_request, record_response_event, Recorder},
+        recorder::{Recorder, reasoning_effort_from_request, record_response_event},
         usage::types::ResponseUsageRecord,
     },
     upstream::openai::{
         protocol::{
             events::TokenUsage,
-            responses::{response_from_codex_sse, CodexResponsesRequest, CollectedResponse},
+            responses::{CodexResponsesRequest, CollectedResponse, response_from_codex_sse},
         },
         transport::{
-            backend_transport_for_response_request, CodexBackendClient, CodexBackendResponse,
+            CodexBackendClient, CodexBackendResponse, backend_transport_for_response_request,
         },
     },
 };
@@ -59,11 +59,11 @@ use crate::{
 use super::{
     errors::{ResponseDispatchError, ResponseDispatchStreamError},
     recording::{
-        insert_response_status_metadata, insert_response_trace_metadata,
-        insert_response_upstream_diagnostics, insert_websocket_pool_decision,
-        record_response_dispatch_error_event, record_response_upstream_error_event,
         ResponseDispatchErrorDetails, ResponseDispatchErrorEventRecord,
-        ResponseUpstreamErrorEventRecord,
+        ResponseUpstreamErrorEventRecord, insert_response_status_metadata,
+        insert_response_trace_metadata, insert_response_upstream_diagnostics,
+        insert_websocket_pool_decision, record_response_dispatch_error_event,
+        record_response_upstream_error_event,
     },
     stream::{
         sse_failure::is_history_recovery_sse_failure,

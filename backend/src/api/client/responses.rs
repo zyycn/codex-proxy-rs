@@ -2,17 +2,17 @@
 //! 做最小 patch 后交给调度层，请求语义原样透传上游。
 
 use axum::{
+    Extension, Json,
     body::{Body, Bytes},
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Extension, Json,
 };
 use serde_json::{Map, Value};
 
 use crate::{
-    api::middleware::request_id::{ClientIp, RequestId},
     api::AppState,
+    api::middleware::request_id::{ClientIp, RequestId},
     dispatch::{errors::ResponseDispatchError, service::ResponseDispatchStream},
     upstream::openai::protocol::{
         responses::{CodexCompactRequest, CodexResponsesRequest},
@@ -449,15 +449,11 @@ pub(crate) fn user_agent_from_headers(headers: &HeaderMap) -> Option<String> {
 }
 
 fn openai_subagent_from_headers(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, OPENAI_SUBAGENT_HEADER).and_then(|value| {
-        if matches!(
+    header_string(headers, OPENAI_SUBAGENT_HEADER).filter(|value| {
+        matches!(
             value.as_str(),
             "review" | "compact" | "memory_consolidation" | "collab_spawn"
-        ) {
-            Some(value)
-        } else {
-            None
-        }
+        )
     })
 }
 

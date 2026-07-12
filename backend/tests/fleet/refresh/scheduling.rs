@@ -23,15 +23,17 @@ async fn token_refresh_task_should_skip_account_when_refresh_lease_is_held() {
         })
         .await
         .expect("account should be inserted");
-    assert!(leases
-        .try_acquire(
-            "acct-lease-held",
-            "external-owner",
-            now + Duration::minutes(5),
-            now,
-        )
-        .await
-        .expect("external owner should acquire lease"));
+    assert!(
+        leases
+            .try_acquire(
+                "acct-lease-held",
+                "external-owner",
+                now + Duration::minutes(5),
+                now,
+            )
+            .await
+            .expect("external owner should acquire lease")
+    );
     let refresher = CountingTokenRefresher::default();
     let task = codex_proxy_rs::fleet::refresh::TokenRefreshService::new(
         store.clone(),
@@ -199,9 +201,11 @@ async fn token_refresh_shutdown_should_wait_for_in_flight_refresh() {
     let shutdown_task = task.clone();
     let shutdown = tokio::spawn(async move { shutdown_task.shutdown().await });
     tokio::pin!(shutdown);
-    assert!(timeout(StdDuration::from_millis(100), &mut shutdown)
-        .await
-        .is_err());
+    assert!(
+        timeout(StdDuration::from_millis(100), &mut shutdown)
+            .await
+            .is_err()
+    );
 
     refresher.release.notify_waiters();
     timeout(StdDuration::from_secs(2), &mut shutdown)
@@ -319,10 +323,12 @@ async fn token_refresh_task_should_cancel_future_timer_without_refreshing_expire
         .await
         .expect("future timer should be scheduled");
     assert_eq!(task.scheduled_timer_count().await, 1);
-    assert!(store
-        .set_status("acct-refresh-unauthorized-now", AccountStatus::Expired)
-        .await
-        .expect("expired status should persist"));
+    assert!(
+        store
+            .set_status("acct-refresh-unauthorized-now", AccountStatus::Expired)
+            .await
+            .expect("expired status should persist")
+    );
 
     task.schedule_account_timers_once_at(now)
         .await

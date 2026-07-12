@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner, TaskFuture},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, TaskFuture, spawn_periodic_task},
 };
 
 const RETENTION_TRIM_INTERVAL_SECS: u64 = 60 * 60;

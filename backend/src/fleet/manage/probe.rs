@@ -3,7 +3,7 @@ use std::{convert::Infallible, pin::Pin};
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use secrecy::ExposeSecret;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -12,15 +12,15 @@ use crate::{
     upstream::openai::{
         protocol::{
             responses::{CodexResponsesRequest, ResponsesSseFailure},
-            sse::{encode_sse_event, parse_sse_events, SseEvent},
+            sse::{SseEvent, encode_sse_event, parse_sse_events},
         },
         transport::{
-            is_banned_auth_signal, is_banned_upstream_error, CodexClientError, CodexRequestContext,
+            CodexClientError, CodexRequestContext, is_banned_auth_signal, is_banned_upstream_error,
         },
     },
 };
 
-use super::{types::AccountManageError, AccountManageService};
+use super::{AccountManageService, types::AccountManageError};
 
 pub(super) type AccountTestStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
 
@@ -221,14 +221,14 @@ impl AccountManageService {
             }
         }
 
-        if matches!(status, AccountStatus::Expired | AccountStatus::Banned) {
-            if let Err(error) = self.store.set_next_refresh_at(account_id, None).await {
-                tracing::warn!(
-                    account_id,
-                    error = %error,
-                    "failed to clear token refresh schedule after connection test"
-                );
-            }
+        if matches!(status, AccountStatus::Expired | AccountStatus::Banned)
+            && let Err(error) = self.store.set_next_refresh_at(account_id, None).await
+        {
+            tracing::warn!(
+                account_id,
+                error = %error,
+                "failed to clear token refresh schedule after connection test"
+            );
         }
         self.sync_account_pool_best_effort(account_id, "connection test")
             .await;
@@ -297,10 +297,10 @@ async fn process_upstream_test_stream(
         }
     }
 
-    if !buffer.trim().is_empty() {
-        if let Some(outcome) = process_sse_frame(tx, &buffer).await {
-            return outcome;
-        }
+    if !buffer.trim().is_empty()
+        && let Some(outcome) = process_sse_frame(tx, &buffer).await
+    {
+        return outcome;
     }
 
     AccountTestOutcome::error("Stream ended before response.completed", None)
@@ -332,10 +332,10 @@ async fn process_sse_event(
     };
     match value.get("type").and_then(Value::as_str) {
         Some("response.output_text.delta") => {
-            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                if !delta.is_empty() {
-                    send_test_event(tx, json!({ "type": "content", "text": delta })).await;
-                }
+            if let Some(delta) = value.get("delta").and_then(Value::as_str)
+                && !delta.is_empty()
+            {
+                send_test_event(tx, json!({ "type": "content", "text": delta })).await;
             }
             None
         }

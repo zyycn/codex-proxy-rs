@@ -6,24 +6,20 @@ use axum::{
     extract::{Json, Query, State},
     http::StatusCode,
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse,
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use futures::Stream;
 use serde::Deserialize;
 
 use crate::{
+    api::AppState,
     api::admin::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
     },
-    api::AppState,
-    update::{
-        service::{self, RestartAction},
-        state::operation_id,
-        types::UpdateError,
-    },
+    update::{service::RestartAction, state::operation_id, types::UpdateError},
 };
 
 #[derive(Debug, Deserialize)]
@@ -38,20 +34,30 @@ pub(crate) struct UpdateRequest {
     target_version: String,
 }
 
-pub(crate) async fn version(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
+pub(crate) async fn version(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<impl IntoResponse, AdminError> {
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(service::version_data().await),
+        AdminEnvelope::ok(state.services.system_update.version_data().await),
     ))
 }
 
 pub(crate) async fn update_detail(
+    State(state): State<AppState>,
     _auth: AdminAuth,
     Query(query): Query<UpdateDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError> {
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(service::update_detail(query.refresh.unwrap_or(false)).await),
+        AdminEnvelope::ok(
+            state
+                .services
+                .system_update
+                .update_detail(query.refresh.unwrap_or(false))
+                .await,
+        ),
     ))
 }
 
@@ -59,7 +65,7 @@ pub(crate) async fn update_event_stream(
     State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError> {
-    let receiver = service::subscribe_update_events();
+    let receiver = state.services.system_update.subscribe_update_events();
     let shutdown = state.services.process_control.subscribe_shutdown();
     let stream = futures::stream::unfold(
         (receiver, shutdown, false),
@@ -90,11 +96,15 @@ pub(crate) async fn update_event_stream(
 }
 
 pub(crate) async fn perform_update(
+    State(state): State<AppState>,
     _auth: AdminAuth,
     payload: Option<Json<UpdateRequest>>,
 ) -> Result<impl IntoResponse, AdminError> {
     let target = payload.map(|Json(payload)| payload.target_version);
-    let result = service::perform_update(target)
+    let result = state
+        .services
+        .system_update
+        .perform_update(target)
         .await
         .map_err(update_error)?;
     Ok(AdminResponse::new(
@@ -103,16 +113,31 @@ pub(crate) async fn perform_update(
     ))
 }
 
-pub(crate) async fn update_status(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
-    let status = service::update_status().map_err(update_error)?;
+pub(crate) async fn update_status(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<impl IntoResponse, AdminError> {
+    let status = state
+        .services
+        .system_update
+        .update_status()
+        .map_err(update_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(status),
     ))
 }
 
-pub(crate) async fn rollback(_auth: AdminAuth) -> Result<impl IntoResponse, AdminError> {
-    let operation_id = service::rollback().await.map_err(update_error)?;
+pub(crate) async fn rollback(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<impl IntoResponse, AdminError> {
+    let operation_id = state
+        .services
+        .system_update
+        .rollback()
+        .await
+        .map_err(update_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({
@@ -127,7 +152,11 @@ pub(crate) async fn restart(
     State(state): State<AppState>,
     _auth: AdminAuth,
 ) -> Result<impl IntoResponse, AdminError> {
-    let plan = service::restart_plan().map_err(update_error)?;
+    let plan = state
+        .services
+        .system_update
+        .restart_plan()
+        .map_err(update_error)?;
     let message = plan.message;
     let process_control = state.services.process_control.clone();
     tokio::spawn(async move {

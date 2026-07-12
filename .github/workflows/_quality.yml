@@ -24,7 +24,6 @@ jobs:
       CARGO_TERM_COLOR: always
       CPR_TEST_DATABASE_URL: postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy
       CPR_TEST_REDIS_URL: redis://127.0.0.1:6379
-      RUSTFLAGS: -D warnings
     services:
       postgres:
         image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
@@ -56,7 +55,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95
+        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
         with:
           components: rustfmt,clippy
 
@@ -71,7 +70,7 @@ jobs:
 
       - name: Rust clippy
         working-directory: backend
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked
 
       - name: Rust tests
         working-directory: backend

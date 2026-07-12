@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, spawn_periodic_task},
 };
 
 /// 支持按时间清理过期记录的存储。

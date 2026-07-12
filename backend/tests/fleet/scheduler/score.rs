@@ -1,6 +1,6 @@
 use chrono::Utc;
 use codex_proxy_rs::fleet::account::AccountStatus;
-use codex_proxy_rs::fleet::scheduler::{rank_candidates, FeedbackStats, ScoreWeights};
+use codex_proxy_rs::fleet::scheduler::{FeedbackStats, ScoreWeights, rank_candidates};
 
 use crate::support::accounts::test_account;
 

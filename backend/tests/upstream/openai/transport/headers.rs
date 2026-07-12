@@ -214,10 +214,12 @@ async fn websocket_execute_response_create_request_should_capture_handshake_head
         response.set_cookie_headers,
         vec!["cf_clearance=ws; Domain=.chatgpt.com; Path=/".to_string()]
     );
-    assert!(response
-        .rate_limit_headers
-        .iter()
-        .any(|(name, value)| name == "x-ratelimit-remaining-requests" && value == "41"));
+    assert!(
+        response
+            .rate_limit_headers
+            .iter()
+            .any(|(name, value)| name == "x-ratelimit-remaining-requests" && value == "41")
+    );
 }
 
 #[tokio::test]
@@ -343,39 +345,57 @@ async fn codex_backend_client_websocket_should_forward_security_chain_headers_an
     );
 
     let headers = received_headers.lock().unwrap().clone();
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-client-request-id" && value == "req_ws_security"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-installation-id" && value == "install-123"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-openai-internal-codex-residency" && value == "us"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-turn-state" && value == "turn-state"));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-client-request-id" && value == "req_ws_security")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-installation-id" && value == "install-123")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-openai-internal-codex-residency" && value == "us")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-turn-state" && value == "turn-state")
+    );
     assert!(headers.iter().any(|(name, value)| {
         name == "x-codex-turn-metadata" && value == "{\"thread_source\":\"subagent\"}"
     }));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-beta-features" && value == "feature-a"));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-beta-features" && value == "feature-a")
+    );
     assert!(headers.iter().any(|(name, value)| {
         name == "x-responsesapi-include-timing-metrics" && value == "true"
     }));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "version" && value == "26.318.11754"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-parent-thread-id" && value == "parent-456"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "x-openai-subagent" && value == "review"));
-    assert!(headers
-        .iter()
-        .any(|(name, value)| name == "session-id" && value == "cp_derived"));
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "version" && value == "26.318.11754")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-parent-thread-id" && value == "parent-456")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "x-openai-subagent" && value == "review")
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "session-id" && value == "cp_derived")
+    );
     assert!(headers.iter().all(|(name, _)| name != "thread-id"));
     assert!(headers.iter().all(|(name, _)| name != "content-type"));
     assert!(headers.iter().all(|(name, _)| name != "accept"));

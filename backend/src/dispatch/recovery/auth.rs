@@ -2,7 +2,7 @@
 
 use crate::{
     fleet::account::AccountStatus,
-    upstream::openai::transport::{is_banned_auth_signal, CodexClientError},
+    upstream::openai::transport::{CodexClientError, is_banned_auth_signal},
 };
 
 pub(crate) fn is_auth_upstream_error(error: &CodexClientError) -> bool {

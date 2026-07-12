@@ -205,7 +205,7 @@ jobs:
             -v "$HOME/.cargo:/cargo" \
             -v "$PWD/..:/workspace" \
             -w /workspace/backend \
-            rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 \
+            rust:1.97-bookworm@sha256:7d0723df719e7f213b69dc7c8c595985c3f4b060cfbee4f7bc0e347a86fe3b6a \
             cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
         working-directory: backend
@@ -239,7 +239,7 @@ jobs:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@eac0f66a48bc4b70a10b9acd4c4e930f835d95ff # 1.95
+        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
         with:
           targets: ${{ matrix.target }}
 

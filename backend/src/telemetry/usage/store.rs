@@ -1,10 +1,10 @@
 //! PostgreSQL 成功使用事实存储。
 
 use super::query::{
-    count_usage_records, usage_account_usage, usage_breakdown, usage_record_account_email_map,
-    usage_record_from_row, usage_summary, usage_trend, UsageRecordAccountUsage,
-    UsageRecordBreakdown, UsageRecordEndpointSource, UsageRecordModelSource, UsageRecordSummary,
-    UsageRecordTrendPoint,
+    UsageRecordAccountUsage, UsageRecordBreakdown, UsageRecordEndpointSource,
+    UsageRecordModelSource, UsageRecordSummary, UsageRecordTrendPoint, count_usage_records,
+    usage_account_usage, usage_breakdown, usage_record_account_email_map, usage_record_from_row,
+    usage_summary, usage_trend,
 };
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 use thiserror::Error;
 
 use crate::{
-    infra::json::{page_offset, NumberedPage},
+    infra::json::{NumberedPage, page_offset},
     telemetry::{buckets::store::PgRequestBucketStore, usage::types::UsageRecord},
 };
 
@@ -221,12 +221,8 @@ insert into usage_records (
         source: UsageRecordModelSource,
     ) -> PgUsageRecordStoreResult<Vec<UsageRecordBreakdown>> {
         let expression = match source {
-            UsageRecordModelSource::Requested => {
-                "coalesce(nullif(requested_model, ''), model)"
-            }
-            UsageRecordModelSource::Upstream => {
-                "coalesce(nullif(upstream_model, ''), model)"
-            }
+            UsageRecordModelSource::Requested => "coalesce(nullif(requested_model, ''), model)",
+            UsageRecordModelSource::Upstream => "coalesce(nullif(upstream_model, ''), model)",
             UsageRecordModelSource::Mapping => {
                 "coalesce(nullif(requested_model, ''), model) || ' -> ' || coalesce(nullif(upstream_model, ''), model)"
             }

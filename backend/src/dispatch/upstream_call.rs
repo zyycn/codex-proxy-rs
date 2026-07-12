@@ -3,29 +3,30 @@
 use std::{future::Future, time::Instant};
 
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     dispatch::{
         affinity::{AccountIdentityService, AccountScopedIdentity},
         attempts::AccountAttemptLedger,
         errors::{
-            is_model_unsupported_upstream_error, is_quota_exhausted_upstream_error,
-            is_rate_limit_upstream_error, is_retryable_account_transport_error,
-            is_retryable_upstream_5xx_error, rate_limit_cooldown_until, upstream_error_body,
-            upstream_error_http_status, upstream_error_set_cookie_headers, ResponseDispatchError,
+            ResponseDispatchError, is_model_unsupported_upstream_error,
+            is_quota_exhausted_upstream_error, is_rate_limit_upstream_error,
+            is_retryable_account_transport_error, is_retryable_upstream_5xx_error,
+            rate_limit_cooldown_until, upstream_error_body, upstream_error_http_status,
+            upstream_error_set_cookie_headers,
         },
         recording::{
-            insert_response_status_metadata, insert_response_trace_metadata,
-            insert_response_upstream_diagnostics, record_response_dispatch_error_event,
-            ResponseDispatchErrorEventRecord,
+            ResponseDispatchErrorEventRecord, insert_response_status_metadata,
+            insert_response_trace_metadata, insert_response_upstream_diagnostics,
+            record_response_dispatch_error_event,
         },
         recovery::{
             auth::{auth_failure_account_status, is_auth_upstream_error},
             cloudflare::{
-                cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-                is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-                CloudflareRecovery,
+                CloudflareRecovery, cloudflare_challenge_error_message,
+                cloudflare_path_block_error_message, is_cloudflare_challenge_upstream_error,
+                is_cloudflare_path_block_upstream_error,
             },
             exhaustion::AccountExhaustionTracker,
         },
@@ -50,9 +51,8 @@ use crate::{
             responses::{CodexCompactRequest, CodexResponsesRequest},
         },
         transport::{
-            is_banned_upstream_error, CodexBackendClient, CodexBackendResponse,
-            CodexBackendStreamingResponse, CodexClientError, CodexCompactResponse,
-            CodexRequestContext,
+            CodexBackendClient, CodexBackendResponse, CodexBackendStreamingResponse,
+            CodexClientError, CodexCompactResponse, CodexRequestContext, is_banned_upstream_error,
         },
     },
 };

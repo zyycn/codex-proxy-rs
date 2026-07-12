@@ -29,9 +29,10 @@ description: Codex Proxy RS 仓库开发指南。Use when working on its Rust/Ax
 按改动范围选择足以证明行为的命令。跨领域改动执行完整门禁：
 
 ```bash
-cargo fmt --manifest-path backend/Cargo.toml -- --check
-cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path backend/Cargo.toml --test main --locked
+cd backend
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked
+cargo test --test main --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml config

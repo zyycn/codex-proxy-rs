@@ -147,9 +147,11 @@ fn response_failed_sse_event_should_encode_openai_failure_shape() {
     assert_eq!(data["response"]["error"]["code"], "stream_disconnected");
     assert_eq!(data["response"]["error"]["message"], "closed early");
     assert_eq!(data["error"], data["response"]["error"]);
-    assert!(data["response"]["id"]
-        .as_str()
-        .is_some_and(|id| id.starts_with("resp_proxy_")));
+    assert!(
+        data["response"]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("resp_proxy_"))
+    );
 }
 
 fn responses_body(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {

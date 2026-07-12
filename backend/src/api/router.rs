@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::{extract::State, http::StatusCode, middleware, routing::get, Router};
+use axum::{Router, extract::State, http::StatusCode, middleware, routing::get};
 
 use crate::{
     api::{
@@ -26,6 +26,7 @@ use crate::{
         account_usage::query::AccountUsageQueryService, ops::query::OpsQueryService,
         usage::query::UsageQueryService,
     },
+    update::service::SystemUpdateService,
     upstream::openai::{fingerprint::RuntimeFingerprint, token_client::OpenAiTokenClient},
 };
 
@@ -49,6 +50,7 @@ pub struct ApiServices {
     pub session_affinity: Arc<SessionAffinityService>,
     pub fingerprint: RuntimeFingerprint,
     pub process_control: Arc<dyn ProcessControl>,
+    pub system_update: Arc<SystemUpdateService>,
 }
 
 /// 由 bootstrap 实现的进程生命周期控制端口。

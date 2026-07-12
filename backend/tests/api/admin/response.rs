@@ -7,7 +7,7 @@ use codex_proxy_rs::api::admin::response::{
     AdminEnvelope, AdminError, AdminPageEnvelope, AdminResponse,
 };
 use codex_proxy_rs::infra::json::NumberedPage;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn admin_envelope_should_not_duplicate_request_id_in_body() {

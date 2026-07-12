@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use codex_proxy_rs::dispatch::affinity::{
-    RedisSessionAffinityStore, ResponseReplaySnapshot, SessionAffinityEntry, MAX_REPLAY_DEPTH,
-    MAX_REPLAY_SESSION_BYTES,
+    MAX_REPLAY_DEPTH, MAX_REPLAY_SESSION_BYTES, RedisSessionAffinityStore, ResponseReplaySnapshot,
+    SessionAffinityEntry,
 };
 use redis::AsyncCommands;
 use serde_json::json;
@@ -32,11 +32,13 @@ async fn redis_affinity_store_upserts_reads_and_forgets_entries() {
         .unwrap();
     assert_eq!(loaded, entry);
     assert!(store.forget("resp_1").await.unwrap());
-    assert!(store
-        .get("resp_1", now, Duration::hours(4))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .get("resp_1", now, Duration::hours(4))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -110,11 +112,13 @@ async fn redis_affinity_store_forgets_all_entries_for_account() {
 
     assert_eq!(store.forget_account("acct_delete").await.unwrap(), 2);
     for response_id in ["resp_1", "resp_2"] {
-        assert!(store
-            .get(response_id, now, Duration::hours(4))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .get(response_id, now, Duration::hours(4))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -199,18 +203,20 @@ async fn redis_affinity_store_should_reject_replay_metadata_over_capacity() {
         .await
         .unwrap();
 
-    assert!(store
-        .replay_input(
-            "resp_limit",
-            &entry,
-            now,
-            Duration::hours(4),
-            MAX_REPLAY_DEPTH,
-            MAX_REPLAY_SESSION_BYTES,
-        )
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .replay_input(
+                "resp_limit",
+                &entry,
+                now,
+                Duration::hours(4),
+                MAX_REPLAY_DEPTH,
+                MAX_REPLAY_SESSION_BYTES,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -265,11 +271,13 @@ async fn redis_affinity_store_should_not_persist_already_expired_entries() {
         )
         .await
         .unwrap();
-    assert!(store
-        .get("resp_expired", now, Duration::hours(1))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .get("resp_expired", now, Duration::hours(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn affinity(

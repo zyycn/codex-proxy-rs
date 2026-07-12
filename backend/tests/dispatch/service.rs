@@ -1,19 +1,19 @@
 use std::{
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration as StdDuration, Instant},
 };
 
 use axum::{
-    body::{to_bytes, Body, Bytes},
+    body::{Body, Bytes, to_bytes},
     http::{Request, StatusCode},
 };
 use chrono::{Duration, Utc};
 use codex_proxy_rs::{
-    api::router,
     api::AppState,
+    api::router,
     bootstrap::config::AppConfig,
     bootstrap::services::{Services, UsageRecordOptions},
     dispatch::affinity::{ResponseReplaySnapshot, SessionAffinityEntry},
@@ -22,7 +22,7 @@ use codex_proxy_rs::{
     telemetry::usage::store::{PgUsageRecordStore, UsageRecordFilter},
 };
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -31,21 +31,20 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{
-    accept_hdr_async_with_config,
+    WebSocketStream, accept_hdr_async_with_config,
     tungstenite::{
-        extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+        Error as WsError, Message,
+        extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
         handshake::server::{
             Callback, ErrorResponse, Request as WsRequest, Response as WsResponse,
         },
         protocol::WebSocketConfig,
-        Error as WsError, Message,
     },
-    WebSocketStream,
 };
 use tower::util::ServiceExt;
 use wiremock::{
-    matchers::{header, method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{header, method, path},
 };
 
 use crate::support::{

@@ -1,7 +1,7 @@
 use super::*;
 use wiremock::{
-    matchers::{body_string_contains, method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{body_string_contains, method, path},
 };
 
 #[tokio::test]
@@ -41,9 +41,11 @@ async fn admin_account_oauth_authorize_should_return_pkce_auth_url() {
         Some("S256")
     );
     assert!(params.get("state").is_some_and(|value| !value.is_empty()));
-    assert!(params
-        .get("code_challenge")
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        params
+            .get("code_challenge")
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[tokio::test]

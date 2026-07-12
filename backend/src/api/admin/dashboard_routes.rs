@@ -12,15 +12,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    api::AppState,
     api::admin::{
         response::{AdminEnvelope, AdminError, AdminResponse},
         session::AdminAuth,
         usage_routes::{
-            usage_cost_details, usage_record_models, usage_token_details,
-            UsageRecordCostDetailsData, UsageRecordTokenDetailsData,
+            UsageRecordCostDetailsData, UsageRecordTokenDetailsData, usage_cost_details,
+            usage_record_models, usage_token_details,
         },
     },
-    api::AppState,
     fleet::{
         account::{Account, AccountStatus},
         pool::AccountCapacitySummary,
@@ -36,13 +36,13 @@ use crate::{
     telemetry::{
         account_usage::query::AccountUsageTimeBucket,
         dashboard::{
-            dashboard_cards, dashboard_health_timeline_data, dashboard_trend_data,
             DashboardAccountCounts, DashboardCardsData, DashboardHealthTimelineData,
-            DashboardTrendData, DashboardTrendKind,
+            DashboardTrendData, DashboardTrendKind, dashboard_cards,
+            dashboard_health_timeline_data, dashboard_trend_data,
         },
         usage::{
             query::{UsageQueryFilter, UsageRecordAccountUsage},
-            types::{metadata_string, UsageRecord},
+            types::{UsageRecord, metadata_string},
         },
     },
     upstream::openai::fingerprint::Fingerprint,

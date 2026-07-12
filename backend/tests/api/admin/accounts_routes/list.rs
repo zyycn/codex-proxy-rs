@@ -82,15 +82,17 @@ async fn admin_accounts_list_should_derive_refreshing_display_status_from_active
     let now = chrono::Utc::now();
     let refresh_leases =
         codex_proxy_rs::fleet::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
-    assert!(refresh_leases
-        .try_acquire(
-            "acct_refreshing",
-            "test-owner",
-            now + chrono::Duration::hours(1),
-            now,
-        )
-        .await
-        .unwrap());
+    assert!(
+        refresh_leases
+            .try_acquire(
+                "acct_refreshing",
+                "test-owner",
+                now + chrono::Duration::hours(1),
+                now,
+            )
+            .await
+            .unwrap()
+    );
 
     let response = app
         .oneshot(
@@ -131,15 +133,17 @@ async fn admin_accounts_list_should_ignore_refresh_lease_for_expired_account() {
     let now = chrono::Utc::now();
     let refresh_leases =
         codex_proxy_rs::fleet::refresh::RedisRefreshLeaseStore::new(state.redis.clone());
-    assert!(refresh_leases
-        .try_acquire(
-            "acct_expired",
-            "stale-owner",
-            now + chrono::Duration::hours(1),
-            now,
-        )
-        .await
-        .unwrap());
+    assert!(
+        refresh_leases
+            .try_acquire(
+                "acct_expired",
+                "stale-owner",
+                now + chrono::Duration::hours(1),
+                now,
+            )
+            .await
+            .unwrap()
+    );
 
     let response = app
         .oneshot(
@@ -349,9 +353,11 @@ async fn admin_accounts_list_should_include_usage_quota_and_model_stats() {
         item["quota"]["windows"][2]["localUsage"]["totalTokensDisplay"],
         "124K"
     );
-    assert!(item["quota"]["windows"][2]["windowUsedDisplay"]
-        .as_str()
-        .is_some_and(|value| value.contains(" / 7.0d")));
+    assert!(
+        item["quota"]["windows"][2]["windowUsedDisplay"]
+            .as_str()
+            .is_some_and(|value| value.contains(" / 7.0d"))
+    );
     assert_eq!(item["usage"]["createdTokens"], 972_900);
     assert_eq!(item["usage"]["readTokens"], 49_100);
     assert_eq!(item["usage"]["models"].as_array().unwrap().len(), 4);

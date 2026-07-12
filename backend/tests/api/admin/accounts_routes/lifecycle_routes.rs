@@ -114,15 +114,17 @@ async fn admin_accounts_lifecycle_should_update_and_delete_accounts() {
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(response_json(deleted).await["data"]["deleted"], 1);
     assert_account_related_rows_deleted(&pool, "acct_lifecycle").await;
-    assert!(session_affinity
-        .get(
-            "resp_lifecycle",
-            chrono::Utc::now(),
-            chrono::Duration::hours(1),
-        )
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        session_affinity
+            .get(
+                "resp_lifecycle",
+                chrono::Utc::now(),
+                chrono::Duration::hours(1),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 async fn seed_account_related_rows(pool: &PgPool, account_id: &str) {
@@ -930,8 +932,8 @@ async fn admin_account_manual_create_should_reject_missing_invalid_expired_or_un
 }
 
 #[tokio::test]
-async fn admin_account_manual_create_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated(
-) {
+async fn admin_account_manual_create_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated()
+ {
     let server = wiremock::MockServer::start().await;
     let access_token = test_jwt(
         "rt-create-account",

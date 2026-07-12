@@ -5,9 +5,9 @@ use serde_json::Value;
 
 use crate::{
     dispatch::affinity::{
+        SessionAffinityEntry, SessionAffinityService,
         service::{MAX_REPLAY_DEPTH, MAX_REPLAY_SESSION_BYTES, MAX_REPLAY_SNAPSHOT_BYTES},
         types::ResponseReplaySnapshot,
-        SessionAffinityEntry, SessionAffinityService,
     },
     upstream::openai::protocol::responses::{CodexResponsesRequest, StreamCommitPolicy},
 };

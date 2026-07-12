@@ -519,11 +519,12 @@ fn account_pool_should_not_fallback_when_required_account_is_unavailable() {
         AccountStatus::Active,
     ));
 
-    assert!(pool
-        .acquire_with(
+    assert!(
+        pool.acquire_with(
             &AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_required_account_id("acct_a"),
         )
-        .is_some());
+        .is_some()
+    );
     let acquired = pool.acquire_with(
         &AccountAcquireRequest::new("gpt-5.5", fixed_time()).with_required_account_id("acct_a"),
     );
@@ -544,9 +545,10 @@ fn account_pool_should_cleanup_stale_slots_before_acquire() {
         AccountStatus::Active,
     ));
 
-    assert!(pool
-        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
-        .is_some());
+    assert!(
+        pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+            .is_some()
+    );
     let acquired = pool
         .acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",

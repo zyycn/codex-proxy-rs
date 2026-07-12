@@ -2,8 +2,8 @@ use std::{env, fs, io, path::PathBuf, sync::Arc};
 
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::{
-    pem::{self, PemObject, SectionKind},
     CertificateDer,
+    pem::{self, PemObject, SectionKind},
 };
 use thiserror::Error;
 

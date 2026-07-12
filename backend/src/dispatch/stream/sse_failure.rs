@@ -6,7 +6,7 @@ use crate::{
     upstream::openai::{
         protocol::{
             events::TokenUsage,
-            responses::{response_from_codex_sse, CollectedResponse, ResponsesSseFailure},
+            responses::{CollectedResponse, ResponsesSseFailure, response_from_codex_sse},
             sse::SseError,
         },
         transport::is_banned_auth_signal,

@@ -2,7 +2,7 @@
 //!
 //! 提供 Bearer token 提取与客户端 API key 校验。
 
-use axum::http::{header::AUTHORIZATION, HeaderMap};
+use axum::http::{HeaderMap, header::AUTHORIZATION};
 
 use crate::api::AppState;
 

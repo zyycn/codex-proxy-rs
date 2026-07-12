@@ -15,7 +15,7 @@ use crate::models::service::{
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner, PeriodicTaskStartup},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, PeriodicTaskStartup, spawn_periodic_task},
 };
 
 /// 模型刷新任务接线器。

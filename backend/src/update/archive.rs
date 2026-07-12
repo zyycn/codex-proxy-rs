@@ -10,7 +10,7 @@ use tar::Archive;
 
 use crate::update::types::UpdateError;
 
-use super::service::{internal_error, internal_error_with, SystemUpdateConfig, APP_BINARY_NAME};
+use super::service::{APP_BINARY_NAME, SystemUpdateConfig, internal_error, internal_error_with};
 
 #[derive(Debug)]
 pub(super) struct ExtractedRelease {
@@ -125,22 +125,22 @@ pub(super) fn replace_release_files(
     };
 
     let binary_backup = backup_path_for(exe_path);
-    if binary_backup.exists() {
-        if let Err(error) = fs::remove_file(&binary_backup) {
-            let mut rollback_errors = Vec::new();
-            if web_replaced {
-                collect_rollback_error(
-                    &mut rollback_errors,
-                    "restore web assets",
-                    restore_dir(web_dist_dir, &web_backup),
-                );
-            }
-            return Err(update_error_with_rollback(
-                "Failed to remove old binary backup",
-                error,
-                rollback_errors,
-            ));
+    if binary_backup.exists()
+        && let Err(error) = fs::remove_file(&binary_backup)
+    {
+        let mut rollback_errors = Vec::new();
+        if web_replaced {
+            collect_rollback_error(
+                &mut rollback_errors,
+                "restore web assets",
+                restore_dir(web_dist_dir, &web_backup),
+            );
         }
+        return Err(update_error_with_rollback(
+            "Failed to remove old binary backup",
+            error,
+            rollback_errors,
+        ));
     }
     if let Err(error) = move_file(exe_path, &binary_backup) {
         let mut rollback_errors = Vec::new();

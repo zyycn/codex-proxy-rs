@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const MONTH_WINDOW_MINUTES: u64 = 43_200;
 const MONTH_WINDOW_SECONDS: u64 = 2_592_000;

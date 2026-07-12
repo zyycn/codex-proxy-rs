@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Write as _, sync::Arc};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use reqwest::{Client, StatusCode, Url};
@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use super::{
-    types::{AccountManageError, OAuthAuthorizeResult, OAuthExchangeInput},
     AccountManageService,
+    types::{AccountManageError, OAuthAuthorizeResult, OAuthExchangeInput},
 };
 
 const OPENAI_OAUTH_AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";

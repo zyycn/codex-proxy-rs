@@ -7,7 +7,7 @@ use crate::{
     infra::time::elapsed_millis_i64,
     upstream::openai::protocol::{
         schema::reconvert_tuple_values,
-        sse::{parse_sse_events, SseError, SseEvent},
+        sse::{SseError, SseEvent, parse_sse_events},
     },
 };
 

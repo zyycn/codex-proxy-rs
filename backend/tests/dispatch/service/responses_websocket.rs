@@ -313,9 +313,11 @@ async fn responses_websocket_should_reuse_connection_for_recorded_conversation()
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_pool_first\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_pool_first\"")
+    );
 
     let second_response = app
         .oneshot(
@@ -337,9 +339,11 @@ async fn responses_websocket_should_reuse_connection_for_recorded_conversation()
         .await
         .unwrap();
     assert_eq!(second_response.status(), StatusCode::OK);
-    assert!(response_text(second_response)
-        .await
-        .contains("\"id\":\"resp_pool_second\""));
+    assert!(
+        response_text(second_response)
+            .await
+            .contains("\"id\":\"resp_pool_second\"")
+    );
     let (reused_connection, first_payload, second_payload) = upstream.await.unwrap();
 
     assert!(reused_connection, "second request opened a new websocket");
@@ -395,9 +399,11 @@ async fn responses_websocket_should_replay_history_when_reused_connection_dies_b
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_stale_reuse_first\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_stale_reuse_first\"")
+    );
 
     let second_response = app
         .oneshot(responses_json_request(
@@ -432,8 +438,8 @@ async fn responses_websocket_should_replay_history_when_reused_connection_dies_b
 }
 
 #[tokio::test]
-async fn responses_websocket_stream_should_replay_managed_history_after_previous_response_not_found(
-) {
+async fn responses_websocket_stream_should_replay_managed_history_after_previous_response_not_found()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -745,9 +751,11 @@ async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled()
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_disabled_pool_first\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_disabled_pool_first\"")
+    );
 
     let second_response = app
         .oneshot(
@@ -769,9 +777,11 @@ async fn responses_websocket_should_not_reuse_connection_when_pool_is_disabled()
         .await
         .unwrap();
     assert_eq!(second_response.status(), StatusCode::OK);
-    assert!(response_text(second_response)
-        .await
-        .contains("\"id\":\"resp_disabled_pool_second\""));
+    assert!(
+        response_text(second_response)
+            .await
+            .contains("\"id\":\"resp_disabled_pool_second\"")
+    );
     let (reused_connection, first_payload, second_payload) = upstream.await.unwrap();
 
     assert!(
@@ -889,9 +899,11 @@ async fn responses_websocket_stream_should_strip_turn_state_when_replaying_on_ne
         .await
         .unwrap();
     assert_eq!(second_response.status(), StatusCode::OK);
-    assert!(response_text(second_response)
-        .await
-        .contains("\"id\":\"resp_metadata_turn_state_next\""));
+    assert!(
+        response_text(second_response)
+            .await
+            .contains("\"id\":\"resp_metadata_turn_state_next\"")
+    );
     let (first_payload, second_payload, second_headers) = upstream.await.unwrap();
 
     assert!(first_payload.get("previous_response_id").is_none());
@@ -965,9 +977,11 @@ async fn responses_websocket_pool_should_be_evicted_after_admin_account_status_c
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_pool_status_first\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_pool_status_first\"")
+    );
 
     update_admin_account_status(&app, "acct_chat", "disabled").await;
     update_admin_account_status(&app, "acct_chat", "active").await;
@@ -984,9 +998,11 @@ async fn responses_websocket_pool_should_be_evicted_after_admin_account_status_c
         .await
         .unwrap();
     assert_eq!(second_response.status(), StatusCode::OK);
-    assert!(response_text(second_response)
-        .await
-        .contains("\"id\":\"resp_pool_status_second\""));
+    assert!(
+        response_text(second_response)
+            .await
+            .contains("\"id\":\"resp_pool_status_second\"")
+    );
 
     let reused_connection = upstream.await.unwrap();
     assert!(
@@ -1028,9 +1044,11 @@ async fn responses_websocket_should_route_previous_response_id_to_recorded_accou
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_affinity_first\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_affinity_first\"")
+    );
     let stored_affinity = state
         .services
         .session_affinity
@@ -1107,9 +1125,11 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
         .await
         .unwrap();
     assert_eq!(first_response.status(), StatusCode::OK);
-    assert!(response_text(first_response)
-        .await
-        .contains("\"id\":\"resp_conversation_seed\""));
+    assert!(
+        response_text(first_response)
+            .await
+            .contains("\"id\":\"resp_conversation_seed\"")
+    );
     assert!(
         state
             .services
@@ -1126,9 +1146,11 @@ async fn responses_websocket_should_prefer_conversation_account_without_previous
     let (_reused, first_payload, second_payload) = upstream.await.unwrap();
 
     assert!(body.contains("\"id\":\"resp_conversation_affinity\""));
-    assert!(first_payload["prompt_cache_key"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("wi_")));
+    assert!(
+        first_payload["prompt_cache_key"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("wi_"))
+    );
     assert_eq!(
         second_payload["prompt_cache_key"],
         first_payload["prompt_cache_key"]
@@ -1346,8 +1368,8 @@ async fn responses_websocket_without_history_should_mark_expired_after_fallback_
 }
 
 #[tokio::test]
-async fn responses_websocket_without_history_should_return_rate_limit_stream_error_when_fallback_accounts_exhausted(
-) {
+async fn responses_websocket_without_history_should_return_rate_limit_stream_error_when_fallback_accounts_exhausted()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -1475,8 +1497,8 @@ async fn responses_websocket_response_failed_quota_should_retry_fallback_account
 }
 
 #[tokio::test]
-async fn responses_websocket_without_history_should_return_quota_stream_error_when_402_has_no_fallback(
-) {
+async fn responses_websocket_without_history_should_return_quota_stream_error_when_402_has_no_fallback()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -1527,8 +1549,8 @@ async fn responses_websocket_without_history_should_return_quota_stream_error_wh
 }
 
 #[tokio::test]
-async fn responses_websocket_without_history_should_return_model_unsupported_stream_error_when_no_fallback(
-) {
+async fn responses_websocket_without_history_should_return_model_unsupported_stream_error_when_no_fallback()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
@@ -1691,8 +1713,8 @@ async fn responses_with_previous_response_id_should_use_websocket_and_configured
 }
 
 #[tokio::test]
-async fn responses_stream_with_previous_response_id_should_forward_websocket_chunks_before_completion(
-) {
+async fn responses_stream_with_previous_response_id_should_forward_websocket_chunks_before_completion()
+ {
     let (base_url, first_chunk_sent_rx, finish_tx, upstream) =
         spawn_chunked_websocket_upstream().await;
     let (app, api_key, _dir) = test_app_with_account(base_url).await;

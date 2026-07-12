@@ -11,21 +11,21 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE,
-        COOKIE, RETRY_AFTER, USER_AGENT,
-    },
     Client, Response as ReqwestResponse, StatusCode,
+    header::{
+        ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName,
+        HeaderValue, RETRY_AFTER, USER_AGENT,
+    },
 };
-use serde_json::{map::Map, Value};
+use serde_json::{Value, map::Map};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
 use crate::upstream::openai::fingerprint::{Fingerprint, RuntimeFingerprint};
 use crate::upstream::openai::protocol::events::{extract_sse_usage, retry_after_seconds_from_body};
 use crate::upstream::openai::protocol::responses::{
-    http_sse_fallback_allowed, transport_for_request, CodexCompactRequest, CodexResponsesRequest,
-    CodexTransport,
+    CodexCompactRequest, CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed,
+    transport_for_request,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
@@ -33,20 +33,20 @@ use crate::upstream::openai::protocol::websocket::{
 };
 
 use super::diagnostics::CodexUpstreamDiagnostics;
-use super::endpoints::{endpoint_url, CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH};
+use super::endpoints::{CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH, endpoint_url};
 use super::headers::{
     build_ordered_codex_base_headers, insert_optional_header, insert_ordered_headers,
     websocket_header_pairs,
 };
 use super::response_meta;
-use super::tls::{build_reqwest_client_with_custom_ca, custom_ca_env_cache_key, CustomCaError};
+use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
-    execute_response_create_request_stream_with_pool, execute_response_create_request_with_pool,
-    write_websocket_audit_artifact_from_env, CodexWebSocketConnection, CodexWebSocketExchangeError,
-    CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketTurnStateUpdate,
+    CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRateLimitHeaderUpdates,
+    CodexWebSocketTurnStateUpdate, execute_response_create_request_stream_with_pool,
+    execute_response_create_request_with_pool, write_websocket_audit_artifact_from_env,
 };
 use super::websocket_pool::{
-    CodexWebSocketPool, CodexWebSocketPoolKey, WebSocketPoolDecision, DEFAULT_INITIAL_EVENT_TIMEOUT,
+    CodexWebSocketPool, CodexWebSocketPoolKey, DEFAULT_INITIAL_EVENT_TIMEOUT, WebSocketPoolDecision,
 };
 
 // ---------------------------------------------------------------------------

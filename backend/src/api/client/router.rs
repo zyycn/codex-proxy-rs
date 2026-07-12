@@ -1,9 +1,9 @@
 //! OpenAI 兼容 API 路由。
 
 use axum::{
+    Router,
     extract::DefaultBodyLimit,
     routing::{get, post},
-    Router,
 };
 
 use crate::api::AppState;

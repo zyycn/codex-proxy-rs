@@ -1,8 +1,8 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -29,9 +29,11 @@ fn model_catalog_should_resolve_alias_chain_to_model_id() {
     let catalog = ModelCatalog::from_config(&ModelConfig { model_aliases });
 
     // 透明代理：只解析 alias，不再拆分 `-high`/`-flex` 等后缀。
-    assert!(catalog
-        .public_model_ids()
-        .contains(&"codex-fast".to_string()));
+    assert!(
+        catalog
+            .public_model_ids()
+            .contains(&"codex-fast".to_string())
+    );
     assert_eq!(
         catalog.model_info_for_name("codex-fast").unwrap().id,
         "gpt-5.5"
@@ -201,7 +203,7 @@ async fn model_service_should_return_no_accounts_when_no_plan_accounts_exist() {
         .await
         .expect_err("refresh should fail");
 
-    assert!(matches!(error, ModelServiceError::NoAccounts));
+    std::assert_matches!(error, ModelServiceError::NoAccounts);
 }
 
 #[tokio::test]

@@ -1,19 +1,19 @@
 use std::time::Instant;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{
     dispatch::errors::{
-        backend_transport_name, insert_dispatch_error_metadata,
-        insert_upstream_diagnostics_metadata, upstream_error_http_status, DispatchErrorMetadata,
+        DispatchErrorMetadata, backend_transport_name, insert_dispatch_error_metadata,
+        insert_upstream_diagnostics_metadata, upstream_error_http_status,
     },
     infra::time::elapsed_millis_i64,
     telemetry::{
         ops::types::OpsErrorLog,
         recorder::{
-            enrich_event_route_metadata, enrich_usage_record_identity,
-            event_kind as response_event_kind, reasoning_effort_from_request,
-            record_dispatch_error_event, DispatchErrorLogRecord, Recorder,
+            DispatchErrorLogRecord, Recorder, enrich_event_route_metadata,
+            enrich_usage_record_identity, event_kind as response_event_kind,
+            reasoning_effort_from_request, record_dispatch_error_event,
         },
         usage::types::UsageRecordLevel,
     },
@@ -28,10 +28,10 @@ use crate::{
 
 use super::{
     errors::{
-        dispatch_error_metadata, enrich_response_dispatch_error_metadata, ResponseDispatchError,
+        ResponseDispatchError, dispatch_error_metadata, enrich_response_dispatch_error_metadata,
     },
     stream::{
-        live::{latest_response_id, LiveResponseStreamContext},
+        live::{LiveResponseStreamContext, latest_response_id},
         sse_failure::{status_code_for_stream_failure, stream_failure_metadata},
         trace::{ResponseDispatchAttempt, ResponseDispatchTrace},
     },
@@ -236,13 +236,13 @@ pub(super) async fn record_prefetched_response_stream_failure_event(
     event.model = Some(record.model.to_string());
     event.status_code = Some(event_status_code);
     event.latency_ms = Some(elapsed_millis_i64(record.started_at));
-    if !record.rate_limit_headers.is_empty() {
-        if let Some(object) = metadata.as_object_mut() {
-            object.insert(
-                "rateLimitHeaders".to_string(),
-                serde_json::json!(record.rate_limit_headers),
-            );
-        }
+    if !record.rate_limit_headers.is_empty()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            "rateLimitHeaders".to_string(),
+            serde_json::json!(record.rate_limit_headers),
+        );
     }
     event.metadata = metadata;
     if let Err(error) = record.recorder.record_error(event).await {

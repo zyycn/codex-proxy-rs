@@ -15,7 +15,7 @@ use codex_proxy_rs::{
     },
     upstream::openai::fingerprint::PgFingerprintStore,
 };
-use sqlx::{postgres::PgPoolOptions, Connection, PgConnection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 const DEFAULT_TEST_DATABASE_URL: &str =

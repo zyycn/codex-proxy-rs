@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::LazyLock;
 
 use axum::{
-    extract::{connect_info::ConnectInfo, Request},
+    extract::{Request, connect_info::ConnectInfo},
     http::{HeaderMap, HeaderValue},
     middleware::Next,
     response::Response,

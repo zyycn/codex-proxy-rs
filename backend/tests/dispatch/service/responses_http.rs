@@ -108,10 +108,12 @@ async fn responses_should_honor_explicit_http_sse_transport() {
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
     assert!(response.headers().get("set-cookie").is_none());
-    assert!(response
-        .headers()
-        .get("x-codex-primary-used-percent")
-        .is_none());
+    assert!(
+        response
+            .headers()
+            .get("x-codex-primary-used-percent")
+            .is_none()
+    );
     let body = response_text(response).await;
     let requests = server.received_requests().await.unwrap();
     let upstream_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
@@ -287,9 +289,11 @@ async fn responses_should_use_websocket_upstream_by_default_while_serving_sse() 
         .as_object()
         .expect("official websocket timing metadata should be present");
     assert_eq!(metadata.len(), 1);
-    assert!(metadata["x-codex-ws-stream-request-start-ms"]
-        .as_str()
-        .is_some_and(|value| value.parse::<u128>().is_ok()));
+    assert!(
+        metadata["x-codex-ws-stream-request-start-ms"]
+            .as_str()
+            .is_some_and(|value| value.parse::<u128>().is_ok())
+    );
 }
 
 #[tokio::test]
@@ -981,9 +985,11 @@ async fn responses_stream_should_close_http_sse_upstream_when_client_disconnects
         .expect("first SSE chunk should arrive before disconnect")
         .expect("stream should yield a first chunk")
         .expect("chunk should be readable");
-    assert!(String::from_utf8(first_chunk.to_vec())
-        .unwrap()
-        .contains("event: response.output_text.delta"));
+    assert!(
+        String::from_utf8(first_chunk.to_vec())
+            .unwrap()
+            .contains("event: response.output_text.delta")
+    );
 
     drop(body);
     assert!(
@@ -1071,8 +1077,8 @@ async fn responses_stream_should_forward_first_chunk_before_upstream_completes()
 }
 
 #[tokio::test]
-async fn responses_stream_should_emit_failed_event_after_upstream_read_error_once_downstream_started(
-) {
+async fn responses_stream_should_emit_failed_event_after_upstream_read_error_once_downstream_started()
+ {
     let (base_url, first_chunk_sent, close_upstream) =
         spawn_chunked_sse_upstream_then_abrupt_close(include_str!(
             "../../fixtures/responses/http_sse/partial_transport_failure.sse"
@@ -1113,9 +1119,11 @@ async fn responses_stream_should_emit_failed_event_after_upstream_read_error_onc
         .expect("first proxied SSE chunk should arrive before upstream closes")
         .unwrap()
         .unwrap();
-    assert!(String::from_utf8(first_chunk.to_vec())
-        .unwrap()
-        .contains("partial before transport failure"));
+    assert!(
+        String::from_utf8(first_chunk.to_vec())
+            .unwrap()
+            .contains("partial before transport failure")
+    );
 
     close_upstream.send(()).unwrap();
     let rest = collect_stream_body(body_stream).await;
@@ -1166,9 +1174,11 @@ async fn responses_stream_should_emit_failed_event_when_upstream_closes_without_
         .expect("first proxied SSE chunk should arrive before upstream closes")
         .unwrap()
         .unwrap();
-    assert!(String::from_utf8(first_chunk.to_vec())
-        .unwrap()
-        .contains("partial before clean close"));
+    assert!(
+        String::from_utf8(first_chunk.to_vec())
+            .unwrap()
+            .contains("partial before clean close")
+    );
 
     close_upstream.send(()).unwrap();
     let rest = collect_stream_body(body_stream).await;

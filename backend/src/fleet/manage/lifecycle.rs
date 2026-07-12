@@ -1,10 +1,10 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashSet},
+    collections::{HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
 use chrono::{DateTime, Duration, Utc};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -16,12 +16,12 @@ use crate::{
 };
 
 use super::{
-    types::{
-        parse_account_status, stored_to_admin_metadata, AccountHealthCheck, AccountManageError,
-        AccountRefreshOutcome, AccountRefreshResult, AccountUpdate, BatchDeleteAccounts,
-        ManagedAccount, ManualCreateTokens,
-    },
     AccountManageService,
+    types::{
+        AccountHealthCheck, AccountManageError, AccountRefreshOutcome, AccountRefreshResult,
+        AccountUpdate, BatchDeleteAccounts, ManagedAccount, ManualCreateTokens,
+        parse_account_status, stored_to_admin_metadata,
+    },
 };
 
 const ADMIN_REFRESH_LEASE_TTL_SECONDS: i64 = 5 * 60;

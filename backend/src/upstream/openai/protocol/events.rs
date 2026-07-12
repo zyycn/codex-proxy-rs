@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::upstream::openai::protocol::sse::{parse_sse_events, SseError};
+use crate::upstream::openai::protocol::sse::{SseError, parse_sse_events};
 
 /// 从 Codex/OpenAI usage 结构中提取出的标准化 token 用量。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,17 +356,16 @@ pub fn rate_limit_quota(
         })
         .collect::<Vec<_>>();
 
-    if let Some(existing_quota) = existing_quota {
-        if let Some(existing_snapshots) = existing_quota.get("snapshots").and_then(Value::as_array)
-        {
-            for snapshot in existing_snapshots {
-                if !rate_limits
-                    .limits
-                    .keys()
-                    .any(|limit_id| quota_snapshot_matches_limit(snapshot, limit_id))
-                {
-                    snapshots.push(snapshot.clone());
-                }
+    if let Some(existing_quota) = existing_quota
+        && let Some(existing_snapshots) = existing_quota.get("snapshots").and_then(Value::as_array)
+    {
+        for snapshot in existing_snapshots {
+            if !rate_limits
+                .limits
+                .keys()
+                .any(|limit_id| quota_snapshot_matches_limit(snapshot, limit_id))
+            {
+                snapshots.push(snapshot.clone());
             }
         }
     }

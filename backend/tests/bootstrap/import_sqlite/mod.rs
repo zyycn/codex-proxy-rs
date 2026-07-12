@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use codex_proxy_rs::{
-    bootstrap::import_sqlite::{import_sqlite, ImportSqliteError},
+    bootstrap::import_sqlite::{ImportSqliteError, import_sqlite},
     keys::{service::KeyVerifier, store::PgClientKeyStore},
 };
-use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, Row};
+use sqlx::{Row, sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions};
 
 use crate::support::storage::init_test_db;
 
@@ -116,7 +116,7 @@ async fn import_sqlite_should_rollback_all_target_writes_on_invalid_source_value
 
     let error = import_sqlite(&target, &source_path).await.unwrap_err();
 
-    assert!(matches!(error, ImportSqliteError::InvalidTimestamp { .. }));
+    std::assert_matches!(error, ImportSqliteError::InvalidTimestamp { .. });
     let rows: i64 = sqlx::query_scalar("select count(*) from admin_users")
         .fetch_one(&target)
         .await
@@ -137,10 +137,10 @@ async fn import_sqlite_should_reject_unknown_source_version() {
 
     let error = import_sqlite(&target, &source_path).await.unwrap_err();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         ImportSqliteError::UnsupportedSourceVersion { actual: Some(2) }
-    ));
+    );
 }
 
 #[tokio::test]
@@ -159,7 +159,7 @@ async fn import_sqlite_should_reject_nonempty_target() {
 
     let error = import_sqlite(&target, &source_path).await.unwrap_err();
 
-    assert!(matches!(error, ImportSqliteError::TargetNotEmpty));
+    std::assert_matches!(error, ImportSqliteError::TargetNotEmpty);
 }
 
 #[tokio::test]

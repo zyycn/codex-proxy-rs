@@ -1,8 +1,8 @@
 use super::*;
 use crate::support::jwt::unsigned_jwt;
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 #[tokio::test]
@@ -527,8 +527,8 @@ async fn admin_accounts_import_should_complete_chatgpt_account_id_from_refresh_t
 }
 
 #[tokio::test]
-async fn admin_accounts_import_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated(
-) {
+async fn admin_accounts_import_from_refresh_token_should_not_store_consumed_refresh_token_when_not_rotated()
+ {
     let server = MockServer::start().await;
     let access_token = test_jwt(
         "rt-import-no-rotation-account",

@@ -2,7 +2,7 @@
 
 use secrecy::SecretString;
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgRow};
 
 use crate::{
     fleet::{
@@ -13,9 +13,9 @@ use crate::{
 };
 
 use super::{
-    queries::{GET_POOL_ACCOUNT_SQL, LIST_POOL_ACCOUNTS_SQL},
     AccountQuotaSnapshot, AccountStoreError, PgAccountStore, PgAccountStoreError,
     PgAccountStoreResult, StoredAccount, StoredAccountMetadata,
+    queries::{GET_POOL_ACCOUNT_SQL, LIST_POOL_ACCOUNTS_SQL},
 };
 
 pub(super) async fn list_pool_accounts(

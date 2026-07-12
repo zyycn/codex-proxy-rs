@@ -34,9 +34,11 @@ async fn admin_client_keys_route_should_create_list_and_authorize_v1_requests() 
         .unwrap();
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_body = response_json(create_response).await;
-    assert!(create_body["data"]["key"]
-        .as_str()
-        .is_some_and(|p| p.starts_with("sk_")));
+    assert!(
+        create_body["data"]["key"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("sk_"))
+    );
 
     let key = create_body["data"]["key"].as_str().unwrap().to_string();
 

@@ -13,12 +13,10 @@ use crate::update::types::UpdateError;
 
 use super::{
     download::validate_github_api_base,
-    service::{build_type_label, deployment_mode_label, SystemUpdateConfig, APP_BINARY_NAME},
+    service::{APP_BINARY_NAME, SystemUpdateConfig, build_type_label, deployment_mode_label},
 };
 
 const UPDATE_CACHE_TTL: Duration = Duration::from_secs(20 * 60);
-
-static RELEASE_CACHE: Mutex<Option<CachedUpdateInfo>> = Mutex::const_new(None);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +43,18 @@ struct CachedUpdateInfo {
     cached_at: Instant,
 }
 
+pub(super) struct ReleaseCache {
+    entry: Mutex<Option<CachedUpdateInfo>>,
+}
+
+impl Default for ReleaseCache {
+    fn default() -> Self {
+        Self {
+            entry: Mutex::const_new(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct GitHubRelease {
     pub tag_name: String,
@@ -64,6 +74,7 @@ pub(super) struct GitHubAsset {
 }
 
 pub(super) async fn check_latest_release(
+    cache: &ReleaseCache,
     config: &SystemUpdateConfig,
     force: bool,
 ) -> UpdateInfoData {
@@ -103,19 +114,17 @@ pub(super) async fn check_latest_release(
     }
     let cache_key = config.release_cache_key();
 
-    if !force {
-        if let Some(info) = cached_release_info(&cache_key).await {
-            return info;
-        }
+    if !force && let Some(info) = cached_release_info(cache, &cache_key).await {
+        return info;
     }
 
     match fetch_latest_release(&config.github_api_base, repository).await {
         Ok(release) => {
             let info = update_info_from_release(config, release);
-            cache_release_info(cache_key, &info).await;
+            cache_release_info(cache, cache_key, &info).await;
             info
         }
-        Err(error) => cached_release_info(&cache_key)
+        Err(error) => cached_release_info(cache, &cache_key)
             .await
             .unwrap_or_else(|| UpdateInfoData {
                 current_version: config.version.clone(),
@@ -224,24 +233,24 @@ pub(super) fn select_release_archive<'a>(
         })
 }
 
-async fn cached_release_info(cache_key: &str) -> Option<UpdateInfoData> {
+async fn cached_release_info(cache: &ReleaseCache, cache_key: &str) -> Option<UpdateInfoData> {
     let mut info = {
-        let cache = RELEASE_CACHE.lock().await;
-        let cached = cache.as_ref()?;
+        let entry = cache.entry.lock().await;
+        let cached = entry.as_ref()?;
         if cached.key != cache_key || cached.cached_at.elapsed() > UPDATE_CACHE_TTL {
             return None;
         }
         let info = cached.info.clone();
-        drop(cache);
+        drop(entry);
         info
     };
     info.cached = true;
     Some(info)
 }
 
-async fn cache_release_info(cache_key: String, info: &UpdateInfoData) {
-    let mut cache = RELEASE_CACHE.lock().await;
-    *cache = Some(CachedUpdateInfo {
+async fn cache_release_info(cache: &ReleaseCache, cache_key: String, info: &UpdateInfoData) {
+    let mut entry = cache.entry.lock().await;
+    *entry = Some(CachedUpdateInfo {
         key: cache_key,
         info: info.clone(),
         cached_at: Instant::now(),

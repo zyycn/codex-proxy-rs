@@ -428,12 +428,16 @@ fn codex_websocket_response_completed_id_should_reject_missing_id_and_incomplete
     })
     .to_string();
 
-    assert!(websocket_response_completed_id(&missing_id)
-        .expect_err("missing id should be rejected")
-        .contains("missing field"));
-    assert!(websocket_response_completed_id(&incomplete_usage)
-        .expect_err("incomplete usage should be rejected")
-        .contains("missing field"));
+    assert!(
+        websocket_response_completed_id(&missing_id)
+            .expect_err("missing id should be rejected")
+            .contains("missing field")
+    );
+    assert!(
+        websocket_response_completed_id(&incomplete_usage)
+            .expect_err("incomplete usage should be rejected")
+            .contains("missing field")
+    );
 }
 
 #[test]

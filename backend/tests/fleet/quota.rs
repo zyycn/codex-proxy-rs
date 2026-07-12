@@ -4,18 +4,18 @@ use chrono::{Duration, Utc};
 use codex_proxy_rs::fleet::account::AccountStatus;
 use codex_proxy_rs::fleet::cookies::PgCookieStore;
 use codex_proxy_rs::fleet::quota::{
-    quota_from_usage, quota_snapshot_limit_reached, quota_snapshot_limit_window_seconds,
-    quota_snapshot_reset_at, QuotaRefreshService,
+    QuotaRefreshService, quota_from_usage, quota_snapshot_limit_reached,
+    quota_snapshot_limit_window_seconds, quota_snapshot_reset_at,
 };
 use codex_proxy_rs::fleet::store::{NewAccount, PgAccountStore};
 use codex_proxy_rs::infra::identity::AccountPseudonymizer;
 use codex_proxy_rs::telemetry::account_usage::store::PgAccountUsageStore;
 use codex_proxy_rs::upstream::openai::transport::CodexBackendClient;
 use secrecy::SecretString;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 use crate::support::storage::init_test_db;

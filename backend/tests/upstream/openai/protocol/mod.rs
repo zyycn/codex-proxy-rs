@@ -1,22 +1,23 @@
 use axum::http::HeaderMap;
 use codex_proxy_rs::api::client::responses::{build_codex_request, build_compact_request};
 use codex_proxy_rs::upstream::openai::protocol::events::{
-    extract_sse_usage, extract_usage, parse_rate_limit_headers, parse_rate_limits_event,
-    rate_limit_quota, retry_after_seconds_from_body, RateLimitWindow, TokenUsage,
+    RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage, parse_rate_limit_headers,
+    parse_rate_limits_event, rate_limit_quota, retry_after_seconds_from_body,
 };
 use codex_proxy_rs::upstream::openai::protocol::responses::{
-    http_sse_fallback_allowed, response_body_has_first_output, response_from_codex_sse,
-    response_sse_event_is_terminal, transport_for_request, CodexResponsesRequest, CodexTransport,
-    CollectedResponse,
+    CodexResponsesRequest, CodexTransport, CollectedResponse, http_sse_fallback_allowed,
+    response_body_has_first_output, response_from_codex_sse, response_sse_event_is_terminal,
+    transport_for_request,
 };
 use codex_proxy_rs::upstream::openai::protocol::sse::{
     parse_sse_events, response_failed_sse_event,
 };
 use codex_proxy_rs::upstream::openai::protocol::websocket::{
-    classify_websocket_error_frame, is_terminal_websocket_event,
-    retry_after_seconds_from_wrapped_error_headers, websocket_audit_artifact_from_attempt,
-    websocket_event_to_sse_frame, websocket_metadata_turn_state, websocket_payload_audit_snapshot,
-    websocket_response_completed_id, OpeningAuditHeader, OpeningAuditSnapshot,
+    OpeningAuditHeader, OpeningAuditSnapshot, classify_websocket_error_frame,
+    is_terminal_websocket_event, retry_after_seconds_from_wrapped_error_headers,
+    websocket_audit_artifact_from_attempt, websocket_event_to_sse_frame,
+    websocket_metadata_turn_state, websocket_payload_audit_snapshot,
+    websocket_response_completed_id,
 };
 use serde_json::json;
 
