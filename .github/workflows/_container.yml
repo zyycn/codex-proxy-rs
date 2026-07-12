@@ -108,6 +108,13 @@ jobs:
           docker compose --project-name "$COMPOSE_PROJECT_NAME" \
             -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml config --quiet
 
+      - name: Configure Redis host memory overcommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sysctl -w vm.overcommit_memory=1
+          test "$(sysctl -n vm.overcommit_memory)" = 1
+
       - name: Verify PostgreSQL and Redis volume persistence
         shell: bash
         run: |
