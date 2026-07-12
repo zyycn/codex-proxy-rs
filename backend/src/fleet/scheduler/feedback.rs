@@ -6,8 +6,8 @@
 //! 对齐 sub2api 的设计,避免选择热路径上的锁与 DB 往返。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// EWMA 平滑系数(新样本权重)。与 sub2api 一致取 0.2。
 const EWMA_ALPHA: f64 = 0.2;
@@ -59,11 +59,7 @@ impl AccountFeedback {
 /// 读取 EWMA 样本;哨兵(NaN)返回 `None`。
 fn load_sample(bits: &AtomicU64) -> Option<f64> {
     let value = f64::from_bits(bits.load(Ordering::Relaxed));
-    if value.is_nan() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_nan() { None } else { Some(value) }
 }
 
 /// 无锁 CAS 更新 EWMA:首个样本直接落值,其后按 alpha 混合。

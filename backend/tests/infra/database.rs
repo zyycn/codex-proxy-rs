@@ -117,21 +117,25 @@ async fn postgres_schema_separates_success_and_error_facts() {
         assert!(error_columns.contains(column), "missing {column}");
     }
 
-    assert!(sqlx::query(
-        "insert into usage_records (
+    assert!(
+        sqlx::query(
+            "insert into usage_records (
            id, kind, provider, account_id, model, status_code, message, metadata_json, created_at
          ) values ('bad', 'request', 'openai', 'acct', 'gpt-5', 500, 'bad', '{}'::jsonb, now())",
-    )
-    .execute(&pool)
-    .await
-    .is_err());
-    assert!(sqlx::query(
-        "insert into ops_error_logs (id, kind, status_code, message, metadata_json, created_at)
+        )
+        .execute(&pool)
+        .await
+        .is_err()
+    );
+    assert!(
+        sqlx::query(
+            "insert into ops_error_logs (id, kind, status_code, message, metadata_json, created_at)
          values ('bad', 'request', 700, 'bad', '{}'::jsonb, now())",
-    )
-    .execute(&pool)
-    .await
-    .is_err());
+        )
+        .execute(&pool)
+        .await
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -167,21 +171,25 @@ async fn postgres_schema_has_required_fact_and_bucket_indexes() {
 #[tokio::test]
 async fn postgres_schema_enforces_account_and_counter_constraints() {
     let (pool, _guard) = init_test_db("schema-constraints").await;
-    assert!(sqlx::query(
-        "insert into accounts (id, access_token, status, added_at, updated_at)
+    assert!(
+        sqlx::query(
+            "insert into accounts (id, access_token, status, added_at, updated_at)
          values ('acct_bad', 'token', 'refreshing', now(), now())",
-    )
-    .execute(&pool)
-    .await
-    .is_err());
-    assert!(sqlx::query(
-        "insert into request_time_buckets (
+        )
+        .execute(&pool)
+        .await
+        .is_err()
+    );
+    assert!(
+        sqlx::query(
+            "insert into request_time_buckets (
            bucket_start, provider, account_id, model, service_tier, success_count
          ) values (now(), 'openai', 'acct', 'gpt-5', '__unknown__', -1)",
-    )
-    .execute(&pool)
-    .await
-    .is_err());
+        )
+        .execute(&pool)
+        .await
+        .is_err()
+    );
     sqlx::query(
         "insert into runtime_settings (
            id, refresh_margin_seconds, refresh_concurrency,

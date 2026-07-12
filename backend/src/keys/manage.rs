@@ -5,7 +5,7 @@ use crate::infra::json::NumberedPage;
 use super::{
     store::PgClientKeyStore,
     types::{
-        parse_client_key_status, BatchDeleteClientApiKeys, KeyManageError, ManagedClientApiKey,
+        BatchDeleteClientApiKeys, KeyManageError, ManagedClientApiKey, parse_client_key_status,
     },
 };
 

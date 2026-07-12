@@ -36,6 +36,7 @@ deploy/.env
 worktrees/
 .codex-ws-audit/
 .agents/
-.cargo/
+.cargo/*
+!.cargo/config.toml
 .reasonix/
 *.tmp

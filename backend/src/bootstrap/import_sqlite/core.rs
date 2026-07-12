@@ -1,11 +1,11 @@
 use futures::TryStreamExt;
-use sqlx::{types::Json, Postgres, Row, SqlitePool, Transaction};
+use sqlx::{Postgres, Row, SqlitePool, Transaction, types::Json};
 
 use crate::infra::identity::hash_credential;
 
 use super::{
-    parse_cookie_expiration, parse_json, parse_optional_json, parse_optional_timestamp,
-    parse_timestamp, ImportSqliteError, ImportSqliteReport,
+    ImportSqliteError, ImportSqliteReport, parse_cookie_expiration, parse_json,
+    parse_optional_json, parse_optional_timestamp, parse_timestamp,
 };
 
 pub(super) async fn import_core_tables(

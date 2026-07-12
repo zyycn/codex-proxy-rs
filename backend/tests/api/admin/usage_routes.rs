@@ -10,7 +10,7 @@ use codex_proxy_rs::{
         usage::types::UsageRecord,
     },
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::util::ServiceExt;
 
 use crate::support::{

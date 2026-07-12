@@ -28,9 +28,10 @@ fn account_pool_should_mark_quota_state_as_quota_exhausted_status() {
     let limited = pool.get("limited").unwrap();
     assert_eq!(limited.status, AccountStatus::QuotaExhausted);
     assert!(limited.quota_limit_reached);
-    assert!(pool
-        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
-        .is_none());
+    assert!(
+        pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+            .is_none()
+    );
 
     pool.apply_quota_state("limited", false, None);
 
@@ -65,9 +66,10 @@ fn account_pool_should_reuse_quota_limited_accounts_after_cooldown() {
     ));
     pool.mark_quota_limited_until("limited", now + Duration::seconds(30));
 
-    assert!(pool
-        .acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
-        .is_none());
+    assert!(
+        pool.acquire_with(&AccountAcquireRequest::new("gpt-5.5", now))
+            .is_none()
+    );
     assert_eq!(
         pool.acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
@@ -92,12 +94,13 @@ fn account_pool_should_not_shorten_existing_quota_cooldown() {
     pool.mark_quota_limited_until("limited", now + Duration::seconds(180));
     pool.mark_quota_limited_until("limited", now + Duration::seconds(60));
 
-    assert!(pool
-        .acquire_with(&AccountAcquireRequest::new(
+    assert!(
+        pool.acquire_with(&AccountAcquireRequest::new(
             "gpt-5.5",
             now + Duration::seconds(90)
         ))
-        .is_none());
+        .is_none()
+    );
 }
 
 #[test]
@@ -143,10 +146,12 @@ fn acquire_should_refresh_expired_cooldowns_before_selecting_account() {
     assert!(acquired.account.quota_cooldown_until.is_none());
     assert!(acquired.account.cloudflare_cooldown_until.is_none());
     assert_eq!(acquired.account.window_request_count, 0);
-    assert!(acquired
-        .account
-        .window_reset_at
-        .is_some_and(|reset| reset > now));
+    assert!(
+        acquired
+            .account
+            .window_reset_at
+            .is_some_and(|reset| reset > now)
+    );
 }
 
 #[test]

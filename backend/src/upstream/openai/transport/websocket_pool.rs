@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::{sync::Mutex, time::Instant};
 use uuid::Uuid;
@@ -221,12 +221,10 @@ impl CodexWebSocketPool {
             );
             if owns_reservation && (expired || state.shutting_down || !self.config.enabled) {
                 state.slots.remove(key);
-            } else if owns_reservation {
-                if let Some(connection) = connection.take() {
-                    state
-                        .slots
-                        .insert(key.clone(), WebSocketPoolSlot::Idle(Box::new(connection)));
-                }
+            } else if owns_reservation && let Some(connection) = connection.take() {
+                state
+                    .slots
+                    .insert(key.clone(), WebSocketPoolSlot::Idle(Box::new(connection)));
             }
         }
         if let Some(connection) = connection {

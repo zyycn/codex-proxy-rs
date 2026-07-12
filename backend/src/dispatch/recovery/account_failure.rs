@@ -12,9 +12,9 @@ use crate::{
         recovery::{
             auth::{auth_failure_account_status, is_auth_upstream_error},
             cloudflare::{
-                cloudflare_challenge_error_message, cloudflare_path_block_error_message,
-                is_cloudflare_challenge_upstream_error, is_cloudflare_path_block_upstream_error,
-                CloudflareRecovery,
+                CloudflareRecovery, cloudflare_challenge_error_message,
+                cloudflare_path_block_error_message, is_cloudflare_challenge_upstream_error,
+                is_cloudflare_path_block_upstream_error,
             },
             exhaustion::AccountExhaustionTracker,
         },
@@ -26,7 +26,7 @@ use crate::{
     fleet::{account::AccountStatus, pool::AccountPoolService},
     upstream::openai::{
         protocol::responses::ResponsesSseFailure,
-        transport::{is_banned_upstream_error, CodexClientError},
+        transport::{CodexClientError, is_banned_upstream_error},
     },
 };
 

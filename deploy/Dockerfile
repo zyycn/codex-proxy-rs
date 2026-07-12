@@ -21,6 +21,7 @@ ENV CPR_VERSION=${CPR_VERSION}
 ENV CPR_GIT_SHA=${CPR_GIT_SHA}
 ENV CPR_BUILD_TIME=${CPR_BUILD_TIME}
 ENV CPR_BUILD_TYPE=${CPR_BUILD_TYPE}
+COPY .cargo/config.toml /app/.cargo/config.toml
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/build.rs ./build.rs
 COPY backend/src ./src

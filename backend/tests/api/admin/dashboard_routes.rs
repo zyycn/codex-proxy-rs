@@ -10,7 +10,7 @@ use codex_proxy_rs::{
     telemetry::{usage::store::PgUsageRecordStore, usage::types::UsageRecord},
     upstream::openai::fingerprint::Fingerprint,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::util::ServiceExt;
 
@@ -89,8 +89,8 @@ async fn dashboard_trend_should_report_database_failure() {
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets(
-) {
+async fn dashboard_summary_should_calculate_today_traffic_and_average_first_token_latency_from_time_buckets()
+ {
     let (app, store, pool, _dir) = dashboard_test_app(
         "dashboard-traffic-latency",
         crate::support::fingerprint::test_fingerprint(),
@@ -138,11 +138,13 @@ async fn dashboard_summary_should_calculate_today_traffic_and_average_first_toke
         body["data"]["cards"]["cache"]["averageFirstTokenLatencyMs"],
         "300 ms"
     );
-    assert!(body["data"]["cards"]["cache"]
-        .as_object()
-        .unwrap()
-        .get("averageLatencyMs")
-        .is_none());
+    assert!(
+        body["data"]["cards"]["cache"]
+            .as_object()
+            .unwrap()
+            .get("averageLatencyMs")
+            .is_none()
+    );
 }
 
 #[tokio::test]

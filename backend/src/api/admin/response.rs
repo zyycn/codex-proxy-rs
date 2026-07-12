@@ -1,10 +1,10 @@
 //! 管理端响应封装与 From 转换。
 
-use crate::infra::json::{total_pages, NumberedPage};
+use crate::infra::json::{NumberedPage, total_pages};
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

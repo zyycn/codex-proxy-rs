@@ -12,7 +12,7 @@ use codex_proxy_rs::{
     api::AppState,
     bootstrap::{
         config::AppConfig,
-        services::{apply_settings_to_config, settings_snapshot_from_config, Services},
+        services::{Services, apply_settings_to_config, settings_snapshot_from_config},
         tasks::coordinator::TaskCoordinator,
     },
     fleet::pool::AccountAcquireRequest,

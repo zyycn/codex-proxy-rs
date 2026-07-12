@@ -1,43 +1,54 @@
-# Rust build output.
+# Rust
 /backend/target/
-/target/
-/dist/
-/package/
-/checksums.txt
-/codex-proxy-rs_*.tar.gz
-/codex-proxy-rs_*.zip
+*.profraw
+*.profdata
 
-# Frontend dependencies and build output.
+# Frontend
 /frontend/node_modules/
 /frontend/dist/
-.pnpm-store
+/frontend/.vite/
+/.pnpm-store/
+/frontend/.pnpm-store/
+*.tsbuildinfo
 
-# Application runtime state.
-*.runtime
+# Release artifacts
+/dist/
+
+# Runtime data
+/.runtime/
 *.sqlite
 *.sqlite3
+*.sqlite-*
 *.db
 *.db-shm
 *.db-wal
 *.log
 
-# Local configuration.
-/local.yaml
-/local.yml
-/.env
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+/.envrc
 /config.yaml
 /backend/config.yaml
-/deploy/.env
 
-# Local workspaces and tooling state.
+# Editors and operating systems
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local tools and worktrees
+/.codegraph/
+/.codex-ws-audit/
+/.agents/
+/.reasonix/
 /.worktrees/
 /worktrees/
-/.codex-ws-audit/
-/.codegraph/
+/.cargo/*
+!/.cargo/config.toml
 *.tmp
-*.swp
-*~
-*.codegraph
-/.agents/
-/.cargo/
-/.reasonix/

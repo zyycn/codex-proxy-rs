@@ -13,8 +13,8 @@ use codex_proxy_rs::telemetry::account_usage::store::{
 };
 use codex_proxy_rs::upstream::openai::fingerprint::{PgFingerprintStore, RuntimeFingerprint};
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 use crate::support::storage::init_test_db;

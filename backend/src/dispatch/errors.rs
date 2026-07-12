@@ -1,7 +1,7 @@
 //! Shared upstream error classification for dispatch routes.
 
 use chrono::{DateTime, Duration, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::{

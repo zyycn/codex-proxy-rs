@@ -1,9 +1,9 @@
 [package]
 name = "codex-proxy-rs"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 publish = false
-rust-version = "1.95"
+rust-version = "1.97"
 
 [dependencies]
 argon2 = "0.5.3"

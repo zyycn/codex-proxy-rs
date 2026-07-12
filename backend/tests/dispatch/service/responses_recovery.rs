@@ -1121,10 +1121,12 @@ async fn responses_explicit_previous_response_should_fail_without_transparent_re
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "previous_response_unavailable");
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("resend the complete input"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("resend the complete input")
+    );
     assert_eq!(captured.payload["previous_response_id"], "resp_stale");
     assert!(!captured.retry_attempted);
 }
@@ -2398,9 +2400,11 @@ async fn responses_should_return_rate_limit_error_when_429_fallback_is_exhausted
     assert_eq!(event.transport.as_deref(), Some("http_sse"));
     assert_eq!(event.failure_class.as_deref(), Some("rate_limited"));
     assert_eq!(metadata["exhaustedCount"], 1);
-    assert!(metadata["upstreamError"]
-        .as_str()
-        .is_some_and(|error| error.contains("rate limited")));
+    assert!(
+        metadata["upstreamError"]
+            .as_str()
+            .is_some_and(|error| error.contains("rate limited"))
+    );
 }
 
 #[tokio::test]
@@ -2481,9 +2485,11 @@ async fn responses_stream_should_return_rate_limit_error_when_429_fallback_is_ex
     assert_eq!(event.transport.as_deref(), Some("http_sse"));
     assert_eq!(event.failure_class.as_deref(), Some("rate_limited"));
     assert_eq!(metadata["exhaustedCount"], 1);
-    assert!(metadata["upstreamError"]
-        .as_str()
-        .is_some_and(|error| error.contains("rate limited")));
+    assert!(
+        metadata["upstreamError"]
+            .as_str()
+            .is_some_and(|error| error.contains("rate limited"))
+    );
 }
 
 #[tokio::test]

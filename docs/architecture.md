@@ -562,7 +562,7 @@ frontend/src/
 CI 的质量门禁包括：
 
 - Rust `fmt`
-- Rust `clippy --all-targets --all-features -D warnings`
+- Rust `clippy --all-targets --all-features --locked`
 - 后端集成测试
 - 前端 Prettier 检查与生产构建
 - GitHub Actions workflow lint

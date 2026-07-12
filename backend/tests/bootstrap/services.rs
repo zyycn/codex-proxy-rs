@@ -25,9 +25,11 @@ async fn services_try_new_should_use_configured_tls_transport_builder() {
         ) else {
             panic!("invalid custom CA should fail service transport construction");
         };
-        assert!(error
-            .to_string()
-            .contains("Failed to read CA certificate file"));
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to read CA certificate file")
+        );
         return;
     }
 

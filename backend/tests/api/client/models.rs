@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use axum::{
+    Router,
     body::Body,
     http::{Request, StatusCode},
-    Router,
 };
 use codex_proxy_rs::{api::AppState, bootstrap::services::Services};
 use tower::util::ServiceExt;
@@ -75,11 +75,13 @@ async fn models_route_should_accept_stored_client_api_key() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert!(body["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|model| model["id"] == "gpt-5.5"));
+    assert!(
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "gpt-5.5")
+    );
 }
 
 #[tokio::test]

@@ -7,10 +7,10 @@ use std::{
     time::Duration as StdDuration,
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::{Map, Value};
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore, watch};
 
 use crate::fleet::account::{Account, AccountStatus};
 use crate::upstream::openai::token_client::{RefreshFailure, TokenPair, TokenRefresher};

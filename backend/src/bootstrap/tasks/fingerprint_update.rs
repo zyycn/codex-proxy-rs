@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::upstream::openai::fingerprint::{
-    PgFingerprintStore, RuntimeFingerprint, UpdateChecker, APPCAST_POLL_INTERVAL,
+    APPCAST_POLL_INTERVAL, PgFingerprintStore, RuntimeFingerprint, UpdateChecker,
 };
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, spawn_periodic_task},
 };
 
 /// Codex Desktop 官方 appcast 地址。

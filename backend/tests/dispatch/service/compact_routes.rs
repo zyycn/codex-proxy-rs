@@ -185,10 +185,12 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
             .and_then(|value| value.to_str().ok()),
         Some("text/event-stream")
     );
-    assert!(compact_request
-        .headers
-        .get("x-codex-installation-id")
-        .is_some());
+    assert!(
+        compact_request
+            .headers
+            .get("x-codex-installation-id")
+            .is_some()
+    );
     let upstream_body: Value = serde_json::from_slice(&compact_request.body).unwrap();
     assert_eq!(upstream_body["model"], "gpt-5.5");
     assert_eq!(upstream_body["instructions"], "compress the session");
@@ -206,9 +208,11 @@ async fn responses_compact_should_post_json_to_codex_compact_upstream() {
     // compact 只剥离 stream；prompt_cache_key 按账号作用域伪名化。
     assert!(upstream_body.get("stream").is_none());
     assert_eq!(upstream_body["store"], true);
-    assert!(upstream_body["prompt_cache_key"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("wi_") && value != "session-seed"));
+    assert!(
+        upstream_body["prompt_cache_key"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("wi_") && value != "session-seed")
+    );
     assert_eq!(upstream_body["input"].as_array().unwrap().len(), 4);
     assert_eq!(upstream_body["input"][1]["ignored"], "drop");
     assert_eq!(
@@ -290,9 +294,11 @@ async fn responses_compact_should_return_rate_limit_error_when_fallback_is_exhau
     assert_eq!(metadata["failed"], true);
     assert_eq!(event.failure_class.as_deref(), Some("rate_limited"));
     assert_eq!(metadata["exhaustedCount"], 1);
-    assert!(metadata["upstreamError"]
-        .as_str()
-        .is_some_and(|value| value.contains("compact quota reached")));
+    assert!(
+        metadata["upstreamError"]
+            .as_str()
+            .is_some_and(|value| value.contains("compact quota reached"))
+    );
 }
 
 #[tokio::test]
@@ -353,9 +359,11 @@ async fn responses_compact_should_preserve_upstream_client_error_status() {
     assert_eq!(metadata["failed"], true);
     assert_eq!(event.failure_class.as_deref(), Some("upstream"));
     assert_eq!(event.upstream_status_code, Some(400));
-    assert!(metadata["error"]
-        .as_str()
-        .is_some_and(|value| value.contains("invalid_encrypted_content")));
+    assert!(
+        metadata["error"]
+            .as_str()
+            .is_some_and(|value| value.contains("invalid_encrypted_content"))
+    );
 }
 
 #[tokio::test]

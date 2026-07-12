@@ -1,20 +1,34 @@
-use std::{ffi::OsString, fs, sync::Mutex};
+use std::{fs, path::PathBuf, process::Command};
 
 use codex_proxy_rs::infra::paths::{ensure_data_dir, load_or_create_identity_secret};
 
 const IDENTITY_SECRET_FILE_NAME: &str = "identity_hmac_secret";
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+const DATA_DIR_CASE_ENV: &str = "CODEX_PROXY_TEST_DATA_DIR_CASE";
 
 #[test]
 fn data_dir_should_use_xdg_data_home_directly() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    if std::env::var(DATA_DIR_CASE_ENV).as_deref() == Ok("child") {
+        let expected = PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap());
+        assert_eq!(ensure_data_dir().unwrap(), expected);
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
-    let _xdg_data_home = EnvVarGuard::set("XDG_DATA_HOME", dir.path().as_os_str().to_owned());
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("infra::paths::data_dir_should_use_xdg_data_home_directly")
+        .arg("--nocapture")
+        .env(DATA_DIR_CASE_ENV, "child")
+        .env("XDG_DATA_HOME", dir.path())
+        .output()
+        .unwrap();
 
-    let resolved = ensure_data_dir().unwrap();
-
-    assert_eq!(resolved, dir.path());
+    assert!(
+        output.status.success(),
+        "isolated data directory test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -45,26 +59,4 @@ fn identity_secret_should_fail_closed_when_existing_file_is_invalid() {
     let error = load_or_create_identity_secret(dir.path()).expect_err("invalid secret must fail");
 
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-}
-
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: OsString) -> Self {
-        let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
-        }
-    }
 }

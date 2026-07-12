@@ -5,20 +5,20 @@ use std::{
 };
 
 use axum::{
-    body::{to_bytes, Body},
+    Extension, Router,
+    body::{Body, to_bytes},
     extract::connect_info::ConnectInfo,
     http::HeaderMap,
     http::{Request, StatusCode},
     middleware::from_fn,
     routing::get,
-    Extension, Router,
 };
 use codex_proxy_rs::api::middleware::{
-    request_id::{attach_request_id, ClientIp},
+    request_id::{ClientIp, attach_request_id},
     trace::http_trace_layer,
 };
 use serde_json::Value;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 

@@ -11,7 +11,7 @@
 
 use crate::fleet::account::Account;
 use crate::fleet::scheduler::feedback::{FeedbackSample, FeedbackStats};
-use crate::fleet::scheduler::{account_window_token_count, SelectionInput};
+use crate::fleet::scheduler::{SelectionInput, account_window_token_count};
 
 /// 配额封顶账号的惩罚分。远大于各因子加权和的理论上限（各因子 ∈ [0,1]，权重和通常为
 /// 个位数），保证未封顶账号总是优先于封顶账号。
@@ -202,11 +202,11 @@ impl NormalizationContext {
             max_window_cached = max_window_cached.max(account.window_cached_tokens as f64);
             max_window_requests = max_window_requests.max(account.window_request_count as f64);
 
-            if let Some(ttft) = sample.ttft_ms {
-                if ttft > 0.0 {
-                    min_ttft_ms = min_ttft_ms.min(ttft);
-                    max_ttft_ms = max_ttft_ms.max(ttft);
-                }
+            if let Some(ttft) = sample.ttft_ms
+                && ttft > 0.0
+            {
+                min_ttft_ms = min_ttft_ms.min(ttft);
+                max_ttft_ms = max_ttft_ms.max(ttft);
             }
 
             if let Some(reset_at) = account.window_reset_at {

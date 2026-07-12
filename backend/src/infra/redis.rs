@@ -1,6 +1,6 @@
 //! Redis 运行态连接与键前缀。
 
-use redis::{aio::ConnectionManager, AsyncCommands};
+use redis::{AsyncCommands, aio::ConnectionManager};
 
 /// Redis 运行态连接。
 #[derive(Clone)]

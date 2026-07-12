@@ -4,10 +4,11 @@ use serde_json::Value;
 use crate::upstream::openai::protocol::events::retry_after_seconds_from_body;
 
 use super::{
+    CodexBackendClient, CodexClientError, CodexClientResult, CodexRequestContext,
+    CodexUpstreamDiagnostics,
     client::{read_capped_error_body, retry_after_seconds, truncate_for_error},
     endpoints::usage_endpoint_urls,
-    response_meta, CodexBackendClient, CodexClientError, CodexClientResult, CodexRequestContext,
-    CodexUpstreamDiagnostics,
+    response_meta,
 };
 
 impl CodexBackendClient {

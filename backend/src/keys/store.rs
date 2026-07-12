@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::infra::{
     identity::generate_client_api_key,
-    json::{page_offset, NumberedPage},
+    json::{NumberedPage, page_offset},
 };
 
 const CLIENT_KEY_SELECT_SQL: &str = r"select

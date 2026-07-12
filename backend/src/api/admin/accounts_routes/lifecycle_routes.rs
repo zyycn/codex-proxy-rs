@@ -33,12 +33,12 @@ pub async fn health_check_accounts(
             "stagger_ms must be between 500 and 30000",
         ));
     }
-    if let Some(concurrency) = payload.concurrency {
-        if !(1..=10).contains(&concurrency) {
-            return Err(AdminError::bad_request(
-                "concurrency must be between 1 and 10",
-            ));
-        }
+    if let Some(concurrency) = payload.concurrency
+        && !(1..=10).contains(&concurrency)
+    {
+        return Err(AdminError::bad_request(
+            "concurrency must be between 1 and 10",
+        ));
     }
     match state
         .services

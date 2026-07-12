@@ -727,9 +727,11 @@ async fn responses_stream_should_preserve_body_metadata_when_capture_body_enable
     );
     assert_eq!(metadata["requestBody"]["model"], "gpt-5.5");
     assert_eq!(metadata["requestBody"]["stream"], true);
-    assert!(metadata["responseBody"]
-        .as_str()
-        .is_some_and(|body| body.contains("resp_stream_usage")));
+    assert!(
+        metadata["responseBody"]
+            .as_str()
+            .is_some_and(|body| body.contains("resp_stream_usage"))
+    );
 }
 
 #[tokio::test]
@@ -842,9 +844,11 @@ async fn responses_stream_should_record_failure_detail_after_transport_error() {
 
     assert_eq!(metadata["failureSource"], "proxy");
     assert_eq!(metadata["synthetic"], true);
-    assert!(metadata["failureDetail"]
-        .as_str()
-        .is_some_and(|detail| !detail.trim().is_empty()));
+    assert!(
+        metadata["failureDetail"]
+            .as_str()
+            .is_some_and(|detail| !detail.trim().is_empty())
+    );
 }
 
 #[tokio::test]

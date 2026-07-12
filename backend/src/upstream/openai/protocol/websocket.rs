@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::upstream::openai::protocol::responses::{
-    http_sse_fallback_allowed, transport_for_request, CodexResponsesRequest, CodexTransport,
+    CodexResponsesRequest, CodexTransport, http_sse_fallback_allowed, transport_for_request,
 };
 use crate::upstream::openai::protocol::sse::encode_sse_event;
 

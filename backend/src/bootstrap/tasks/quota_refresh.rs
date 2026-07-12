@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     coordinator::SchedulerHandle,
-    periodic::{spawn_periodic_task, PeriodicTaskConfig, PeriodicTaskRunner},
+    periodic::{PeriodicTaskConfig, PeriodicTaskRunner, spawn_periodic_task},
 };
 
 /// 主动配额刷新后台任务。

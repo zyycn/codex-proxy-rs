@@ -186,9 +186,11 @@ async fn account_store_page_should_return_row_mapping_errors_instead_of_skipping
         .list_metadata_page(1, 20, None)
         .await
         .expect_err("invalid rows must fail the page instead of disappearing");
-    assert!(error
-        .to_string()
-        .contains("PostgreSQL account store status error: corrupt"));
+    assert!(
+        error
+            .to_string()
+            .contains("PostgreSQL account store status error: corrupt")
+    );
 }
 
 #[tokio::test]
@@ -278,14 +280,16 @@ async fn account_store_should_update_status_and_label_without_rewriting_tokens()
         .await
         .unwrap();
 
-    assert!(repo
-        .set_status("acct_a", AccountStatus::Disabled)
-        .await
-        .unwrap());
-    assert!(repo
-        .set_label("acct_a", Some("work".to_string()))
-        .await
-        .unwrap());
+    assert!(
+        repo.set_status("acct_a", AccountStatus::Disabled)
+            .await
+            .unwrap()
+    );
+    assert!(
+        repo.set_label("acct_a", Some("work".to_string()))
+            .await
+            .unwrap()
+    );
 
     let after: (String,) = sqlx::query_as("select access_token from accounts where id = $1")
         .bind("acct_a")
@@ -319,8 +323,8 @@ async fn account_store_should_not_reactivate_disabled_or_banned_accounts_from_cl
         .expect("banned status should persist");
 
     for account_id in ["acct_disabled", "acct_banned"] {
-        assert!(repo
-            .update_from_claims(
+        assert!(
+            repo.update_from_claims(
                 account_id,
                 AccountClaimsUpdate {
                     email: Some(format!("{account_id}@example.com")),
@@ -337,7 +341,8 @@ async fn account_store_should_not_reactivate_disabled_or_banned_accounts_from_cl
                 },
             )
             .await
-            .expect("claims update should persist"));
+            .expect("claims update should persist")
+        );
     }
 
     let disabled = repo

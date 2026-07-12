@@ -10,7 +10,7 @@ use crate::{
     },
     upstream::openai::protocol::{
         events::TokenUsage,
-        responses::{completed_response_metadata, CodexResponsesRequest},
+        responses::{CodexResponsesRequest, completed_response_metadata},
     },
 };
 
@@ -146,12 +146,11 @@ fn build_variant_identity(request: &CodexResponsesRequest) -> Option<String> {
     if let Some(window_id) = non_empty_str(request.codex_window_id.as_deref()) {
         parts.push(format!("window:{window_id}"));
     }
-    if request.explicit_prompt_cache_key
-        || non_empty_str(request.client_conversation_id.as_deref()).is_some()
+    if (request.explicit_prompt_cache_key
+        || non_empty_str(request.client_conversation_id.as_deref()).is_some())
+        && let Some(anchor) = derive_stable_conversation_key(request)
     {
-        if let Some(anchor) = derive_stable_conversation_key(request) {
-            parts.push(format!("anchor:{anchor}"));
-        }
+        parts.push(format!("anchor:{anchor}"));
     }
 
     (!parts.is_empty()).then(|| parts.join("\0"))

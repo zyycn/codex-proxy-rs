@@ -10,7 +10,7 @@ use tower_http::{
     classify::{ServerErrorsAsFailures, ServerErrorsFailureClass, SharedClassifier},
     trace::TraceLayer,
 };
-use tracing::{debug, info, warn, Span};
+use tracing::{Span, debug, info, warn};
 
 use crate::api::middleware::request_id::{ClientIp, RequestId};
 

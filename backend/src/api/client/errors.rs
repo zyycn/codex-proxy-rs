@@ -1,11 +1,11 @@
 //! OpenAI 路由共享错误响应。
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     dispatch::errors::{DispatchFailureClass, ResponseDispatchError},
@@ -117,12 +117,10 @@ pub fn responses_dispatch_error_response(error: ResponseDispatchError) -> Respon
 
 pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> Response {
     if let ResponseDispatchError::Upstream(CodexClientError::Upstream { status, body, .. }) = error
+        && status.is_client_error()
+        && let Ok(body) = serde_json::from_str::<Value>(body)
     {
-        if status.is_client_error() {
-            if let Ok(body) = serde_json::from_str::<Value>(body) {
-                return (*status, Json(body)).into_response();
-            }
-        }
+        return (*status, Json(body)).into_response();
     }
 
     match error {

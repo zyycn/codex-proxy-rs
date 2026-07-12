@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use subtle::ConstantTimeEq;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::infra::identity::{generate_admin_api_key, hash_credential};
 

@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use crate::fleet::account::Account;
 use crate::fleet::scheduler::{
-    compare_last_used, compare_window_reset, order_by, select_by, SelectionInput,
+    SelectionInput, compare_last_used, compare_window_reset, order_by, select_by,
 };
 
 /// QuotaResetPriority 策略选择。

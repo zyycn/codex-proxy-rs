@@ -1,24 +1,28 @@
 use std::{
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header::CONTENT_TYPE, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header::CONTENT_TYPE},
 };
-use codex_proxy_rs::{api::AppState, bootstrap::services::Services};
-use flate2::{write::GzEncoder, Compression};
-use serde_json::{json, Value};
+use codex_proxy_rs::{
+    api::{AppState, router::ProcessControl},
+    bootstrap::services::Services,
+    update::service::{SystemUpdateConfig, SystemUpdateService},
+};
+use flate2::{Compression, write::GzEncoder};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tar::{Builder, EntryType, Header};
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tower::util::ServiceExt;
 use wiremock::{
-    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
 };
 
 use crate::support::{
@@ -28,20 +32,47 @@ use crate::support::{
     http::response_json,
 };
 
-static SYSTEM_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 const VERSION_OLD: &str = "0.1.0";
 const VERSION_NEW: &str = "0.2.0";
 
+struct TestProcessControl {
+    shutdown: broadcast::Sender<()>,
+}
+
+impl TestProcessControl {
+    fn new() -> Self {
+        let (shutdown, _receiver) = broadcast::channel(16);
+        Self { shutdown }
+    }
+
+    fn signal_shutdown(&self) {
+        let _ = self.shutdown.send(());
+    }
+}
+
+impl ProcessControl for TestProcessControl {
+    fn request_shutdown(&self) {
+        self.signal_shutdown();
+    }
+
+    fn request_restart(&self, _executable_path: PathBuf) {
+        self.signal_shutdown();
+    }
+
+    fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
+        self.shutdown.subscribe()
+    }
+}
+
 #[tokio::test]
 async fn version_should_return_backend_build_metadata() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-version-route";
     let github = MockServer::start().await;
     mount_latest_release(&github, repository, "0.2.0").await;
-    set_system_update_env(repository, &github.uri());
-    std::env::set_var("CPR_GIT_SHA", "version-test-sha");
-    std::env::set_var("CPR_BUILD_TIME", "2026-07-01T00:00:00Z");
-    let (app, _dir) = admin_system_test_app("system-version").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    update_config.git_sha = "version-test-sha".to_string();
+    update_config.build_time = "2026-07-01T00:00:00Z".to_string();
+    let (app, _dir) = admin_system_test_app("system-version", update_config).await;
 
     let response = app
         .oneshot(
@@ -73,16 +104,14 @@ async fn version_should_return_backend_build_metadata() {
 
 #[tokio::test]
 async fn update_detail_should_use_cached_release_when_not_refreshed() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-cache-route";
-    let success_server = MockServer::start().await;
-    mount_latest_release(&success_server, repository, "0.2.0").await;
-    set_system_update_env(repository, &success_server.uri());
-    let (app, _dir) = admin_system_test_app("system-cache").await;
+    let github = MockServer::start().await;
+    mount_latest_release(&github, repository, "0.2.0").await;
+    let update_config = system_update_config(repository, &github.uri());
+    let (app, _dir) = admin_system_test_app("system-cache", update_config).await;
     let initial = get_update_detail(&app, true, "req_system_cache_initial").await;
 
-    let failing_server = MockServer::start().await;
-    set_system_update_env(repository, &failing_server.uri());
+    github.reset().await;
     let cached = get_update_detail(&app, false, "req_system_cache_cached").await;
 
     assert!(
@@ -94,21 +123,19 @@ async fn update_detail_should_use_cached_release_when_not_refreshed() {
 
 #[tokio::test]
 async fn update_detail_should_fallback_to_cache_when_refresh_fetch_fails() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-cache-forced-route";
-    let success_server = MockServer::start().await;
-    mount_latest_release(&success_server, repository, "0.3.0").await;
-    set_system_update_env(repository, &success_server.uri());
-    let (app, _dir) = admin_system_test_app("system-cache-forced").await;
+    let github = MockServer::start().await;
+    mount_latest_release(&github, repository, "0.3.0").await;
+    let update_config = system_update_config(repository, &github.uri());
+    let (app, _dir) = admin_system_test_app("system-cache-forced", update_config).await;
     let initial = get_update_detail(&app, true, "req_system_cache_forced_initial").await;
 
-    let failing_server = MockServer::start().await;
+    github.reset().await;
     Mock::given(method("GET"))
         .and(path(format!("/repos/{repository}/releases/latest")))
         .respond_with(ResponseTemplate::new(500))
-        .mount(&failing_server)
+        .mount(&github)
         .await;
-    set_system_update_env(repository, &failing_server.uri());
     let fallback = get_update_detail(&app, true, "req_system_cache_forced_fallback").await;
 
     assert!(
@@ -121,13 +148,12 @@ async fn update_detail_should_fallback_to_cache_when_refresh_fetch_fails() {
 
 #[tokio::test]
 async fn update_detail_should_report_source_build_as_unsupported() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-source-route";
     let github = MockServer::start().await;
     mount_latest_release(&github, repository, "0.2.0").await;
-    set_system_update_env(repository, &github.uri());
-    std::env::set_var("CPR_BUILD_TYPE", "source");
-    let (app, _dir) = admin_system_test_app("system-source-build").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    update_config.build_type = "source".to_string();
+    let (app, _dir) = admin_system_test_app("system-source-build", update_config).await;
 
     let info = get_update_detail(&app, true, "req_system_source_build").await;
 
@@ -144,12 +170,11 @@ async fn update_detail_should_report_source_build_as_unsupported() {
 
 #[tokio::test]
 async fn update_detail_should_reject_untrusted_github_api_base() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
-    set_system_update_env(
+    let update_config = system_update_config(
         "zyycn/codex-proxy-rs-untrusted-api-base-route",
         "https://mirror.example",
     );
-    let (app, _dir) = admin_system_test_app("system-untrusted-api-base").await;
+    let (app, _dir) = admin_system_test_app("system-untrusted-api-base", update_config).await;
 
     let info = get_update_detail(&app, true, "req_system_untrusted_api_base").await;
 
@@ -162,10 +187,12 @@ async fn update_detail_should_reject_untrusted_github_api_base() {
 
 #[tokio::test]
 async fn restart_should_request_process_restart_inside_docker() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
-    set_system_update_env("zyycn/codex-proxy-rs-restart-route", "http://127.0.0.1:9");
-    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
-    let (app, _dir) = admin_system_test_app("system-restart").await;
+    let mut update_config =
+        system_update_config("zyycn/codex-proxy-rs-restart-route", "http://127.0.0.1:9");
+    update_config.self_restart_enabled = true;
+    let (app, _dir, process_control) =
+        admin_system_test_app_with_process_control("system-restart", update_config).await;
+    let mut shutdown = process_control.subscribe_shutdown();
 
     let response = app
         .oneshot(
@@ -180,11 +207,7 @@ async fn restart_should_request_process_restart_inside_docker() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    let shutdown = tokio::time::timeout(
-        Duration::from_secs(2),
-        codex_proxy_rs::bootstrap::shutdown::shutdown_signal(),
-    )
-    .await;
+    let shutdown = tokio::time::timeout(Duration::from_secs(2), shutdown.recv()).await;
 
     assert!(
         body["data"]["operationId"]
@@ -197,19 +220,20 @@ async fn restart_should_request_process_restart_inside_docker() {
 
 #[tokio::test]
 async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let replacement = Path::new("/bin/true");
     if !replacement.exists() {
         return;
     }
-    set_system_update_env(
+    let mut update_config = system_update_config(
         "zyycn/codex-proxy-rs-binary-restart-route",
         "http://127.0.0.1:9",
     );
-    std::env::set_var("CPR_DEPLOYMENT_MODE", "binary");
-    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
-    std::env::set_var("CPR_UPDATE_EXE_PATH", replacement);
-    let (app, _dir) = admin_system_test_app("system-binary-restart").await;
+    update_config.deployment_mode = "binary".to_string();
+    update_config.self_restart_enabled = true;
+    update_config.executable_path = Some(replacement.to_path_buf());
+    let (app, _dir, process_control) =
+        admin_system_test_app_with_process_control("system-binary-restart", update_config).await;
+    let mut shutdown = process_control.subscribe_shutdown();
 
     let response = app
         .oneshot(
@@ -224,29 +248,25 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    let shutdown = tokio::time::timeout(
-        Duration::from_secs(2),
-        codex_proxy_rs::bootstrap::shutdown::shutdown_signal(),
-    )
-    .await;
+    let shutdown = tokio::time::timeout(Duration::from_secs(2), shutdown.recv()).await;
 
     assert!(body["data"]["message"] == "已安排自重启" && shutdown.is_ok());
 }
 
 #[tokio::test]
 async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
-    set_system_update_env(
+    let mut update_config = system_update_config(
         "zyycn/codex-proxy-rs-restart-spawn-failure-route",
         "http://127.0.0.1:9",
     );
-    std::env::set_var("CPR_DEPLOYMENT_MODE", "binary");
-    std::env::set_var("CPR_ENABLE_SELF_RESTART", "true");
-    std::env::set_var(
-        "CPR_UPDATE_EXE_PATH",
-        "/tmp/codex-proxy-rs-missing-restart-binary",
-    );
-    let (app, _dir) = admin_system_test_app("system-restart-spawn-failure").await;
+    update_config.deployment_mode = "binary".to_string();
+    update_config.self_restart_enabled = true;
+    update_config.executable_path =
+        Some(PathBuf::from("/tmp/codex-proxy-rs-missing-restart-binary"));
+    let (app, _dir, process_control) =
+        admin_system_test_app_with_process_control("system-restart-spawn-failure", update_config)
+            .await;
+    let mut shutdown = process_control.subscribe_shutdown();
 
     let response = app
         .oneshot(
@@ -262,11 +282,7 @@ async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
         .unwrap();
     let status = response.status();
     let body = response_json(response).await;
-    let shutdown = tokio::time::timeout(
-        Duration::from_millis(100),
-        codex_proxy_rs::bootstrap::shutdown::shutdown_signal(),
-    )
-    .await;
+    let shutdown = tokio::time::timeout(Duration::from_millis(100), shutdown.recv()).await;
     let message = body["message"].as_str().unwrap_or_default();
 
     assert!(
@@ -278,7 +294,6 @@ async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
 
 #[tokio::test]
 async fn update_should_replace_local_release_files_with_latest_asset() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-update-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -288,9 +303,9 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
     std::fs::write(&exe_path, "old-binary").unwrap();
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
     mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update", update_config).await;
 
     let response = app
         .clone()
@@ -328,23 +343,21 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
 
 #[tokio::test]
 async fn update_should_reject_when_confirmed_target_differs_from_remote_latest() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-update-target-changed-route";
-    let initial_github = MockServer::start().await;
-    let latest_github = MockServer::start().await;
+    let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
     let exe_path = deploy.path().join("codex-proxy-rs");
     let web_dist = deploy.path().join("web/dist");
     std::fs::create_dir_all(&web_dist).unwrap();
     std::fs::write(&exe_path, "old-binary").unwrap();
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
-    mount_latest_release(&initial_github, repository, "0.4.0").await;
-    mount_latest_release(&latest_github, repository, "0.5.0").await;
-    set_system_update_env(repository, &initial_github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-target-changed").await;
+    mount_latest_release(&github, repository, "0.4.0").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-target-changed", update_config).await;
     let initial = get_update_detail(&app, true, "req_system_update_target_initial").await;
-    set_system_update_env(repository, &latest_github.uri());
+    github.reset().await;
+    mount_latest_release(&github, repository, "0.5.0").await;
 
     let response = app
         .clone()
@@ -374,19 +387,19 @@ async fn update_should_reject_when_confirmed_target_differs_from_remote_latest()
 
 #[tokio::test]
 async fn update_should_reject_untrusted_github_api_base() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let deploy = tempfile::tempdir().unwrap();
     let exe_path = deploy.path().join("codex-proxy-rs");
     let web_dist = deploy.path().join("web/dist");
     std::fs::create_dir_all(&web_dist).unwrap();
     std::fs::write(&exe_path, "old-binary").unwrap();
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
-    set_system_update_env(
+    let mut update_config = system_update_config(
         "zyycn/codex-proxy-rs-update-untrusted-api-base-route",
         "https://mirror.example",
     );
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-untrusted-api-base").await;
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) =
+        admin_system_test_app("system-update-untrusted-api-base", update_config).await;
 
     let response = app
         .oneshot(
@@ -413,7 +426,6 @@ async fn update_should_reject_untrusted_github_api_base() {
 
 #[tokio::test]
 async fn update_should_fail_when_release_checksum_is_missing() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-missing-checksum-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -430,9 +442,9 @@ async fn update_should_fail_when_release_checksum_is_missing() {
         "new-web",
     )
     .await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-missing-checksum").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-missing-checksum", update_config).await;
 
     assert_update_failure_preserves_files(
         &app,
@@ -447,7 +459,6 @@ async fn update_should_fail_when_release_checksum_is_missing() {
 
 #[tokio::test]
 async fn update_should_fail_when_release_checksum_mismatches() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-bad-checksum-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -464,9 +475,9 @@ async fn update_should_fail_when_release_checksum_mismatches() {
         "new-web",
     )
     .await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-bad-checksum").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-bad-checksum", update_config).await;
 
     assert_update_failure_preserves_files(
         &app,
@@ -481,7 +492,6 @@ async fn update_should_fail_when_release_checksum_mismatches() {
 
 #[tokio::test]
 async fn update_should_reject_release_archive_from_untrusted_host() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-untrusted-download-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -498,9 +508,10 @@ async fn update_should_reject_release_archive_from_untrusted_host() {
         "https://github.com/zyycn/codex-proxy-rs/releases/download/v0.4.0/checksums.txt",
     )
     .await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-untrusted-download").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) =
+        admin_system_test_app("system-update-untrusted-download", update_config).await;
 
     assert_update_failure_preserves_files(
         &app,
@@ -514,8 +525,7 @@ async fn update_should_reject_release_archive_from_untrusted_host() {
 }
 
 #[tokio::test]
-async fn update_should_reject_insecure_release_archive_even_when_env_flag_is_set() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
+async fn update_should_reject_insecure_release_archive() {
     let repository = "zyycn/codex-proxy-rs-insecure-download-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -532,10 +542,9 @@ async fn update_should_reject_insecure_release_archive_even_when_env_flag_is_set
         "https://github.com/zyycn/codex-proxy-rs/releases/download/v0.4.0/checksums.txt",
     )
     .await;
-    set_system_update_env(repository, &github.uri());
-    std::env::set_var("CPR_UPDATE_ALLOW_INSECURE_DOWNLOADS", "true");
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-insecure-download").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-insecure-download", update_config).await;
 
     assert_update_failure_preserves_files(
         &app,
@@ -550,7 +559,6 @@ async fn update_should_reject_insecure_release_archive_even_when_env_flag_is_set
 
 #[tokio::test]
 async fn update_should_reject_release_archive_with_unsafe_path() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-unsafe-archive-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -561,9 +569,9 @@ async fn update_should_reject_release_archive_with_unsafe_path() {
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
     mount_latest_release_with_unsafe_archive(&github, repository, "0.4.0", "new-binary", "new-web")
         .await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-unsafe-archive").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-unsafe-archive", update_config).await;
 
     assert_update_failure_preserves_files(
         &app,
@@ -578,7 +586,6 @@ async fn update_should_reject_release_archive_with_unsafe_path() {
 
 #[tokio::test]
 async fn update_should_restore_web_assets_when_binary_backup_fails() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-binary-backup-failure-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -589,9 +596,10 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
     std::fs::create_dir(deploy.path().join("codex-proxy-rs.backup")).unwrap();
     mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-binary-backup-failure").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) =
+        admin_system_test_app("system-update-binary-backup-failure", update_config).await;
 
     let response = app
         .clone()
@@ -629,7 +637,6 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
 
 #[tokio::test]
 async fn update_should_remove_stale_file_lock_and_continue() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-stale-lock-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -648,9 +655,9 @@ async fn update_should_remove_stale_file_lock_and_continue() {
         .set_modified(SystemTime::now() - Duration::from_secs(31 * 60))
         .unwrap();
     mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-update-stale-lock").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-update-stale-lock", update_config).await;
 
     let response = app
         .clone()
@@ -680,7 +687,6 @@ async fn update_should_remove_stale_file_lock_and_continue() {
 
 #[tokio::test]
 async fn update_should_replace_web_assets_across_filesystems() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let Ok(web_root) = tempfile::tempdir_in("/dev/shm") else {
         return;
     };
@@ -693,9 +699,9 @@ async fn update_should_replace_web_assets_across_filesystems() {
     std::fs::write(&exe_path, "old-binary").unwrap();
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
     mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-cross-device-update").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-cross-device-update", update_config).await;
 
     let response = app
         .clone()
@@ -726,10 +732,11 @@ async fn update_should_replace_web_assets_across_filesystems() {
 
 #[tokio::test]
 async fn update_status_should_read_local_update_state() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let deploy = tempfile::tempdir().unwrap();
-    set_system_update_env("zyycn/codex-proxy-rs-status-route", "http://127.0.0.1:9");
-    set_system_update_paths(
+    let mut update_config =
+        system_update_config("zyycn/codex-proxy-rs-status-route", "http://127.0.0.1:9");
+    configure_system_update_paths(
+        &mut update_config,
         deploy.path(),
         &deploy.path().join("codex-proxy-rs"),
         &deploy.path().join("web/dist"),
@@ -754,7 +761,7 @@ async fn update_status_should_read_local_update_state() {
         .to_string(),
     )
     .unwrap();
-    let (app, _dir) = admin_system_test_app("system-status").await;
+    let (app, _dir) = admin_system_test_app("system-status", update_config).await;
 
     let response = app
         .oneshot(
@@ -779,15 +786,16 @@ async fn update_status_should_read_local_update_state() {
 
 #[tokio::test]
 async fn update_events_should_open_authenticated_sse_stream() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let deploy = tempfile::tempdir().unwrap();
-    set_system_update_env("zyycn/codex-proxy-rs-events-route", "http://127.0.0.1:9");
-    set_system_update_paths(
+    let mut update_config =
+        system_update_config("zyycn/codex-proxy-rs-events-route", "http://127.0.0.1:9");
+    configure_system_update_paths(
+        &mut update_config,
         deploy.path(),
         &deploy.path().join("codex-proxy-rs"),
         &deploy.path().join("web/dist"),
     );
-    let (app, _dir) = admin_system_test_app("system-events").await;
+    let (app, _dir) = admin_system_test_app("system-events", update_config).await;
 
     let response = app
         .oneshot(
@@ -812,18 +820,19 @@ async fn update_events_should_open_authenticated_sse_stream() {
 
 #[tokio::test]
 async fn update_events_should_close_on_shutdown() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let deploy = tempfile::tempdir().unwrap();
-    set_system_update_env(
+    let mut update_config = system_update_config(
         "zyycn/codex-proxy-rs-events-shutdown-route",
         "http://127.0.0.1:9",
     );
-    set_system_update_paths(
+    configure_system_update_paths(
+        &mut update_config,
         deploy.path(),
         &deploy.path().join("codex-proxy-rs"),
         &deploy.path().join("web/dist"),
     );
-    let (app, _dir) = admin_system_test_app("system-events-shutdown").await;
+    let (app, _dir, process_control) =
+        admin_system_test_app_with_process_control("system-events-shutdown", update_config).await;
 
     let response = app
         .oneshot(
@@ -837,7 +846,7 @@ async fn update_events_should_close_on_shutdown() {
         )
         .await
         .unwrap();
-    codex_proxy_rs::bootstrap::shutdown::request_shutdown();
+    process_control.signal_shutdown();
 
     let body = tokio::time::timeout(Duration::from_secs(2), to_bytes(response.into_body(), 1024))
         .await
@@ -849,7 +858,6 @@ async fn update_events_should_close_on_shutdown() {
 
 #[tokio::test]
 async fn update_events_should_close_after_terminal_update_log() {
-    let _guard = SYSTEM_ENV_LOCK.lock().await;
     let repository = "zyycn/codex-proxy-rs-events-terminal-route";
     let github = MockServer::start().await;
     let deploy = tempfile::tempdir().unwrap();
@@ -859,9 +867,9 @@ async fn update_events_should_close_after_terminal_update_log() {
     std::fs::write(&exe_path, "old-binary").unwrap();
     std::fs::write(web_dist.join("index.html"), "old-web").unwrap();
     mount_latest_release_with_archive(&github, repository, "0.4.0", "new-binary", "new-web").await;
-    set_system_update_env(repository, &github.uri());
-    set_system_update_paths(deploy.path(), &exe_path, &web_dist);
-    let (app, _dir) = admin_system_test_app("system-events-terminal").await;
+    let mut update_config = system_update_config(repository, &github.uri());
+    configure_system_update_paths(&mut update_config, deploy.path(), &exe_path, &web_dist);
+    let (app, _dir) = admin_system_test_app("system-events-terminal", update_config).await;
 
     let sse_response = app
         .clone()
@@ -1217,31 +1225,36 @@ fn append_raw_tar_file<W: Write>(builder: &mut Builder<W>, path: &str, bytes: &[
     builder.append(&header, bytes).unwrap();
 }
 
-fn set_system_update_env(repository: &str, github_api_base: &str) {
-    std::env::set_var("CPR_VERSION", "0.1.0");
-    std::env::set_var("CPR_DEPLOYMENT_MODE", "docker");
-    std::env::set_var("CPR_BUILD_TYPE", "release");
-    std::env::set_var("CPR_UPDATE_CHANNEL", "stable");
-    std::env::set_var("CPR_UPDATE_REPOSITORY", repository);
-    std::env::set_var("CPR_GITHUB_API_BASE", format!("{github_api_base}/repos"));
-    std::env::remove_var("CPR_UPDATE_ALLOW_INSECURE_DOWNLOADS");
-    std::env::remove_var("CPR_UPDATE_EXE_PATH");
-    std::env::remove_var("CPR_WEB_DIST_DIR");
-    std::env::remove_var("CPR_UPDATE_STATE_FILE");
-    std::env::remove_var("CPR_UPDATE_LOCK_FILE");
-    std::env::remove_var("CPR_UPDATE_TEMP_DIR");
-    std::env::remove_var("CPR_ENABLE_SELF_RESTART");
+fn system_update_config(repository: &str, github_api_base: &str) -> SystemUpdateConfig {
+    SystemUpdateConfig {
+        version: VERSION_OLD.to_string(),
+        git_sha: "test-git-sha".to_string(),
+        build_time: "2026-07-01T00:00:00Z".to_string(),
+        deployment_mode: "docker".to_string(),
+        build_type: "release".to_string(),
+        update_channel: "stable".to_string(),
+        update_repository: Some(repository.to_string()),
+        github_api_base: format!("{github_api_base}/repos"),
+        executable_path: Some(PathBuf::from("/app/bin/codex-proxy-rs")),
+        web_dist_dir: PathBuf::from("/app/web/dist"),
+        update_state_file: PathBuf::from("/app/data/update-state.json"),
+        update_lock_file: PathBuf::from("/app/data/update-state.lock"),
+        update_temp_dir: PathBuf::from("/app/data/update-tmp"),
+        self_restart_enabled: false,
+    }
 }
 
-fn set_system_update_paths(root: &Path, exe_path: &Path, web_dist: &Path) {
-    std::env::set_var("CPR_UPDATE_EXE_PATH", exe_path);
-    std::env::set_var("CPR_WEB_DIST_DIR", web_dist);
-    std::env::set_var(
-        "CPR_UPDATE_STATE_FILE",
-        root.join(".runtime/update-state.json"),
-    );
-    std::env::set_var("CPR_UPDATE_LOCK_FILE", root.join(".runtime/update.lock"));
-    std::env::set_var("CPR_UPDATE_TEMP_DIR", root.join(".runtime/update-tmp"));
+fn configure_system_update_paths(
+    config: &mut SystemUpdateConfig,
+    root: &Path,
+    exe_path: &Path,
+    web_dist: &Path,
+) {
+    config.executable_path = Some(exe_path.to_path_buf());
+    config.web_dist_dir = web_dist.to_path_buf();
+    config.update_state_file = root.join(".runtime/update-state.json");
+    config.update_lock_file = root.join(".runtime/update.lock");
+    config.update_temp_dir = root.join(".runtime/update-tmp");
 }
 
 async fn wait_for_operation_status(app: &axum::Router, expected: &str) -> Value {
@@ -1271,7 +1284,21 @@ async fn wait_for_operation_status(app: &axum::Router, expected: &str) -> Value 
 
 async fn admin_system_test_app(
     db_name: &str,
+    update_config: SystemUpdateConfig,
 ) -> (axum::Router, crate::support::storage::TestDatabaseGuard) {
+    let (app, dir, _process_control) =
+        admin_system_test_app_with_process_control(db_name, update_config).await;
+    (app, dir)
+}
+
+async fn admin_system_test_app_with_process_control(
+    db_name: &str,
+    update_config: SystemUpdateConfig,
+) -> (
+    axum::Router,
+    crate::support::storage::TestDatabaseGuard,
+    Arc<TestProcessControl>,
+) {
     let (pool, dir) = crate::support::storage::init_test_db(db_name).await;
     let redis = crate::support::storage::create_test_redis(db_name).await;
     seed_admin_session(&pool, &redis, "session_1").await;
@@ -1282,7 +1309,10 @@ async fn admin_system_test_app(
         stores,
         runtime_fingerprint(test_fingerprint()),
     ));
-    let state = AppState::from(services.as_ref());
+    let mut state = AppState::from(services.as_ref());
+    state.services.system_update = Arc::new(SystemUpdateService::new(update_config));
+    let process_control = Arc::new(TestProcessControl::new());
+    state.services.process_control = process_control.clone();
     let app = codex_proxy_rs::api::router::router().with_state(state);
-    (app, dir)
+    (app, dir, process_control)
 }

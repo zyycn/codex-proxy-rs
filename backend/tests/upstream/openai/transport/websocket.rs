@@ -152,9 +152,11 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
     server.await.unwrap();
 
     assert!(response.body.contains("hello from websocket"));
-    assert!(response
-        .body
-        .contains("resp_6f8d0c2b5a4e4a0d9c1b7e3f2a8d5c6b"));
+    assert!(
+        response
+            .body
+            .contains("resp_6f8d0c2b5a4e4a0d9c1b7e3f2a8d5c6b")
+    );
 }
 
 #[test]
@@ -297,8 +299,8 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_response_failed_as_upstream_error(
-) {
+async fn websocket_execute_response_create_request_should_surface_response_failed_as_upstream_error()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -394,8 +396,8 @@ async fn websocket_execute_response_create_request_should_pass_through_unmapped_
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_preserve_opening_error_status_body_and_retry_after(
-) {
+async fn websocket_execute_response_create_request_should_preserve_opening_error_status_body_and_retry_after()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -451,15 +453,12 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
         .expect_err("binary websocket events should be rejected");
     server.await.unwrap();
 
-    assert!(matches!(
-        error,
-        CodexWebSocketExchangeError::UnexpectedBinaryEvent
-    ));
+    std::assert_matches!(error, CodexWebSocketExchangeError::UnexpectedBinaryEvent);
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_surface_wrapped_error_status_and_retry_after(
-) {
+async fn websocket_execute_response_create_request_should_surface_wrapped_error_status_and_retry_after()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -605,8 +604,8 @@ async fn websocket_execute_response_create_request_should_forward_typed_events_w
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_capture_internal_metadata_and_rate_limit_events(
-) {
+async fn websocket_execute_response_create_request_should_capture_internal_metadata_and_rate_limit_events()
+ {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -676,14 +675,18 @@ async fn websocket_execute_response_create_request_should_capture_internal_metad
     assert!(!response.body.contains("codex.rate_limits"));
     assert!(!response.body.contains("response.metadata"));
     assert!(response.body.contains("event: response.completed"));
-    assert!(response
-        .rate_limit_headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-primary-used-percent" && value == "100"));
-    assert!(response
-        .rate_limit_headers
-        .iter()
-        .any(|(name, value)| name == "x-codex-primary-reset-at" && value == "1893456300"));
+    assert!(
+        response
+            .rate_limit_headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-primary-used-percent" && value == "100")
+    );
+    assert!(
+        response
+            .rate_limit_headers
+            .iter()
+            .any(|(name, value)| name == "x-codex-primary-reset-at" && value == "1893456300")
+    );
 }
 
 #[tokio::test]
@@ -905,10 +908,10 @@ async fn websocket_execute_response_create_request_should_reject_completed_witho
         .expect_err("completed frame without response must be rejected");
     server.await.unwrap();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         CodexWebSocketExchangeError::InvalidCompletedResponse { .. }
-    ));
+    );
 }
 
 #[tokio::test]
@@ -1002,11 +1005,11 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
         .expect_err("silent upstream should time out");
     server.abort();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         CodexClientError::WebSocket(CodexWebSocketExchangeError::InitialEventTimeout { timeout })
             if timeout == Duration::from_millis(30)
-    ));
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -1167,10 +1170,10 @@ async fn codex_backend_client_stream_should_reject_binary_websocket_event() {
         .expect_err("binary frame should fail the stream");
     server.await.unwrap();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         CodexClientError::WebSocket(CodexWebSocketExchangeError::UnexpectedBinaryEvent)
-    ));
+    );
 }
 
 #[tokio::test]
@@ -1308,10 +1311,10 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
         .expect_err("close before terminal should be an error");
     server.await.unwrap();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         CodexClientError::WebSocket(CodexWebSocketExchangeError::ClosedBeforeTerminal)
-    ));
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -1381,9 +1384,11 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
         .expect("terminal frame should be valid");
     server.await.unwrap();
 
-    assert!(std::str::from_utf8(&terminal)
-        .unwrap()
-        .contains("resp_after_active_gap"));
+    assert!(
+        std::str::from_utf8(&terminal)
+            .unwrap()
+            .contains("resp_after_active_gap")
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -1446,11 +1451,11 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
         .expect_err("active stall should time out");
     server.abort();
 
-    assert!(matches!(
+    std::assert_matches!(
         error,
         CodexClientError::WebSocket(CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout })
             if timeout == Duration::from_secs(5 * 60)
-    ));
+    );
 }
 
 #[tokio::test]
@@ -1557,8 +1562,10 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
         response.set_cookie_headers,
         vec!["cf_clearance=client-ws; Domain=.chatgpt.com; Path=/".to_string()]
     );
-    assert!(response
-        .rate_limit_headers
-        .iter()
-        .any(|(name, value)| name == "x-ratelimit-remaining-requests" && value == "17"));
+    assert!(
+        response
+            .rate_limit_headers
+            .iter()
+            .any(|(name, value)| name == "x-ratelimit-remaining-requests" && value == "17")
+    );
 }

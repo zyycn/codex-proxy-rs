@@ -15,29 +15,28 @@ use futures::Stream;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::{sync::Mutex, time::timeout};
-use tokio_tungstenite::{connect_async_tls_with_config, Connector};
+use tokio_tungstenite::{Connector, connect_async_tls_with_config};
 use tungstenite::{
-    self,
-    extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+    self, Message,
+    extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
     handshake::client::Request as WsRequest,
     http::Response as WsResponse,
     protocol::WebSocketConfig,
-    Message,
 };
 
 use crate::infra::time::china_filename_timestamp_millis;
 use crate::upstream::openai::protocol::events::{self, TokenUsage};
 use crate::upstream::openai::protocol::responses::{
-    response_body_has_first_output, CodexResponsesRequest, PreviousResponseScope,
-    StreamCommitPolicy,
+    CodexResponsesRequest, PreviousResponseScope, StreamCommitPolicy,
+    response_body_has_first_output,
 };
 use crate::upstream::openai::protocol::sse::SseError;
 use crate::upstream::openai::protocol::websocket::{
+    ClassifiedWebSocketError, OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
     classify_websocket_error_frame, is_terminal_websocket_event,
     retry_after_seconds_from_wrapped_error_headers, websocket_event_to_sse_frame,
     websocket_event_type, websocket_metadata_headers, websocket_metadata_turn_state,
     websocket_response_completed_id, websocket_response_create_payload_text,
-    ClassifiedWebSocketError, OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
 };
 
 use super::websocket_pool::{
@@ -182,16 +181,17 @@ impl fmt::Display for PreviousResponseUnavailableReason {
 #[path = "websocket_frames.rs"]
 mod frames;
 
+pub use frames::{
+    CodexWebSocketExchange, CodexWebSocketExchangeError, CodexWebSocketRateLimitHeaderUpdates,
+    CodexWebSocketSseStream, CodexWebSocketStreamingExchange, CodexWebSocketTurnStateUpdate,
+    CodexWebSocketUpstreamError, execute_response_create_request,
+};
 use frames::{
-    audit_header_value, collect_websocket_response, is_initial_event_timeout,
+    WebSocketStreamPoolReturn, WebSocketTerminalKind, audit_header_value,
+    collect_websocket_response, is_initial_event_timeout,
     prefetch_stream_frames_until_output_or_terminal, reusable_websocket_metadata,
     reused_stream_prefetch_error, stream_websocket_response, websocket_audit_file_name,
-    websocket_connection_metadata, WebSocketStreamPoolReturn, WebSocketTerminalKind,
-};
-pub use frames::{
-    execute_response_create_request, CodexWebSocketExchange, CodexWebSocketExchangeError,
-    CodexWebSocketRateLimitHeaderUpdates, CodexWebSocketSseStream, CodexWebSocketStreamingExchange,
-    CodexWebSocketTurnStateUpdate, CodexWebSocketUpstreamError,
+    websocket_connection_metadata,
 };
 
 impl CodexWebSocketRequest {
@@ -539,13 +539,12 @@ pub(crate) async fn execute_response_create_request_with_pool(
         WebSocketPoolAcquire::Reused { connection, lease } => {
             if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
                 request.continuation()
+                && connection.continuation.latest_response_id() != Some(response_id.as_str())
             {
-                if connection.continuation.latest_response_id() != Some(response_id.as_str()) {
-                    lease.put(*connection).await;
-                    return Err(continuation_unavailable(
-                        PreviousResponseUnavailableReason::LatestResponseMismatch,
-                    ));
-                }
+                lease.put(*connection).await;
+                return Err(continuation_unavailable(
+                    PreviousResponseUnavailableReason::LatestResponseMismatch,
+                ));
             }
             let result = execute_pooled_response_create_request(
                 request,
@@ -659,13 +658,12 @@ pub(crate) async fn execute_response_create_request_stream_with_pool(
         WebSocketPoolAcquire::Reused { connection, lease } => {
             if let WebSocketContinuationRequirement::ConnectionLocal { response_id } =
                 request.continuation()
+                && connection.continuation.latest_response_id() != Some(response_id.as_str())
             {
-                if connection.continuation.latest_response_id() != Some(response_id.as_str()) {
-                    lease.put(*connection).await;
-                    return Err(continuation_unavailable(
-                        PreviousResponseUnavailableReason::LatestResponseMismatch,
-                    ));
-                }
+                lease.put(*connection).await;
+                return Err(continuation_unavailable(
+                    PreviousResponseUnavailableReason::LatestResponseMismatch,
+                ));
             }
             let result =
                 execute_pooled_response_create_request_stream(request, pool, lease, *connection)

@@ -451,13 +451,12 @@ impl AccountPool {
         });
 
         let mut account_ids = Vec::with_capacity(ordered.len());
-        if let Some(preferred_account_id) = request.preferred_account_id.as_deref() {
-            if let Some(index) = ordered
+        if let Some(preferred_account_id) = request.preferred_account_id.as_deref()
+            && let Some(index) = ordered
                 .iter()
                 .position(|account| account.id == preferred_account_id)
-            {
-                account_ids.push(ordered.remove(index).id);
-            }
+        {
+            account_ids.push(ordered.remove(index).id);
         }
         account_ids.extend(ordered.into_iter().map(|account| account.id));
         AccountCandidateSnapshotWithStatusRefresh {

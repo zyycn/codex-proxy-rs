@@ -26,7 +26,7 @@ use crate::{
     infra::{
         database::connect,
         identity::AccountPseudonymizer,
-        logging::{init_tracing, LogError, LogGuard, RotationConfig, TracingConfig},
+        logging::{LogError, LogGuard, RotationConfig, TracingConfig, init_tracing},
         paths::{ensure_data_dir, load_or_create_identity_secret},
         redis::RedisConnection,
     },
@@ -36,7 +36,7 @@ use crate::{
         store::{ModelSnapshotStore, RedisModelSnapshotStore},
         types::ModelConfig,
     },
-    settings::{service::SettingsService, SettingsSnapshot},
+    settings::{SettingsSnapshot, service::SettingsService},
     telemetry::{
         account_usage::query::AccountUsageQueryService,
         account_usage::store::{AccountUsageStore, PgAccountUsageStore},
@@ -45,14 +45,15 @@ use crate::{
         ops::store::PgOpsErrorLogStore,
         recorder::Recorder,
         usage::query::UsageQueryService,
-        usage::store::{PgUsageRecordStore, DEFAULT_USAGE_RECORD_CAPTURE_BODY},
+        usage::store::{DEFAULT_USAGE_RECORD_CAPTURE_BODY, PgUsageRecordStore},
     },
+    update::service::SystemUpdateService,
     upstream::openai::{
         fingerprint::{Fingerprint, PgFingerprintStore, RuntimeFingerprint},
-        token_client::{default_openai_token_client, OpenAiTokenClient, TokenClientConfig},
+        token_client::{OpenAiTokenClient, TokenClientConfig, default_openai_token_client},
         transport::{
-            build_reqwest_client, tls::CustomCaError, CodexBackendClient, CodexModelCatalogClient,
-            CodexWebSocketPool, CodexWebSocketPoolConfig,
+            CodexBackendClient, CodexModelCatalogClient, CodexWebSocketPool,
+            CodexWebSocketPoolConfig, build_reqwest_client, tls::CustomCaError,
         },
     },
 };
@@ -117,6 +118,7 @@ pub struct Services {
     pub websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub fingerprint: RuntimeFingerprint,
     pub account_pseudonymizer: Arc<AccountPseudonymizer>,
+    pub system_update: Arc<SystemUpdateService>,
     pub background_tasks: BackgroundTaskStores,
     pub(crate) account_pool_static: AccountPoolStaticSettings,
 }
@@ -304,6 +306,7 @@ impl Services {
             account_identity,
             cloudflare: cloudflare_recovery,
         }));
+        let system_update = Arc::new(SystemUpdateService::from_env());
 
         Ok(Self {
             database,
@@ -327,6 +330,7 @@ impl Services {
             websocket_pool,
             fingerprint,
             account_pseudonymizer,
+            system_update,
             background_tasks: stores,
             account_pool_static,
         })
@@ -362,6 +366,7 @@ impl From<&Services> for crate::api::router::ApiServices {
             session_affinity: services.session_affinity.clone(),
             fingerprint: services.fingerprint.clone(),
             process_control: Arc::new(crate::bootstrap::shutdown::RuntimeProcessControl),
+            system_update: services.system_update.clone(),
         }
     }
 }

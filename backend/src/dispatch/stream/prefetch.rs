@@ -2,7 +2,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 
 use crate::upstream::openai::{
-    protocol::sse::{sse_frame_end, SseError},
+    protocol::sse::{SseError, sse_frame_end},
     transport::CodexBackendSseStream,
 };
 

@@ -8,8 +8,8 @@ use std::{collections::BTreeMap, fmt, path::Path};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     PgPool, Postgres, SqlitePool, Transaction,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use thiserror::Error;
 

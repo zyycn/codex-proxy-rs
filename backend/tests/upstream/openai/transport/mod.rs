@@ -1,8 +1,8 @@
 use std::{
     process::Command,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -10,8 +10,8 @@ use std::{
 use codex_proxy_rs::upstream::openai::{
     protocol::responses::{PreviousResponseScope, StreamCommitPolicy},
     transport::websocket::{
-        execute_response_create_request, responses_websocket_endpoint, CodexWebSocketConnection,
-        CodexWebSocketExchangeError, CodexWebSocketRequest,
+        CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketRequest,
+        execute_response_create_request, responses_websocket_endpoint,
     },
     transport::websocket_pool::{CodexWebSocketPool, CodexWebSocketPoolConfig},
     transport::{CodexBackendClient, CodexClientError, CodexRequestContext},
@@ -26,12 +26,12 @@ use tokio::{
 use tokio_tungstenite::{
     accept_hdr_async_with_config,
     tungstenite::{
-        extensions::{compression::deflate::DeflateConfig, ExtensionsConfig},
+        Message,
+        extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
         handshake::server::{
             Callback, ErrorResponse, Request as WsRequest, Response as WsResponse,
         },
         protocol::WebSocketConfig,
-        Message,
     },
 };
 

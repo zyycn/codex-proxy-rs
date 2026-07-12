@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, Request, StatusCode},
     Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
 };
 use codex_proxy_rs::bootstrap::config::AppConfig;
 use serde_json::Value;
@@ -15,8 +15,8 @@ use crate::support::{
     fingerprint::runtime_fingerprint,
     http::response_json,
     storage::{
-        background_task_stores, create_test_redis, init_test_db, test_database_url,
-        TestDatabaseGuard,
+        TestDatabaseGuard, background_task_stores, create_test_redis, init_test_db,
+        test_database_url,
     },
 };
 
@@ -163,12 +163,16 @@ async fn assert_unknown_api_route(response: axum::response::Response) {
 
 fn assert_no_static_policy_headers(response: &axum::response::Response) {
     assert!(!response.headers().contains_key(header::CACHE_CONTROL));
-    assert!(!response
-        .headers()
-        .contains_key(header::CONTENT_SECURITY_POLICY));
-    assert!(!response
-        .headers()
-        .contains_key(header::X_CONTENT_TYPE_OPTIONS));
+    assert!(
+        !response
+            .headers()
+            .contains_key(header::CONTENT_SECURITY_POLICY)
+    );
+    assert!(
+        !response
+            .headers()
+            .contains_key(header::X_CONTENT_TYPE_OPTIONS)
+    );
     assert!(!response.headers().contains_key("x-frame-options"));
     assert!(!response.headers().contains_key("referrer-policy"));
 }

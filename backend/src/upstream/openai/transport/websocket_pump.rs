@@ -13,8 +13,8 @@
 //!   - 接收：`next` 从 message channel 取出 pump 转发的入站帧（`Ping`/`Pong` 已被 pump 吞掉）。
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ use tokio::{
     task::JoinHandle,
     time::{Instant, MissedTickBehavior},
 };
-use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
 /// 底层 tungstenite WebSocket 流。
 pub(crate) type RawWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -208,11 +208,10 @@ async fn pump_loop(
             }
             _ = tick(&mut ticker) => {
                 // 先检查 liveness：长时间无入站活动则判定失活退出。
-                if let Some(timeout) = liveness_timeout {
-                    if last_activity.elapsed() >= timeout {
+                if let Some(timeout) = liveness_timeout
+                    && last_activity.elapsed() >= timeout {
                         break;
                     }
-                }
                 // 再按需主动 ping 保活（穿透 NAT/中间盒空闲计时器）。
                 if ping_interval.is_some()
                     && inner.send(Message::Ping(Vec::new().into())).await.is_err()

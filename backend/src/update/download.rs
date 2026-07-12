@@ -12,14 +12,15 @@ use sha2::{Digest, Sha256};
 use crate::update::types::UpdateError;
 
 use super::service::{
-    bad_gateway_with, bad_request_with, emit_update_event, format_bytes, internal_error_with,
-    UpdateLogLevel,
+    UpdateEventSender, UpdateLogLevel, bad_gateway_with, bad_request_with, format_bytes,
+    internal_error_with,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(super) struct DownloadProgress<'a> {
     pub operation_id: &'a str,
     pub total_size: u64,
+    pub events: &'a UpdateEventSender,
 }
 
 pub(super) async fn download_file(
@@ -65,7 +66,7 @@ pub(super) async fn download_file(
             if progress.total_size > 0
                 && (percent >= next_progress || downloaded >= progress.total_size)
             {
-                emit_update_event(
+                progress.events.emit(
                     UpdateLogLevel::Info,
                     Some(progress.operation_id),
                     Some("download"),

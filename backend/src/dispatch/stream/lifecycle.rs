@@ -7,14 +7,14 @@ use crate::{
         affinity::prepare_variant_identity,
         attempts::AccountAttemptLedger,
         errors::{
-            backend_transport_name, is_continuation_busy_error, is_history_recovery_upstream_error,
-            is_retryable_account_transport_error, upstream_error_body,
-            upstream_error_set_cookie_headers, ResponseDispatchError,
+            ResponseDispatchError, backend_transport_name, is_continuation_busy_error,
+            is_history_recovery_upstream_error, is_retryable_account_transport_error,
+            upstream_error_body, upstream_error_set_cookie_headers,
         },
         recording::{
-            record_prefetched_response_stream_failure_event, record_response_upstream_error_event,
             ResponseDispatchErrorDetails, ResponseStreamFailureEventRecord,
-            ResponseUpstreamErrorEventRecord,
+            ResponseUpstreamErrorEventRecord, record_prefetched_response_stream_failure_event,
+            record_response_upstream_error_event,
         },
         recovery::{
             account_failure::{isolate_rotatable_account_failure, isolate_sse_account_failure},
@@ -23,7 +23,7 @@ use crate::{
         },
         service::{ResponseDispatchService, ResponseDispatchStream},
         stream::{
-            live::{spawn_live_response_stream, LiveResponseStreamContext},
+            live::{LiveResponseStreamContext, spawn_live_response_stream},
             prefetch::prefetch_first_sse_chunk,
             sse_failure::{
                 first_sse_failure, is_history_recovery_sse_failure, sse_failure_error_body,
@@ -31,9 +31,9 @@ use crate::{
             trace::ResponseDispatchTrace,
         },
         upstream_call::{
-            create_response_stream_with_account_retrying_5xx, verify_acquired_quota_if_required,
-            AccountUpstreamContext, QuotaVerificationContext, QuotaVerificationDecision,
-            QUOTA_VERIFY_LIMIT_REACHED_MESSAGE,
+            AccountUpstreamContext, QUOTA_VERIFY_LIMIT_REACHED_MESSAGE, QuotaVerificationContext,
+            QuotaVerificationDecision, create_response_stream_with_account_retrying_5xx,
+            verify_acquired_quota_if_required,
         },
     },
     fleet::pool::AccountAcquireRequest,

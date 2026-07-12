@@ -2,7 +2,7 @@
   <h1>Codex Proxy RS</h1>
   <p>OpenAI Responses 兼容的 Codex 多账号网关</p>
   <p>
-    <a href="https://www.rust-lang.org/"><img alt="Rust 1.95" src="https://img.shields.io/badge/Rust-1.95-000?style=flat-square&amp;logo=rust" /></a>
+    <a href="https://www.rust-lang.org/"><img alt="Rust 1.97" src="https://img.shields.io/badge/Rust-1.97-000?style=flat-square&amp;logo=rust" /></a>
     <a href="https://github.com/tokio-rs/axum"><img alt="Axum 0.8" src="https://img.shields.io/badge/Axum-0.8-2f7d95?style=flat-square" /></a>
     <a href="https://vuejs.org/"><img alt="Vue 3.5" src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&amp;logo=vuedotjs&amp;logoColor=white" /></a>
     <a href="https://vite.dev/"><img alt="Vite 8" src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&amp;logo=vite&amp;logoColor=white" /></a>

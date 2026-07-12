@@ -1,5 +1,5 @@
-use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
-use codex_proxy_rs::api::client::auth::{bearer_client_api_key, ClientApiKeyAuthError};
+use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+use codex_proxy_rs::api::client::auth::{ClientApiKeyAuthError, bearer_client_api_key};
 
 #[test]
 fn bearer_client_api_key_should_report_missing_authorization() {

@@ -16,10 +16,10 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use thiserror::Error;
 use tracing_appender::non_blocking::{ErrorCounter, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::{
+    EnvFilter,
     fmt::{self as tracing_fmt, format::Writer, time::FormatTime},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter,
 };
 
 use crate::infra::time::{china_date, china_rfc3339_millis};
@@ -459,14 +459,16 @@ impl DroppedLogMonitor {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let handle = thread::Builder::new()
             .name("tracing-drop-monitor".to_string())
-            .spawn(move || loop {
-                match shutdown_rx.recv_timeout(DROP_MONITOR_INTERVAL) {
-                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        report_dropped_logs(&mut counters, &mut io::stderr().lock());
-                        break;
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        report_dropped_logs(&mut counters, &mut io::stderr().lock());
+            .spawn(move || {
+                loop {
+                    match shutdown_rx.recv_timeout(DROP_MONITOR_INTERVAL) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            report_dropped_logs(&mut counters, &mut io::stderr().lock());
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            report_dropped_logs(&mut counters, &mut io::stderr().lock());
+                        }
                     }
                 }
             })?;

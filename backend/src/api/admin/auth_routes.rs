@@ -1,21 +1,21 @@
 //! 管理端认证路由。
 
 use axum::{
-    extract::State,
-    http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Extension, Json,
+    extract::State,
+    http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
+        AppState,
         admin::{
             response::{AdminEnvelope, AdminError, AdminResponse},
-            session::{admin_session_cookie, ADMIN_SESSION_COOKIE},
+            session::{ADMIN_SESSION_COOKIE, admin_session_cookie},
         },
         middleware::request_id::ClientIp,
-        AppState,
     },
     auth::types::SessionError,
     infra::time::china_rfc3339,
@@ -107,15 +107,14 @@ pub(crate) async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    if let Some(session_id) = admin_session_cookie(&headers) {
-        if let Err(error) = state
+    if let Some(session_id) = admin_session_cookie(&headers)
+        && let Err(error) = state
             .services
             .admin_sessions
             .delete_session(&session_id)
             .await
-        {
-            tracing::warn!(error = %error, "failed to revoke admin session during logout");
-        }
+    {
+        tracing::warn!(error = %error, "failed to revoke admin session during logout");
     }
 
     let mut response = AdminResponse::new(

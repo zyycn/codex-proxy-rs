@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use thiserror::Error;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::warn;
 
 use crate::fleet::{

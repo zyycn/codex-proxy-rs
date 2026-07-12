@@ -2,7 +2,7 @@ use std::{fs, io::Write};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::{
-    logging::{build_file_appender, init_tracing, RotationConfig, TracingConfig},
+    logging::{RotationConfig, TracingConfig, build_file_appender, init_tracing},
     time::china_date,
 };
 
@@ -68,10 +68,11 @@ fn rolling_appender_should_remove_logs_outside_calendar_retention() {
     let _appender = build_file_appender(&config).unwrap();
 
     assert!(!dir.path().join(managed_log_name(&old_date, 0)).exists());
-    assert!(dir
-        .path()
-        .join(managed_log_name(&retained_date, 0))
-        .exists());
+    assert!(
+        dir.path()
+            .join(managed_log_name(&retained_date, 0))
+            .exists()
+    );
     assert!(dir.path().join("other.log").exists());
 }
 

@@ -5,8 +5,8 @@
 use axum::{
     body::Body,
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
         StatusCode,
+        header::{CACHE_CONTROL, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
 };

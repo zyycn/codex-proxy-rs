@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgPoolOptions};
 
 const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,

@@ -4,26 +4,25 @@ use std::{
     env, fmt, fs, io,
     path::{Path, PathBuf},
     process::Command,
-    sync::OnceLock,
 };
 
 use chrono::Utc;
 use serde::Serialize;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 use super::{
     archive::{extract_release_archive, replace_release_files, rollback_release_update},
     download::{
-        download_file, validate_download_url, validate_github_api_base, verify_checksum,
-        DownloadProgress,
+        DownloadProgress, download_file, validate_download_url, validate_github_api_base,
+        verify_checksum,
     },
     release::{
-        check_latest_release, fetch_latest_release, normalize_version_tag, select_release_archive,
-        update_info_from_release, GitHubRelease, UpdateInfoData,
+        GitHubRelease, ReleaseCache, UpdateInfoData, check_latest_release, fetch_latest_release,
+        normalize_version_tag, select_release_archive, update_info_from_release,
     },
     state::{
-        finish_operation, operation_id, read_state, set_operation_running, OperationLock,
-        SystemOperationKind, SystemUpdateStatusData,
+        OperationLock, SystemOperationKind, SystemUpdateStatusData, finish_operation, operation_id,
+        read_state, set_operation_running,
     },
     types::UpdateError,
 };
@@ -34,9 +33,6 @@ const GITHUB_API_BASE: &str = "https://api.github.com/repos";
 const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024;
 const RESTART_DELAY_ENV: &str = "CPR_RESTART_DELAY_MS";
 const REPLACEMENT_START_DELAY_MS: &str = "1200";
-
-static SYSTEM_OPERATION_LOCK: Mutex<()> = Mutex::const_new(());
-static UPDATE_EVENT_SENDER: OnceLock<broadcast::Sender<SystemUpdateEvent>> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,145 +92,170 @@ impl SystemUpdateEvent {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct SystemUpdateConfig {
-    pub(super) version: String,
-    pub(super) git_sha: String,
-    pub(super) build_time: String,
-    pub(super) deployment_mode: String,
-    pub(super) build_type: String,
-    pub(super) update_channel: String,
-    pub(super) update_repository: Option<String>,
-    pub(super) github_api_base: String,
-    pub(super) executable_path: Option<PathBuf>,
-    pub(super) web_dist_dir: PathBuf,
-    pub(super) update_state_file: PathBuf,
-    pub(super) update_lock_file: PathBuf,
-    pub(super) update_temp_dir: PathBuf,
+pub struct SystemUpdateConfig {
+    pub version: String,
+    pub git_sha: String,
+    pub build_time: String,
+    pub deployment_mode: String,
+    pub build_type: String,
+    pub update_channel: String,
+    pub update_repository: Option<String>,
+    pub github_api_base: String,
+    pub executable_path: Option<PathBuf>,
+    pub web_dist_dir: PathBuf,
+    pub update_state_file: PathBuf,
+    pub update_lock_file: PathBuf,
+    pub update_temp_dir: PathBuf,
+    pub self_restart_enabled: bool,
 }
 
-pub(crate) async fn version_data() -> VersionData {
-    let config = SystemUpdateConfig::from_env();
-    let update_info = check_latest_release(&config, false).await;
-    config.version_data(&update_info)
+pub struct SystemUpdateService {
+    config: SystemUpdateConfig,
+    operation_lock: Mutex<()>,
+    release_cache: ReleaseCache,
+    events: UpdateEventSender,
 }
 
-pub(crate) async fn update_detail(refresh: bool) -> UpdateInfoData {
-    let config = SystemUpdateConfig::from_env();
-    check_latest_release(&config, refresh).await
-}
-
-pub(crate) fn subscribe_update_events() -> broadcast::Receiver<SystemUpdateEvent> {
-    update_event_sender().subscribe()
-}
-
-pub(crate) async fn perform_update(
-    target_version: Option<String>,
-) -> Result<UpdateStartedData, UpdateError> {
-    let _guard = SYSTEM_OPERATION_LOCK
-        .try_lock()
-        .map_err(|_| UpdateError::conflict("System update already running"))?;
-    let config = SystemUpdateConfig::from_env();
-    if let Some(reason) = config.update_support_error() {
-        emit_terminal_update_event(
-            UpdateLogLevel::Error,
-            None,
-            Some("preflight"),
-            reason.clone(),
-        );
-        return Err(UpdateError::conflict(reason));
+impl SystemUpdateService {
+    pub fn new(config: SystemUpdateConfig) -> Self {
+        Self {
+            config,
+            operation_lock: Mutex::const_new(()),
+            release_cache: ReleaseCache::default(),
+            events: UpdateEventSender::default(),
+        }
     }
-    let confirmed_target_version = confirmed_update_target(target_version)?;
 
-    emit_update_event(
-        UpdateLogLevel::Info,
-        None,
-        Some("release"),
-        "正在获取最新 Release 信息",
-    );
-    let release = fetch_latest_release(
-        &config.github_api_base,
-        config
-            .update_repository
-            .as_deref()
-            .ok_or_else(|| UpdateError::conflict("Update checks require CPR_UPDATE_REPOSITORY"))?,
-    )
-    .await
-    .map_err(|error| {
-        emit_terminal_update_event(UpdateLogLevel::Error, None, Some("release"), error.clone());
-        UpdateError::bad_gateway(error)
-    })?;
-    let info = update_info_from_release(&config, release.clone());
-    if info.latest_version != confirmed_target_version {
-        let message = format!(
-            "远端最新版本已变更为 v{}，请重新检查并确认",
-            info.latest_version
-        );
-        emit_terminal_update_event(
-            UpdateLogLevel::Warning,
+    pub(crate) fn from_env() -> Self {
+        Self::new(SystemUpdateConfig::from_env())
+    }
+
+    pub(crate) async fn version_data(&self) -> VersionData {
+        let update_info = check_latest_release(&self.release_cache, &self.config, false).await;
+        self.config.version_data(&update_info)
+    }
+
+    pub(crate) async fn update_detail(&self, refresh: bool) -> UpdateInfoData {
+        check_latest_release(&self.release_cache, &self.config, refresh).await
+    }
+
+    pub(crate) fn subscribe_update_events(&self) -> broadcast::Receiver<SystemUpdateEvent> {
+        self.events.subscribe()
+    }
+
+    pub(crate) async fn perform_update(
+        &self,
+        target_version: Option<String>,
+    ) -> Result<UpdateStartedData, UpdateError> {
+        let _guard = self
+            .operation_lock
+            .try_lock()
+            .map_err(|_| UpdateError::conflict("System update already running"))?;
+        let config = &self.config;
+        if let Some(reason) = config.update_support_error() {
+            self.events.emit_terminal(
+                UpdateLogLevel::Error,
+                None,
+                Some("preflight"),
+                reason.clone(),
+            );
+            return Err(UpdateError::conflict(reason));
+        }
+        let confirmed_target_version = confirmed_update_target(target_version)?;
+
+        self.events.emit(
+            UpdateLogLevel::Info,
             None,
             Some("release"),
-            message.clone(),
+            "正在获取最新 Release 信息",
         );
-        return Err(UpdateError::conflict(message));
-    }
-    if !info.has_update {
-        emit_terminal_update_event(
-            UpdateLogLevel::Warning,
-            None,
-            Some("release"),
-            "当前版本已是最新",
-        );
-        return Err(UpdateError::conflict("Already up to date"));
-    }
-    let target_version = info.latest_version.clone();
-    let operation_id = operation_id("update");
-    let lock = OperationLock::acquire(&config.update_lock_file)?;
-    set_operation_running(
-        &config.update_state_file,
-        &operation_id,
-        SystemOperationKind::Update,
-        Some(&target_version),
-    )?;
+        let release = fetch_latest_release(
+            &config.github_api_base,
+            config.update_repository.as_deref().ok_or_else(|| {
+                UpdateError::conflict("Update checks require CPR_UPDATE_REPOSITORY")
+            })?,
+        )
+        .await
+        .map_err(|error| {
+            self.events
+                .emit_terminal(UpdateLogLevel::Error, None, Some("release"), error.clone());
+            UpdateError::bad_gateway(error)
+        })?;
+        let info = update_info_from_release(config, release.clone());
+        if info.latest_version != confirmed_target_version {
+            let message = format!(
+                "远端最新版本已变更为 v{}，请重新检查并确认",
+                info.latest_version
+            );
+            self.events.emit_terminal(
+                UpdateLogLevel::Warning,
+                None,
+                Some("release"),
+                message.clone(),
+            );
+            return Err(UpdateError::conflict(message));
+        }
+        if !info.has_update {
+            self.events.emit_terminal(
+                UpdateLogLevel::Warning,
+                None,
+                Some("release"),
+                "当前版本已是最新",
+            );
+            return Err(UpdateError::conflict("Already up to date"));
+        }
+        let target_version = info.latest_version.clone();
+        let operation_id = operation_id("update");
+        let lock = OperationLock::acquire(&config.update_lock_file)?;
+        set_operation_running(
+            &config.update_state_file,
+            &operation_id,
+            SystemOperationKind::Update,
+            Some(&target_version),
+        )?;
 
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(&operation_id),
-        Some("prepare"),
-        format!("准备更新到 v{target_version}"),
-    );
-    let result = perform_release_update(&config, &release, &target_version, &operation_id).await;
-    if let Err(error) = &result {
-        emit_terminal_update_event(
-            UpdateLogLevel::Error,
+        self.events.emit(
+            UpdateLogLevel::Info,
             Some(&operation_id),
-            Some("failed"),
-            error.to_string(),
+            Some("prepare"),
+            format!("准备更新到 v{target_version}"),
         );
-    } else {
-        emit_terminal_update_event(
-            UpdateLogLevel::Success,
-            Some(&operation_id),
-            Some("done"),
-            "更新文件已替换，等待服务重启生效",
+        let result = self
+            .perform_release_update(&release, &target_version, &operation_id)
+            .await;
+        if let Err(error) = &result {
+            self.events.emit_terminal(
+                UpdateLogLevel::Error,
+                Some(&operation_id),
+                Some("failed"),
+                error.to_string(),
+            );
+        } else {
+            self.events.emit_terminal(
+                UpdateLogLevel::Success,
+                Some(&operation_id),
+                Some("done"),
+                "更新文件已替换，等待服务重启生效",
+            );
+        }
+        finish_operation(
+            &config.update_state_file,
+            &operation_id,
+            SystemOperationKind::Update,
+            result.as_ref().ok().map(|_| target_version.clone()),
+            result.as_ref().err().map(ToString::to_string),
         );
-    }
-    finish_operation(
-        &config.update_state_file,
-        &operation_id,
-        SystemOperationKind::Update,
-        result.as_ref().ok().map(|_| target_version.clone()),
-        result.as_ref().err().map(ToString::to_string),
-    );
-    drop(lock);
-    result?;
+        drop(lock);
+        result?;
 
-    Ok(UpdateStartedData {
-        operation_id,
-        deployment_mode: config.deployment_mode,
-        message: "更新完成，请重启服务。".to_string(),
-        need_restart: true,
-        target_version,
-    })
+        Ok(UpdateStartedData {
+            operation_id,
+            deployment_mode: config.deployment_mode.clone(),
+            message: "更新完成，请重启服务。".to_string(),
+            need_restart: true,
+            target_version,
+        })
+    }
 }
 
 fn confirmed_update_target(target_version: Option<String>) -> Result<String, UpdateError> {
@@ -248,51 +269,52 @@ fn confirmed_update_target(target_version: Option<String>) -> Result<String, Upd
     Ok(target_version)
 }
 
-pub(crate) fn update_status() -> Result<SystemUpdateStatusData, UpdateError> {
-    let config = SystemUpdateConfig::from_env();
-    read_state(&config.update_state_file)
-}
-
-pub(crate) async fn rollback() -> Result<String, UpdateError> {
-    let _guard = SYSTEM_OPERATION_LOCK
-        .try_lock()
-        .map_err(|_| UpdateError::conflict("系统操作正在执行中"))?;
-    let config = SystemUpdateConfig::from_env();
-    if let Some(reason) = config.update_support_error() {
-        return Err(UpdateError::conflict(reason));
+impl SystemUpdateService {
+    pub(crate) fn update_status(&self) -> Result<SystemUpdateStatusData, UpdateError> {
+        read_state(&self.config.update_state_file)
     }
 
-    let operation_id = operation_id("rollback");
-    let lock = OperationLock::acquire(&config.update_lock_file)?;
-    set_operation_running(
-        &config.update_state_file,
-        &operation_id,
-        SystemOperationKind::Rollback,
-        None,
-    )?;
-    let result = rollback_release_update(&config).await;
-    finish_operation(
-        &config.update_state_file,
-        &operation_id,
-        SystemOperationKind::Rollback,
-        None,
-        result.as_ref().err().map(ToString::to_string),
-    );
-    drop(lock);
-    result?;
+    pub(crate) async fn rollback(&self) -> Result<String, UpdateError> {
+        let _guard = self
+            .operation_lock
+            .try_lock()
+            .map_err(|_| UpdateError::conflict("系统操作正在执行中"))?;
+        let config = &self.config;
+        if let Some(reason) = config.update_support_error() {
+            return Err(UpdateError::conflict(reason));
+        }
 
-    Ok(operation_id)
-}
+        let operation_id = operation_id("rollback");
+        let lock = OperationLock::acquire(&config.update_lock_file)?;
+        set_operation_running(
+            &config.update_state_file,
+            &operation_id,
+            SystemOperationKind::Rollback,
+            None,
+        )?;
+        let result = rollback_release_update(config).await;
+        finish_operation(
+            &config.update_state_file,
+            &operation_id,
+            SystemOperationKind::Rollback,
+            None,
+            result.as_ref().err().map(ToString::to_string),
+        );
+        drop(lock);
+        result?;
 
-pub(crate) fn restart_plan() -> Result<RestartPlan, UpdateError> {
-    if env_string("CPR_ENABLE_SELF_RESTART").as_deref() != Some("true") {
-        return Err(UpdateError::conflict(
-            "自重启未启用，请设置 CPR_ENABLE_SELF_RESTART=true",
-        ));
+        Ok(operation_id)
     }
 
-    let config = SystemUpdateConfig::from_env();
-    schedule_restart(&config)
+    pub(crate) fn restart_plan(&self) -> Result<RestartPlan, UpdateError> {
+        if !self.config.self_restart_enabled {
+            return Err(UpdateError::conflict(
+                "自重启未启用，请设置 CPR_ENABLE_SELF_RESTART=true",
+            ));
+        }
+
+        schedule_restart(&self.config)
+    }
 }
 
 pub(crate) struct RestartPlan {
@@ -369,6 +391,7 @@ impl SystemUpdateConfig {
             update_state_file: state_file,
             update_lock_file,
             update_temp_dir,
+            self_restart_enabled: env_string("CPR_ENABLE_SELF_RESTART").as_deref() == Some("true"),
         }
     }
 
@@ -443,127 +466,131 @@ pub(super) fn bad_gateway_with<E: fmt::Display>(
     move |error| UpdateError::bad_gateway(format!("{context}: {error}"))
 }
 
-async fn perform_release_update(
-    config: &SystemUpdateConfig,
-    release: &GitHubRelease,
-    version: &str,
-    operation_id: &str,
-) -> Result<(), UpdateError> {
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("asset"),
-        "正在选择匹配当前平台的更新包",
-    );
-    let archive = select_release_archive(release, version)?;
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("asset"),
-        format!(
-            "已选择更新包 {} ({})",
-            archive.name,
-            format_bytes(archive.size)
-        ),
-    );
+impl SystemUpdateService {
+    async fn perform_release_update(
+        &self,
+        release: &GitHubRelease,
+        version: &str,
+        operation_id: &str,
+    ) -> Result<(), UpdateError> {
+        let config = &self.config;
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("asset"),
+            "正在选择匹配当前平台的更新包",
+        );
+        let archive = select_release_archive(release, version)?;
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("asset"),
+            format!(
+                "已选择更新包 {} ({})",
+                archive.name,
+                format_bytes(archive.size)
+            ),
+        );
 
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("verify"),
-        "正在校验下载地址",
-    );
-    validate_download_url(&archive.browser_download_url, &config.github_api_base)?;
-    if archive.size > MAX_DOWNLOAD_SIZE {
-        return Err(UpdateError::bad_request("Release archive is too large"));
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("verify"),
+            "正在校验下载地址",
+        );
+        validate_download_url(&archive.browser_download_url, &config.github_api_base)?;
+        if archive.size > MAX_DOWNLOAD_SIZE {
+            return Err(UpdateError::bad_request("Release archive is too large"));
+        }
+        let checksum = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == "checksums.txt")
+            .ok_or_else(|| UpdateError::bad_gateway("Release checksums.txt is required"))?;
+        validate_download_url(&checksum.browser_download_url, &config.github_api_base)?;
+
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("prepare"),
+            "正在创建临时更新目录",
+        );
+        fs::create_dir_all(&config.update_temp_dir)
+            .map_err(internal_error_with("Failed to prepare update temp dir"))?;
+        let temp_dir = fs::canonicalize(&config.update_temp_dir)
+            .and_then(|dir| tempfile_dir_in(&dir, ".codex-proxy-rs-update-"))
+            .map_err(internal_error_with("Failed to create update temp dir"))?;
+        let archive_path = temp_dir.join(&archive.name);
+
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("download"),
+            "开始下载更新包",
+        );
+        download_file(
+            &archive.browser_download_url,
+            &archive_path,
+            MAX_DOWNLOAD_SIZE,
+            Some(DownloadProgress {
+                operation_id,
+                total_size: archive.size,
+                events: &self.events,
+            }),
+        )
+        .await?;
+        self.events.emit(
+            UpdateLogLevel::Success,
+            Some(operation_id),
+            Some("download"),
+            "更新包下载完成",
+        );
+
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("checksum"),
+            "正在校验 checksum",
+        );
+        verify_checksum(&archive_path, &archive.name, &checksum.browser_download_url).await?;
+        self.events.emit(
+            UpdateLogLevel::Success,
+            Some(operation_id),
+            Some("checksum"),
+            "checksum 校验通过",
+        );
+
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("extract"),
+            "正在解压更新包",
+        );
+        let extracted = extract_release_archive(&archive_path, &temp_dir)?;
+        self.events.emit(
+            UpdateLogLevel::Success,
+            Some(operation_id),
+            Some("extract"),
+            "更新包解压完成",
+        );
+
+        self.events.emit(
+            UpdateLogLevel::Info,
+            Some(operation_id),
+            Some("replace"),
+            "正在替换应用文件",
+        );
+        let exe_path = config.executable_path()?;
+        replace_release_files(&exe_path, &config.web_dist_dir, extracted)?;
+        self.events.emit(
+            UpdateLogLevel::Success,
+            Some(operation_id),
+            Some("replace"),
+            "应用文件替换完成",
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+        Ok(())
     }
-    let checksum = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == "checksums.txt")
-        .ok_or_else(|| UpdateError::bad_gateway("Release checksums.txt is required"))?;
-    validate_download_url(&checksum.browser_download_url, &config.github_api_base)?;
-
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("prepare"),
-        "正在创建临时更新目录",
-    );
-    fs::create_dir_all(&config.update_temp_dir)
-        .map_err(internal_error_with("Failed to prepare update temp dir"))?;
-    let temp_dir = fs::canonicalize(&config.update_temp_dir)
-        .and_then(|dir| tempfile_dir_in(&dir, ".codex-proxy-rs-update-"))
-        .map_err(internal_error_with("Failed to create update temp dir"))?;
-    let archive_path = temp_dir.join(&archive.name);
-
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("download"),
-        "开始下载更新包",
-    );
-    download_file(
-        &archive.browser_download_url,
-        &archive_path,
-        MAX_DOWNLOAD_SIZE,
-        Some(DownloadProgress {
-            operation_id,
-            total_size: archive.size,
-        }),
-    )
-    .await?;
-    emit_update_event(
-        UpdateLogLevel::Success,
-        Some(operation_id),
-        Some("download"),
-        "更新包下载完成",
-    );
-
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("checksum"),
-        "正在校验 checksum",
-    );
-    verify_checksum(&archive_path, &archive.name, &checksum.browser_download_url).await?;
-    emit_update_event(
-        UpdateLogLevel::Success,
-        Some(operation_id),
-        Some("checksum"),
-        "checksum 校验通过",
-    );
-
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("extract"),
-        "正在解压更新包",
-    );
-    let extracted = extract_release_archive(&archive_path, &temp_dir)?;
-    emit_update_event(
-        UpdateLogLevel::Success,
-        Some(operation_id),
-        Some("extract"),
-        "更新包解压完成",
-    );
-
-    emit_update_event(
-        UpdateLogLevel::Info,
-        Some(operation_id),
-        Some("replace"),
-        "正在替换应用文件",
-    );
-    let exe_path = config.executable_path()?;
-    replace_release_files(&exe_path, &config.web_dist_dir, extracted)?;
-    emit_update_event(
-        UpdateLogLevel::Success,
-        Some(operation_id),
-        Some("replace"),
-        "应用文件替换完成",
-    );
-    let _ = fs::remove_dir_all(temp_dir);
-    Ok(())
 }
 
 fn tempfile_dir_in(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
@@ -598,90 +625,88 @@ fn env_string(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn runtime_build_info_override(key: &str) -> Option<String> {
-    if cfg!(debug_assertions) {
-        env_string(key)
-    } else {
-        None
-    }
-}
-
 fn build_version() -> String {
-    runtime_build_info_override("CPR_VERSION").unwrap_or_else(|| {
-        option_env!("CPR_VERSION")
-            .unwrap_or(env!("CARGO_PKG_VERSION"))
-            .to_string()
-    })
+    option_env!("CPR_VERSION")
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
+        .to_string()
 }
 
 fn build_git_sha() -> String {
-    runtime_build_info_override("CPR_GIT_SHA")
-        .unwrap_or_else(|| option_env!("CPR_GIT_SHA").unwrap_or("unknown").to_string())
+    option_env!("CPR_GIT_SHA").unwrap_or("unknown").to_string()
 }
 
 fn build_time() -> String {
-    runtime_build_info_override("CPR_BUILD_TIME").unwrap_or_else(|| {
-        option_env!("CPR_BUILD_TIME")
-            .unwrap_or("unknown")
-            .to_string()
-    })
+    option_env!("CPR_BUILD_TIME")
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 fn build_type() -> String {
-    runtime_build_info_override("CPR_BUILD_TYPE").unwrap_or_else(|| {
-        option_env!("CPR_BUILD_TYPE")
-            .unwrap_or("source")
-            .to_string()
-    })
+    option_env!("CPR_BUILD_TYPE")
+        .unwrap_or("source")
+        .to_string()
 }
 
-fn update_event_sender() -> &'static broadcast::Sender<SystemUpdateEvent> {
-    UPDATE_EVENT_SENDER.get_or_init(|| {
+pub(super) struct UpdateEventSender {
+    sender: broadcast::Sender<SystemUpdateEvent>,
+}
+
+impl Default for UpdateEventSender {
+    fn default() -> Self {
         let (sender, _receiver) = broadcast::channel(256);
-        sender
-    })
+        Self { sender }
+    }
 }
 
-pub(super) fn emit_update_event(
-    level: UpdateLogLevel,
-    operation_id: Option<&str>,
-    step: Option<&str>,
-    message: impl Into<String>,
-) {
-    emit_update_event_with_terminal(level, operation_id, step, message, false);
-}
+impl UpdateEventSender {
+    fn subscribe(&self) -> broadcast::Receiver<SystemUpdateEvent> {
+        self.sender.subscribe()
+    }
 
-fn emit_terminal_update_event(
-    level: UpdateLogLevel,
-    operation_id: Option<&str>,
-    step: Option<&str>,
-    message: impl Into<String>,
-) {
-    emit_update_event_with_terminal(level, operation_id, step, message, true);
-}
+    pub(super) fn emit(
+        &self,
+        level: UpdateLogLevel,
+        operation_id: Option<&str>,
+        step: Option<&str>,
+        message: impl Into<String>,
+    ) {
+        self.emit_with_terminal(level, operation_id, step, message, false);
+    }
 
-fn emit_update_event_with_terminal(
-    level: UpdateLogLevel,
-    operation_id: Option<&str>,
-    step: Option<&str>,
-    message: impl Into<String>,
-    terminal: bool,
-) {
-    let now = Utc::now();
-    let event = SystemUpdateEvent {
-        id: format!(
-            "update-log-{}",
-            now.timestamp_nanos_opt()
-                .unwrap_or_else(|| now.timestamp_millis())
-        ),
-        operation_id: operation_id.map(ToString::to_string),
-        level,
-        step: step.map(ToString::to_string),
-        message: message.into(),
-        terminal,
-        at: now.to_rfc3339(),
-    };
-    let _ = update_event_sender().send(event);
+    fn emit_terminal(
+        &self,
+        level: UpdateLogLevel,
+        operation_id: Option<&str>,
+        step: Option<&str>,
+        message: impl Into<String>,
+    ) {
+        self.emit_with_terminal(level, operation_id, step, message, true);
+    }
+
+    fn emit_with_terminal(
+        &self,
+        level: UpdateLogLevel,
+        operation_id: Option<&str>,
+        step: Option<&str>,
+        message: impl Into<String>,
+        terminal: bool,
+    ) {
+        let now = Utc::now();
+        let event = SystemUpdateEvent {
+            id: format!(
+                "update-log-{}",
+                now.timestamp_nanos_opt()
+                    .unwrap_or_else(|| now.timestamp_millis())
+            ),
+            operation_id: operation_id.map(ToString::to_string),
+            level,
+            step: step.map(ToString::to_string),
+            message: message.into(),
+            terminal,
+            at: now.to_rfc3339(),
+        };
+        let _ = self.sender.send(event);
+    }
 }
 
 fn is_false(value: &bool) -> bool {

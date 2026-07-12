@@ -8,8 +8,8 @@ use codex_proxy_rs::{
     upstream::openai::protocol::sse::{encode_sse_event, parse_sse_events},
 };
 use wiremock::{
-    matchers::{header, method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{header, method, path},
 };
 
 async fn seed_test_account(pool: &PgPool) {

@@ -15,7 +15,7 @@ use codex_proxy_rs::{
     infra::redis::RedisConnection,
 };
 use secrecy::{ExposeSecret, SecretString};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::util::ServiceExt;
 

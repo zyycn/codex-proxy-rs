@@ -11,7 +11,7 @@ use crate::{
     telemetry::{
         billing,
         usage::store::{
-            push_filter, PgUsageRecordStore, PgUsageRecordStoreResult, UsageRecordFilter,
+            PgUsageRecordStore, PgUsageRecordStoreResult, UsageRecordFilter, push_filter,
         },
         usage::types::UsageRecord,
     },

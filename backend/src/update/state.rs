@@ -204,10 +204,10 @@ impl OperationLock {
 
 impl Drop for OperationLock {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_file(&self.path) {
-            if error.kind() != io::ErrorKind::NotFound {
-                eprintln!("failed to remove update lock: {error}");
-            }
+        if let Err(error) = fs::remove_file(&self.path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!("failed to remove update lock: {error}");
         }
     }
 }

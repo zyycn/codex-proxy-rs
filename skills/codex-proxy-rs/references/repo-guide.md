@@ -24,7 +24,7 @@
 
 ## 仓库结构
 
-- `backend/src/`：Rust 1.95 / Axum 后端生产代码。
+- `backend/src/`：Rust 1.97 / Axum 后端生产代码。
 - `backend/tests/`：后端集成测试和 fixtures。测试代码禁止放进 `backend/src/`。
 - `backend/build.rs`：把版本、Git SHA、构建时间和构建类型写入编译期环境变量。
 - `frontend/`：Vue 3、Vite 8、Tailwind v4、Pinia、Vue Router、Axios、Lucide 和 ECharts 管理端。
@@ -73,7 +73,8 @@
 启动服务：
 
 ```bash
-cargo run --manifest-path backend/Cargo.toml -- serve
+cd backend
+cargo run -- serve
 ```
 
 `main.rs` 还提供内部维护命令 `import-sqlite` 和 `rebuild-buckets`。SQLite 导入只面向历史 schema v3，不是运行时存储路径。
@@ -110,7 +111,7 @@ cargo run --manifest-path backend/Cargo.toml -- serve
 
 - Runtime 基于 `debian:bookworm-slim`，只安装 `ca-certificates` 和健康检查所需的 `curl`。
 - 镜像包含单个后端二进制和 `web/dist`，以非 root 用户 `10001:10001` 运行。
-- Builder 使用 Node 24 和 Rust 1.95，构建工具不得进入 runtime。
+- Builder 使用 Node 24 和 Rust 1.97，构建工具不得进入 runtime。
 - 默认应用镜像是 `ghcr.io/zyycn/codex-proxy-rs:latest`。
 
 `deploy/.env.example` 是 Docker 密钥模板，包含：
@@ -191,9 +192,10 @@ GHCR 发布 `<version>` 和 `sha-<git-sha>` tag；只有稳定版本更新 `late
 Rust：
 
 ```bash
-cargo fmt --manifest-path backend/Cargo.toml -- --check
-cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path backend/Cargo.toml --test main --locked
+cd backend
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked
+cargo test --test main --locked
 ```
 
 完整测试需要 PostgreSQL 和 Redis。通过以下变量提供连接：

@@ -4,10 +4,10 @@ use std::{
 };
 
 use axum::{
+    Json, Router,
     body::Body,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
-    Json, Router,
 };
 use serde_json::json;
 use tower::service_fn;

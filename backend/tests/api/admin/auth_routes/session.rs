@@ -94,11 +94,13 @@ async fn admin_logout_should_revoke_session_and_clear_cookie() {
         .await
         .unwrap();
     assert_eq!(logout.status(), StatusCode::OK);
-    assert!(logout
-        .headers()
-        .get("set-cookie")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains("Max-Age=0")));
+    assert!(
+        logout
+            .headers()
+            .get("set-cookie")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("Max-Age=0"))
+    );
 
     let status = app
         .oneshot(

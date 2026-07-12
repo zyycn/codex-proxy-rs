@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgRow};
 
 use super::types::{ManagementApiKeyStatus, SettingsError, SettingsSnapshot};
 

@@ -1,9 +1,9 @@
 use futures::TryStreamExt;
 use serde_json::Value;
-use sqlx::{types::Json, Postgres, Row, SqlitePool, Transaction};
+use sqlx::{Postgres, Row, SqlitePool, Transaction, types::Json};
 
 use super::{
-    normalized_dimension, parse_json, parse_timestamp, ImportSqliteError, ImportSqliteReport,
+    ImportSqliteError, ImportSqliteReport, normalized_dimension, parse_json, parse_timestamp,
 };
 
 pub(super) async fn import_telemetry_tables(
