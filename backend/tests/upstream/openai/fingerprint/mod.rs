@@ -1,8 +1,15 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, time::Duration};
 
-use codex_proxy_rs::upstream::openai::fingerprint::{PgFingerprintStore, UpdateChecker};
+use codex_proxy_rs::upstream::openai::fingerprint::{
+    APPCAST_POLL_INTERVAL, PgFingerprintStore, UpdateChecker,
+};
 
 use crate::support::storage::init_test_db;
+
+#[test]
+fn fingerprint_appcast_poll_interval_should_be_one_day() {
+    assert_eq!(APPCAST_POLL_INTERVAL, Duration::from_hours(24));
+}
 
 #[tokio::test]
 async fn fingerprint_store_should_update_current_record() {

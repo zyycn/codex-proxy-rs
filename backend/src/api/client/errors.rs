@@ -138,6 +138,79 @@ pub fn responses_stream_dispatch_failed_sse_event(error: &ResponseDispatchError)
     responses_failed_sse_event(kind, &http_error.message)
 }
 
+pub(super) fn responses_websocket_dispatch_error_event(
+    error: &ResponseDispatchError,
+    request_id: &str,
+) -> String {
+    if let Some(event) = upstream_client_websocket_error_event(error, request_id) {
+        return event;
+    }
+    let http_error =
+        response_dispatch_http_error(error, ResponseDispatchMessageStyle::ResponsesStream);
+    let kind = response_dispatch_error_kind(error);
+    responses_websocket_error_event(
+        http_error.status,
+        kind.error_type,
+        kind.code,
+        &http_error.message,
+        request_id,
+    )
+}
+
+pub(super) fn responses_websocket_error_event(
+    status: StatusCode,
+    error_type: &str,
+    code: &str,
+    message: &str,
+    request_id: &str,
+) -> String {
+    json!({
+        "type": "error",
+        "status": status.as_u16(),
+        "error": {
+            "type": error_type,
+            "code": code,
+            "message": message,
+        },
+        "headers": {
+            "x-request-id": request_id,
+        },
+    })
+    .to_string()
+}
+
+fn upstream_client_websocket_error_event(
+    error: &ResponseDispatchError,
+    request_id: &str,
+) -> Option<String> {
+    let ResponseDispatchError::Upstream(CodexClientError::Upstream { status, body, .. }) = error
+    else {
+        return None;
+    };
+    if !status.is_client_error() {
+        return None;
+    }
+    let Value::Object(mut payload) = serde_json::from_str::<Value>(body).ok()? else {
+        return None;
+    };
+    if !payload.get("error").is_some_and(Value::is_object) {
+        return None;
+    }
+    payload.insert("type".to_string(), Value::String("error".to_string()));
+    payload.insert("status".to_string(), Value::Number(status.as_u16().into()));
+    let headers = payload
+        .entry("headers".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !headers.is_object() {
+        *headers = Value::Object(serde_json::Map::new());
+    }
+    headers.as_object_mut()?.insert(
+        "x-request-id".to_string(),
+        Value::String(request_id.to_string()),
+    );
+    Some(Value::Object(payload).to_string())
+}
+
 fn responses_no_available_accounts_response() -> (StatusCode, Json<Value>) {
     let kind = NO_AVAILABLE_ACCOUNTS_ERROR;
     (

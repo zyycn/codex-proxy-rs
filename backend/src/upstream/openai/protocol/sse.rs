@@ -22,6 +22,50 @@ pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 /// SSE 流结束标记帧。
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 
+/// 用于处理任意分块边界的增量 SSE 解码器。
+#[derive(Debug, Default)]
+pub struct SseEventDecoder {
+    pending: Vec<u8>,
+}
+
+impl SseEventDecoder {
+    /// 追加一个字节块并返回其中已经完整的事件。
+    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, SseError> {
+        self.pending.extend_from_slice(chunk);
+        let mut events = Vec::new();
+        let mut consumed = 0usize;
+
+        while let Some(frame_len) = sse_frame_end(&self.pending[consumed..]) {
+            let end = consumed.saturating_add(frame_len);
+            let frame = std::str::from_utf8(&self.pending[consumed..end])
+                .map_err(|error| SseError::ParseError(error.to_string()))?;
+            events.extend(parse_sse_events(frame)?);
+            consumed = end;
+        }
+
+        if consumed != 0 {
+            self.pending.drain(..consumed);
+        }
+        if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+            return Err(SseError::BufferExceeded {
+                max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
+            });
+        }
+        Ok(events)
+    }
+
+    /// 流结束时解析尚未带空行分隔符的最后一帧。
+    pub fn finish(&mut self) -> Result<Vec<SseEvent>, SseError> {
+        if self.pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pending = std::mem::take(&mut self.pending);
+        let frame = std::str::from_utf8(&pending)
+            .map_err(|error| SseError::ParseError(error.to_string()))?;
+        parse_sse_events(frame)
+    }
+}
+
 /// 编码 OpenAI Responses `response.failed` SSE 事件。
 pub fn response_failed_sse_event(error_type: &str, code: &str, message: &str) -> String {
     response_failed_sse_event_with_id(None, error_type, code, message)

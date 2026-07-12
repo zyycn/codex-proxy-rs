@@ -18,6 +18,8 @@ flate2 = "1.1.9"
 futures = "0.3.32"
 hex = "0.4.3"
 hmac = "0.13.0"
+hyper = { version = "1.10.1", features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
 indexmap = { version = "2.0", features = ["serde"] }
 ipnet = "2.12.0"
 percent-encoding = "2.3.2"
@@ -62,8 +64,7 @@ tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungsteni
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
 
 [lints.rust]
-future_incompatible = { level = "warn", priority = -1 }
-nonstandard_style = { level = "deny", priority = -1 }
+warnings = "deny"
 unsafe_code = "forbid"
 
 [lints.clippy]

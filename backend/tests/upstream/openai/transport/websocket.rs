@@ -1317,6 +1317,156 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
     );
 }
 
+#[tokio::test]
+async fn codex_backend_client_stream_should_preserve_burst_during_downstream_backpressure() {
+    const BURST_FRAMES: usize = 256;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "initial;"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        for index in 0..BURST_FRAMES {
+            let frame = json!({
+                "type": "response.output_text.delta",
+                "delta": format!("chunk-{index};")
+            })
+            .to_string();
+            if websocket.send(Message::Text(frame.into())).await.is_err() {
+                return;
+            }
+        }
+        let _ = websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_backpressure", 3, 257).into(),
+            ))
+            .await;
+        let _ = websocket.close(None).await;
+    });
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    );
+    let request = pooled_websocket_request("conversation-backpressure");
+
+    let mut response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_stream_backpressure", Some("chatgpt-account")),
+        )
+        .await
+        .expect("websocket stream should open after the first output frame");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let body = timeout(Duration::from_secs(5), async {
+        let mut body = String::new();
+        while let Some(chunk) = response.body.next().await {
+            let chunk = chunk.expect("backpressured websocket frame should remain valid");
+            body.push_str(std::str::from_utf8(&chunk).unwrap());
+        }
+        body
+    })
+    .await
+    .expect("backpressured websocket stream should finish");
+    server.await.unwrap();
+
+    assert_eq!(
+        body.matches("event: response.output_text.delta").count(),
+        BURST_FRAMES + 1
+    );
+    assert!(body.contains("initial;"));
+    assert!(body.contains("chunk-0;"));
+    assert!(body.contains("chunk-255;"));
+    assert!(body.contains("resp_backpressure"));
+}
+
+#[tokio::test]
+async fn codex_backend_client_stream_should_cancel_while_inbound_is_backpressured() {
+    const BURST_FRAMES: usize = 256;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (burst_sent_tx, burst_sent_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "initial;"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        for index in 0..BURST_FRAMES {
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.output_text.delta",
+                        "delta": format!("chunk-{index};")
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        burst_sent_tx.send(()).unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                match websocket.next().await {
+                    Some(Ok(Message::Close(_))) => return,
+                    Some(Ok(_)) => continue,
+                    Some(Err(error)) => panic!("websocket close should be graceful: {error}"),
+                    None => panic!("websocket ended without a close frame"),
+                }
+            }
+        })
+        .await
+        .expect("client cancellation should reach a backpressured pump");
+    });
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        crate::support::fingerprint::runtime_test_fingerprint(),
+    );
+    let request = pooled_websocket_request("conversation-backpressure-cancel");
+
+    let response = backend
+        .create_response_stream(
+            &request,
+            request_context("req_stream_backpressure_cancel", Some("chatgpt-account")),
+        )
+        .await
+        .expect("websocket stream should open after the first output frame");
+    burst_sent_rx
+        .await
+        .expect("server should finish the inbound burst");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    drop(response.body);
+    server.await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn codex_backend_client_stream_should_wait_for_terminal_after_active_websocket_gap() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -13,6 +13,8 @@ use crate::support::{
     storage::{background_task_stores, create_test_redis, init_test_db, test_database_url},
 };
 
+mod websocket;
+
 #[tokio::test]
 async fn responses_route_should_reject_missing_client_api_key() {
     let (app, _key, _dir) = test_app_with_client_api_key().await;
@@ -151,7 +153,7 @@ async fn responses_route_should_default_omitted_stream_to_sse() {
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 
-async fn test_app_with_client_api_key() -> (
+pub(super) async fn test_app_with_client_api_key() -> (
     axum::Router,
     String,
     crate::support::storage::TestDatabaseGuard,
