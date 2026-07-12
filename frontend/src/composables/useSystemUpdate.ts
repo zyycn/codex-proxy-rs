@@ -2,7 +2,6 @@ import { computed, ref, shallowRef } from 'vue'
 
 import {
   SYSTEM_UPDATE_EVENTS_URL,
-  checkSystemHealth,
   getSystemVersion,
   getSystemUpdateDetail,
   performSystemUpdate,
@@ -38,14 +37,14 @@ const updateLogs = ref<SystemUpdateLog[]>([])
 const updateStreaming = shallowRef(false)
 const updateStreamError = shallowRef('')
 const updateEventSource = shallowRef<EventSource | null>(null)
+const restartTargetVersion = shallowRef('')
 
 let loadVersionPromise: Promise<SystemVersion> | undefined
 let loadSystemPromise: Promise<void> | undefined
 const maxUpdateLogs = 200
-const restartStopPollAttempts = 50
-const restartStopPollIntervalMs = 200
-const restartReadyPollAttempts = 60
-const restartReadyPollIntervalMs = 1000
+const restartReadyTimeoutMs = 60_000
+const restartProbeTimeoutMs = 2_000
+const restartReadyPollIntervalMs = 500
 
 const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate ?? version.value?.hasUpdate))
 const isReleaseBuild = computed(() => updateInfo.value?.buildType === 'release')
@@ -63,6 +62,7 @@ function resetUpdateResult() {
   updateError.value = ''
   updateSuccess.value = false
   needRestart.value = false
+  restartTargetVersion.value = ''
 }
 
 function isUpdateLog(value: unknown): value is SystemUpdateLog {
@@ -206,6 +206,7 @@ async function updateNow(targetVersion: string) {
     const result = await performSystemUpdate(confirmedTargetVersion)
     updateSuccess.value = true
     needRestart.value = result.needRestart
+    restartTargetVersion.value = result.needRestart ? normalizeVersion(result.targetVersion) : ''
     updateInfo.value = {
       ...currentInfo,
       latestVersion: result.targetVersion,
@@ -233,37 +234,34 @@ function delay(ms: number) {
 }
 
 async function waitForServiceAndReload() {
-  let stopped = false
-  for (let attempt = 0; attempt < restartStopPollAttempts; attempt += 1) {
-    try {
-      await checkSystemHealth()
-    } catch {
-      stopped = true
-      break
-    }
-    await delay(restartStopPollIntervalMs)
-  }
+  const expectedVersion = restartTargetVersion.value
+  const deadline = Date.now() + restartReadyTimeoutMs
 
-  if (!stopped) {
-    updateError.value = '未检测到服务停止，请检查重启进程状态'
-    restarting.value = false
-    return
-  }
-
-  for (let attempt = 0; attempt < restartReadyPollAttempts; attempt += 1) {
+  while (Date.now() < deadline) {
     try {
-      await checkSystemHealth()
-      window.location.reload()
-      return
-    } catch {
-      if (attempt < restartReadyPollAttempts - 1) {
-        await delay(restartReadyPollIntervalMs)
+      const readyVersion = await getSystemVersion({ timeoutMs: restartProbeTimeoutMs })
+      if (normalizeVersion(readyVersion.version) === expectedVersion) {
+        window.location.reload()
+        return
       }
+    } catch {
+      // 进程切换期间短暂不可达，继续等待目标版本就绪
+    }
+
+    const remainingMs = deadline - Date.now()
+    if (remainingMs > 0) {
+      await delay(Math.min(restartReadyPollIntervalMs, remainingMs))
     }
   }
 
-  updateError.value = '服务重启恢复超时，请检查进程是否已被自重启或外部守护进程拉起'
+  updateError.value = `服务未在预期时间内启动 v${expectedVersion}`
   restarting.value = false
+}
+
+function normalizeVersion(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .replace(/^v/i, '')
 }
 
 function apiErrorStatus(error: unknown) {
@@ -272,6 +270,12 @@ function apiErrorStatus(error: unknown) {
 
 async function restartNow() {
   if (restarting.value) return
+
+  if (!restartTargetVersion.value) {
+    const error = new Error('缺少待生效的目标版本')
+    updateError.value = error.message
+    throw error
+  }
 
   restarting.value = true
   updateError.value = ''

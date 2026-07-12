@@ -2,7 +2,6 @@ import request from '../request'
 import { API_BASE_URL } from '../constants'
 
 export const SYSTEM_UPDATE_EVENTS_URL = `${API_BASE_URL}/api/admin/system/update-events`
-const SYSTEM_HEALTH_URL = `${API_BASE_URL}/healthz`
 
 export interface SystemVersion {
   version: string
@@ -47,18 +46,12 @@ export interface SystemOperationStarted {
   needRestart?: boolean
 }
 
-export function getSystemVersion() {
+export function getSystemVersion(options: { timeoutMs?: number } = {}) {
   return request<SystemVersion>({
     url: '/api/admin/system/version',
     method: 'GET',
+    ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
   })
-}
-
-export async function checkSystemHealth() {
-  const response = await fetch(SYSTEM_HEALTH_URL, { cache: 'no-store' })
-  if (!response.ok) {
-    throw new Error('service is not ready')
-  }
 }
 
 export function getSystemUpdateDetail(refresh = false) {
