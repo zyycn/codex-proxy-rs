@@ -72,3 +72,51 @@ fn first_output_detection_should_match_crlf_frames() {
 
     assert!(response_body_has_first_output(body));
 }
+
+#[test]
+fn incremental_decoder_should_wait_for_complete_frame() {
+    let mut decoder = SseEventDecoder::default();
+
+    let events = decoder
+        .push(b"event: response.created\ndata: {\"type\":\"response.created\"}")
+        .unwrap();
+
+    assert!(events.is_empty());
+}
+
+#[test]
+fn incremental_decoder_should_decode_events_across_chunk_boundaries() {
+    let mut decoder = SseEventDecoder::default();
+    decoder
+        .push(b"event: response.created\ndata: {\"type\":\"response.")
+        .unwrap();
+
+    let events = decoder
+        .push(
+            b"created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+        )
+        .unwrap();
+
+    assert_eq!(events.len(), 2);
+}
+
+#[test]
+fn incremental_decoder_should_ignore_done_frame() {
+    let mut decoder = SseEventDecoder::default();
+
+    let events = decoder.push(b"data: [DONE]\n\n").unwrap();
+
+    assert!(events.is_empty());
+}
+
+#[test]
+fn incremental_decoder_finish_should_decode_unterminated_final_frame() {
+    let mut decoder = SseEventDecoder::default();
+    decoder
+        .push(b"event: response.completed\ndata: {\"type\":\"response.completed\"}")
+        .unwrap();
+
+    let events = decoder.finish().unwrap();
+
+    assert_eq!(events.len(), 1);
+}

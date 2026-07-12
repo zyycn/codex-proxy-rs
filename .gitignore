@@ -49,6 +49,5 @@ Thumbs.db
 /.reasonix/
 /.worktrees/
 /worktrees/
-/.cargo/*
-!/.cargo/config.toml
+/.cargo/
 *.tmp

@@ -364,6 +364,8 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "hyper",
+ "hyper-util",
  "indexmap",
  "ipnet",
  "percent-encoding",

@@ -27,6 +27,8 @@ pub struct CodexWebSocketExchange {
 
 /// Responses WebSocket live SSE exchange result.
 pub struct CodexWebSocketStreamingExchange {
+    /// 关联请求日志与底层 pump 生命周期日志的连接标识。
+    pub(crate) websocket_connection_id: Uuid,
     /// Live SSE bytes converted from WebSocket events.
     pub body: CodexWebSocketSseStream,
     /// 上游 metadata 帧中的最新 turn state。
@@ -494,6 +496,7 @@ pub(super) fn stream_websocket_response(
     prefetched_frames: Vec<String>,
     initial_event_timeout: Option<Duration>,
 ) -> CodexWebSocketStreamingExchange {
+    let websocket_connection_id = websocket.connection_id();
     let response_metadata = metadata.clone();
     let rate_limit_header_updates = Arc::new(Mutex::new(Vec::new()));
     let rate_limit_header_updates_for_task = Arc::clone(&rate_limit_header_updates);
@@ -519,6 +522,7 @@ pub(super) fn stream_websocket_response(
     });
 
     CodexWebSocketStreamingExchange {
+        websocket_connection_id,
         body: Box::pin(body),
         turn_state: response_metadata.turn_state,
         set_cookie_headers: response_metadata.set_cookie_headers,
@@ -789,8 +793,21 @@ async fn discard_stream_websocket(
     pool_return: Option<WebSocketStreamPoolReturn>,
     reason: StreamWebSocketDiscardReason,
 ) {
+    let websocket_connection_id = websocket.connection_id();
+    let pump_exit = websocket.exit_reason();
+    let pump_exit_reason = pump_exit
+        .as_ref()
+        .map(PumpExitReason::as_str)
+        .unwrap_or("running");
+    let pump_exit_detail = pump_exit
+        .as_ref()
+        .and_then(PumpExitReason::detail)
+        .unwrap_or_default();
     tracing::info!(
+        websocket_connection_id = %websocket_connection_id,
         reason = reason.as_str(),
+        pump_exit_reason,
+        pump_exit_detail,
         pooled = pool_return.is_some(),
         "discarding Responses WebSocket stream"
     );

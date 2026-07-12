@@ -44,7 +44,7 @@ use super::websocket_pool::{
     PooledWebSocketConnection, WebSocketContinuationState, WebSocketPoolAcquire,
     WebSocketPoolDecision, WebSocketPoolLease,
 };
-use super::websocket_pump::{PumpKeepalive, PumpedWebSocket, RawWsStream};
+use super::websocket_pump::{PumpExitReason, PumpKeepalive, PumpedWebSocket, RawWsStream};
 use super::{client::CodexResponseMetadata, diagnostics::CodexUpstreamDiagnostics, response_meta};
 use uuid::Uuid;
 

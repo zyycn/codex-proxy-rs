@@ -10,7 +10,7 @@ use codex_proxy_rs::upstream::openai::protocol::responses::{
     transport_for_request,
 };
 use codex_proxy_rs::upstream::openai::protocol::sse::{
-    parse_sse_events, response_failed_sse_event,
+    SseEventDecoder, parse_sse_events, response_failed_sse_event,
 };
 use codex_proxy_rs::upstream::openai::protocol::websocket::{
     OpeningAuditHeader, OpeningAuditSnapshot, classify_websocket_error_frame,

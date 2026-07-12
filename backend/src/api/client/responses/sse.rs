@@ -13,7 +13,7 @@ use axum::{
 
 use crate::upstream::openai::protocol::sse::DONE_SSE_FRAME;
 
-use super::errors::openai_error_response;
+use crate::api::client::errors::openai_error_response;
 
 /// 编码 OpenAI 流结束标记。
 pub fn done_sse_frame() -> &'static str {

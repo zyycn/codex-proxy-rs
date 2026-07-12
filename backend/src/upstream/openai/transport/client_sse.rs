@@ -368,6 +368,13 @@ impl CodexBackendClient {
             }
         }
         .map_err(websocket_exchange_error_to_client_error)?;
+        tracing::info!(
+            request_id = %context.request_id,
+            account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
+            websocket_connection_id = %exchange.websocket_connection_id,
+            ws_pool = exchange.pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
+            "websocket response stream established"
+        );
         log_websocket_pool_decision(
             context.request_id,
             pool_account_id.or(context.account_id),

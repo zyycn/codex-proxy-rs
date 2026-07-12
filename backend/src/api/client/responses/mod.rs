@@ -1,6 +1,11 @@
 //! OpenAI Responses API 透明代理入口：解析原始 JSON body，提取调度元数据，
 //! 做最小 patch 后交给调度层，请求语义原样透传上游。
 
+mod sse;
+mod websocket;
+
+pub use websocket::responses_websocket;
+
 use axum::{
     Extension, Json,
     body::{Body, Bytes},
@@ -20,6 +25,7 @@ use crate::{
     },
 };
 
+use self::sse::{done_sse_frame, event_stream_response as sse_event_stream_response};
 use super::{
     errors::{
         invalid_responses_request_response, missing_client_api_key_response,
@@ -27,7 +33,6 @@ use super::{
         responses_dispatch_error_response_ref, responses_stream_dispatch_failed_sse_event,
     },
     models::model_catalog_for_state,
-    sse::{done_sse_frame, event_stream_response as sse_event_stream_response},
 };
 
 const OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
@@ -322,29 +327,39 @@ async fn handle_responses(
     let Some(body) = parse_responses_body(&body) else {
         return invalid_responses_request_response().into_response();
     };
-    let model = match validated_responses_model(&state, request_model(&body)).await {
-        Ok(model) => model,
-        Err(ResponsesModelValidationError::InvalidRequest) => {
+    let prepared = match prepare_responses_request(
+        &state,
+        body,
+        &headers,
+        forced_subagent,
+        client_ip,
+        client_api_key_id,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(ResponsesRequestValidationError::InvalidRequest) => {
             return invalid_responses_request_response().into_response();
         }
-        Err(ResponsesModelValidationError::ModelNotFound) => {
+        Err(ResponsesRequestValidationError::ModelNotFound) => {
             return model_not_found_response().into_response();
         }
     };
-    let mut codex_request = build_codex_request(body, &headers, forced_subagent);
-    codex_request.client_ip = client_ip;
-    codex_request.client_api_key_id = Some(client_api_key_id);
+    let PreparedResponsesRequest {
+        mut request,
+        requested_model,
+    } = prepared;
     // 客户端未显式指定 transport 时默认偏好 WebSocket。
-    if !codex_request.force_http_sse {
-        codex_request.use_websocket = true;
+    if !request.force_http_sse {
+        request.use_websocket = true;
     }
-    let stream = codex_request.stream();
+    let stream = request.stream();
 
     if stream {
         return match state
             .services
             .responses
-            .stream(request_id.as_str(), route, codex_request, &model)
+            .stream(request_id.as_str(), route, request, &requested_model)
             .await
         {
             Ok(stream) => live_event_stream_response(stream),
@@ -355,7 +370,7 @@ async fn handle_responses(
     match state
         .services
         .responses
-        .complete(request_id.as_str(), route, codex_request, &model)
+        .complete(request_id.as_str(), route, request, &requested_model)
         .await
     {
         Ok(result) => apply_safe_response_headers(
@@ -384,10 +399,10 @@ async fn handle_compact_responses(
     };
     let model = match validated_responses_model(&state, request_model(&body)).await {
         Ok(model) => model,
-        Err(ResponsesModelValidationError::InvalidRequest) => {
+        Err(ResponsesRequestValidationError::InvalidRequest) => {
             return invalid_responses_request_response().into_response();
         }
-        Err(ResponsesModelValidationError::ModelNotFound) => {
+        Err(ResponsesRequestValidationError::ModelNotFound) => {
             return model_not_found_response().into_response();
         }
     };
@@ -423,23 +438,47 @@ fn request_model(body: &Map<String, Value>) -> &str {
         .unwrap_or_default()
 }
 
+pub(super) struct PreparedResponsesRequest {
+    pub(super) request: CodexResponsesRequest,
+    pub(super) requested_model: String,
+}
+
+pub(super) async fn prepare_responses_request(
+    state: &AppState,
+    body: Map<String, Value>,
+    headers: &HeaderMap,
+    forced_subagent: Option<&str>,
+    client_ip: Option<String>,
+    client_api_key_id: String,
+) -> Result<PreparedResponsesRequest, ResponsesRequestValidationError> {
+    let requested_model = validated_responses_model(state, request_model(&body)).await?;
+    let mut request = build_codex_request(body, headers, forced_subagent);
+    request.client_ip = client_ip;
+    request.client_api_key_id = Some(client_api_key_id);
+    Ok(PreparedResponsesRequest {
+        request,
+        requested_model,
+    })
+}
+
 async fn validated_responses_model(
     state: &AppState,
     raw_model: &str,
-) -> Result<String, ResponsesModelValidationError> {
+) -> Result<String, ResponsesRequestValidationError> {
     let model = raw_model.trim();
     if model.is_empty() {
-        return Err(ResponsesModelValidationError::InvalidRequest);
+        return Err(ResponsesRequestValidationError::InvalidRequest);
     }
     let catalog = model_catalog_for_state(state).await;
     if catalog.is_recognized_model_name(model) {
         Ok(model.to_string())
     } else {
-        Err(ResponsesModelValidationError::ModelNotFound)
+        Err(ResponsesRequestValidationError::ModelNotFound)
     }
 }
 
-enum ResponsesModelValidationError {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResponsesRequestValidationError {
     InvalidRequest,
     ModelNotFound,
 }

@@ -76,7 +76,7 @@ fn replay_snapshot(turn_input: Vec<Value>, turn_output: Vec<Value>) -> ResponseR
     }
 }
 
-async fn accept_async(stream: TcpStream) -> Result<WebSocketStream<TcpStream>, WsError> {
+pub(crate) async fn accept_async(stream: TcpStream) -> Result<WebSocketStream<TcpStream>, WsError> {
     accept_hdr_async(stream, |_request, _response| {}).await
 }
 
@@ -268,7 +268,7 @@ async fn test_app_state_with_storage(
     AppState::from(&services)
 }
 
-async fn test_app_with_account(
+pub(crate) async fn test_app_with_account(
     base_url: String,
 ) -> (
     axum::Router,

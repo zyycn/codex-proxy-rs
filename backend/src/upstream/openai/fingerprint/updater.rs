@@ -12,7 +12,7 @@ use super::{
 };
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
-pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_hours(72);
+pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_hours(24);
 type AppcastFields = (Option<String>, Option<String>, Option<String>);
 
 /// Appcast 指纹更新检查器。
