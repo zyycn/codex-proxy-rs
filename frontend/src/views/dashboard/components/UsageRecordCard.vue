@@ -6,7 +6,6 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import {
   usageAccountText,
   usageIsCompact,
-  usageReasoningEffort,
   usageRecordColumns,
   usageRecordType,
   usageRecordTypeClass,
@@ -14,6 +13,7 @@ import {
 import UsageClientIpCell from '@/views/usage/components/UsageClientIpCell.vue'
 import UsageBillingCell from '@/views/usage/components/UsageBillingCell.vue'
 import UsageModelCell from '@/views/usage/components/UsageModelCell.vue'
+import UsageReasoningEffortCell from '@/views/usage/components/UsageReasoningEffortCell.vue'
 import UsageTokenCell from '@/views/usage/components/UsageTokenCell.vue'
 
 defineProps<{
@@ -57,9 +57,7 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter((column) => column
           </template>
 
           <template #reasoningEffort="{ row }">
-            <span class="whitespace-nowrap text-[12px] font-[720] text-(--cp-text-primary)">
-              {{ usageReasoningEffort(row) }}
-            </span>
+            <UsageReasoningEffortCell :record="row" />
           </template>
 
           <template #route="{ row }">

@@ -102,6 +102,7 @@ struct DashboardUsageRecordData {
     client_ip: Option<String>,
     user_agent: Option<String>,
     reasoning_effort: Option<String>,
+    reasoning_preset: Option<String>,
     compact: bool,
     request_kind: Option<String>,
     subagent_kind: Option<String>,
@@ -517,6 +518,7 @@ fn dashboard_usage_record_data(
     let user_agent = metadata_string(&record.metadata, &["userAgent", "user_agent"]);
     let reasoning_effort =
         metadata_string(&record.metadata, &["reasoningEffort", "reasoning_effort"]);
+    let reasoning_preset = metadata_string(&record.metadata, &["reasoningPreset"]);
     let compact = record
         .metadata
         .get("compact")
@@ -541,6 +543,7 @@ fn dashboard_usage_record_data(
         client_ip,
         user_agent,
         reasoning_effort,
+        reasoning_preset,
         compact,
         request_kind,
         subagent_kind,

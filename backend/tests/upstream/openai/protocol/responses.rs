@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use super::*;
@@ -445,6 +447,120 @@ fn responses_request_semantics_should_detect_compaction_trigger_without_metadata
     let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
 
     assert!(request.semantics().compact);
+}
+
+#[test]
+fn responses_request_semantics_should_restore_ultra_from_proactive_mode() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [developer_multi_agent_mode(
+            "Proactive multi-agent delegation is active. Use sub-agents when useful.",
+        )]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+
+    assert_eq!(request.semantics().reasoning_preset, Some("ultra"));
+    assert_eq!(request.reasoning().unwrap()["effort"], "max");
+}
+
+#[test]
+fn responses_request_semantics_should_use_latest_multi_agent_mode() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [
+            developer_multi_agent_mode("Proactive multi-agent delegation is active."),
+            developer_multi_agent_mode("Do not spawn sub-agents unless explicitly requested."),
+        ]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+
+    assert_eq!(request.semantics().reasoning_preset, None);
+}
+
+#[test]
+fn responses_request_semantics_should_ignore_user_multi_agent_mode_marker() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "<multi_agent_mode>Proactive multi-agent delegation is active.</multi_agent_mode>",
+            }],
+        }]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+
+    assert_eq!(request.semantics().reasoning_preset, None);
+}
+
+#[test]
+fn responses_request_semantics_should_require_max_for_ultra() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "high"},
+        "input": [developer_multi_agent_mode(
+            "Proactive multi-agent delegation is active.",
+        )]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+
+    assert_eq!(request.semantics().reasoning_preset, None);
+}
+
+#[test]
+fn responses_request_semantics_should_not_mark_subagent_as_ultra() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-codex-turn-metadata",
+        r#"{"subagent_kind":"thread_spawn"}"#.parse().unwrap(),
+    );
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [developer_multi_agent_mode(
+            "Proactive multi-agent delegation is active.",
+        )]
+    });
+
+    let request = build_codex_request(body.as_object().unwrap().clone(), &headers, None);
+
+    assert_eq!(request.semantics().reasoning_preset, None);
+}
+
+#[test]
+fn responses_request_semantics_should_read_mode_from_local_replay_history() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "reasoning": {"effort": "max"},
+        "input": [{"type": "message", "role": "user", "content": []}]
+    });
+    let mut request =
+        build_codex_request(body.as_object().unwrap().clone(), &HeaderMap::new(), None);
+    request.local_replay_input = Some(Arc::new(vec![developer_multi_agent_mode(
+        "Proactive multi-agent delegation is active.",
+    )]));
+
+    assert_eq!(request.semantics().reasoning_preset, Some("ultra"));
+}
+
+fn developer_multi_agent_mode(mode: &str) -> Value {
+    json!({
+        "type": "message",
+        "role": "developer",
+        "content": [{
+            "type": "input_text",
+            "text": format!("<multi_agent_mode>{mode}</multi_agent_mode>"),
+        }],
+    })
 }
 
 #[test]

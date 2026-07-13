@@ -46,10 +46,18 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
     record.metadata = json!({
         "compact": true,
         "requestKind": "compaction",
+        "reasoningEffort": "max",
+        "reasoningPreset": "ultra"
+    });
+    usage.append(&record).await.unwrap();
+    let mut subagent = success_record("subagent completed");
+    subagent.id = "usage_route_subagent".to_string();
+    subagent.client_api_key_id = Some("key_42".to_string());
+    subagent.metadata = json!({
         "subagentKind": "thread_spawn",
         "reasoningEffort": "max"
     });
-    usage.append(&record).await.unwrap();
+    usage.append(&subagent).await.unwrap();
 
     let response = app
         .oneshot(
@@ -65,16 +73,28 @@ async fn usage_route_returns_success_facts_without_legacy_level() {
     let body = response_json(response).await;
     assert_eq!(body["data"]["page"]["page"], 1);
     assert_eq!(body["data"]["page"]["pageSize"], 50);
-    assert_eq!(body["data"]["page"]["total"], 1);
+    assert_eq!(body["data"]["page"]["total"], 2);
     assert!(body["data"]["page"].get("nextCursor").is_none());
-    let item = &body["data"]["items"][0];
+    let items = body["data"]["items"].as_array().unwrap();
+    let item = items
+        .iter()
+        .find(|item| item["id"] == "usage_route_success")
+        .unwrap();
     assert_eq!(item["id"], "usage_route_success");
     assert_eq!(item["clientApiKeyId"], "key_42");
     assert_eq!(item["statusCode"], 200);
     assert_eq!(item["compact"], true);
     assert_eq!(item["requestKind"], "compaction");
-    assert_eq!(item["subagentKind"], "thread_spawn");
+    assert!(item["subagentKind"].is_null());
     assert_eq!(item["reasoningEffort"], "max");
+    assert_eq!(item["reasoningPreset"], "ultra");
+    let subagent = items
+        .iter()
+        .find(|item| item["id"] == "usage_route_subagent")
+        .unwrap();
+    assert_eq!(subagent["subagentKind"], "thread_spawn");
+    assert_eq!(subagent["reasoningEffort"], "max");
+    assert!(subagent["reasoningPreset"].is_null());
     assert!(item.get("level").is_none());
 }
 

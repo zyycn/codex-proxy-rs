@@ -439,6 +439,7 @@ pub(crate) fn enrich_response_request_semantics(
     object.insert("compact".to_string(), Value::Bool(semantics.compact));
     insert_trimmed_string(object, "requestKind", semantics.request_kind.as_deref());
     insert_trimmed_string(object, "subagentKind", semantics.subagent_kind.as_deref());
+    insert_trimmed_string(object, "reasoningPreset", semantics.reasoning_preset);
 }
 
 pub(crate) fn reasoning_effort_from_request(request: &CodexResponsesRequest) -> Option<&str> {
