@@ -137,6 +137,311 @@ async fn responses_websocket_stream_should_synthesize_response_failed_when_close
 }
 
 #[tokio::test]
+async fn responses_websocket_cyber_policy_should_change_account_on_next_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let first_payload = accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-primary",
+            "resp_cyber_first",
+        )
+        .await;
+
+        let second_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-secondary",
+            websocket_completed_response("resp_after_cyber_rotation", 3, 1),
+        )
+        .await;
+        let third_payload = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-primary",
+            websocket_completed_response("resp_after_cyber_clear", 3, 1),
+        )
+        .await;
+        (first_payload, second_payload, third_payload)
+    });
+    let (app, state, api_key, pool, _dir) =
+        test_app_with_two_accounts_and_state_config(base_url, |config| {
+            config.auth.rotation_strategy = "round_robin".to_string();
+        })
+        .await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_next_request",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let mut first_body_stream = first_response.into_body().into_data_stream();
+    let mut first_body = String::new();
+    while let Some(chunk) = first_body_stream.next().await {
+        first_body.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        if first_body.contains("\"code\":\"cyber_policy\"") {
+            break;
+        }
+    }
+    drop(first_body_stream);
+    assert!(first_body.contains("partial output before policy failure"));
+    assert!(first_body.contains("\"code\":\"cyber_policy\""));
+    let statuses: Vec<(String, String)> =
+        sqlx::query_as("select id, status from accounts order by id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        statuses,
+        vec![
+            ("acct_primary".to_string(), "active".to_string()),
+            ("acct_secondary".to_string(), "active".to_string()),
+        ]
+    );
+
+    let second_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let mut second_body_stream = second_response.into_body().into_data_stream();
+    let mut second_body = String::new();
+    while let Some(chunk) = second_body_stream.next().await {
+        second_body.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        if second_body.contains("resp_after_cyber_rotation") {
+            break;
+        }
+    }
+    drop(second_body_stream);
+    assert!(second_body.contains("resp_after_cyber_rotation"));
+
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_secondary", AccountStatus::Disabled)
+            .await
+    );
+    let third_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let third_body = response_text(third_response).await;
+    let (first_payload, second_payload, third_payload) = upstream.await.unwrap();
+
+    assert!(third_body.contains("resp_after_cyber_clear"));
+    assert_eq!(first_payload["type"], "response.create");
+    assert_eq!(second_payload["type"], "response.create");
+    assert_eq!(third_payload["type"], "response.create");
+}
+
+#[tokio::test]
+async fn responses_websocket_cyber_policy_should_stop_after_three_accounts() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (three_attempts_tx, three_attempts_rx) = oneshot::channel();
+    let (verify_no_fourth_tx, verify_no_fourth_rx) = oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        let mut payloads = Vec::new();
+        for (index, authorization) in ["Bearer access-0", "Bearer access-1", "Bearer access-2"]
+            .into_iter()
+            .enumerate()
+        {
+            payloads.push(
+                accept_cyber_policy_websocket_response_with_authorization(
+                    &listener,
+                    authorization,
+                    &format!("resp_cyber_cap_{index}"),
+                )
+                .await,
+            );
+        }
+        three_attempts_tx.send(()).unwrap();
+        verify_no_fourth_rx.await.unwrap();
+        assert!(
+            timeout(StdDuration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "a fourth upstream account must not be contacted"
+        );
+        payloads
+    });
+    let (app, api_key, _dir) = test_app_with_ranked_accounts(base_url, 4).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_three_account_cap",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    for _ in 0..3 {
+        let response = app
+            .clone()
+            .oneshot(responses_json_request(&api_key, &request_body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response_text(response).await.contains("cyber_policy"));
+    }
+    three_attempts_rx.await.unwrap();
+
+    let fourth_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(fourth_response.status(), StatusCode::BAD_REQUEST);
+    let fourth_body = response_json(fourth_response).await;
+    assert_eq!(fourth_body["error"]["code"], "cyber_policy");
+    assert_eq!(
+        fourth_body["error"]["message"],
+        "This request has been flagged for possible cybersecurity risk."
+    );
+    verify_no_fourth_tx.send(()).unwrap();
+    assert_eq!(upstream.await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn responses_websocket_cyber_policy_state_should_isolate_session_and_api_key() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let first = accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-primary",
+            "resp_cyber_isolation",
+        )
+        .await;
+        let second = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-primary",
+            websocket_completed_response("resp_other_session", 3, 1),
+        )
+        .await;
+        let third = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-primary",
+            websocket_completed_response("resp_other_api_key", 3, 1),
+        )
+        .await;
+        (first, second, third)
+    });
+    let (app, state, first_api_key, pool, _dir) =
+        test_app_with_two_accounts_and_state(base_url).await;
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_secondary", AccountStatus::Disabled)
+            .await
+    );
+    let first_session = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_isolation_a",
+        "input": [],
+        "stream": true,
+        "use_websocket": true
+    });
+    let other_session = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_isolation_b",
+        "input": [],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&first_api_key, &first_session))
+        .await
+        .unwrap();
+    assert!(response_text(first_response).await.contains("cyber_policy"));
+
+    let other_session_response = app
+        .clone()
+        .oneshot(responses_json_request(&first_api_key, &other_session))
+        .await
+        .unwrap();
+    assert!(
+        response_text(other_session_response)
+            .await
+            .contains("resp_other_session")
+    );
+
+    let second_api_key = insert_client_api_key(&pool).await;
+    let other_key_response = app
+        .oneshot(responses_json_request(&second_api_key, &first_session))
+        .await
+        .unwrap();
+    assert!(
+        response_text(other_key_response)
+            .await
+            .contains("resp_other_api_key")
+    );
+    let _ = upstream.await.unwrap();
+}
+
+#[tokio::test]
+async fn responses_websocket_cyber_policy_should_not_move_external_previous_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        let first = accept_cyber_policy_websocket_response_with_authorization(
+            &listener,
+            "Bearer access-primary",
+            "resp_cyber_external_previous",
+        )
+        .await;
+        let second = accept_websocket_response_with_authorization_and_message(
+            &listener,
+            "Bearer access-primary",
+            websocket_completed_response("resp_same_external_previous_account", 3, 1),
+        )
+        .await;
+        (first, second)
+    });
+    let (app, state, api_key, _pool, _dir) = test_app_with_two_accounts_and_state(base_url).await;
+    assert!(
+        state
+            .services
+            .account_pool
+            .set_status("acct_secondary", AccountStatus::Disabled)
+            .await
+    );
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_external_previous",
+        "previous_response_id": "resp_external_unknown",
+        "input": [],
+        "stream": true,
+        "use_websocket": true
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(response_text(first_response).await.contains("cyber_policy"));
+    let second_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert!(
+        response_text(second_response)
+            .await
+            .contains("resp_same_external_previous_account")
+    );
+    let _ = upstream.await.unwrap();
+}
+
+#[tokio::test]
 async fn responses_websocket_stream_first_error_429_should_retry_fallback_account() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

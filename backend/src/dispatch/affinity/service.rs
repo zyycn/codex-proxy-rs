@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use super::{
     store::{RedisSessionAffinityStore, RedisSessionAffinityStoreError},
-    types::SessionAffinityEntry,
+    types::{CyberPolicyFailureSnapshot, CyberPolicySessionState, SessionAffinityEntry},
 };
 
 const DEFAULT_SESSION_AFFINITY_TTL_SECS: i64 = 4 * 60 * 60;
@@ -80,6 +80,37 @@ impl SessionAffinityService {
                 false
             }
         }
+    }
+
+    pub(crate) async fn load_cyber_policy_state(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<CyberPolicySessionState>, SessionAffinityError> {
+        Ok(self.store.cyber_policy_state(session_key).await?)
+    }
+
+    pub(crate) async fn persist_cyber_policy_failure(
+        &self,
+        session_key: &str,
+        failure: &CyberPolicyFailureSnapshot,
+        max_accounts: usize,
+        ttl: Duration,
+    ) -> Result<CyberPolicySessionState, SessionAffinityError> {
+        Ok(self
+            .store
+            .record_cyber_policy_failure(session_key, failure, max_accounts, ttl)
+            .await?)
+    }
+
+    pub(crate) async fn delete_cyber_policy_state(
+        &self,
+        session_key: &str,
+        expected_revision: &str,
+    ) -> Result<bool, SessionAffinityError> {
+        Ok(self
+            .store
+            .clear_cyber_policy_state(session_key, expected_revision)
+            .await?)
     }
 
     async fn entry(&self, response_id: &str, now: DateTime<Utc>) -> Option<SessionAffinityEntry> {

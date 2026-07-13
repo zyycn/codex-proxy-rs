@@ -18,6 +18,7 @@ use crate::{
         },
         recovery::{
             account_failure::{isolate_rotatable_account_failure, isolate_sse_account_failure},
+            cyber_policy::CyberPolicyRecovery,
             exhaustion::AccountExhaustionTracker,
             history::HistoryRecoveryPlan,
         },
@@ -63,15 +64,22 @@ impl ResponseDispatchService {
         prepare_variant_identity(&mut request);
         self.account_identity.prepare_local_identity(&mut request);
         let mut history = HistoryRecoveryPlan::load(&self.session_affinity, &request).await;
-        let preferred_account_id = self
-            .preferred_account_id_for_request(&request, &history, now)
-            .await;
+        let cyber_policy = CyberPolicyRecovery::new(Arc::clone(&self.session_affinity));
+        let (cyber_policy_plan, preferred_account_id) = tokio::join!(
+            cyber_policy.prepare(&request),
+            self.preferred_account_id_for_request(&request, &history, now),
+        );
         let mut acquire_request = AccountAcquireRequest::new(request.model(), now);
         if let Some(preferred_account_id) = preferred_account_id {
             acquire_request = acquire_request.with_preferred_account_id(preferred_account_id);
         }
-        let mut candidates =
-            AccountAttemptLedger::freeze(&self.account_pool, &acquire_request).await;
+        let cyber_policy_excluded_accounts = cyber_policy_plan.excluded_account_ids();
+        let mut candidates = AccountAttemptLedger::freeze(
+            &self.account_pool,
+            &acquire_request,
+            &cyber_policy_excluded_accounts,
+        )
+        .await;
         let mut exhausted_accounts = AccountExhaustionTracker::default();
         let mut next_required_account_id: Option<String> = None;
         let mut trace = ResponseDispatchTrace::default();
@@ -85,7 +93,9 @@ impl ResponseDispatchService {
                     started_at,
                     ResponseDispatchErrorDetails {
                         client_api_key_id: request.client_api_key_id.as_deref(),
-                        account_id: exhausted_accounts.last_account_id(),
+                        account_id: cyber_policy_plan
+                            .last_account_id()
+                            .or_else(|| exhausted_accounts.last_account_id()),
                         stream: true,
                         compact,
                         transport: Some(backend_transport_name(
@@ -117,6 +127,15 @@ impl ResponseDispatchService {
                 return Err(error);
             }};
         }
+        if let Some(failure) = cyber_policy_plan.exhausted_failure() {
+            return_stream_dispatch_error!(
+                ResponseDispatchError::Failed(failure),
+                account_id: cyber_policy_plan.last_account_id(),
+                transport: Some(backend_transport_name(
+                    backend_transport_for_response_request(&request)
+                ))
+            );
+        }
         loop {
             let acquired = if let Some(account_id) = next_required_account_id.take() {
                 match self
@@ -143,6 +162,11 @@ impl ResponseDispatchService {
                 let error = exhausted_accounts
                     .last_exhausted()
                     .map(ResponseDispatchError::from_exhausted_account)
+                    .or_else(|| {
+                        cyber_policy_plan
+                            .last_failure()
+                            .map(ResponseDispatchError::Failed)
+                    })
                     .unwrap_or(ResponseDispatchError::NoActiveAccount);
                 return_stream_dispatch_error!(error);
             };
@@ -219,6 +243,13 @@ impl ResponseDispatchService {
                         Ok(prefetched) => prefetched,
                         Err(ResponseDispatchError::Upstream(error)) => {
                             acquired.complete().await;
+                            cyber_policy
+                                .observe_upstream_error(
+                                    &cyber_policy_plan,
+                                    &release_account_id,
+                                    &error,
+                                )
+                                .await;
                             if isolate_rotatable_account_failure(
                                 self.account_pool.as_ref(),
                                 &self.cloudflare,
@@ -314,6 +345,9 @@ impl ResponseDispatchService {
                         }
                     };
                     if let Some(failure) = first_failure {
+                        cyber_policy
+                            .observe_sse_failure(&cyber_policy_plan, &release_account_id, &failure)
+                            .await;
                         if is_history_recovery_sse_failure(&failure)
                             && history.recover_managed_history(&release_account_id)
                         {
@@ -376,6 +410,8 @@ impl ResponseDispatchService {
                         account_pool: Arc::clone(&self.account_pool),
                         account_lease: acquired,
                         session_affinity: Arc::clone(&self.session_affinity),
+                        cyber_policy,
+                        cyber_policy_plan,
                         history,
                         recorder: Arc::clone(&self.recorder),
                         cloudflare: self.cloudflare.clone(),
@@ -405,6 +441,9 @@ impl ResponseDispatchService {
                 }
                 Err(error) => {
                     acquired.complete().await;
+                    cyber_policy
+                        .observe_upstream_error(&cyber_policy_plan, &release_account_id, &error)
+                        .await;
                     if isolate_rotatable_account_failure(
                         self.account_pool.as_ref(),
                         &self.cloudflare,

@@ -26,7 +26,7 @@ use crate::{
     fleet::{account::AccountStatus, pool::AccountPoolService},
     upstream::openai::{
         protocol::responses::ResponsesSseFailure,
-        transport::{CodexClientError, is_banned_upstream_error},
+        transport::{CodexClientError, is_banned_upstream_error, is_cyber_policy_upstream_error},
     },
 };
 
@@ -41,10 +41,27 @@ pub(crate) async fn isolate_rotatable_account_failure(
     account_id: &str,
     error: &CodexClientError,
 ) -> bool {
+    if is_cyber_policy_upstream_error(error) {
+        return false;
+    }
+
     if is_rate_limit_upstream_error(error) {
         exhausted_accounts.record_rate_limited(Some(account_id), upstream_error_body(error));
         account_pool
             .mark_quota_limited_until(account_id, rate_limit_cooldown_until(error, Utc::now()))
+            .await;
+        return true;
+    }
+
+    if is_banned_upstream_error(error) {
+        exhausted_accounts.record_auth_failure(
+            Some(account_id),
+            AccountStatus::Banned,
+            upstream_error_body(error),
+            Some(upstream_error_http_status(error)),
+        );
+        account_pool
+            .set_status(account_id, AccountStatus::Banned)
             .await;
         return true;
     }
@@ -87,19 +104,6 @@ pub(crate) async fn isolate_rotatable_account_failure(
 
     if is_model_unsupported_upstream_error(error) {
         exhausted_accounts.record_model_unsupported(Some(account_id), upstream_error_body(error));
-        return true;
-    }
-
-    if is_banned_upstream_error(error) {
-        exhausted_accounts.record_auth_failure(
-            Some(account_id),
-            AccountStatus::Banned,
-            upstream_error_body(error),
-            Some(upstream_error_http_status(error)),
-        );
-        account_pool
-            .set_status(account_id, AccountStatus::Banned)
-            .await;
         return true;
     }
 

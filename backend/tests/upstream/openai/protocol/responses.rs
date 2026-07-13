@@ -399,6 +399,11 @@ fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_heade
         "x-codex-parent-thread-id",
         " parent-from-header ".parse().unwrap(),
     );
+    headers.insert("session_id", " session-from-header ".parse().unwrap());
+    headers.insert(
+        "conversation_id",
+        " conversation-from-header ".parse().unwrap(),
+    );
 
     let codex = build_codex_request(body, &headers, None);
 
@@ -407,6 +412,14 @@ fn build_codex_request_should_prefer_body_context_fields_then_fall_back_to_heade
     assert_eq!(codex.turn_metadata.as_deref(), Some("meta-from-header"));
     assert_eq!(codex.include_timing_metrics.as_deref(), Some("true"));
     assert_eq!(codex.codex_window_id.as_deref(), Some("window-from-header"));
+    assert_eq!(
+        codex.client_session_id.as_deref(),
+        Some("session-from-header")
+    );
+    assert_eq!(
+        codex.client_conversation_id.as_deref(),
+        Some("conversation-from-header")
+    );
     assert_eq!(
         codex.parent_thread_id.as_deref(),
         Some("parent-from-header")
