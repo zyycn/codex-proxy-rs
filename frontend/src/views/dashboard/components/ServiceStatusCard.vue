@@ -60,15 +60,19 @@ const valueToneClasses: Record<string, string> = {
                 class="col-start-3 text-[13px] leading-[1.15] font-[650] text-(--cp-text-primary)"
                 >{{ item.label }}</strong
               >
-              <span
-                class="col-start-4 text-[13px] leading-[1.15] font-bold"
-                :class="valueToneClasses[item.tone]"
-                >{{ item.value }}</span
+              <div
+                class="col-start-4 col-span-2 grid min-w-0 grid-cols-1 justify-items-end gap-1.5 sm:grid-cols-[minmax(0,1.08fr)_minmax(72px,0.92fr)] sm:items-center sm:justify-items-stretch sm:gap-0"
               >
-              <span
-                class="col-start-5 text-right font-mono text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
-                >{{ item.detail }}</span
-              >
+                <span
+                  class="max-w-full min-w-0 wrap-break-word text-right text-[13px] leading-[1.15] font-bold sm:text-left"
+                  :class="valueToneClasses[item.tone]"
+                  >{{ item.value }}</span
+                >
+                <span
+                  class="text-right font-mono text-xs leading-[1.15] font-semibold text-(--cp-text-secondary)"
+                  >{{ item.detail }}</span
+                >
+              </div>
             </template>
           </div>
         </template>

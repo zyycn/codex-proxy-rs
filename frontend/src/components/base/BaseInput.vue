@@ -55,12 +55,13 @@ const inputClasses = computed(() => [
 
 <template>
   <label class="grid box-content gap-2 overflow-visible p-0.75">
-    <span :class="containerClasses">
+    <span class="base-input__control" :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
       </span>
       <input
         v-model="model"
+        class="base-input__field"
         :class="inputClasses"
         :placeholder="placeholder"
         :type="type"
@@ -77,3 +78,27 @@ const inputClasses = computed(() => [
     }}</span>
   </label>
 </template>
+
+<style scoped>
+.base-input__control {
+  --base-input-autofill-bg: var(--cp-input-current-bg, var(--cp-input-context-bg));
+}
+
+.base-input__control:hover {
+  --base-input-autofill-bg: var(--cp-input-current-bg-hover, var(--cp-input-context-bg-hover));
+}
+
+.base-input__control:focus-within {
+  --base-input-autofill-bg: var(--cp-input-soft-bg-focus);
+}
+
+.base-input__field:-webkit-autofill,
+.base-input__field:-webkit-autofill:hover,
+.base-input__field:-webkit-autofill:focus,
+.base-input__field:autofill {
+  caret-color: var(--cp-text-primary);
+  -webkit-text-fill-color: var(--cp-text-primary) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
+  box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
+}
+</style>
