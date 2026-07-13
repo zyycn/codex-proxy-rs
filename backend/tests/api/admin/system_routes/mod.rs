@@ -1199,9 +1199,9 @@ fn system_update_config(repository: &str, github_api_base: &str) -> SystemUpdate
         github_api_base: format!("{github_api_base}/repos"),
         executable_path: Some(PathBuf::from("/app/bin/codex-proxy-rs")),
         web_dist_dir: PathBuf::from("/app/web/dist"),
-        update_state_file: PathBuf::from("/app/data/update-state.json"),
-        update_lock_file: PathBuf::from("/app/data/update-state.lock"),
-        update_temp_dir: PathBuf::from("/app/data/update-tmp"),
+        update_state_file: PathBuf::from("/app/.runtime/data/update-state.json"),
+        update_lock_file: PathBuf::from("/app/.runtime/data/update-state.lock"),
+        update_temp_dir: PathBuf::from("/app/.runtime/data/update-tmp"),
         self_restart_enabled: false,
     }
 }

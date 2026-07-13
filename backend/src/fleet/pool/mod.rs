@@ -321,7 +321,7 @@ impl AccountPoolService {
             tracing::error!(
                 account_id,
                 error = %error,
-                "failed to persist account request usage"
+                "Failed to persist account request usage"
             );
         }
     }
@@ -334,7 +334,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id,
                     error = %error,
-                    "failed to persist account status"
+                    "Failed to persist account status"
                 );
                 false
             }
@@ -351,7 +351,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id,
                     error = %error,
-                    "failed to persist quota cooldown state"
+                    "Failed to persist quota cooldown state"
                 );
                 false
             }
@@ -454,7 +454,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id = %refreshed.account.id,
                     error = %error,
-                    "failed to persist refreshed runtime account state"
+                    "Failed to persist refreshed runtime account state"
                 );
             }
             if refreshed.sync_usage_window
@@ -469,7 +469,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id = %refreshed.account.id,
                     error = %error,
-                    "failed to persist refreshed runtime account usage window"
+                    "Failed to persist refreshed runtime account usage window"
                 );
             }
         }
@@ -530,7 +530,7 @@ impl AccountPoolService {
             tracing::error!(
                 account_id,
                 error = %error,
-                "failed to persist account token usage"
+                "Failed to persist account token usage"
             );
         }
         self.pool.lock().await.record_window_token_usage(
@@ -562,7 +562,7 @@ impl AccountPoolService {
             tracing::error!(
                 account_id,
                 error = %error,
-                "failed to persist empty response usage"
+                "Failed to persist empty response usage"
             );
         }
         if image_generation_requested {
@@ -607,7 +607,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id = %account_id,
                     error = %error,
-                    "failed to read existing quota json before passive rate-limit sync"
+                    "Failed to read existing quota JSON before passive rate-limit sync"
                 );
                 None
             }
@@ -634,7 +634,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id,
                     error = %error,
-                    "failed to persist verified quota snapshot"
+                    "Failed to persist verified quota snapshot"
                 );
                 false
             }
@@ -649,7 +649,7 @@ impl AccountPoolService {
             tracing::error!(
                 account_id,
                 error = %error,
-                "failed to persist verified quota window"
+                "Failed to persist verified quota window"
             );
         }
 
@@ -712,7 +712,7 @@ impl AccountPoolService {
                 tracing::error!(
                     account_id,
                     error = %error,
-                    "failed to persist Cloudflare cooldown state"
+                    "Failed to persist Cloudflare cooldown state"
                 );
                 false
             }

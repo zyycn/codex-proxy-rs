@@ -48,7 +48,7 @@ fn make_http_span(request: &Request<Body>) -> Span {
 }
 
 fn on_http_request(_request: &Request<Body>, _span: &Span) {
-    debug!("received HTTP request");
+    debug!("Received HTTP request");
 }
 
 fn on_http_response(response: &Response<Body>, latency: Duration, _span: &Span) {
@@ -58,7 +58,7 @@ fn on_http_response(response: &Response<Body>, latency: Duration, _span: &Span) 
     info!(
         status = response.status().as_u16(),
         latency_ms = latency.as_millis(),
-        "completed HTTP request"
+        "Completed HTTP request"
     );
 }
 
@@ -70,7 +70,7 @@ fn on_http_failure(failure_class: ServerErrorsFailureClass, latency: Duration, _
     warn!(
         failure = %failure_class,
         latency_ms = latency.as_millis(),
-        "failed HTTP request"
+        "Failed HTTP request"
     );
 }
 

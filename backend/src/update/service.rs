@@ -366,7 +366,7 @@ impl SystemUpdateConfig {
             });
         let state_file = env_string("CPR_UPDATE_STATE_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/app/data/update-state.json"));
+            .unwrap_or_else(|| PathBuf::from("/app/.runtime/data/update-state.json"));
         let update_lock_file = env_string("CPR_UPDATE_LOCK_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(|| state_file.with_extension("lock"));

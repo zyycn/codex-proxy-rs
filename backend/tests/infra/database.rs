@@ -62,6 +62,19 @@ async fn postgres_migrate_should_reject_changed_applied_sql_checksum() {
 }
 
 #[tokio::test]
+async fn postgres_migrate_should_skip_existing_migration_table() {
+    let (pool, _guard) = init_test_db("schema-existing-migration-table").await;
+
+    migrate(&pool).await.unwrap();
+
+    let migration_count: i64 = sqlx::query_scalar("select count(*) from schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(migration_count, 1);
+}
+
+#[tokio::test]
 async fn postgres_schema_keeps_retrievable_client_keys_and_hashes_admin_credentials() {
     let (pool, _guard) = init_test_db("schema-credential-storage").await;
     let key_columns = columns(&pool, "client_api_keys").await;

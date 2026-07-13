@@ -72,7 +72,7 @@ pub async fn responses_websocket(State(state): State<AppState>, mut request: Req
             tracing::info!(
                 websocket_connection_id = %connection_id,
                 error = %error,
-                "invalid Responses WebSocket upgrade request"
+                "Invalid Responses WebSocket upgrade request"
             );
             return openai_error_response(
                 StatusCode::BAD_REQUEST,
@@ -453,7 +453,7 @@ async fn forward_dispatch_stream(
                 let events = match decoder.push(&chunk) {
                     Ok(events) => events,
                     Err(error) => {
-                        tracing::warn!(request_id, error = %error, "failed to decode Responses SSE for WebSocket forwarding");
+                        tracing::warn!(request_id, error = %error, "Failed to decode Responses SSE for WebSocket forwarding");
                         let sent = send_error(
                             socket,
                             StatusCode::BAD_GATEWAY,
@@ -507,7 +507,7 @@ async fn forward_dispatch_stream(
                 let events = match decoder.finish() {
                     Ok(events) => events,
                     Err(error) => {
-                        tracing::warn!(request_id, error = %error, "failed to finish Responses SSE decoding");
+                        tracing::warn!(request_id, error = %error, "Failed to finish Responses SSE decoding");
                         return if send_error(
                             socket,
                             StatusCode::BAD_GATEWAY,

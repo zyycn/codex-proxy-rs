@@ -195,7 +195,7 @@ impl CodexBackendClient {
                             fallback_transport = "http_sse",
                             fallback_reason = "websocket_error",
                             error = %error,
-                            "websocket response failed; falling back to HTTP SSE"
+                            "WebSocket response failed; falling back to HTTP SSE"
                         );
                         self.create_response_http_sse(&upstream_request, context, started_at)
                             .await
@@ -245,7 +245,7 @@ impl CodexBackendClient {
                             fallback_transport = "http_sse",
                             fallback_reason = "websocket_error",
                             error = %error,
-                            "websocket response stream failed; falling back to HTTP SSE"
+                            "WebSocket response stream failed; falling back to HTTP SSE"
                         );
                         self.create_response_stream_http_sse(&upstream_request, context)
                             .await
@@ -278,7 +278,7 @@ impl CodexBackendClient {
             websocket_payload_audit_snapshot(&websocket_request),
         );
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
-            tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
+            tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
         }
         let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
@@ -345,7 +345,7 @@ impl CodexBackendClient {
             websocket_payload_audit_snapshot(&websocket_request),
         );
         if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
-            tracing::warn!(error = %error, "failed to write Codex WebSocket audit artifact");
+            tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
         }
         let pool_key = self.websocket_pool_key(upstream_request, context, pool_account_id);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
@@ -373,7 +373,7 @@ impl CodexBackendClient {
             account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
             websocket_connection_id = %exchange.websocket_connection_id,
             ws_pool = exchange.pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
-            "websocket response stream established"
+            "WebSocket response stream established"
         );
         log_websocket_pool_decision(
             context.request_id,

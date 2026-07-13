@@ -61,7 +61,7 @@ impl Write for SharedLogWriter {
 async fn wait_for_trace_output(logs: &SharedLogBuffer) -> String {
     for _ in 0..20 {
         let output = logs.content();
-        if output.contains("completed HTTP request") {
+        if output.contains("Completed HTTP request") {
             return output;
         }
         sleep(Duration::from_millis(5)).await;
@@ -105,15 +105,15 @@ async fn http_trace_should_include_request_id_and_completion_fields() {
     let output = wait_for_trace_output(&logs).await;
     assert!(
         output.contains("req_trace")
-            && output.contains("received HTTP request")
-            && output.contains("completed HTTP request")
+            && output.contains("Received HTTP request")
+            && output.contains("Completed HTTP request")
             && output.contains("\"status\":204")
             && output.contains("latency_ms"),
         "unexpected trace output: {output}"
     );
     let received = json_events(&output)
         .into_iter()
-        .find(|event| event["fields"]["message"] == "received HTTP request")
+        .find(|event| event["fields"]["message"] == "Received HTTP request")
         .expect("received event should exist");
     assert!(received["fields"].get("request_id").is_none());
     assert!(received["fields"].get("method").is_none());
@@ -186,8 +186,8 @@ async fn http_trace_should_emit_one_terminal_event_for_server_error() {
     sleep(Duration::from_millis(10)).await;
 
     let output = logs.content();
-    assert_eq!(output.matches("completed HTTP request").count(), 0);
-    assert_eq!(output.matches("failed HTTP request").count(), 1);
+    assert_eq!(output.matches("Completed HTTP request").count(), 0);
+    assert_eq!(output.matches("Failed HTTP request").count(), 1);
 }
 
 #[tokio::test(flavor = "current_thread")]

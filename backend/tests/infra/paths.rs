@@ -1,34 +1,14 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::fs;
 
 use codex_proxy_rs::infra::paths::{ensure_data_dir, load_or_create_identity_secret};
 
 const IDENTITY_SECRET_FILE_NAME: &str = "identity_hmac_secret";
-const DATA_DIR_CASE_ENV: &str = "CODEX_PROXY_TEST_DATA_DIR_CASE";
-
 #[test]
-fn data_dir_should_use_xdg_data_home_directly() {
-    if std::env::var(DATA_DIR_CASE_ENV).as_deref() == Ok("child") {
-        let expected = PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap());
-        assert_eq!(ensure_data_dir().unwrap(), expected);
-        return;
-    }
-
+fn data_dir_should_use_explicit_configured_directory() {
     let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(std::env::current_exe().unwrap())
-        .arg("--exact")
-        .arg("infra::paths::data_dir_should_use_xdg_data_home_directly")
-        .arg("--nocapture")
-        .env(DATA_DIR_CASE_ENV, "child")
-        .env("XDG_DATA_HOME", dir.path())
-        .output()
-        .unwrap();
+    let configured = dir.path().join("configured-data");
 
-    assert!(
-        output.status.success(),
-        "isolated data directory test failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_eq!(ensure_data_dir(&configured).unwrap(), configured);
 }
 
 #[test]

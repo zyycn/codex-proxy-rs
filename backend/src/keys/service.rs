@@ -86,7 +86,7 @@ impl KeyVerifier {
     pub async fn flush_pending_last_used(&self) {
         let updates = self.take_pending_last_used();
         if let Err(error) = self.store.touch_last_used_batch(&updates).await {
-            tracing::error!(error = %error, "failed to flush client key last_used_at batch");
+            tracing::error!(error = %error, "Failed to flush client key last_used_at batch");
             merge_last_used_updates(
                 &mut self
                     .pending_last_used

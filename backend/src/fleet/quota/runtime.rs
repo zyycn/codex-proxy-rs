@@ -215,7 +215,7 @@ impl QuotaRefreshService {
                     warn!(
                         account_id = %account.id,
                         error = %error,
-                        "quota usage 拉取失败"
+                        "Quota usage 拉取失败"
                     );
                     summary.failed += 1;
                 }
@@ -246,7 +246,7 @@ impl QuotaRefreshService {
             warn!(
                 account_id = %account_id,
                 error = %error,
-                "failed to sync runtime account pool after quota refresh"
+                "Failed to sync runtime account pool after quota refresh"
             );
         }
     }

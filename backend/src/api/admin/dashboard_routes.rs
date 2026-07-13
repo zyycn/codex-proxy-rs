@@ -419,7 +419,7 @@ async fn account_quota_used_percent_by_id(
 }
 
 fn dashboard_data_error(source: &'static str, error: &impl std::fmt::Display) -> AdminError {
-    tracing::error!(source, error = %error, "failed to load dashboard data");
+    tracing::error!(source, error = %error, "Failed to load dashboard data");
     AdminError::internal("Failed to load dashboard data")
 }
 

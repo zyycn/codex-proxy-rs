@@ -59,7 +59,8 @@ RUN apt-get update \
     && printf '%s\n' "${TZ}" > /etc/timezone \
     && groupadd --system --gid 10001 cpr \
     && useradd --system --uid 10001 --gid cpr --home-dir /app --shell /usr/sbin/nologin cpr \
-    && install -d -o cpr -g cpr /app/bin /app/data /app/logs /app/web \
+    && install -d -o cpr -g cpr \
+        /app/bin /app/deploy /app/.runtime/data /app/.runtime/logs /app/web \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

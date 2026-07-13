@@ -1,6 +1,6 @@
 use codex_proxy_rs::bootstrap::config::{
     AdminConfig, ApiConfig, AppConfig, AuthConfig, DatabaseConfig, FileLoggingConfig,
-    FingerprintConfig, LoggingConfig, QuotaConfig, RedisConfig, ServerConfig, TelemetryConfig,
+    LoggingConfig, QuotaConfig, RedisConfig, RuntimePathsConfig, ServerConfig, TelemetryConfig,
     TlsConfig, WebSocketPoolSettings,
 };
 
@@ -33,22 +33,29 @@ pub(crate) fn test_config(database_url: String) -> AppConfig {
         redis: RedisConfig {
             url: crate::support::storage::test_redis_url(),
         },
+        runtime: RuntimePathsConfig {
+            data_directory: std::path::PathBuf::from(".runtime/test-data"),
+        },
         tls: TlsConfig {
             force_http11: false,
         },
-        ws_pool: WebSocketPoolSettings::default(),
-        fingerprint: FingerprintConfig::default(),
+        ws_pool: WebSocketPoolSettings {
+            enabled: true,
+            max_age_ms: 3_300_000,
+            max_per_account: 8,
+            initial_event_timeout_ms: 20_000,
+        },
+        fingerprint: crate::support::fingerprint::test_fingerprint_config(),
         admin: AdminConfig {
             session_ttl_minutes: 1440,
             default_username: "admin".to_string(),
-            default_password: "test-admin-password".to_string(),
         },
         logging: LoggingConfig {
             level: "info".to_string(),
             stdout: false,
             file: FileLoggingConfig {
                 enabled: false,
-                directory: "logs".to_string(),
+                directory: std::path::PathBuf::from("logs"),
                 retention_days: 14,
                 max_file_size_mb: 20,
                 max_files: 20,

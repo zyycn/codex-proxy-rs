@@ -368,7 +368,7 @@ async fn terminate_oversized_live_stream(
         account_id = %context.account_id,
         captured_bytes = body_bytes.len(),
         capture_limit_bytes = MAX_LIVE_RESPONSE_CAPTURE_BYTES,
-        "live response capture limit exceeded"
+        "Live response capture limit exceeded"
     );
     let Some(body_text) = send_live_response_stream_tail(
         sender,
@@ -533,7 +533,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
         }
         Ok(None) => None,
         Err(error) => {
-            tracing::warn!(account_id = %context.account_id, error = %error, "failed to extract streaming token usage");
+            tracing::warn!(account_id = %context.account_id, error = %error, "Failed to extract streaming token usage");
             None
         }
     };
@@ -605,7 +605,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
                 code = ?failure.upstream_code.as_deref(),
                 failure_source = %failure_source,
                 failure_detail = ?failure_detail.as_deref(),
-                "live upstream stream ended with response.failed"
+                "Live upstream stream ended with response.failed"
             );
             let mut metadata = stream_failure_metadata(&failure, usage);
             insert_first_token_ms(&mut metadata, first_token_ms);
@@ -623,7 +623,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
         Ok(CollectedResponse::MissingCompleted | CollectedResponse::Empty) => {
             tracing::warn!(
                 account_id = %context.account_id,
-                "live upstream stream ended without response.completed"
+                "Live upstream stream ended without response.completed"
             );
             let mut metadata = serde_json::json!({
                 "stream": true,
@@ -644,7 +644,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
             .await;
         }
         Err(error) => {
-            tracing::warn!(account_id = %context.account_id, error = %error, "failed to parse completed live stream");
+            tracing::warn!(account_id = %context.account_id, error = %error, "Failed to parse completed live stream");
             let mut metadata = serde_json::json!({
                 "stream": true,
                 "sseParseError": error.to_string(),

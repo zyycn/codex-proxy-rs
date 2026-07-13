@@ -21,7 +21,7 @@ description: Codex Proxy RS 仓库开发指南。Use when working on its Rust/Ax
 - 后端：遵循 `backend/src` 当前领域边界；测试统一放在 `backend/tests`，禁止写入 `backend/src`。
 - 存储：PostgreSQL 是权威持久化，Redis 保存运行态数据，本地数据目录保存身份密钥和更新状态。
 - 前端：使用 Vue 3 `<script setup>`、TypeScript、Tailwind v4、已有组件和主题 token。
-- Docker / 发布：保留非 root runtime、Compose 密钥注入、命名卷、GitHub Release、GHCR 和在线更新契约。
+- Docker / 发布：保留非 root runtime、YAML 凭据桥接、`.runtime` 绑定目录、GitHub Release、GHCR 和在线更新契约。
 - 文档：README 面向部署者和使用者；`docs/architecture.md` 面向开发者。不要新增过程型审计或迁移文档。
 
 ## 验证
@@ -35,10 +35,10 @@ cargo clippy --all-targets --all-features --locked
 cargo test --test main --locked
 pnpm --dir frontend format:check
 pnpm --dir frontend build
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
+docker compose -f deploy/compose.yaml config --quiet
 ```
 
-后端集成测试需要可用的 PostgreSQL 和 Redis；通过 `CPR_TEST_DATABASE_URL`、`CPR_TEST_REDIS_URL` 指定测试连接。使用部署 Compose 时，连接密码必须与 `deploy/.env` 一致。
+后端集成测试需要可用的 PostgreSQL 和 Redis；通过 `CPR_TEST_DATABASE_URL`、`CPR_TEST_REDIS_URL` 指定测试连接。使用部署 Compose 时，连接密码必须与 `deploy/config.yaml` 一致。
 
 涉及在线更新时，至少运行 `api::admin::system_routes` 相关测试。涉及发布或镜像时，按 `references/repo-guide.md` 核对版本元数据、Release asset 和镜像 tag。
 

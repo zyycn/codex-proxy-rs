@@ -28,7 +28,7 @@
 - `backend/tests/`：后端集成测试和 fixtures。测试代码禁止放进 `backend/src/`。
 - `backend/build.rs`：把版本、Git SHA、构建时间和构建类型写入编译期环境变量。
 - `frontend/`：Vue 3、Vite 8、Tailwind v4、Pinia、Vue Router、Axios、Lucide 和 ECharts 管理端。
-- `deploy/`：Dockerfile、Compose、`config.example.yaml` 和 `.env.example`。
+- `deploy/`：Dockerfile、唯一的 `compose.yaml` 和 `config.example.yaml`。
 - `docs/architecture.md`：唯一长期架构文档。
 - `release/`：版本、目标平台和发布脚本。
 - `skills/`：项目本地 Codex skills。
@@ -114,34 +114,32 @@ cargo run -- serve
 - Builder 使用 Node 24 和 Rust 1.97，构建工具不得进入 runtime。
 - 默认应用镜像是 `ghcr.io/zyycn/codex-proxy-rs:latest`。
 
-`deploy/.env.example` 是 Docker 密钥模板，包含：
-
-- `CPR_ADMIN_DEFAULT_PASSWORD`
-- `CPR_POSTGRES_PASSWORD`
-- `CPR_REDIS_PASSWORD`
-
-`deploy/config.example.yaml` 是启动配置模板。真实密码只放在 `deploy/.env`，应用通过环境变量覆盖连接 URL 的密码。
+`deploy/config.example.yaml` 是完整启动配置模板。真实配置复制为被 Git 忽略的
+`deploy/config.yaml`，其中同时保存应用行为、管理员初始化密码、PostgreSQL 密码和 Redis 密码。
+服务密码通过 YAML anchor 与 Compose `extends` 传给内置服务，不使用 `.env` 配置文件。
 
 首次部署：
 
 ```bash
 mkdir -p .runtime/data .runtime/logs
-cp deploy/config.example.yaml .runtime/config.yaml
-cp deploy/.env.example deploy/.env
-# 设置 deploy/.env 后执行
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+install -d -m 0750 .runtime/postgres .runtime/redis
+cp deploy/config.example.yaml deploy/config.yaml
+sudo chown "$(id -u):10001" deploy/config.yaml
+chmod 0640 deploy/config.yaml
+# 设置 deploy/config.yaml 中的三个密码后执行
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml up -d
 ```
 
 挂载和卷：
 
-- `.runtime/config.yaml` -> `/app/config.yaml`，只读
-- `.runtime/data` -> `/app/data`
-- `.runtime/logs` -> `/app/logs`
-- `postgres-data` -> PostgreSQL 权威数据
-- `redis-data` -> Redis AOF
+- `deploy/config.yaml` -> `/app/deploy/config.yaml`，Compose config、只读（宿主 mode `0640`）
+- `.runtime/data` -> `/app/.runtime/data`
+- `.runtime/logs` -> `/app/.runtime/logs`
+- `.runtime/postgres` -> PostgreSQL 权威数据
+- `.runtime/redis` -> Redis AOF
 
-普通升级不得执行 `docker compose down -v`。该命令会删除 PostgreSQL 和 Redis 命名卷。
+普通 `docker compose down` 不删除绑定目录；删除 `.runtime` 才会清除本地状态。
 
 ## 发布和在线更新
 
@@ -172,9 +170,9 @@ GHCR 发布 `<version>` 和 `sha-<git-sha>` tag；只有稳定版本更新 `late
 - `CPR_DEPLOYMENT_MODE=docker`
 - `CPR_UPDATE_REPOSITORY=zyycn/codex-proxy-rs`
 - `CPR_UPDATE_CHANNEL=stable`
-- `CPR_UPDATE_TEMP_DIR=/app/data/update-tmp`
-- `CPR_UPDATE_STATE_FILE=/app/data/update-state.json`
-- `CPR_UPDATE_LOCK_FILE=/app/data/update.lock`
+- `CPR_UPDATE_TEMP_DIR=/app/.runtime/data/update-tmp`
+- `CPR_UPDATE_STATE_FILE=/app/.runtime/data/update-state.json`
+- `CPR_UPDATE_LOCK_FILE=/app/.runtime/data/update.lock`
 - `CPR_WEB_DIST_DIR=/app/web/dist`
 - `CPR_ENABLE_SELF_RESTART=true`
 
@@ -205,7 +203,7 @@ CPR_TEST_DATABASE_URL
 CPR_TEST_REDIS_URL
 ```
 
-使用部署 Compose 时，测试 URL 的密码必须与 `deploy/.env` 一致并正确进行 URL 编码。不要在日志或提交中输出真实密码。
+使用部署 Compose 时，测试 URL 的密码必须与 `deploy/config.yaml` 一致并正确进行 URL 编码。不要在日志或提交中输出真实密码。
 
 前端：
 
@@ -217,7 +215,7 @@ pnpm --dir frontend build
 Compose：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml config
+docker compose -f deploy/compose.yaml config --quiet
 ```
 
 聚焦测试应使用现有集成测试模块过滤；只有跨模块契约、存储或用户流程变化时才扩大到完整门禁。发布与镜像改动还需核对 `.github/workflows/_quality.yml`、`.github/workflows/_container.yml` 和 `.github/workflows/release.yml`。

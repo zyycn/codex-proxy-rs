@@ -62,7 +62,7 @@ pub(in crate::dispatch) async fn record_response_affinity(
         Err(error) => {
             tracing::warn!(
                 error = %error,
-                "failed to parse completed response metadata for session affinity"
+                "Failed to parse completed response metadata for session affinity"
             );
             return;
         }
@@ -98,7 +98,7 @@ pub(in crate::dispatch) async fn record_response_affinity(
             error = %error,
             response_id = %metadata.response_id,
             account_id = %account_id,
-            "failed to record session affinity"
+            "Failed to record session affinity"
         );
     }
 }

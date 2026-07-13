@@ -416,7 +416,7 @@ fn log_websocket_pool_decision(
             ws_pool_reason = reason,
             conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
             ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
-            "websocket pool decision"
+            "WebSocket pool decision"
         );
     } else {
         tracing::info!(
@@ -426,7 +426,7 @@ fn log_websocket_pool_decision(
             ws_pool = decision.kind(),
             conversation_id_hash = pool_context.map_or("", |context| context.conversation_id_hash.as_str()),
             ws_pool_key_hash = pool_context.map_or("", |context| context.pool_key_hash.as_str()),
-            "websocket pool decision"
+            "WebSocket pool decision"
         );
     }
 }

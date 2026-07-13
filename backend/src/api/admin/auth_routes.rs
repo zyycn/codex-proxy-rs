@@ -114,7 +114,7 @@ pub(crate) async fn logout(
             .delete_session(&session_id)
             .await
     {
-        tracing::warn!(error = %error, "failed to revoke admin session during logout");
+        tracing::warn!(error = %error, "Failed to revoke admin session during logout");
     }
 
     let mut response = AdminResponse::new(

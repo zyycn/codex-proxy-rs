@@ -814,7 +814,7 @@ async fn discard_stream_websocket(
         pump_exit_reason,
         pump_exit_detail,
         pooled = pool_return.is_some(),
-        "discarding Responses WebSocket stream"
+        "Discarding Responses WebSocket stream"
     );
     if let Some(pool_return) = pool_return {
         pool_return.lease.discard().await;

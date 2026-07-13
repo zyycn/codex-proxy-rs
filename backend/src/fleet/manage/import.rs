@@ -229,7 +229,7 @@ impl AccountManageService {
             Err(error) => {
                 tracing::warn!(
                     error = %error,
-                    "failed to fetch supplemental account information during import"
+                    "Failed to fetch supplemental account information during import"
                 );
                 ImportSupplementalAccountInfo {
                     status: import_status_from_usage_error(&error),

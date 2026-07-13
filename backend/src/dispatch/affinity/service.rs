@@ -65,7 +65,7 @@ impl SessionAffinityService {
                 tracing::warn!(
                     response_id,
                     error = %error,
-                    "failed to remove Redis session affinity"
+                    "Failed to remove Redis session affinity"
                 );
                 false
             }
@@ -76,7 +76,7 @@ impl SessionAffinityService {
         match self.store.forget_account(account_id).await {
             Ok(forgotten) => forgotten > 0,
             Err(error) => {
-                tracing::warn!(account_id, error = %error, "failed to remove account affinities");
+                tracing::warn!(account_id, error = %error, "Failed to remove account affinities");
                 false
             }
         }
@@ -86,7 +86,7 @@ impl SessionAffinityService {
         match self.store.get(response_id, now, self.ttl).await {
             Ok(entry) => entry,
             Err(error) => {
-                tracing::warn!(response_id, error = %error, "failed to read Redis session affinity");
+                tracing::warn!(response_id, error = %error, "Failed to read Redis session affinity");
                 None
             }
         }
@@ -106,7 +106,7 @@ impl SessionAffinityService {
         {
             Ok(entry) => entry,
             Err(error) => {
-                tracing::warn!(conversation_id, error = %error, "failed to query Redis affinity index");
+                tracing::warn!(conversation_id, error = %error, "Failed to query Redis affinity index");
                 None
             }
         }

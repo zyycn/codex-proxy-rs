@@ -1,106 +1,142 @@
-server:
-  # 容器内监听地址。Docker 部署保持 0.0.0.0。
-  host: '0.0.0.0'
-  # 容器内服务端口，需与 docker-compose.yml 的 target port 一致。
-  port: 8080
+# Codex Proxy RS 应用配置模板。
+#
+# 使用：
+#   cp deploy/config.example.yaml deploy/config.yaml
+#   sudo chown "$(id -u):10001" deploy/config.yaml
+#   chmod 640 deploy/config.yaml
+#
+# 三个密码建议分别执行 `openssl rand -hex 24` 生成。
 
-api:
-  # ChatGPT / Codex 上游 API 地址。
-  base_url: 'https://chatgpt.com/backend-api'
+x-cpr:
+  schema_version: 1
 
-database:
-  # PostgreSQL 持久层。
-  url: 'postgres://codex_proxy:codex_proxy@postgres:5432/codex_proxy'
+  server:
+    # 本地 cargo run 使用；Docker 内由 compose.yaml 固定覆盖为 0.0.0.0:8080。
+    host: '127.0.0.1'
+    port: 8080
 
-redis:
-  # Redis 仅承载可丢弃的运行态与缓存。
-  url: 'redis://:codex_proxy@redis:6379/'
+  api:
+    base_url: 'https://chatgpt.com/backend-api'
 
-quota:
-  # 账号额度刷新间隔，单位分钟。
-  refresh_interval_minutes: 5
-  # 调度时跳过已耗尽账号。
-  skip_exhausted: true
+  database:
+    # 本地连接地址；Docker 内由 compose.yaml 固定改用 postgres 服务名。
+    # 密码不要写进 URL。
+    url: 'postgres://codex_proxy@127.0.0.1:5432/codex_proxy'
+    # 必填：48 位十六进制字符。
+    password: &postgres_password ''
 
-tls:
-  # 某些网络环境下可强制 HTTP/1.1；默认使用自动协商。
-  force_http11: false
+  redis:
+    # 本地连接地址；Docker 内由 compose.yaml 固定改用 redis 服务名。
+    # 密码不要写进 URL。
+    url: 'redis://127.0.0.1:6379/'
+    # 必填：48 位十六进制字符。
+    password: &redis_password ''
 
-ws_pool:
-  # 上游 WebSocket 连接池。
-  enabled: true
-  # 单个连接最大存活时间，单位毫秒。
-  max_age_ms: 3300000
-  # 每个账号最多保留的连接数。
-  max_per_account: 8
+  runtime:
+    # 相对路径以 deploy/config.yaml 所在目录为基准。
+    data_directory: '../.runtime/data'
 
-fingerprint:
-  # 上游请求指纹。通常保持默认，除非需要模拟其他客户端版本。
-  originator: Codex Desktop
-  app_version: '26.623.42026'
-  build_number: '4514'
-  platform: darwin
-  arch: arm64
-  chromium_version: '146'
-  user_agent_template: Codex Desktop/{version} ({platform}; {arch})
-  default_headers:
-    - name: Accept-Encoding
-      value: gzip, deflate, br, zstd
-    - name: Accept-Language
-      value: en-US,en;q=0.9
-    - name: sec-ch-ua-mobile
-      value: '?0'
-    - name: sec-ch-ua-platform
-      value: '"macOS"'
-    - name: sec-fetch-site
-      value: same-origin
-    - name: sec-fetch-mode
-      value: cors
-    - name: sec-fetch-dest
-      value: empty
-  header_order:
-    # 上游请求头顺序。通常保持默认。
-    - authorization
-    - chatgpt-account-id
-    - originator
-    - x-openai-internal-codex-residency
-    - x-client-request-id
-    - x-codex-installation-id
-    - x-codex-turn-state
-    - openai-beta
-    - user-agent
-    - sec-ch-ua
-    - sec-ch-ua-mobile
-    - sec-ch-ua-platform
-    - accept-encoding
-    - accept-language
-    - sec-fetch-site
-    - sec-fetch-mode
-    - sec-fetch-dest
-    - content-type
-    - accept
-    - cookie
+  quota:
+    refresh_interval_minutes: 5
+    skip_exhausted: true
 
-admin:
-  # 管理端登录会话有效期，单位分钟。
-  session_ttl_minutes: 1440
-  # 首次启动创建的默认管理员账号。Docker 部署通过 CPR_ADMIN_DEFAULT_PASSWORD 注入密码。
-  default_username: admin@cpr.local
-  default_password: ''
+  tls:
+    force_http11: false
 
-logging:
-  # RUST_LOG 存在时优先使用环境变量。
-  level: info
-  # 同时写入 docker logs。
-  stdout: true
-  file:
-    # 文件日志挂载到仓库 .runtime/logs。
+  ws_pool:
     enabled: true
-    directory: /app/logs
-    retention_days: 14
-    max_file_size_mb: 20
-    max_files: 20
+    max_age_ms: 3300000
+    max_per_account: 8
+    # 首个真实输出的绝对超时，单位毫秒；0 表示禁用。
+    initial_event_timeout_ms: 20000
 
-telemetry:
-  # 记录真实 /v1 代理调用的成功与失败事实。
-  enabled: true
+  fingerprint:
+    # PostgreSQL 中不存在当前指纹时，使用这里的数据初始化。
+    originator: 'Codex Desktop'
+    app_version: '26.707.51957'
+    build_number: '5175'
+    platform: 'darwin'
+    arch: 'arm64'
+    chromium_version: '146'
+    user_agent_template: 'Codex Desktop/{version} ({platform}; {arch})'
+
+    default_headers:
+      - name: 'Accept-Encoding'
+        value: 'gzip, deflate, br, zstd'
+      - name: 'Accept-Language'
+        value: 'en-US,en;q=0.9'
+      - name: 'sec-ch-ua-mobile'
+        value: '?0'
+      - name: 'sec-ch-ua-platform'
+        value: '"macOS"'
+      - name: 'sec-fetch-site'
+        value: 'same-origin'
+      - name: 'sec-fetch-mode'
+        value: 'cors'
+      - name: 'sec-fetch-dest'
+        value: 'empty'
+
+    header_order:
+      - authorization
+      - chatgpt-account-id
+      - originator
+      - x-openai-internal-codex-residency
+      - x-client-request-id
+      - x-codex-installation-id
+      - x-codex-turn-state
+      - openai-beta
+      - user-agent
+      - sec-ch-ua
+      - sec-ch-ua-mobile
+      - sec-ch-ua-platform
+      - accept-encoding
+      - accept-language
+      - sec-fetch-site
+      - sec-fetch-mode
+      - sec-fetch-dest
+      - content-type
+      - accept
+      - cookie
+
+  admin:
+    session_ttl_minutes: 1440
+    default_username: 'admin@cpr.local'
+    # 仅首次创建管理员时使用；至少 12 个字符且不能包含 `$`。
+    default_password: ''
+
+  logging:
+    level: 'info'
+    stdout: true
+    file:
+      enabled: true
+      # 相对路径以 deploy/config.yaml 所在目录为基准。
+      directory: '../.runtime/logs'
+      retention_days: 14
+      max_file_size_mb: 20
+      max_files: 20
+
+  telemetry:
+    enabled: true
+
+
+# Compose 凭据桥接区。通常不需要修改。
+services:
+  postgres-credentials:
+    environment:
+      POSTGRES_PASSWORD: *postgres_password
+
+  redis-credentials:
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --requirepass
+      - *redis_password
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - --no-auth-warning
+        - -a
+        - *redis_password
+        - ping

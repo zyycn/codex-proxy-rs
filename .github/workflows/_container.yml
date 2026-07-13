@@ -19,21 +19,24 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: cpr-ci-${{ github.run_id }}-${{ github.run_attempt }}
       CPR_IMAGE: codex-proxy-rs:ci-${{ inputs.ref }}
-      CPR_ADMIN_DEFAULT_PASSWORD: 'admin @:/?#%2F ci password'
-      CPR_POSTGRES_PASSWORD: 'pg @:/?#%2F ci'
-      CPR_REDIS_PASSWORD: 'redis @:/?#%2F ci'
-      CPR_SMOKE_PORT: '18080'
       TRIVY_QUIET: 'true'
       TRIVY_SKIP_VERSION_CHECK: 'true'
     steps:
-      - name: Define isolated runtime paths
+      - name: Define isolated runtime values
         shell: bash
         run: |
+          set -euo pipefail
+          admin_password="$(openssl rand -hex 24)"
+          postgres_password="$(openssl rand -hex 24)"
+          redis_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$admin_password"
+          echo "::add-mask::$postgres_password"
+          echo "::add-mask::$redis_password"
           {
-            echo "CPR_CONFIG_FILE=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/config.yaml"
-            echo "CPR_DATA_DIR=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/data"
-            echo "CPR_LOG_DIR=$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/logs"
             echo "DIAGNOSTICS_DIR=$RUNNER_TEMP/codex-proxy-rs-diagnostics"
+            echo "CI_ADMIN_PASSWORD=$admin_password"
+            echo "CI_POSTGRES_PASSWORD=$postgres_password"
+            echo "CI_REDIS_PASSWORD=$redis_password"
           } >> "$GITHUB_ENV"
 
       - name: Checkout
@@ -94,19 +97,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runtime_dir="$(dirname "$CPR_CONFIG_FILE")"
-          mkdir -p "$runtime_dir" "$DIAGNOSTICS_DIR"
-          sudo install -d -m 0770 -o "$(id -u)" -g 10001 "$CPR_DATA_DIR" "$CPR_LOG_DIR"
-          cp deploy/config.example.yaml "$CPR_CONFIG_FILE"
-          sudo chown "$(id -u):10001" "$CPR_CONFIG_FILE"
-          chmod 0640 "$CPR_CONFIG_FILE"
+          umask 0077
+          install -d -m 0750 .runtime/postgres .runtime/redis
+          mkdir -p "$DIAGNOSTICS_DIR"
+          sudo install -d -m 0770 -o "$(id -u)" -g 10001 \
+            .runtime/data .runtime/logs
+          ruby <<'RUBY'
+          path = "deploy/config.example.yaml"
+          content = File.read(path)
+          replacements = {
+            "password: &postgres_password ''" => "password: &postgres_password '#{ENV.fetch("CI_POSTGRES_PASSWORD")}'",
+            "password: &redis_password ''" => "password: &redis_password '#{ENV.fetch("CI_REDIS_PASSWORD")}'",
+            "default_password: ''" => "default_password: '#{ENV.fetch("CI_ADMIN_PASSWORD")}'",
+          }
+          replacements.each do |placeholder, configured|
+            raise "missing config placeholder: #{placeholder}" unless content.sub!(placeholder, configured)
+          end
+          File.write("deploy/config.yaml", content)
+          RUBY
+          sudo chown "$(id -u):10001" deploy/config.yaml
+          chmod 0640 deploy/config.yaml
 
       - name: Validate Docker Compose
         shell: bash
         run: |
           set -euo pipefail
           docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml config --quiet
+            -f deploy/compose.yaml config --quiet
 
       - name: Configure Redis host memory overcommit
         shell: bash
@@ -120,25 +137,25 @@ jobs:
         run: |
           set -euo pipefail
           compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+            -f deploy/compose.yaml)
           "${compose[@]}" up -d --no-build --wait postgres redis
-          test "$("${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+          test "$("${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
             psql -At -U codex_proxy -d codex_proxy -c "SHOW TimeZone;" | tr -d '\r')" = Asia/Shanghai
-          "${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+          "${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
             psql -v ON_ERROR_STOP=1 -U codex_proxy -d codex_proxy -c \
             "CREATE TABLE cpr_ci_persistence_probe (value text PRIMARY KEY); INSERT INTO cpr_ci_persistence_probe VALUES ('persisted');"
-          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CI_REDIS_PASSWORD" redis \
             redis-cli SET cpr:ci:persistence-probe persisted
           "${compose[@]}" up -d --no-build --wait --force-recreate postgres redis
-          test "$("${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+          test "$("${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
             psql -At -U codex_proxy -d codex_proxy -c \
             "SELECT value FROM cpr_ci_persistence_probe;")" = persisted
-          test "$("${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+          test "$("${compose[@]}" exec -T -e REDISCLI_AUTH="$CI_REDIS_PASSWORD" redis \
             redis-cli --raw GET cpr:ci:persistence-probe | tr -d '\r')" = persisted
-          "${compose[@]}" exec -T -e PGPASSWORD="$CPR_POSTGRES_PASSWORD" postgres \
+          "${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
             psql -v ON_ERROR_STOP=1 -U codex_proxy -d codex_proxy -c \
             "DROP TABLE cpr_ci_persistence_probe;"
-          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CPR_REDIS_PASSWORD" redis \
+          "${compose[@]}" exec -T -e REDISCLI_AUTH="$CI_REDIS_PASSWORD" redis \
             redis-cli DEL cpr:ci:persistence-probe
 
       - name: Start and verify application
@@ -146,24 +163,24 @@ jobs:
         run: |
           set -euo pipefail
           compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+            -f deploy/compose.yaml)
           "${compose[@]}" up -d --no-build --wait codex-proxy-rs
           status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            "http://127.0.0.1:${CPR_SMOKE_PORT}/healthz")"
+            "http://127.0.0.1:8080/healthz")"
           test "$status" = 204
           test "$("${compose[@]}" exec -T codex-proxy-rs id -u | tr -d '\r')" = 10001
           test "$("${compose[@]}" exec -T codex-proxy-rs id -g | tr -d '\r')" = 10001
           test "$("${compose[@]}" exec -T codex-proxy-rs date +%z | tr -d '\r')" = +0800
           test "$("${compose[@]}" exec -T codex-proxy-rs cat /etc/timezone | tr -d '\r')" = Asia/Shanghai
           "${compose[@]}" exec -T codex-proxy-rs sh -c \
-            'touch /app/data/.ci-write /app/logs/.ci-write && rm /app/data/.ci-write /app/logs/.ci-write'
+            'touch /app/.runtime/data/.ci-write /app/.runtime/logs/.ci-write && rm /app/.runtime/data/.ci-write /app/.runtime/logs/.ci-write'
 
       - name: Verify clean logs and graceful shutdown
         shell: bash
         run: |
           set -euo pipefail
           compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+            -f deploy/compose.yaml)
           "${compose[@]}" stop --timeout 30 codex-proxy-rs
           container_id="$("${compose[@]}" ps -a -q codex-proxy-rs)"
           test -n "$container_id"
@@ -195,7 +212,7 @@ jobs:
           mkdir -p "$DIAGNOSTICS_DIR"
           raw_dir="$(mktemp -d)"
           compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml)
+            -f deploy/compose.yaml)
           "${compose[@]}" config > "$raw_dir/compose-config.yaml" 2>&1
           "${compose[@]}" ps -a > "$raw_dir/compose-ps.txt" 2>&1
           "${compose[@]}" logs --no-color --timestamps > "$raw_dir/compose.log" 2>&1
@@ -207,9 +224,9 @@ jobs:
           raw_dir = ENV.fetch("RAW_DIR")
           output_dir = ENV.fetch("OUTPUT_DIR")
           secrets = [
-            ENV.fetch("CPR_ADMIN_DEFAULT_PASSWORD"),
-            ENV.fetch("CPR_POSTGRES_PASSWORD"),
-            ENV.fetch("CPR_REDIS_PASSWORD"),
+            ENV.fetch("CI_ADMIN_PASSWORD"),
+            ENV.fetch("CI_POSTGRES_PASSWORD"),
+            ENV.fetch("CI_REDIS_PASSWORD"),
           ]
           encoded_secrets = secrets.map do |secret|
             secret.encode("UTF-8").bytes.map do |byte|
@@ -243,6 +260,5 @@ jobs:
         shell: bash
         run: |
           docker compose --project-name "$COMPOSE_PROJECT_NAME" \
-            -f deploy/docker-compose.yml -f deploy/docker-compose.smoke.yml \
-            down --volumes --remove-orphans || true
-          sudo rm -rf "$GITHUB_WORKSPACE/.runtime/ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            -f deploy/compose.yaml down --remove-orphans || true
+          sudo rm -rf "$GITHUB_WORKSPACE/.runtime" "$GITHUB_WORKSPACE/deploy/config.yaml"

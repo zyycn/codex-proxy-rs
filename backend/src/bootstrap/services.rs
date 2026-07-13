@@ -3,13 +3,14 @@
 use std::{env, error::Error, future::IntoFuture, sync::Arc, time::Duration};
 
 use axum::Router;
+use secrecy::ExposeSecret;
 
 use crate::{
     auth::{
         service::SessionService,
         store::{PgAdminUserStore, RedisAdminSessionStore},
     },
-    bootstrap::config::AppConfig,
+    bootstrap::config::{AppConfig, BootstrapConfig},
     dispatch::{
         affinity::{RedisSessionAffinityStore, SessionAffinityService},
         service::{ResponseDispatchService, ResponseDispatchServiceParts},
@@ -445,13 +446,12 @@ pub fn account_pool_options_from_config(config: &AppConfig) -> AccountPoolOption
     .pool_options(&settings_snapshot_from_config(config))
 }
 
-pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn run(config: BootstrapConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
     wait_for_scheduled_restart().await;
 
-    let config = AppConfig::load()?;
-    let host = config.server.host.clone();
-    let port = config.server.port;
-    let log_guard = init_logging(&config)?;
+    let host = config.app().server.host.clone();
+    let port = config.app().server.port;
+    let log_guard = init_logging(config.app())?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     let (router, task_coordinator, connection_drain) = build_router(config).await?;
     let mut task_coordinator = Some(task_coordinator);
@@ -501,7 +501,7 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
                         Ok(())
                     }
                     () = crate::bootstrap::shutdown::shutdown_signal() => {
-                        tracing::warn!("received a second shutdown signal; cancelling remaining connections");
+                        tracing::warn!("Received a second shutdown signal; cancelling remaining connections");
                         Ok(())
                     }
                 }
@@ -534,7 +534,7 @@ pub async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
 const HTTP_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 async fn build_router(
-    mut config: AppConfig,
+    bootstrap_config: BootstrapConfig,
 ) -> Result<
     (
         Router,
@@ -543,8 +543,17 @@ async fn build_router(
     ),
     Box<dyn Error + Send + Sync>,
 > {
-    let pool = connect(&config.database.url).await?;
-    let redis = RedisConnection::connect(&config.redis.url, "cpr").await?;
+    let crate::bootstrap::config::BootstrapConfigParts {
+        app: mut config,
+        database_url,
+        redis_url,
+        admin_default_password,
+    } = bootstrap_config.into_parts();
+
+    let pool = connect(database_url.expose_secret()).await?;
+    drop(database_url);
+    let redis = RedisConnection::connect(redis_url.expose_secret(), "cpr").await?;
+    drop(redis_url);
     let settings =
         SettingsService::load_or_initialize(settings_snapshot_from_config(&config), &pool).await?;
     apply_settings_to_config(&mut config, &settings);
@@ -567,16 +576,14 @@ async fn build_router(
         request_buckets: PgRequestBucketStore::new(pool),
     };
 
-    config.admin.validate_default_password()?;
-    let default_admin_password = config.admin.default_password.clone();
-    let data_dir = ensure_data_dir()?;
+    let data_dir = ensure_data_dir(&config.runtime.data_directory)?;
     let identity_secret = load_or_create_identity_secret(&data_dir)?;
     let default_fingerprint = fingerprint_from_config(&config.fingerprint);
     let runtime_fingerprint = fingerprint_store
         .ensure_current_seed(&default_fingerprint)
         .await?;
     let runtime_fingerprint = RuntimeFingerprint::new(runtime_fingerprint);
-    let runtime_config = crate::bootstrap::state::RuntimeConfig::from(config.clone());
+    let runtime_config = crate::bootstrap::state::RuntimeConfig::from(&config);
     let services = Services::try_with_identity_secret_and_usage_record_options(
         &config,
         stores,
@@ -588,8 +595,9 @@ async fn build_router(
 
     let created_default_admin = services
         .admin_sessions
-        .ensure_default_admin(&default_admin_password)
+        .ensure_default_admin(admin_default_password.expose_secret())
         .await?;
+    drop(admin_default_password);
     tracing::info!(
         created = created_default_admin,
         "默认管理员账号已完成初始化检查"
