@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::infra::redis::RedisConnection;
 
-use super::types::SessionAffinityEntry;
+use super::types::{CyberPolicyFailureSnapshot, CyberPolicySessionState, SessionAffinityEntry};
 
 /// 单会话保留的最近响应元数据数量。
 pub const MAX_CONVERSATION_AFFINITIES: usize = 128;
@@ -20,6 +20,65 @@ pub const MAX_GLOBAL_AFFINITY_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_AFFINITY_METADATA_BYTES: usize = 64 * 1024;
 const GLOBAL_STALE_CLEANUP_BATCH: usize = 256;
 const AFFINITY_VERSION: &str = "affinity:v3";
+
+const RECORD_CYBER_POLICY_FAILURE_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+local state = { failedAccountIds = {}, revision = '' }
+if raw then
+  local ok, decoded = pcall(cjson.decode, raw)
+  if ok and type(decoded) == 'table' and type(decoded.failedAccountIds) == 'table' then
+    state = decoded
+  end
+end
+
+local account_id = ARGV[1]
+local max_accounts = tonumber(ARGV[5])
+local known = false
+for _, failed_account_id in ipairs(state.failedAccountIds) do
+  if failed_account_id == account_id then
+    known = true
+    break
+  end
+end
+
+local recorded = known
+if not known and #state.failedAccountIds < max_accounts then
+  table.insert(state.failedAccountIds, account_id)
+  recorded = true
+end
+
+if recorded then
+  local failure = {
+    accountId = account_id,
+    event = ARGV[2],
+    message = ARGV[4]
+  }
+  if ARGV[3] ~= '' then
+    failure.upstreamCode = ARGV[3]
+  end
+  state.lastFailure = failure
+  state.revision = ARGV[7]
+end
+
+local encoded = cjson.encode(state)
+redis.call('SET', KEYS[1], encoded, 'EX', tonumber(ARGV[6]))
+return encoded
+"#;
+
+const CLEAR_CYBER_POLICY_STATE_SCRIPT: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return 0
+end
+local ok, state = pcall(cjson.decode, raw)
+if not ok or type(state) ~= 'table' then
+  return 0
+end
+if tostring(state.revision or '') ~= ARGV[1] then
+  return 0
+end
+return redis.call('DEL', KEYS[1])
+"#;
 
 const UPSERT_SCRIPT: &str = r#"
 local response_id = ARGV[1]
@@ -461,6 +520,55 @@ impl RedisSessionAffinityStore {
         Ok(forgotten)
     }
 
+    pub async fn cyber_policy_state(
+        &self,
+        session_key: &str,
+    ) -> RedisSessionAffinityStoreResult<Option<CyberPolicySessionState>> {
+        let mut connection = self.redis.manager();
+        let value: Option<String> = connection.get(self.cyber_policy_key(session_key)).await?;
+        value
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn record_cyber_policy_failure(
+        &self,
+        session_key: &str,
+        failure: &CyberPolicyFailureSnapshot,
+        max_accounts: usize,
+        ttl: Duration,
+    ) -> RedisSessionAffinityStoreResult<CyberPolicySessionState> {
+        let mut connection = self.redis.manager();
+        let revision = uuid::Uuid::new_v4().to_string();
+        let value: String = redis::Script::new(RECORD_CYBER_POLICY_FAILURE_SCRIPT)
+            .key(self.cyber_policy_key(session_key))
+            .arg(&failure.account_id)
+            .arg(&failure.event)
+            .arg(failure.upstream_code.as_deref().unwrap_or_default())
+            .arg(&failure.message)
+            .arg(max_accounts.max(1))
+            .arg(ttl.num_seconds().max(1))
+            .arg(revision)
+            .invoke_async(&mut connection)
+            .await?;
+        Ok(serde_json::from_str(&value)?)
+    }
+
+    pub async fn clear_cyber_policy_state(
+        &self,
+        session_key: &str,
+        expected_revision: &str,
+    ) -> RedisSessionAffinityStoreResult<bool> {
+        let mut connection = self.redis.manager();
+        let removed: usize = redis::Script::new(CLEAR_CYBER_POLICY_STATE_SCRIPT)
+            .key(self.cyber_policy_key(session_key))
+            .arg(expected_revision)
+            .invoke_async(&mut connection)
+            .await?;
+        Ok(removed > 0)
+    }
+
     fn response_key(&self, response_id: &str) -> String {
         format!("{}{response_id}", self.response_key_prefix())
     }
@@ -471,6 +579,11 @@ impl RedisSessionAffinityStore {
 
     fn account_key(&self, account_id: &str) -> String {
         format!("{}{account_id}", self.account_key_prefix())
+    }
+
+    fn cyber_policy_key(&self, session_key: &str) -> String {
+        self.redis
+            .key(&format!("{AFFINITY_VERSION}:cyber:{session_key}"))
     }
 
     fn global_index_key(&self) -> String {

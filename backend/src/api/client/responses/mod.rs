@@ -109,9 +109,13 @@ pub fn build_codex_request(
 }
 
 fn apply_identity_fields(request: &mut CodexResponsesRequest, headers: &HeaderMap) {
-    request.client_conversation_id = request.prompt_cache_key().map(ToString::to_string);
+    request.client_conversation_id = identity_context_string(request.body(), "conversation_id")
+        .or_else(|| header_string(headers, "conversation-id"))
+        .or_else(|| header_string(headers, "conversation_id"))
+        .or_else(|| request.prompt_cache_key().map(ToString::to_string));
     request.client_session_id = identity_context_string(request.body(), "session_id")
-        .or_else(|| header_string(headers, "session-id"));
+        .or_else(|| header_string(headers, "session-id"))
+        .or_else(|| header_string(headers, "session_id"));
     request.client_thread_id = identity_context_string(request.body(), "thread_id")
         .or_else(|| header_string(headers, "thread-id"));
     request.client_request_id = identity_context_string(request.body(), "x-client-request-id")

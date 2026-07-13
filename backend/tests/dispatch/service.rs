@@ -991,6 +991,42 @@ async fn accept_websocket_response_with_authorization_and_message(
     payload
 }
 
+async fn accept_cyber_policy_websocket_response_with_authorization(
+    listener: &TcpListener,
+    expected_authorization: &'static str,
+    response_id: &str,
+) -> Value {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut websocket = accept_websocket_with_authorization(stream, expected_authorization).await;
+    let message = websocket.next().await.unwrap().unwrap();
+    let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+        .expect("websocket payload should be json");
+    for event in [
+        json!({
+            "type": "response.created",
+            "response": {"id": response_id, "status": "in_progress"}
+        }),
+        json!({
+            "type": "response.output_text.delta",
+            "delta": "partial output before policy failure"
+        }),
+        json!({
+            "type": "error",
+            "error": {
+                "code": "cyber_policy",
+                "message": "This request has been flagged for possible cybersecurity risk."
+            }
+        }),
+    ] {
+        websocket
+            .send(Message::Text(event.to_string().into()))
+            .await
+            .unwrap();
+    }
+    websocket.close(None).await.unwrap();
+    payload
+}
+
 async fn accept_websocket_with_authorization(
     stream: TcpStream,
     expected_authorization: &'static str,

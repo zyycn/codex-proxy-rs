@@ -5,10 +5,60 @@ use std::sync::{
 
 use super::{accept_codex_test_websocket, completed_websocket_response, request_context};
 use codex_proxy_rs::upstream::openai::protocol::responses::CodexResponsesRequest;
-use codex_proxy_rs::upstream::openai::transport::{CodexBackendClient, CodexWebSocketPool};
+use codex_proxy_rs::upstream::openai::transport::{
+    CodexBackendClient, CodexClientError, CodexUpstreamDiagnostics, CodexWebSocketPool,
+    is_cyber_policy_error_body, is_cyber_policy_upstream_error,
+    is_deactivated_workspace_error_body,
+};
 use futures::{SinkExt, StreamExt};
+use reqwest::StatusCode;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
+
+#[test]
+fn deactivated_workspace_error_body_should_match_detail_code() {
+    let body = r#"{"detail":{"code":"deactivated_workspace"}}"#;
+
+    assert!(is_deactivated_workspace_error_body(body));
+}
+
+#[test]
+fn deactivated_workspace_error_body_should_not_match_other_json_paths() {
+    let body = r#"{"error":{"code":"deactivated_workspace"}}"#;
+
+    assert!(!is_deactivated_workspace_error_body(body));
+}
+
+#[test]
+fn cyber_policy_error_body_should_match_supported_error_paths_only() {
+    assert!(is_cyber_policy_error_body(
+        r#"{"error":{"code":"cyber_policy"}}"#
+    ));
+    assert!(is_cyber_policy_error_body(
+        r#"{"response":{"error":{"code":"cyber_policy"}}}"#
+    ));
+    assert!(!is_cyber_policy_error_body(
+        r#"{"detail":{"code":"cyber_policy"}}"#
+    ));
+}
+
+#[test]
+fn cyber_policy_upstream_error_should_require_client_error_status() {
+    let error = |status| CodexClientError::Upstream {
+        status,
+        body: r#"{"error":{"code":"cyber_policy"}}"#.to_string(),
+        retry_after_seconds: None,
+        diagnostics: CodexUpstreamDiagnostics::default(),
+        set_cookie_headers: Vec::new(),
+    };
+
+    assert!(is_cyber_policy_upstream_error(&error(
+        StatusCode::FORBIDDEN
+    )));
+    assert!(!is_cyber_policy_upstream_error(&error(
+        StatusCode::INTERNAL_SERVER_ERROR
+    )));
+}
 
 #[tokio::test]
 async fn codex_backend_client_should_apply_configured_websocket_pool() {

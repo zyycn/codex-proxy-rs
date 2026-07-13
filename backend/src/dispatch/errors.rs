@@ -11,7 +11,10 @@ use crate::{
     },
     upstream::openai::{
         protocol::{responses::ResponsesSseFailure, sse::SseError},
-        transport::{CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics},
+        transport::{
+            CodexBackendTransport, CodexClientError, CodexUpstreamDiagnostics,
+            is_banned_upstream_error, is_cyber_policy_upstream_error,
+        },
     },
 };
 
@@ -189,6 +192,9 @@ pub(crate) fn upstream_error_diagnostics(
 }
 
 pub(crate) fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
+    if is_cyber_policy_upstream_error(error) {
+        return false;
+    }
     matches!(
         error,
         CodexClientError::Upstream { status, .. } if status_code_is_rate_limited(status.as_u16())
@@ -196,6 +202,9 @@ pub(crate) fn is_rate_limit_upstream_error(error: &CodexClientError) -> bool {
 }
 
 pub(crate) fn is_retryable_upstream_5xx_error(error: &CodexClientError) -> bool {
+    if is_cyber_policy_upstream_error(error) {
+        return false;
+    }
     matches!(
         error,
         CodexClientError::Upstream { status, .. }
@@ -223,7 +232,10 @@ pub(crate) fn is_retryable_account_transport_error(error: &CodexClientError) -> 
 pub(crate) fn is_quota_exhausted_upstream_error(error: &CodexClientError) -> bool {
     matches!(
         error,
-        CodexClientError::Upstream { status, .. } if status_code_is_quota_exhausted(status.as_u16())
+        CodexClientError::Upstream { status, .. }
+            if status_code_is_quota_exhausted(status.as_u16())
+                && !is_banned_upstream_error(error)
+                && !is_cyber_policy_upstream_error(error)
     )
 }
 
@@ -233,6 +245,7 @@ pub(crate) fn is_model_unsupported_upstream_error(error: &CodexClientError) -> b
         CodexClientError::Upstream { status, body, .. }
             if status.is_client_error()
                 && !matches!(status.as_u16(), 401 | 402 | 403 | 404 | 429)
+                && !is_cyber_policy_upstream_error(error)
                 && is_model_unsupported_signal(body)
     )
 }

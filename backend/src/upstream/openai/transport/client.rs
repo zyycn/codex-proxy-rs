@@ -155,12 +155,43 @@ pub fn is_banned_auth_signal(value: &str) -> bool {
         || value.contains("banned")
 }
 
+/// 判断 402 错误正文是否带有 OpenAI 工作区停用标记。
+pub fn is_deactivated_workspace_error_body(value: &str) -> bool {
+    serde_json::from_str::<Value>(value).is_ok_and(|value| {
+        value.pointer("/detail/code").and_then(Value::as_str) == Some("deactivated_workspace")
+    })
+}
+
+/// 判断错误正文是否带有 OpenAI `cyber_policy` 标记。
+pub fn is_cyber_policy_error_body(value: &str) -> bool {
+    serde_json::from_str::<Value>(value).is_ok_and(|value| {
+        value
+            .pointer("/response/error/code")
+            .or_else(|| value.pointer("/error/code"))
+            .or_else(|| value.get("code"))
+            .and_then(Value::as_str)
+            .is_some_and(|code| code.trim().eq_ignore_ascii_case("cyber_policy"))
+    })
+}
+
+/// 判断 Codex 上游错误是否为会话级 `cyber_policy`。
+pub fn is_cyber_policy_upstream_error(error: &CodexClientError) -> bool {
+    matches!(
+        error,
+        CodexClientError::Upstream { status, body, .. }
+            if status.is_client_error() && is_cyber_policy_error_body(body)
+    )
+}
+
 /// 判断 Codex 上游错误是否表示账号已封禁或停用。
 pub fn is_banned_upstream_error(error: &CodexClientError) -> bool {
     matches!(
         error,
         CodexClientError::Upstream { status, body, .. }
-            if status.as_u16() == 403 && !is_html_error_body(body)
+            if (status.as_u16() == 403
+                && !is_html_error_body(body)
+                && !is_cyber_policy_upstream_error(error))
+                || (status.as_u16() == 402 && is_deactivated_workspace_error_body(body))
     )
 }
 

@@ -18,7 +18,13 @@ use crate::{
             insert_first_token_ms, live_response_rate_limit_headers, live_response_turn_state,
             record_live_response_stream_event,
         },
-        recovery::{cloudflare::CloudflareRecovery, history::HistoryRecoveryPlan},
+        recovery::{
+            cloudflare::CloudflareRecovery,
+            cyber_policy::{
+                CyberPolicyRecovery, CyberPolicyRoutingPlan, CyberPolicyStreamObserver,
+            },
+            history::HistoryRecoveryPlan,
+        },
         service::ResponseDispatchStream,
     },
     fleet::pool::{AccountLease, AccountPoolService},
@@ -93,6 +99,15 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
             .map(TupleSseEventTransformer::new);
         let mut body_bytes = Vec::new();
         let mut first_token_ms = None;
+        let mut cyber_policy_observer = CyberPolicyStreamObserver::default();
+        cyber_policy_observer
+            .observe_chunk(
+                &context.cyber_policy,
+                &context.cyber_policy_plan,
+                &context.account_id,
+                &prefetched,
+            )
+            .await;
         let mut first_output_detector = FirstOutputDetector::default();
         first_output_detector.observe(context.started_at, &prefetched, &mut first_token_ms);
         match send_live_response_stream_chunk(
@@ -109,8 +124,14 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                 return;
             }
             Err(LiveStreamWriteError::CaptureLimitExceeded) => {
-                terminate_oversized_live_stream(context, &sender, &mut body_bytes, first_token_ms)
-                    .await;
+                terminate_oversized_live_stream(
+                    context,
+                    &sender,
+                    &mut body_bytes,
+                    first_token_ms,
+                    cyber_policy_observer.state_transition_applied(),
+                )
+                .await;
                 return;
             }
         }
@@ -128,6 +149,14 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
             };
             match next {
                 Ok(chunk) => {
+                    cyber_policy_observer
+                        .observe_chunk(
+                            &context.cyber_policy,
+                            &context.cyber_policy_plan,
+                            &context.account_id,
+                            &chunk,
+                        )
+                        .await;
                     first_output_detector.observe(context.started_at, &chunk, &mut first_token_ms);
                     match send_live_response_stream_chunk(
                         &sender,
@@ -148,6 +177,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                                 &sender,
                                 &mut body_bytes,
                                 first_token_ms,
+                                cyber_policy_observer.state_transition_applied(),
                             )
                             .await;
                             return;
@@ -155,6 +185,13 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                     }
                 }
                 Err(error) => {
+                    cyber_policy_observer
+                        .finish(
+                            &context.cyber_policy,
+                            &context.cyber_policy_plan,
+                            &context.account_id,
+                        )
+                        .await;
                     match flush_live_response_stream_transformer(
                         &sender,
                         &mut body_bytes,
@@ -173,6 +210,7 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                                 &sender,
                                 &mut body_bytes,
                                 first_token_ms,
+                                cyber_policy_observer.state_transition_applied(),
                             )
                             .await;
                             return;
@@ -186,11 +224,25 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                         context.account_lease.complete().await;
                         return;
                     };
-                    finalize_live_response_stream(context, body_text, first_token_ms).await;
+                    finalize_live_response_stream(
+                        context,
+                        body_text,
+                        first_token_ms,
+                        cyber_policy_observer.state_transition_applied(),
+                    )
+                    .await;
                     return;
                 }
             }
         }
+
+        cyber_policy_observer
+            .finish(
+                &context.cyber_policy,
+                &context.cyber_policy_plan,
+                &context.account_id,
+            )
+            .await;
 
         match flush_live_response_stream_transformer(
             &sender,
@@ -205,8 +257,14 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
                 return;
             }
             Err(LiveStreamWriteError::CaptureLimitExceeded) => {
-                terminate_oversized_live_stream(context, &sender, &mut body_bytes, first_token_ms)
-                    .await;
+                terminate_oversized_live_stream(
+                    context,
+                    &sender,
+                    &mut body_bytes,
+                    first_token_ms,
+                    cyber_policy_observer.state_transition_applied(),
+                )
+                .await;
                 return;
             }
         }
@@ -216,7 +274,13 @@ pub(in crate::dispatch) fn spawn_live_response_stream(
             return;
         };
 
-        finalize_live_response_stream(context, body_text, first_token_ms).await;
+        finalize_live_response_stream(
+            context,
+            body_text,
+            first_token_ms,
+            cyber_policy_observer.state_transition_applied(),
+        )
+        .await;
     });
 
     ResponseDispatchStream {
@@ -362,6 +426,7 @@ async fn terminate_oversized_live_stream(
     sender: &mpsc::Sender<Result<Bytes, ResponseDispatchStreamError>>,
     body_bytes: &mut Vec<u8>,
     first_token_ms: Option<i64>,
+    cyber_policy_state_transition_applied: bool,
 ) {
     tracing::warn!(
         request_id = %context.request_id,
@@ -380,7 +445,13 @@ async fn terminate_oversized_live_stream(
         context.account_lease.complete().await;
         return;
     };
-    finalize_live_response_stream(context, body_text, first_token_ms).await;
+    finalize_live_response_stream(
+        context,
+        body_text,
+        first_token_ms,
+        cyber_policy_state_transition_applied,
+    )
+    .await;
 }
 
 async fn send_live_response_stream_tail(
@@ -447,6 +518,8 @@ pub(in crate::dispatch) struct LiveResponseStreamContext {
     pub(in crate::dispatch) account_pool: Arc<AccountPoolService>,
     pub(in crate::dispatch) account_lease: AccountLease,
     pub(in crate::dispatch) session_affinity: Arc<SessionAffinityService>,
+    pub(in crate::dispatch) cyber_policy: CyberPolicyRecovery,
+    pub(in crate::dispatch) cyber_policy_plan: CyberPolicyRoutingPlan,
     pub(in crate::dispatch) history: HistoryRecoveryPlan,
     pub(in crate::dispatch) recorder: Arc<Recorder>,
     pub(in crate::dispatch) cloudflare: CloudflareRecovery,
@@ -508,6 +581,7 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
     context: LiveResponseStreamContext,
     body: String,
     first_token_ms: Option<i64>,
+    cyber_policy_state_transition_applied: bool,
 ) {
     context
         .cloudflare
@@ -542,6 +616,12 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
     let completed_terminal = matches!(&collected_response, Ok(CollectedResponse::Completed(_)));
     match collected_response {
         Ok(CollectedResponse::Completed(terminal) | CollectedResponse::Incomplete(terminal)) => {
+            if !cyber_policy_state_transition_applied {
+                context
+                    .cyber_policy
+                    .observe_success(&context.cyber_policy_plan)
+                    .await;
+            }
             context
                 .cloudflare
                 .reset_account_recovery(&context.account_id)
@@ -582,6 +662,12 @@ pub(in crate::dispatch) async fn finalize_live_response_stream(
             .await;
         }
         Ok(CollectedResponse::Failed(failure)) => {
+            if !cyber_policy_state_transition_applied {
+                context
+                    .cyber_policy
+                    .observe_sse_failure(&context.cyber_policy_plan, &context.account_id, &failure)
+                    .await;
+            }
             let response_id = latest_response_id(&body);
             let latency_ms = elapsed_millis_i64(context.started_at);
             let failure_source = stream_failure_source(&failure);

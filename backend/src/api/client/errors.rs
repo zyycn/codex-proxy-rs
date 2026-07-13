@@ -8,7 +8,10 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    dispatch::errors::{DispatchFailureClass, ResponseDispatchError},
+    dispatch::{
+        errors::{DispatchFailureClass, ResponseDispatchError},
+        recovery::cyber_policy::is_cyber_policy_failure,
+    },
     upstream::openai::protocol::sse::response_failed_sse_event as encode_response_failed_sse_event,
     upstream::openai::transport::CodexClientError,
 };
@@ -123,6 +126,20 @@ pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> R
         return (*status, Json(body)).into_response();
     }
 
+    if let ResponseDispatchError::Failed(failure) = error
+        && is_cyber_policy_failure(failure)
+    {
+        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
+        let kind = responses_error_kind_for_status(status);
+        return openai_error_response(
+            status,
+            &failure.message,
+            kind.error_type,
+            failure.upstream_code.as_deref().unwrap_or(kind.code),
+        )
+        .into_response();
+    }
+
     match error {
         ResponseDispatchError::NoActiveAccount => {
             responses_no_available_accounts_response().into_response()
@@ -132,6 +149,17 @@ pub fn responses_dispatch_error_response_ref(error: &ResponseDispatchError) -> R
 }
 
 pub fn responses_stream_dispatch_failed_sse_event(error: &ResponseDispatchError) -> String {
+    if let ResponseDispatchError::Failed(failure) = error
+        && is_cyber_policy_failure(failure)
+    {
+        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
+        let kind = responses_error_kind_for_status(status);
+        return encode_response_failed_sse_event(
+            kind.error_type,
+            failure.upstream_code.as_deref().unwrap_or(kind.code),
+            &failure.message,
+        );
+    }
     let http_error =
         response_dispatch_http_error(error, ResponseDispatchMessageStyle::ResponsesStream);
     let kind = response_dispatch_error_kind(error);
@@ -142,6 +170,19 @@ pub(super) fn responses_websocket_dispatch_error_event(
     error: &ResponseDispatchError,
     request_id: &str,
 ) -> String {
+    if let ResponseDispatchError::Failed(failure) = error
+        && is_cyber_policy_failure(failure)
+    {
+        let status = status_from_u16(error.client_http_status_code(), StatusCode::BAD_GATEWAY);
+        let kind = responses_error_kind_for_status(status);
+        return responses_websocket_error_event(
+            status,
+            kind.error_type,
+            failure.upstream_code.as_deref().unwrap_or(kind.code),
+            &failure.message,
+            request_id,
+        );
+    }
     if let Some(event) = upstream_client_websocket_error_event(error, request_id) {
         return event;
     }

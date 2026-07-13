@@ -26,8 +26,10 @@ impl AccountAttemptLedger {
     pub(in crate::dispatch) async fn freeze(
         account_pool: &AccountPoolService,
         request: &AccountAcquireRequest,
+        excluded_account_ids: &BTreeSet<String>,
     ) -> Self {
-        let candidate_ids = account_pool.candidate_snapshot(request).await;
+        let mut candidate_ids = account_pool.candidate_snapshot(request).await;
+        candidate_ids.retain(|account_id| !excluded_account_ids.contains(account_id));
         Self {
             model: request.model.clone(),
             pending: candidate_ids.iter().cloned().collect(),

@@ -87,7 +87,187 @@ async fn responses_should_classify_sse_cyber_policy_failure_as_bad_request() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "codex_client_error");
+    assert_eq!(body["error"]["code"], "cyber_policy");
+    assert_eq!(
+        body["error"]["message"],
+        "This request has been flagged for possible cybersecurity risk."
+    );
+}
+
+#[tokio::test]
+async fn responses_http_cyber_policy_should_keep_account_active_and_change_next_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "error": {
+                "code": "cyber_policy",
+                "message": "This request has been flagged for possible cybersecurity risk."
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_AFTER_402_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_http_cyber_next_request",
+        "input": [{"role": "user", "content": "Security assessment"}],
+        "stream": false,
+        "use_websocket": false
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::FORBIDDEN);
+    let first_body = response_json(first_response).await;
+    assert_eq!(first_body["error"]["code"], "cyber_policy");
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "active");
+
+    let second_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    let second_body = response_json(second_response).await;
+    assert_eq!(second_body["id"], "resp_after_402");
+}
+
+#[tokio::test]
+async fn responses_http_rate_limited_cyber_policy_should_not_retry_in_same_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "code": "cyber_policy",
+                "message": "This request has been flagged for possible cybersecurity risk."
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_AFTER_402_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_http_429_cyber_next_request",
+        "input": [],
+        "stream": false,
+        "use_websocket": false
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response_json(first_response).await["error"]["code"],
+        "cyber_policy"
+    );
+    let account_status: (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as("select status, quota_cooldown_until from accounts where id = $1")
+            .bind("acct_primary")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(account_status, ("active".to_string(), None));
+
+    let second_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(response_json(second_response).await["id"], "resp_after_402");
+}
+
+#[tokio::test]
+async fn responses_cyber_rotation_should_return_current_quota_error_when_candidates_exhaust() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "error": {"code": "cyber_policy", "message": "cyber blocked"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": {"code": "billing_limit", "message": "quota exhausted"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let request_body = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_key": "conv_cyber_then_quota",
+        "input": [],
+        "stream": false,
+        "use_websocket": false
+    });
+
+    let first_response = app
+        .clone()
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::FORBIDDEN);
+    let second_response = app
+        .oneshot(responses_json_request(&api_key, &request_body))
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let second_body = response_json(second_response).await;
+    assert_eq!(second_body["error"]["code"], "insufficient_quota");
+    assert!(
+        second_body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| {
+                message.contains("quota exhausted") && !message.contains("cyber blocked")
+            })
+    );
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
+        .bind("acct_secondary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(account_status.0, "quota_exhausted");
 }
 
 #[tokio::test]
@@ -482,6 +662,111 @@ async fn responses_should_mark_banned_when_401_says_account_deactivated() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(account_status.0, "banned");
+}
+
+#[tokio::test]
+async fn responses_should_mark_banned_after_402_deactivated_workspace_and_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "detail": {"code": "deactivated_workspace"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_AFTER_402_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.5",
+                        "input": [{"role": "user", "content": "Say hello"}],
+                        "stream": false,
+                        "use_websocket": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(body["id"], "resp_after_402");
+    assert_eq!(account_status.0, "banned");
+}
+
+#[tokio::test]
+async fn responses_stream_should_mark_banned_after_402_deactivated_workspace_and_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-primary"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "detail": {"code": "deactivated_workspace"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer access-secondary"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(RESPONSES_STREAM_AFTER_402_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (app, api_key, pool, _dir) = test_app_with_two_accounts(server.uri()).await;
+    let response = app
+        .oneshot(responses_json_request(
+            &api_key,
+            &json!({
+                "model": "gpt-5.5",
+                "input": [{"role": "user", "content": "Say hello"}],
+                "stream": true,
+                "use_websocket": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    let account_status: (String,) = sqlx::query_as("select status from accounts where id = $1")
+        .bind("acct_primary")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert!(body.contains("resp_stream_after_402"));
     assert_eq!(account_status.0, "banned");
 }
 
