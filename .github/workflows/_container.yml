@@ -98,7 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           umask 0077
-          install -d -m 0750 .runtime/postgres .runtime/redis
+          # Bind roots hand off ownership to the image-specific database users.
+          # Sticky directories keep that initialization compatible with user-namespaced runners.
+          install -d -m 1777 .runtime/postgres .runtime/redis
           mkdir -p "$DIAGNOSTICS_DIR"
           sudo install -d -m 0770 -o "$(id -u)" -g 10001 \
             .runtime/data .runtime/logs
