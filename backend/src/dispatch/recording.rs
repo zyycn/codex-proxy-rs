@@ -424,6 +424,7 @@ fn response_request_summary(
         "compact": semantics.compact,
         "requestKind": semantics.request_kind,
         "subagentKind": semantics.subagent_kind,
+        "reasoningPreset": semantics.reasoning_preset,
         "transport": backend_transport_name(transport),
         "inputType": json_value_kind(input),
         "inputItemsCount": input.and_then(Value::as_array).map(Vec::len),

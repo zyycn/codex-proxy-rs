@@ -403,10 +403,12 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
     )
     .await;
     let record_at = Utc::now() - Duration::seconds(1);
-    store
-        .append(&usage_record_with_tokens(record_at, 10))
-        .await
-        .unwrap();
+    let mut record = usage_record_with_tokens(record_at, 10);
+    record.metadata = json!({
+        "reasoningEffort": "max",
+        "reasoningPreset": "ultra"
+    });
+    store.append(&record).await.unwrap();
 
     let body = dashboard_summary(app).await;
 
@@ -414,6 +416,9 @@ async fn dashboard_summary_should_return_backend_formatted_time_fields() {
         body["data"]["usageRecords"][0]["createdAtDisplay"],
         china_datetime(&record_at)
     );
+    assert_eq!(body["data"]["usageRecords"][0]["reasoningEffort"], "max");
+    assert_eq!(body["data"]["usageRecords"][0]["reasoningPreset"], "ultra");
+    assert!(body["data"]["usageRecords"][0]["subagentKind"].is_null());
     assert!(body["data"]["usageRecords"][0].get("metadata").is_none());
 }
 

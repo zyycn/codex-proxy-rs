@@ -12,7 +12,6 @@ import {
   usageTimeRangeOptions,
   usageAccountText,
   usageIsCompact,
-  usageReasoningEffort,
   usageRecordColumns,
   usageRecordType,
   usageRecordTypeClass,
@@ -27,6 +26,7 @@ import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageModelCell from './components/UsageModelCell.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
+import UsageReasoningEffortCell from './components/UsageReasoningEffortCell.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import UsageTokenCell from './components/UsageTokenCell.vue'
 
@@ -184,9 +184,7 @@ watch(timeRange, () => {
             </template>
 
             <template #reasoningEffort="{ row }">
-              <span class="whitespace-nowrap text-[12px] font-[720] text-(--cp-text-primary)">
-                {{ usageReasoningEffort(row) }}
-              </span>
+              <UsageReasoningEffortCell :record="row" />
             </template>
 
             <template #route="{ row }">

@@ -11,6 +11,10 @@ use crate::{
     },
 };
 
+const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
+const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
+const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";
+
 /// Codex Responses 上游请求体。
 ///
 /// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、
@@ -97,6 +101,8 @@ pub struct CodexRequestSemantics {
     pub request_kind: Option<String>,
     /// Codex turn metadata 中的子代理类型。
     pub subagent_kind: Option<String>,
+    /// Codex 客户端选择的推理预设。
+    pub reasoning_preset: Option<&'static str>,
     /// 请求是否为远端压缩。
     pub compact: bool,
 }
@@ -696,7 +702,7 @@ impl CodexResponsesRequest {
         self.body.get("client_metadata")
     }
 
-    /// 提取 Codex 请求类型、子代理类型与压缩语义。
+    /// 提取 Codex 请求类型、子代理类型、推理预设与压缩语义。
     pub fn semantics(&self) -> CodexRequestSemantics {
         let turn_metadata = self
             .turn_metadata
@@ -717,6 +723,16 @@ impl CodexResponsesRequest {
             .and_then(|metadata| metadata.get("subagent_kind"))
             .and_then(Value::as_str)
             .and_then(non_empty_owned_string);
+        let reasoning_preset = (subagent_kind.is_none()
+            && self
+                .reasoning()
+                .and_then(|value| value.get("effort"))
+                .and_then(Value::as_str)
+                == Some("max")
+            && self
+                .latest_multi_agent_mode()
+                .is_some_and(|mode| mode.starts_with(PROACTIVE_MULTI_AGENT_MODE_PREFIX)))
+        .then_some("ultra");
         let compact = request_kind.as_deref() == Some("compaction")
             || self
                 .input()
@@ -726,8 +742,17 @@ impl CodexResponsesRequest {
         CodexRequestSemantics {
             request_kind,
             subagent_kind,
+            reasoning_preset,
             compact,
         }
+    }
+
+    fn latest_multi_agent_mode(&self) -> Option<&str> {
+        latest_multi_agent_mode(self.input()).or_else(|| {
+            self.local_replay_input
+                .as_deref()
+                .and_then(|input| latest_multi_agent_mode(input.as_slice()))
+        })
     }
 
     /// 设置 / 合并 client metadata。
@@ -771,4 +796,26 @@ impl CodexResponsesRequest {
 fn non_empty_owned_string(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+fn latest_multi_agent_mode(input: &[Value]) -> Option<&str> {
+    input.iter().rev().find_map(|item| {
+        if item.get("role").and_then(Value::as_str) != Some("developer") {
+            return None;
+        }
+        item.get("content")?
+            .as_array()?
+            .iter()
+            .rev()
+            .filter_map(|content| content.get("text").and_then(Value::as_str))
+            .find_map(multi_agent_mode_from_text)
+    })
+}
+
+fn multi_agent_mode_from_text(text: &str) -> Option<&str> {
+    let close = text.rfind(MULTI_AGENT_MODE_CLOSE_TAG)?;
+    let before_close = &text[..close];
+    let open = before_close.rfind(MULTI_AGENT_MODE_OPEN_TAG)?;
+    let body = &before_close[open + MULTI_AGENT_MODE_OPEN_TAG.len()..];
+    Some(body.trim())
 }

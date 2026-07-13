@@ -243,7 +243,16 @@ export function usageUserAgent(record: any) {
 }
 
 export function usageReasoningEffort(record: any) {
-  return record?.reasoningEffort || record?.metadata?.reasoningEffort || '—'
+  const reasoningEffort = record?.reasoningEffort || record?.metadata?.reasoningEffort || '—'
+  if (usageIsSubagent(record)) {
+    return reasoningEffort
+  }
+
+  return record?.reasoningPreset || record?.metadata?.reasoningPreset || reasoningEffort
+}
+
+export function usageIsSubagent(record: any) {
+  return Boolean(record?.subagentKind)
 }
 
 export function usageIsCompact(record: any) {
