@@ -50,7 +50,6 @@ function latencyDisplay(value: unknown) {
     description="状态码、失败分类与诊断信息"
     variant="danger"
     width="920px"
-    scrollable
     body-max-height="min(76dvh,760px)"
   >
     <template v-if="record">

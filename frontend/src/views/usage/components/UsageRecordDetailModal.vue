@@ -214,7 +214,6 @@ function themeColor(name: string, fallback: string) {
     description="单次请求的完整链路信息"
     variant="info"
     width="960px"
-    scrollable
     body-max-height="min(76dvh,820px)"
     body-view-class="grid gap-3"
   >

@@ -178,6 +178,9 @@ function togglePasswordVisible(): void {
   --cp-disabled-bg: var(--login-disabled-bg);
   --cp-disabled-text: var(--login-disabled-text);
   --cp-disabled-icon: var(--login-disabled-text);
+  --cp-input-current-bg: var(--login-input-bg);
+  --cp-input-current-bg-hover: var(--login-input-bg-hover);
+  --cp-input-soft-bg-focus: var(--login-input-focus);
   --cp-button-radius-base: 6px;
   --cp-icon-button-radius: 6px;
   --cp-shadow-control: none;

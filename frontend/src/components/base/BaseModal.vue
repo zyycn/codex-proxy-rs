@@ -14,7 +14,6 @@ const props = defineProps<{
   width?: string | number
   variant?: ModalVariant
   closeDisabled?: boolean
-  scrollable?: boolean
   bodyMaxHeight?: string
   bodyViewClass?: string
   hideFooter?: boolean
@@ -45,11 +44,12 @@ const modalStyle = computed(() => {
   }
 })
 const bodyClass = computed(() => [
-  'min-h-0 flex-1 overflow-x-hidden p-4 sm:p-7',
-  props.scrollable ? 'overflow-hidden' : 'overflow-y-auto overscroll-contain',
+  'min-h-0 overflow-hidden p-4 sm:p-7',
   props.description || variant.value !== 'default' ? 'pt-4 sm:pt-5' : 'pt-4 sm:pt-6',
 ])
-const scrollViewClass = computed(() => ['pr-4', props.bodyViewClass].filter(Boolean).join(' '))
+const scrollViewClass = computed(() =>
+  ['pr-3 sm:pr-4', props.bodyViewClass].filter(Boolean).join(' '),
+)
 
 const iconMap = {
   default: Info,
@@ -177,7 +177,7 @@ onBeforeUnmount(() => {
         <div class="absolute inset-0 bg-(--cp-overlay-scrim)" @click="closeModal" />
         <section
           ref="panel"
-          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 flex-col overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover) sm:max-h-[calc(100dvh-3rem)]"
+          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover) sm:max-h-[calc(100dvh-3rem)]"
           :style="modalStyle"
           role="dialog"
           aria-modal="true"
@@ -219,14 +219,12 @@ onBeforeUnmount(() => {
           </header>
           <div :class="bodyClass">
             <BaseScrollbar
-              v-if="scrollable"
-              class="h-full sm:-mr-4"
+              class="h-full -mr-3 sm:-mr-4"
               :max-height="bodyMaxHeight"
               :view-class="scrollViewClass"
             >
               <slot />
             </BaseScrollbar>
-            <slot v-else />
           </div>
           <footer
             v-if="!hideFooter"

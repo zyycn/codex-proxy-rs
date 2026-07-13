@@ -338,7 +338,7 @@ watch(
       >
         <span
           v-if="!isCollapsed"
-          class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-[650] text-(--cp-success-text)"
+          class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-[650] text-(--cp-success-text)"
         >
           <i class="size-1.5 rounded-full bg-(--cp-success)" />
           在线
