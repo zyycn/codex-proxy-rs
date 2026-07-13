@@ -96,7 +96,7 @@ pub fn router_with_assets(dist_dir: impl AsRef<Path>) -> Router<AppState> {
 
 async fn healthz(State(state): State<AppState>) -> StatusCode {
     if let Err(error) = state.services.health_probe.check().await {
-        tracing::warn!(error, "health check failed");
+        tracing::warn!(error, "Health check failed");
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     StatusCode::NO_CONTENT

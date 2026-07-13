@@ -1,4 +1,4 @@
-use std::{fs, io::Write};
+use std::{fs, io::Write, process::Command};
 
 use chrono::{Duration, Utc};
 use codex_proxy_rs::infra::{
@@ -11,6 +11,53 @@ fn tracing_config_should_reject_disabled_outputs() {
     let result = init_tracing(&TracingConfig::new("info", false, None));
 
     assert!(result.is_err());
+}
+
+#[test]
+fn tracing_stdout_should_stay_json_with_china_time_when_not_a_terminal() {
+    const CASE_ENV: &str = "CODEX_PROXY_TEST_JSON_STDOUT_LOGGING";
+
+    if std::env::var(CASE_ENV).as_deref() == Ok("child") {
+        let _guard = init_tracing(&TracingConfig::new("info", true, None)).unwrap();
+        tracing::info!(probe = 42, "logging format probe");
+        return;
+    }
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("infra::logging::tracing_stdout_should_stay_json_with_china_time_when_not_a_terminal")
+        .arg("--nocapture")
+        .env(CASE_ENV, "child")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "isolated logging test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let event = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .find_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .unwrap();
+    assert_eq!(
+        (
+            event["level"].as_str(),
+            event["fields"]["message"].as_str(),
+            event["fields"]["probe"].as_i64(),
+            event["timestamp"]
+                .as_str()
+                .map(|timestamp| timestamp.ends_with("+08:00")),
+        ),
+        (
+            Some("INFO"),
+            Some("logging format probe"),
+            Some(42),
+            Some(true)
+        )
+    );
 }
 
 #[test]

@@ -148,7 +148,7 @@ impl Drop for RefreshLeaseGuard {
         drop(tasks.spawn_on(
             async move {
                 if let Err(error) = store.release(&account_id, &owner).await {
-                    warn!(account_id, error = %error, "failed to release cancelled token refresh lease");
+                    warn!(account_id, error = %error, "Failed to release cancelled token refresh lease");
                 }
             },
             &runtime,
@@ -452,7 +452,7 @@ where
                     warn!(
                         account_id = %timer_account_id,
                         error = %error,
-                        "scheduled token refresh failed"
+                        "Scheduled token refresh failed"
                     );
                 }
             });
@@ -503,7 +503,7 @@ where
             warn!(
                 remaining_tasks = self.tasks.len(),
                 timeout_secs = REFRESH_TASK_SHUTDOWN_TIMEOUT.as_secs(),
-                "waiting for in-flight token refresh tasks timed out"
+                "Waiting for in-flight token refresh tasks timed out"
             );
         }
     }
@@ -561,7 +561,7 @@ where
         if delay.is_zero() {
             debug!(
                 account_id = %account.id,
-                "refreshed token is already within refresh margin; skipping next timer"
+                "Refreshed token is already within refresh margin; skipping next timer"
             );
             return;
         }
@@ -617,7 +617,7 @@ where
                         next_refresh_at = ?updated.next_refresh_at,
                         refresh_token_present = updated.refresh_token.is_some(),
                         refresh_token_rotated,
-                        "token refresh succeeded"
+                        "Token refresh succeeded"
                     );
                     return Ok(TokenRefreshOutcome::Refreshed(Box::new(updated)));
                 }

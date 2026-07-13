@@ -3,33 +3,37 @@ name: codex-proxy-rs
 x-json-logging: &json-logging
   driver: json-file
   options:
-    max-size: "10m"
-    max-file: "5"
+    max-size: '10m'
+    max-file: '5'
 
 services:
   postgres:
+    extends:
+      file: config.yaml
+      service: postgres-credentials
     image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
     restart: unless-stopped
     command:
-      [
-        "postgres",
-        "-c",
-        "timezone=Asia/Shanghai",
-        "-c",
-        "log_timezone=Asia/Shanghai",
-      ]
+      - postgres
+      - -c
+      - timezone=Asia/Shanghai
+      - -c
+      - log_timezone=Asia/Shanghai
     environment:
       TZ: Asia/Shanghai
       POSTGRES_DB: codex_proxy
       POSTGRES_USER: codex_proxy
-      POSTGRES_PASSWORD: ${CPR_POSTGRES_PASSWORD:?CPR_POSTGRES_PASSWORD must be set in deploy/.env}
       POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - type: bind
+        source: ../.runtime/postgres
+        target: /var/lib/postgresql
+        bind:
+          create_host_path: false
     ports:
-      - "127.0.0.1:5432:5432"
+      - '127.0.0.1:5432:5432'
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U codex_proxy -d codex_proxy"]
+      test: [CMD-SHELL, pg_isready -U codex_proxy -d codex_proxy]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -38,30 +42,20 @@ services:
     logging: *json-logging
 
   redis:
+    extends:
+      file: config.yaml
+      service: redis-credentials
     image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     restart: unless-stopped
-    command:
-      [
-        "redis-server",
-        "--appendonly",
-        "yes",
-        "--requirepass",
-        "${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD must be set in deploy/.env}",
-      ]
     volumes:
-      - redis-data:/data
+      - type: bind
+        source: ../.runtime/redis
+        target: /data
+        bind:
+          create_host_path: false
     ports:
-      - "127.0.0.1:6379:6379"
+      - '127.0.0.1:6379:6379'
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "--no-auth-warning",
-          "-a",
-          "${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD must be set in deploy/.env}",
-          "ping",
-        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -80,9 +74,8 @@ services:
         CPR_GIT_SHA: ${CPR_GIT_SHA:-unknown}
         CPR_BUILD_TIME: ${CPR_BUILD_TIME:-unknown}
         CPR_BUILD_TYPE: ${CPR_BUILD_TYPE:-release}
-    container_name: codex-proxy-rs
     restart: unless-stopped
-    user: "10001:10001"
+    user: '10001:10001'
     init: true
     stop_grace_period: 30s
     depends_on:
@@ -91,14 +84,24 @@ services:
       redis:
         condition: service_healthy
     pids_limit: 256
-    cpus: "2.0"
+    cpus: '2.0'
     mem_limit: 1g
     ports:
-      - "127.0.0.1:8080:8080"
+      - '127.0.0.1:8080:8080'
     volumes:
-      - ${CPR_CONFIG_FILE:-../.runtime/config.yaml}:/app/config.yaml:ro
-      - ${CPR_DATA_DIR:-../.runtime/data}:/app/data
-      - ${CPR_LOG_DIR:-../.runtime/logs}:/app/logs
+      - type: bind
+        source: ../.runtime/data
+        target: /app/.runtime/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../.runtime/logs
+        target: /app/.runtime/logs
+        bind:
+          create_host_path: false
+    configs:
+      - source: cpr_config
+        target: /app/deploy/config.yaml
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -106,28 +109,27 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      test: [CMD, curl, -fsS, http://127.0.0.1:8080/healthz]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
     environment:
       HOME: /app
-      XDG_DATA_HOME: /app/data
-      CPR_CONFIG_FILE: /app/config.yaml
-      CPR_ADMIN_DEFAULT_PASSWORD: ${CPR_ADMIN_DEFAULT_PASSWORD:?CPR_ADMIN_DEFAULT_PASSWORD must be set in deploy/.env}
-      CPR_POSTGRES_PASSWORD: ${CPR_POSTGRES_PASSWORD:?CPR_POSTGRES_PASSWORD must be set in deploy/.env}
-      CPR_REDIS_PASSWORD: ${CPR_REDIS_PASSWORD:?CPR_REDIS_PASSWORD must be set in deploy/.env}
+      CPR_SERVER_HOST: 0.0.0.0
+      CPR_SERVER_PORT: '8080'
+      CPR_DATABASE_URL: postgres://codex_proxy@postgres:5432/codex_proxy
+      CPR_REDIS_URL: redis://redis:6379/
       CPR_DEPLOYMENT_MODE: docker
       CPR_UPDATE_REPOSITORY: zyycn/codex-proxy-rs
       CPR_UPDATE_CHANNEL: stable
-      CPR_UPDATE_TEMP_DIR: /app/data/update-tmp
-      CPR_UPDATE_STATE_FILE: /app/data/update-state.json
-      CPR_UPDATE_LOCK_FILE: /app/data/update.lock
+      CPR_UPDATE_TEMP_DIR: /app/.runtime/data/update-tmp
+      CPR_UPDATE_STATE_FILE: /app/.runtime/data/update-state.json
+      CPR_UPDATE_LOCK_FILE: /app/.runtime/data/update.lock
       CPR_WEB_DIST_DIR: /app/web/dist
-      CPR_ENABLE_SELF_RESTART: "true"
+      CPR_ENABLE_SELF_RESTART: 'true'
     logging: *json-logging
 
-volumes:
-  postgres-data:
-  redis-data:
+configs:
+  cpr_config:
+    file: ./config.yaml

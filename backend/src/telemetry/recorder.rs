@@ -69,7 +69,7 @@ impl Recorder {
                 account_id = event.account_id,
                 model = event.model,
                 status_code = event.status_code,
-                "rejected invalid success usage fact"
+                "Rejected invalid success usage fact"
             );
             return Err(RecorderError::InvalidUsageFact);
         }
@@ -124,7 +124,7 @@ pub(crate) async fn record_dispatch_error_event(record: DispatchErrorLogRecord<'
         tracing::error!(
             account_id = record.account_id.unwrap_or(""),
             error = %error,
-            "failed to record dispatch error event"
+            "Failed to record dispatch error event"
         );
     }
 }
@@ -169,7 +169,7 @@ pub(crate) async fn record_response_event(record: ResponseUsageRecord<'_>) {
     event.metadata = metadata;
 
     if let Err(error) = record.recorder.record_usage(event).await {
-        tracing::error!(account_id = %record.account_id, error = %error, "failed to record response event");
+        tracing::error!(account_id = %record.account_id, error = %error, "Failed to record response event");
     }
 }
 

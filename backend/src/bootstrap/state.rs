@@ -9,7 +9,6 @@ use crate::{
 /// 运行时配置镜像（从 AppConfig 衍生）。
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
-    pub admin: crate::bootstrap::config::AdminConfig,
     pub auth: crate::bootstrap::config::AuthConfig,
     pub quota: crate::bootstrap::config::QuotaConfig,
 }
@@ -40,12 +39,11 @@ impl HealthProbe for RuntimeHealthProbe {
     }
 }
 
-impl From<AppConfig> for RuntimeConfig {
-    fn from(config: AppConfig) -> Self {
+impl From<&AppConfig> for RuntimeConfig {
+    fn from(config: &AppConfig) -> Self {
         Self {
-            admin: config.admin.clone(),
             auth: config.auth.clone(),
-            quota: config.quota,
+            quota: config.quota.clone(),
         }
     }
 }

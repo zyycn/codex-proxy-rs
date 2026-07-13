@@ -418,7 +418,7 @@ impl AccountPool {
             quota_limit_reached = selected.quota_limit_reached,
             quota_cooldown_until = ?selected.quota_cooldown_until,
             previous_slot_at = ?previous_slot_at,
-            "account selected for upstream request"
+            "Account selected for upstream request"
         );
 
         let selected_id = selected.id.clone();
@@ -645,7 +645,7 @@ impl AccountPool {
                 last_used_at = account.last_used_at.as_deref().unwrap_or_default(),
                 quota_limit_reached = account.quota_limit_reached,
                 quota_cooldown_until = ?account.quota_cooldown_until,
-                "account selected for model refresh"
+                "Account selected for model refresh"
             );
             selected_accounts.push((plan_type, account));
         }

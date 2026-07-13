@@ -121,7 +121,7 @@ impl AccountManageService {
                 account_id,
                 operation,
                 error = %error,
-                "failed to sync runtime account pool after admin account update"
+                "Failed to sync runtime account pool after admin account update"
             );
         }
     }
@@ -145,7 +145,7 @@ impl AccountManageService {
                 tracing::warn!(
                     account_id,
                     error = %error,
-                    "failed to inspect account while evicting websocket pool"
+                    "Failed to inspect account while evicting WebSocket pool"
                 );
             }
         }

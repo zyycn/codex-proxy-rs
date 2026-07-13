@@ -351,7 +351,7 @@ impl CodexWebSocketPool {
                         account_id = key.account_id(),
                         conversation_id_hash = key.conversation_id_hash(),
                         reservation_id = %reservation.id,
-                        "removed stale WebSocket pool reservation"
+                        "Removed stale WebSocket pool reservation"
                     );
                 }
                 None => {}

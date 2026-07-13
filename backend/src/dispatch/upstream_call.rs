@@ -97,7 +97,7 @@ pub(crate) async fn verify_acquired_quota_if_required(
                 quota_verify_result = "upstream_error",
                 retry_with_another_account = false,
                 error = %error,
-                "failed to verify stale quota state before upstream request"
+                "Failed to verify stale quota state before upstream request"
             );
             return QuotaVerificationDecision::Ready(Box::new(acquired));
         }
@@ -116,7 +116,7 @@ pub(crate) async fn verify_acquired_quota_if_required(
             quota_verify_required = true,
             quota_verify_result = "limit_reached",
             retry_with_another_account = true,
-            "quota verification reported exhausted account before upstream request"
+            "Quota verification reported exhausted account before upstream request"
         );
         return QuotaVerificationDecision::RetryWithAnotherAccount;
     }

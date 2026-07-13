@@ -10,15 +10,11 @@ use rand::Rng;
 
 const IDENTITY_SECRET_FILE_NAME: &str = "identity_hmac_secret";
 
-fn data_dir() -> PathBuf {
-    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".runtime/data"))
-}
-
 /// 确保本地数据目录存在。
-pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+pub fn ensure_data_dir(directory: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let directory = directory.as_ref();
+    std::fs::create_dir_all(directory)?;
+    Ok(directory.to_path_buf())
 }
 
 /// 读取或创建账号身份隔离使用的 256-bit HMAC 密钥。

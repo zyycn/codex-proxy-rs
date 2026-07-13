@@ -44,8 +44,8 @@ pub fn start_fingerprint_update_task(
         },
         PeriodicTaskConfig::new(
             APPCAST_POLL_INTERVAL.as_secs(),
-            "fingerprint 后台版本检查器已启动",
-            "fingerprint 后台版本检查器已关闭",
+            "Fingerprint 后台版本检查器已启动",
+            "Fingerprint 后台版本检查器已关闭",
         ),
     )
 }
@@ -68,15 +68,15 @@ impl PeriodicTaskRunner for FingerprintUpdateTask {
                     info!(
                         app_version = %app_version,
                         build_number = %build_number,
-                        "fingerprint 运行时版本已更新"
+                        "Fingerprint 运行时版本已更新"
                     );
                 }
                 Ok(None) => {}
                 Err(error) => {
                     if first_tick {
-                        warn!(error = %error, "fingerprint 首次版本检查失败");
+                        warn!(error = %error, "Fingerprint 首次版本检查失败");
                     } else {
-                        warn!(error = %error, "fingerprint 定期版本检查失败");
+                        warn!(error = %error, "Fingerprint 定期版本检查失败");
                     }
                 }
             }

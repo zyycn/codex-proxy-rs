@@ -103,7 +103,7 @@ impl AccountManageService {
                 account_id = %account.id,
                 plan_type,
                 error = %error,
-                "failed to refresh account plan models"
+                "Failed to refresh account plan models"
             );
         }
     }
@@ -214,7 +214,7 @@ impl AccountManageService {
                 tracing::warn!(
                     account_id,
                     error = %error,
-                    "failed to inspect account after connection test"
+                    "Failed to inspect account after connection test"
                 );
                 return None;
             }
@@ -231,7 +231,7 @@ impl AccountManageService {
                     account_id,
                     status = %status,
                     error = %error,
-                    "failed to persist account status after connection test"
+                    "Failed to persist account status after connection test"
                 );
                 return None;
             }
@@ -243,7 +243,7 @@ impl AccountManageService {
             tracing::warn!(
                 account_id,
                 error = %error,
-                "failed to clear token refresh schedule after connection test"
+                "Failed to clear token refresh schedule after connection test"
             );
         }
         self.sync_account_pool_best_effort(account_id, "connection test")

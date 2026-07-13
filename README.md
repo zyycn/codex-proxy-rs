@@ -18,8 +18,6 @@
 
 </div>
 
-后端使用 Rust、Tokio 和 Axum，管理界面使用 Vue 3、TypeScript 和 Vite。SSE 数据边收边转发，上游 WebSocket 连接按账号复用；前端构建后由同一个服务直接提供。
-
 > [!NOTE]
 > 当前兼容 OpenAI Responses API，不提供 `/v1/chat/completions`。
 
@@ -44,18 +42,21 @@ git clone https://github.com/zyycn/codex-proxy-rs.git
 cd codex-proxy-rs
 
 mkdir -p .runtime/data .runtime/logs
-cp deploy/config.example.yaml .runtime/config.yaml
-cp deploy/.env.example deploy/.env
-chmod 0600 deploy/.env
+install -d -m 0750 .runtime/postgres .runtime/redis
+cp deploy/config.example.yaml deploy/config.yaml
+sudo chown "$(id -u):10001" deploy/config.yaml
+chmod 0640 deploy/config.yaml
 ```
 
-编辑 `deploy/.env`：
+分别执行三次以下命令生成密码：
 
-```dotenv
-CPR_ADMIN_DEFAULT_PASSWORD='<至少 12 个字符的管理员密码>'
-CPR_POSTGRES_PASSWORD='<PostgreSQL 密码>'
-CPR_REDIS_PASSWORD='<Redis 密码>'
+```bash
+openssl rand -hex 24
 ```
+
+把结果填入 `deploy/config.yaml` 的 `database.password`、`redis.password` 和
+`admin.default_password`。PostgreSQL 与 Redis 密码必须是 48 位十六进制字符；管理员密码
+至少 12 位且不能包含 `$`。
 
 > [!IMPORTANT]
 > 应用容器以非 root 用户 `10001:10001` 运行。Linux Bind Mount 会保留宿主机权限，因此需要允许容器用户组读取配置并写入数据和日志目录：
@@ -63,24 +64,24 @@ CPR_REDIS_PASSWORD='<Redis 密码>'
 > ```bash
 > sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
 > chmod 0770 .runtime/data .runtime/logs
-> sudo chown "$(id -u):10001" .runtime/config.yaml
-> chmod 0640 .runtime/config.yaml
 > ```
 >
-> macOS 和 Windows 的 Docker Desktop 通常不需要设置这些权限。
+> 配置文件通过 Compose `configs` 只读挂载；普通 Compose 会保留宿主机权限，因此由
+> 当前用户持有、仅向容器组开放读取权限。
+> macOS 和 Windows 的 Docker Desktop 通常也不需要调整数据目录权限。
 
 ### 2. 启动服务
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --no-build
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
 启动后检查：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+docker compose -f deploy/compose.yaml ps
 curl -i http://127.0.0.1:8080/healthz
 ```
 
@@ -88,14 +89,14 @@ curl -i http://127.0.0.1:8080/healthz
 
 ## 首次使用
 
-1. 使用 `admin@cpr.local` 和 `CPR_ADMIN_DEFAULT_PASSWORD` 中设置的密码登录。
+1. 使用 `admin@cpr.local` 和 `x-cpr.admin.default_password` 中设置的密码登录。
 2. 打开“账号”，用 OAuth、Access/Refresh Token 或 JSON 文件添加账号。
 3. 点一次连接测试，能看到模型和额度即可。
 4. 打开“API 密钥”，创建一个 `sk_...` 客户端 Key。
 5. 点击“使用密钥”复制 Codex CLI 配置，或一键导入 CCSwitch。
 
 > [!TIP]
-> `CPR_ADMIN_DEFAULT_PASSWORD` 只用于首次创建管理员。已有管理员后修改该变量不会重置登录密码，但 Compose 启动时仍要求提供有效值。
+> `admin.default_password` 只用于首次创建管理员。已有管理员后修改该字段不会重置登录密码。
 
 ## 客户端接入
 
@@ -158,25 +159,27 @@ curl http://127.0.0.1:8080/v1/responses \
 ### 升级
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull codex-proxy-rs
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --no-build
+docker compose -f deploy/compose.yaml pull codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d --no-build
 ```
 
 ### 查看日志
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f codex-proxy-rs
+docker compose -f deploy/compose.yaml logs -f codex-proxy-rs
 ```
 
 ### 从当前源码构建
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build codex-proxy-rs
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+docker compose -f deploy/compose.yaml build codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d
 ```
 
 > [!WARNING]
-> 不要使用 `docker compose down -v` 进行普通升级，它会删除 PostgreSQL 和 Redis 数据卷。请同时备份 PostgreSQL 与 `.runtime/data/identity_hmac_secret`；数据库备份中包含客户端凭据，应按敏感数据保管。
+> PostgreSQL、Redis、应用数据和文件日志都保存在仓库根目录 `.runtime/`。普通
+> `docker compose down` 不会删除这些绑定目录；删除 `.runtime/` 才会清除数据。升级前请备份
+> 整个目录，数据库备份中包含客户端凭据，应按敏感数据保管。
 
 ## 常见问题
 
@@ -185,13 +188,14 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 检查 PostgreSQL 和 Redis 容器是否健康：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs postgres redis
+docker compose -f deploy/compose.yaml ps
+docker compose -f deploy/compose.yaml logs postgres redis
 ```
 
 ### 容器反复重启
 
-检查 `deploy/.env` 是否填写完整，以及 `.runtime/config.yaml`、`.runtime/data`、`.runtime/logs` 的权限是否正确。
+检查 `deploy/config.yaml` 的三个密码是否填写完整，以及 `.runtime/data`、`.runtime/logs`
+的权限是否正确。
 
 ### 需要从其他设备访问
 

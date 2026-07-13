@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgPoolOptions};
+use tracing::info;
+
+const MIGRATION_LOCK_KEY: i64 = i64::from_be_bytes(*b"CPR-MIGR");
 
 const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,
@@ -50,7 +53,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     validate_migration_catalog()?;
 
     let mut tx = pool.begin().await?;
-    ensure_migrations_table(&mut tx).await?;
+    let migration_table_created = ensure_migrations_table(&mut tx).await?;
 
     let applied = applied_migrations(&mut tx).await?;
     if applied.is_empty() {
@@ -63,7 +66,14 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
         record_migration(&mut tx, migration).await?;
     }
 
-    tx.commit().await
+    tx.commit().await?;
+
+    if migration_table_created {
+        info!("数据库迁移表已创建");
+    } else {
+        info!("数据库迁移表已存在，跳过创建");
+    }
+    Ok(())
 }
 
 fn validate_migration_catalog() -> Result<(), sqlx::Error> {
@@ -86,9 +96,29 @@ fn validate_migration_catalog() -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn ensure_migrations_table(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+async fn ensure_migrations_table(tx: &mut Transaction<'_, Postgres>) -> Result<bool, sqlx::Error> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(MIGRATION_LOCK_KEY)
+        .execute(&mut **tx)
+        .await?;
+
+    let exists = sqlx::query_scalar(
+        "select exists (
+          select 1
+          from information_schema.tables
+          where table_schema = current_schema()
+            and table_name = 'schema_migrations'
+            and table_type = 'BASE TABLE'
+        )",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        return Ok(false);
+    }
+
     sqlx::query(
-        "create table if not exists schema_migrations (
+        "create table schema_migrations (
           version bigint not null check (version > 0),
           name text not null,
           checksum text not null,
@@ -98,7 +128,7 @@ async fn ensure_migrations_table(tx: &mut Transaction<'_, Postgres>) -> Result<(
     )
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(true)
 }
 
 async fn applied_migrations(

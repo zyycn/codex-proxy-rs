@@ -80,7 +80,7 @@ impl AccountAttemptLedger {
                     attempted_count = self.attempted.len(),
                     busy_count = self.busy.len(),
                     timeout_ms = ACCOUNT_CANDIDATE_WAIT_TIMEOUT.as_millis(),
-                    "timed out waiting for a busy account candidate"
+                    "Timed out waiting for a busy account candidate"
                 );
                 return None;
             }

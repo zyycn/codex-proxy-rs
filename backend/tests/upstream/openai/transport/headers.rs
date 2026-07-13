@@ -646,7 +646,7 @@ async fn codex_backend_client_usage_should_use_wham_usage_headers() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("Codex Desktop/26.519.81530 (darwin; arm64)")
+        Some("Codex Desktop/26.707.51957 (darwin; arm64)")
     );
     assert_eq!(
         headers.get("accept").and_then(|value| value.to_str().ok()),
@@ -762,7 +762,7 @@ async fn codex_backend_client_should_send_http_sse_headers_in_fingerprint_order(
     request.turn_metadata = Some("turn-meta".to_string());
     request.beta_features = Some("beta-a".to_string());
     request.include_timing_metrics = Some("true".to_string());
-    request.version = Some("26.519.81530".to_string());
+    request.version = Some("26.707.51957".to_string());
     request.codex_window_id = Some("cw_1".to_string());
     request.parent_thread_id = Some("parent-1".to_string());
     let client = CodexBackendClient::new(

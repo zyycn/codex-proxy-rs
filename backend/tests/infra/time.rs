@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use codex_proxy_rs::infra::time::{
-    china_day_start, china_filename_timestamp_millis, china_hour, china_hour_start,
+    china_datetime, china_day_start, china_filename_timestamp_millis, china_hour, china_hour_start,
     china_quarter_hour_start, china_rfc3339_millis,
 };
 
@@ -24,6 +24,13 @@ fn china_rfc3339_millis_should_keep_china_offset() {
         china_rfc3339_millis(&value),
         "2026-06-25T00:36:59.190+08:00"
     );
+}
+
+#[test]
+fn china_datetime_should_include_complete_china_calendar_time() {
+    let value = "2026-07-13T16:10:06.969Z".parse::<DateTime<Utc>>().unwrap();
+
+    assert_eq!(china_datetime(&value), "2026-07-14 00:10:06");
 }
 
 #[test]

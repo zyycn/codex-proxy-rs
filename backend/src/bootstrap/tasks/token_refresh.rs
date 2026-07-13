@@ -54,8 +54,8 @@ where
     pub fn start(self) -> SchedulerHandle {
         let config = PeriodicTaskConfig::new(
             self.interval_secs,
-            "token 刷新任务已启动",
-            "token 刷新任务已关闭",
+            "Token 刷新任务已启动",
+            "Token 刷新任务已关闭",
         );
         spawn_periodic_task(self, config)
     }
@@ -73,7 +73,7 @@ where
                         scheduled = summary.scheduled,
                         immediate = summary.immediate,
                         replaced = summary.replaced,
-                        "token 刷新定时器已调度"
+                        "Token 刷新定时器已调度"
                     );
                 }
                 Ok(summary) => {
@@ -84,7 +84,7 @@ where
                     );
                 }
                 Err(error) => {
-                    warn!(error = %error, "token 刷新定时器调度失败");
+                    warn!(error = %error, "Token 刷新定时器调度失败");
                 }
             }
         })

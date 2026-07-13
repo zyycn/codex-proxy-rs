@@ -105,7 +105,7 @@ infra/
 - `redis.rs`：创建 Redis `ConnectionManager`，统一添加 `cpr:` 键前缀，提供 ping。
 - `identity.rs`：管理员密码哈希、API Key 和会话令牌生成、账号作用域 HMAC 伪名。
 - `paths.rs`：确定本地数据目录，读取或创建 `identity_hmac_secret`。
-- `logging.rs`：结构化日志、stdout 输出和文件轮转。
+- `logging.rs`：TTY stdout 使用带颜色的 compact 格式；非 TTY stdout 与轮转文件使用 JSON，时间统一为中国时区。
 - `time.rs`、`json.rs`、`format.rs`：跨模块使用的解析与格式化工具。
 
 ### upstream
@@ -344,7 +344,7 @@ bootstrap/
     └── fingerprint_update.rs
 ```
 
-- `config.rs`：启动配置 schema、YAML 加载和密码环境变量覆盖。
+- `config.rs`：`x-cpr` YAML schema、相对路径解析、严格校验和启动秘密隔离。
 - `services.rs`：创建存储、领域服务、上游客户端、路由和后台任务。
 - `state.rs`：进程级运行配置和 PostgreSQL/Redis 健康检查。
 - `shutdown.rs`：信号、管理端重启和进程替换协调。
@@ -354,16 +354,20 @@ bootstrap/
 
 `serve` 的启动顺序固定：
 
-1. 从 `CPR_CONFIG_FILE` 指定路径加载 YAML；未设置时读取当前目录的 `config.yaml`。
-2. 用 `CPR_ADMIN_DEFAULT_PASSWORD`、`CPR_POSTGRES_PASSWORD`、`CPR_REDIS_PASSWORD` 覆盖对应密码。
-3. 初始化日志并绑定监听地址。
-4. 连接 PostgreSQL，校验并执行迁移。
-5. 连接 Redis，统一使用 `cpr:` 键前缀。
-6. 读取或初始化 `runtime_settings`，把数据库设置应用到运行配置。
-7. 创建各领域存储、服务和 OpenAI 上游客户端。
-8. 从本地数据目录读取或创建 `identity_hmac_secret`。
-9. 初始化默认指纹、管理员、模型运行时缓存和内存账号池。
-10. 启动后台任务，挂载 HTTP 路由。
+1. 在创建 Tokio runtime 前，从当前目录向上查找 `deploy/config.yaml`。
+2. 解析 `x-cpr`、校验全部显式字段，并以配置文件目录为基准解析相对路径。
+3. 把 YAML 中的 PostgreSQL/Redis 密码注入基础 URL；Docker 只通过进程环境覆盖容器拓扑地址。
+4. 初始化日志并绑定监听地址。
+5. 连接 PostgreSQL，校验并执行迁移。
+6. 连接 Redis，统一使用 `cpr:` 键前缀。
+7. 读取或初始化 `runtime_settings`，把数据库设置应用到运行配置。
+8. 创建各领域存储、服务和 OpenAI 上游客户端。
+9. 从配置的数据目录读取或创建 `identity_hmac_secret`。
+10. 初始化默认指纹、管理员、模型运行时缓存和内存账号池。
+11. 释放管理员初始化密码并启动后台任务、挂载 HTTP 路由。
+
+数据库、Redis 和管理员密码使用自动脱敏、Drop 时清零的启动类型，不进入 `AppConfig` 或
+`RuntimeConfig`，也不支持旧密码环境变量覆盖。
 
 关闭时先停止接收新请求，再统一结束 HTTP 长流和入站 WebSocket，同时关闭上游 WebSocket 池与后台任务。全部连接最多排空 20 秒，单个后台任务最多等待 5 秒；超时后才强制结束剩余连接。
 
@@ -490,20 +494,25 @@ Redis 使用统一的 `cpr:` 前缀。
 
 ### 本地文件
 
-Docker 默认把宿主机 `.runtime/data` 挂载到 `/app/data`，并设置 `XDG_DATA_HOME=/app/data`。
+Docker 把仓库根目录 `.runtime` 下的四类状态分别绑定到对应容器。应用配置通过 Compose
+`configs` 只读挂载到 `/app/deploy/config.yaml`；宿主文件为当前用户所有、容器组 `10001`
+只读，mode 为 `0640`。
 
 ```text
 .runtime/
-├── config.yaml
 ├── data/
 │   ├── identity_hmac_secret
 │   ├── update-state.json
 │   ├── update.lock
 │   └── update-tmp/
-└── logs/
+├── logs/
+├── postgres/
+└── redis/
 ```
 
-PostgreSQL 数据不在 `.runtime/data`。Compose 使用 `postgres-data` 命名卷；Redis 使用 `redis-data` 命名卷并启用 AOF。更换应用镜像不会删除这些卷，执行 `docker compose down -v` 才会删除命名卷。
+应用容器中的数据与日志目录分别是 `/app/.runtime/data` 和 `/app/.runtime/logs`。PostgreSQL
+使用 `.runtime/postgres`，Redis 使用 `.runtime/redis` 并启用 AOF。普通
+`docker compose down` 不删除绑定目录；删除 `.runtime` 才会清除本地状态。
 
 ## 后台任务
 

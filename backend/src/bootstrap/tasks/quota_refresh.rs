@@ -68,8 +68,8 @@ impl QuotaRefreshTask {
     pub fn start(self) -> SchedulerHandle {
         let config = PeriodicTaskConfig::new(
             self.interval_secs,
-            "quota 刷新任务已启动",
-            "quota 刷新任务已关闭",
+            "Quota 刷新任务已启动",
+            "Quota 刷新任务已关闭",
         );
         spawn_periodic_task(self, config)
     }
@@ -96,7 +96,7 @@ impl PeriodicTaskRunner for QuotaRefreshTask {
                     );
                 }
                 Err(error) => {
-                    warn!(error = %error, "quota 刷新任务失败");
+                    warn!(error = %error, "Quota 刷新任务失败");
                 }
             }
         })
@@ -107,6 +107,6 @@ fn log_refreshed_summary(summary: QuotaRefreshSummary) {
     info!(
         refreshed = summary.refreshed,
         failed = summary.failed,
-        "quota 刷新任务完成"
+        "Quota 刷新任务完成"
     );
 }

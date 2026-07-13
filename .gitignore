@@ -19,13 +19,7 @@
 *.log
 
 # Local configuration and secrets
-.env
-.env.*
-!.env.example
-!**/.env.example
-/.envrc
-/config.yaml
-/backend/config.yaml
+/deploy/config.yaml
 
 # Editors and operating systems
 /.idea/

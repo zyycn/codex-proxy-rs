@@ -1,82 +1,125 @@
 # 部署
 
-本目录包含 Dockerfile、Compose 文件和 Docker 配置模板。
+本目录只有两个配置入口：
 
-## Compose
+- `config.yaml`：应用行为与真实凭据，由 `config.example.yaml` 复制得到并被 Git 忽略。
+- `compose.yaml`：镜像、容器网络、端口、目录映射、健康检查和资源限制。
 
-首次部署先复制样例配置：
+项目不使用 `.env` 配置文件。Compose 中的少量环境变量只描述容器内部拓扑，不是用户配置入口。
+
+## 准备
+
+从仓库根目录执行：
 
 ```bash
 mkdir -p .runtime/data .runtime/logs
-cp deploy/config.example.yaml .runtime/config.yaml
+install -d -m 0750 .runtime/postgres .runtime/redis
+cp deploy/config.example.yaml deploy/config.yaml
+sudo chown "$(id -u):10001" deploy/config.yaml
+chmod 0640 deploy/config.yaml
+```
+
+分别执行三次以下命令：
+
+```bash
+openssl rand -hex 24
+```
+
+把结果写入 `deploy/config.yaml`：
+
+- `x-cpr.database.password`
+- `x-cpr.redis.password`
+- `x-cpr.admin.default_password`
+
+PostgreSQL 与 Redis 密码必须是 48 位十六进制字符。管理员初始化密码至少 12 位、不能是
+常见弱口令且不能包含 `$`。三个密码不会通过环境变量覆盖，也不能嵌入连接 URL。
+
+Linux 上应用容器以 `10001:10001` 运行，需要允许该组写入应用数据和日志目录：
+
+```bash
 sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
 chmod 0770 .runtime/data .runtime/logs
-sudo chown "$(id -u):10001" .runtime/config.yaml
-chmod 0640 .runtime/config.yaml
-cp deploy/.env.example deploy/.env
-chmod 0600 deploy/.env
 ```
 
-`deploy/config.example.yaml` 是 Docker 部署模板。Compose 默认使用仓库根目录的 `.runtime/`：
+`config.yaml` 通过 Compose `configs` 只读挂载。普通 Compose 对本地文件保留宿主机的
+UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001` 开放读取权限。
 
-- `.runtime/config.yaml` -> `/app/config.yaml`
-- `.runtime/data` -> `/app/data`
-- `.runtime/logs` -> `/app/logs`
-
-应用日志同时写入 `docker logs` 与 `.runtime/logs`。Compose 对应用、PostgreSQL、Redis
-统一启用 `json-file` 的 `10m × 5` 轮转；应用文件日志还受配置中的自然日、单文件大小和文件总数限制。
-
-Runtime 镜像和 PostgreSQL 的显示、日志时区固定为 `Asia/Shanghai`。PostgreSQL 时间列仍使用
-`timestamptz` 保存绝对时间点，修改时区只影响查询与日志的显示，不需要迁移或改写已有数据。
-
-`deploy/.env` 是 Docker 部署的密钥配置文件，已被 Git 忽略且必须保持 mode `0600`。其中
-`CPR_ADMIN_DEFAULT_PASSWORD`、`CPR_POSTGRES_PASSWORD`、`CPR_REDIS_PASSWORD` 三项均为必填，
-留空时 Compose 会在启动前失败。管理员密码必须至少 12 位且不能是常见弱口令。
-
-Compose 会把 PostgreSQL、Redis 密码的同一个值同时传给服务端和应用；应用使用 URL API 覆盖连接串
-密码，并用管理员密码覆盖 `admin.default_password`。因此无需修改 `.runtime/config.yaml` 中的密码，
-特殊字符也无需手工编码。本地 Rust 集成测试若复用该 Compose 服务，应使用与 `deploy/.env` 一致的
-测试连接串。
-编辑密码时保留 `deploy/.env` 中的单引号，使 `#`、`$` 等 Compose 语法字符按字面值传递。
-
-如果前面还有 Nginx、Caddy、Cloudflare Tunnel 等反向代理，确保反代正常传递 `CF-Connecting-IP`、`X-Real-IP` 或 `X-Forwarded-For`。后端会按这组头自动解析真实客户端 IP；没有这些头时回落到直连 peer IP。
-
-构建并启动：
+## 启动
 
 ```bash
-# 先编辑 deploy/.env，设置全部三项密码。
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d --no-build
+docker compose -f deploy/compose.yaml ps
 ```
 
-可以通过环境变量覆盖宿主机路径。容器内始终通过 `CPR_CONFIG_FILE=/app/config.yaml` 读取挂载后的配置：
+健康检查：
 
 ```bash
-CPR_CONFIG_FILE=/path/to/config.yaml \
-CPR_DATA_DIR=/path/to/data \
-CPR_LOG_DIR=/path/to/logs \
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+curl -i http://127.0.0.1:8080/healthz
 ```
 
-## 构建
+`204 No Content` 表示应用、PostgreSQL 和 Redis 均可用。
 
-Docker 构建上下文保持仓库根目录：
+不要把未脱敏的 `docker compose config` 或 `docker inspect` 输出上传到工单；它们会包含
+PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
+
+## 本地开发
+
+本地 PostgreSQL 和 Redis 可继续由 Compose 启动：
 
 ```bash
-docker build -f deploy/Dockerfile -t codex-proxy-rs:latest .
+docker compose -f deploy/compose.yaml up -d postgres redis
+cd backend
+cargo run
 ```
 
-也可以用 Compose 构建：
+后端会从当前目录向上查找 `deploy/config.yaml`。相对数据和日志目录以该文件所在目录解析；
+Compose 只把监听地址和数据库、Redis 地址固定覆盖为容器内部服务名。
+
+## 持久化
+
+Compose 使用以下绑定目录：
+
+- `.runtime/data` → 应用身份密钥和更新状态
+- `.runtime/logs` → 应用文件日志
+- `.runtime/postgres` → PostgreSQL
+- `.runtime/redis` → Redis AOF
+
+普通 `docker compose down` 不会删除这些目录。删除 `.runtime` 会永久清除本地状态，应在升级或
+迁移前备份整个目录。
+
+旧版命名卷不会自动迁移到绑定目录。已有部署必须先备份 PostgreSQL 和 Redis，再启用新版
+`compose.yaml`，否则新容器会看到空的 `.runtime/postgres` 与 `.runtime/redis`。
+
+## 密码语义
+
+- `admin.default_password` 只在首次创建管理员时使用。
+- PostgreSQL 官方镜像只在空数据目录初始化时使用 `database.password`。
+- Redis 在每次容器创建时使用 `redis.password`。
+
+已有 PostgreSQL 数据目录后，直接修改 `database.password` 不会修改数据库用户密码，只会导致
+应用无法连接。轮换时必须先在 PostgreSQL 中修改用户密码，再同步更新 `config.yaml`。
+
+## 构建与升级
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build
+docker compose -f deploy/compose.yaml build codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d
 ```
 
-需要写入版本元数据时：
+拉取发布镜像：
+
+```bash
+docker compose -f deploy/compose.yaml pull codex-proxy-rs
+docker compose -f deploy/compose.yaml up -d --no-build
+```
+
+构建元数据仍可作为一次性进程环境传入，不需要 `.env` 文件：
 
 ```bash
 CPR_VERSION="$(ruby -ryaml -e 'puts YAML.load_file("release/version.yaml").fetch("version").delete_prefix("v")')" \
 CPR_GIT_SHA="$(git rev-parse HEAD)" \
 CPR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml build
+docker compose -f deploy/compose.yaml build codex-proxy-rs
 ```

@@ -44,7 +44,7 @@ impl CloudflareRecovery {
                 tracing::warn!(
                     account_id,
                     error = %error,
-                    "failed to persist upstream set-cookie header"
+                    "Failed to persist upstream set-cookie header"
                 );
             }
         }
@@ -67,7 +67,7 @@ impl CloudflareRecovery {
             tracing::warn!(
                 account_id,
                 error = %error,
-                "failed to persist Cloudflare challenge cookie cleanup deadline"
+                "Failed to persist Cloudflare challenge cookie cleanup deadline"
             );
         }
     }
@@ -106,7 +106,7 @@ async fn delete_account_cookies(cookie_store: &PgCookieStore, account_id: &str, 
             account_id,
             reason,
             error = %error,
-            "failed to delete account cookies after Cloudflare recovery signal"
+            "Failed to delete account cookies after Cloudflare recovery signal"
         );
     }
 }

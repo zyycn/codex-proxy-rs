@@ -4,7 +4,7 @@ use std::{
     backtrace::Backtrace,
     env, fmt, fs,
     fs::{File, OpenOptions},
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     panic,
     path::{Path, PathBuf},
     sync::mpsc,
@@ -22,7 +22,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
-use crate::infra::time::{china_date, china_rfc3339_millis};
+use crate::infra::time::{china_date, china_datetime, china_rfc3339_millis};
 
 const LOG_PREFIX: &str = "codex-proxy-rs";
 const LOG_SUFFIX: &str = "log";
@@ -169,6 +169,7 @@ pub fn init_tracing(config: &TracingConfig) -> Result<LogGuard, LogError> {
     let mut writer_guards = Vec::new();
     let mut counters = Vec::new();
 
+    let stdout_is_terminal = io::stdout().is_terminal();
     let stdout_writer = config.stdout.then(|| {
         let (writer, guard) = NonBlockingBuilder::default()
             .lossy(true)
@@ -194,13 +195,20 @@ pub fn init_tracing(config: &TracingConfig) -> Result<LogGuard, LogError> {
             writer
         });
 
-    let stdout_layer = stdout_writer.map(json_layer);
+    let (compact_stdout_writer, json_stdout_writer) = match stdout_writer {
+        Some(writer) if stdout_is_terminal => (Some(writer), None),
+        Some(writer) => (None, Some(writer)),
+        None => (None, None),
+    };
+    let compact_stdout_layer = compact_stdout_writer.map(compact_layer);
+    let json_stdout_layer = json_stdout_writer.map(json_layer);
     let file_layer = file_writer.map(json_layer);
     let drop_monitor = DroppedLogMonitor::start(counters)?;
 
     let init_result = tracing_subscriber::registry()
         .with(filter)
-        .with(stdout_layer)
+        .with(compact_stdout_layer)
+        .with(json_stdout_layer)
         .with(file_layer)
         .try_init()
         .map_err(|_| LogError::SubscriberAlreadyInitialized);
@@ -217,13 +225,36 @@ pub fn init_tracing(config: &TracingConfig) -> Result<LogGuard, LogError> {
     })
 }
 
+fn compact_layer<S>(
+    writer: tracing_appender::non_blocking::NonBlocking,
+) -> tracing_subscriber::fmt::Layer<
+    S,
+    tracing_subscriber::fmt::format::DefaultFields,
+    tracing_subscriber::fmt::format::Format<
+        tracing_subscriber::fmt::format::Compact,
+        ChinaConsoleTimer,
+    >,
+    tracing_appender::non_blocking::NonBlocking,
+>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    tracing_fmt::layer()
+        .compact()
+        .with_timer(ChinaConsoleTimer)
+        .with_writer(writer)
+        .with_ansi(true)
+        .with_target(true)
+        .with_level(true)
+}
+
 fn install_panic_hook() {
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         tracing::error!(
             panic = %panic_info,
             backtrace = %Backtrace::force_capture(),
-            "process panicked"
+            "Process panicked"
         );
         previous_hook(panic_info);
     }));
@@ -313,6 +344,15 @@ impl Write for ChinaDailyFileAppender {
 
     fn flush(&mut self) -> io::Result<()> {
         self.writer.flush()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChinaConsoleTimer;
+
+impl FormatTime for ChinaConsoleTimer {
+    fn format_time(&self, writer: &mut Writer<'_>) -> fmt::Result {
+        write!(writer, "{}", china_datetime(&Utc::now()))
     }
 }
 
